@@ -114,6 +114,19 @@ func TestBuildAgent_Populated(t *testing.T) {
 	}
 }
 
+func TestHermesDataPVCHostPath(t *testing.T) {
+	cfg := &config.Config{DataDir: "/data/obol"}
+	got := HermesDataPVCHostPath(cfg, "quant-rc4")
+	want := "/data/obol/agent-quant-rc4/hermes-data"
+	if got != want {
+		t.Fatalf("HermesDataPVCHostPath = %q, want %q", got, want)
+	}
+	home := HostHomePath(cfg, "quant-rc4")
+	if home != want+"/.hermes" {
+		t.Fatalf("HostHomePath = %q, want %q/.hermes", home, want)
+	}
+}
+
 func TestSeedHostFiles_FreshAgent(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir}

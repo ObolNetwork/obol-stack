@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ObolNetwork/obol-stack/internal/agentcrd"
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/dns"
@@ -1306,10 +1307,12 @@ func fixRuntimeVolumeOwnership(cfg *config.Config, hostPath string, u *ui.UI) {
 	owner := fmt.Sprintf("%d:%d", containerUID, containerGID)
 	switch backendName {
 	case "k3d":
-		if err := k3dNodeExec(cfg, hostPath, "chown -R "+owner+" {}"); err != nil && u != nil {
+		shellCmd := fmt.Sprintf("mkdir -p {} && chown -R %s {}", owner)
+		if err := k3dNodeExec(cfg, hostPath, shellCmd); err != nil && u != nil {
 			u.Warnf("Failed to fix volume ownership for %s: %v", hostPath, err)
 		}
 	default:
+		_ = os.MkdirAll(hostPath, 0o755)
 		_ = os.Chown(hostPath, containerUID, containerGID)
 	}
 }
@@ -1333,11 +1336,10 @@ func hermesPVCPaths(cfg *config.Config, id string) []string {
 	}
 }
 
-// ensureHermesPVCOwnership host-side chowns the Hermes PVC backing directories
-// to containerUID:containerGID so the agent's init containers can write under
-// /data on the first start.
+// EnsureHermesDataPVCOwnership host-side chowns a Hermes data PVC backing dir
+// to containerUID:containerGID so the agent can write under /data on first start.
 //
-// Why this is needed (issue #475):
+// Why this is needed (issue #475, extended to agent-* namespaces in #481 follow-up):
 //   - The embedded k3d config (internal/embed/k3d-config.yaml) sets
 //     KubeletInUserNamespace=true. Pod "root" maps to a host subuid that
 //     lacks chown authority over the host bind-mount path provisioned by
@@ -1352,38 +1354,28 @@ func hermesPVCPaths(cfg *config.Config, id string) []string {
 // k3d server container runs at the host Docker daemon's authority, which is
 // real root and is not subject to the kubelet's user-namespacing.
 //
-// Best-effort. Waits up to 60s for each PVC to be Bound (local-path uses
-// WaitForFirstConsumer, so the host dir doesn't exist until the consuming
+// Best-effort. Waits up to 60s for the PVC to be Bound (local-path uses
+// WaitForFirstConsumer, so the host dir may not exist until the consuming
 // pod is scheduled). On non-k3d backends fixRuntimeVolumeOwnership falls
 // back to a plain os.Chown.
 //
 // If a Hermes pod is currently stuck in Init:CrashLoopBackOff because of the
 // pre-fix permissions, deletes it so kubelet re-creates with the corrected
 // perms immediately rather than after exponential backoff (up to ~5 min).
-// Skips the delete when no pod is stuck so repeated `Sync` calls
-// (e.g. `obol model sync` after `obol model prefer`) do not gratuitously
+// Skips the delete when no pod is stuck so repeated calls do not gratuitously
 // restart a healthy agent.
-func ensureHermesPVCOwnership(cfg *config.Config, id string, u *ui.UI) {
-	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
+func EnsureHermesDataPVCOwnership(cfg *config.Config, namespace, hostPath string, u *ui.UI) {
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
 
-	// Wait only for the PVCs hermesPVCPaths chowns. remote-signer-keystores
-	// is intentionally NOT in this loop — see the doc comment on
-	// hermesPVCPaths for why.
-	for _, pvc := range []string{
-		agentruntime.Describe(agentruntime.Hermes).DataPVCName,
-	} {
-		waitCmd := exec.Command(kubectlBin,
-			"wait", "--for=jsonpath={.status.phase}=Bound",
-			"--timeout=60s", "pvc/"+pvc, "-n", namespace)
-		waitCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-		_ = waitCmd.Run() // best-effort; continue even on timeout
-	}
+	pvcName := agentruntime.Describe(agentruntime.Hermes).DataPVCName
+	waitCmd := exec.Command(kubectlBin,
+		"wait", "--for=jsonpath={.status.phase}=Bound",
+		"--timeout=60s", "pvc/"+pvcName, "-n", namespace)
+	waitCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+	_ = waitCmd.Run() // best-effort; continue even on timeout
 
-	for _, p := range hermesPVCPaths(cfg, id) {
-		fixRuntimeVolumeOwnership(cfg, p, u)
-	}
+	fixRuntimeVolumeOwnership(cfg, hostPath, u)
 
 	if hermesInitStuck(cfg, namespace) {
 		deleteCmd := exec.Command(kubectlBin,
@@ -1395,6 +1387,18 @@ func ensureHermesPVCOwnership(cfg *config.Config, id string, u *ui.UI) {
 			u.Info("Restarted Hermes pod to apply fresh volume ownership")
 		}
 	}
+}
+
+// EnsureCRDAgentHermesPVCOwnership applies EnsureHermesDataPVCOwnership for
+// serviceoffer-controller child agents (namespace agent-<name>). Call after
+// `obol agent new`, `obol sell demo quant`, or when repairing factory-spawned
+// children that crash-loop on Linux k3d.
+func EnsureCRDAgentHermesPVCOwnership(cfg *config.Config, agentName string, u *ui.UI) {
+	EnsureHermesDataPVCOwnership(cfg, agentcrd.Namespace(agentName), agentcrd.HermesDataPVCHostPath(cfg, agentName), u)
+}
+
+func ensureHermesPVCOwnership(cfg *config.Config, id string, u *ui.UI) {
+	EnsureHermesDataPVCOwnership(cfg, agentruntime.Namespace(agentruntime.Hermes, id), hermesPVCPaths(cfg, id)[0], u)
 }
 
 // hermesInitStuck reports whether at least one Hermes pod has an init

@@ -6,6 +6,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentcrd"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/urfave/cli/v3"
@@ -132,6 +133,9 @@ func createCRDAgent(cfg *config.Config, u *ui.UI, opts createCRDAgentOptions) er
 	}
 	u.Successf("Agent %s/%s %s", agentcrd.Namespace(opts.Name), opts.Name, action)
 	u.Infof("Reconciler will provision: namespace → %s deployment → status updates", "hermes")
+	// Host-side chown for agent-<name>/hermes-data (#475). Master-agent Sync
+	// already does this for hermes-obol-agent; CRD children skip helm Sync.
+	hermes.EnsureCRDAgentHermesPVCOwnership(cfg, opts.Name, u)
 	u.Infof("Inspect: kubectl get agent %s -n %s -o yaml", opts.Name, agentcrd.Namespace(opts.Name))
 	return nil
 }

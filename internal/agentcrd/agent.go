@@ -31,12 +31,19 @@ func Namespace(name string) string {
 	return "agent-" + name
 }
 
+// HermesDataPVCHostPath is the host-side directory backing the child agent's
+// hermes-data PVC (<DataDir>/agent-<name>/hermes-data). local-path-provisioner
+// maps the PVC here; HostHomePath writes under .../hermes-data/.hermes.
+func HermesDataPVCHostPath(cfg *config.Config, name string) string {
+	desc := agentruntime.Describe(agentruntime.Hermes)
+	return filepath.Join(cfg.DataDir, Namespace(name), desc.DataPVCName)
+}
+
 // HostHomePath is where the agent's .hermes data lives on the host. The
 // cluster mounts this into the Hermes pod via hostPath; writing
 // SOUL.md/skills here puts them inside the pod automatically.
 func HostHomePath(cfg *config.Config, name string) string {
-	desc := agentruntime.Describe(agentruntime.Hermes)
-	return filepath.Join(cfg.DataDir, Namespace(name), desc.DataPVCName, desc.HomeDir)
+	return filepath.Join(HermesDataPVCHostPath(cfg, name), agentruntime.Describe(agentruntime.Hermes).HomeDir)
 }
 
 // HostSkillsPath is the per-agent skills dir. OBOL_SKILLS_DIR points here
