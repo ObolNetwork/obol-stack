@@ -991,8 +991,9 @@ func importImageWithCache(k3dBinary, clusterName, tag, serverCID string, cache *
 // built and already loaded into the running cluster (the common case after
 // our reuse/cache fixes), we emit a single "  ✓ Local dev images ready"
 // summary line so the surrounding spinner-flanked output stays clean. Only
-// real work — actual `docker build`, `docker pull`, and tarball imports —
-// gets per-image lines, and those go through the UI for consistent styling.
+// real work — actual `docker build`, runtime image preloads, and tarball
+// imports — gets per-image lines, and those go through the UI for consistent
+// styling.
 func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 	start := time.Now()
 
@@ -1066,24 +1067,8 @@ func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 	for _, ref := range devPreloadImages() {
 		total++
 
-		if shouldForceRebuild(ref) || !dockerImageAvailableLocally(ref) {
-			if u != nil {
-				u.Infof("Pulling %s", ref)
-			}
-			pullCmd := exec.Command("docker", "pull", ref)
-			pullCmd.Stdout = os.Stdout
-			pullCmd.Stderr = os.Stderr
-			if err := pullCmd.Run(); err != nil {
-				if u != nil {
-					u.Warnf("Failed to pull %s: %v", ref, err)
-				}
-				continue
-			}
+		if preloadRuntimeImageIntoCluster(clusterName, ref, u) {
 			pulled++
-		}
-
-		if importImageWithCache(k3dBinary, clusterName, ref, serverCID, &cache, u) {
-			imported++
 		}
 	}
 
@@ -1116,6 +1101,42 @@ func importImageToCluster(k3dBinary, clusterName, tag string) error {
 	importCmd.Stderr = os.Stderr
 
 	return importCmd.Run()
+}
+
+// preloadRuntimeImageIntoCluster pulls a public upstream runtime image into the
+// k3s node's CRI store. These images are multi-arch OCI indexes; importing them
+// through `k3d image import` can make Docker Desktop save an index whose sibling
+// platform manifests are absent from the local content store, which then shows
+// up as noisy `content digest ... not found` errors during node import.
+func preloadRuntimeImageIntoCluster(clusterName, ref string, u *ui.UI) bool {
+	if u != nil {
+		u.Infof("Preloading %s into cluster %s", ref, clusterName)
+	}
+	if err := pullRuntimeImageWithCrictl(clusterName, ref, false); err == nil {
+		return true
+	} else {
+		primaryErr := err
+		if err := pullRuntimeImageWithCrictl(clusterName, ref, true); err == nil {
+			return true
+		} else if u != nil {
+			u.Warnf("Failed to preload %s into k3d via crictl: %v; fallback failed: %v", ref, primaryErr, err)
+		}
+	}
+	return false
+}
+
+func pullRuntimeImageWithCrictl(clusterName, ref string, useK3sCrictl bool) error {
+	args := []string{"exec", "k3d-" + clusterName + "-server-0"}
+	if useK3sCrictl {
+		args = append(args, "k3s", "crictl", "pull", ref)
+	} else {
+		args = append(args, "crictl", "pull", ref)
+	}
+	pullCmd := exec.Command("docker", args...)
+	pullCmd.Stdout = os.Stdout
+	pullCmd.Stderr = os.Stderr
+
+	return pullCmd.Run()
 }
 
 // findProjectRoot walks up from the current directory to find go.mod.

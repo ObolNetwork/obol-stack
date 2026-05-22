@@ -1175,11 +1175,10 @@ func image() string {
 }
 
 // ImageRef returns the upstream Hermes container image ref. Used by
-// stack.devPreloadImages so `obol stack up` pulls the image to the host
-// docker daemon and imports it into the k3d cluster's containerd cache —
-// otherwise the cluster's first Hermes pod stalls waiting for the
-// registry mirror to serve a cold pull, which has caused flow-14 step 32
-// timeouts in the past.
+// stack.devPreloadImages so `obol stack up` preloads the image through the
+// k3s node's CRI before the first Hermes pod starts — otherwise the first pod
+// stalls waiting for the registry mirror to serve a cold pull, which has
+// caused flow-14 step 32 timeouts in the past.
 func ImageRef() string {
 	return image()
 }

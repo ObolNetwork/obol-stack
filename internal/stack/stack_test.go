@@ -972,6 +972,126 @@ func TestBuildAndImportLocalImages_SkipsK3dImportWhenCacheIsValid(t *testing.T) 
 	}
 }
 
+func TestBuildAndImportLocalImages_PreloadsRuntimeImagesViaCrictl(t *testing.T) {
+	root := t.TempDir()
+	cfgDir := filepath.Join(root, "config")
+	binDir := filepath.Join(root, "bin")
+	logPath := filepath.Join(root, "commands.log")
+	for _, d := range []string{cfgDir, binDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, stackIDFile), []byte("test-stack"), 0o600); err != nil {
+		t.Fatalf("write stack id: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/test\n\ngo 1.25\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	dockerScript := "#!/bin/sh\n" +
+		"set -eu\n" +
+		"printf 'docker %s\\n' \"$*\" >> \"" + logPath + "\"\n" +
+		"if [ \"${1:-}\" = \"inspect\" ] && [ \"${2:-}\" = \"--format\" ]; then\n" +
+		"  printf 'k3d-server-cid-fake\\n'\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		"if [ \"${1:-}\" = \"exec\" ]; then exit 0; fi\n" +
+		"if [ \"${1:-}\" = \"image\" ] && [ \"${2:-}\" = \"inspect\" ]; then exit 1; fi\n" +
+		"if [ \"${1:-}\" = \"pull\" ]; then exit 97; fi\n" +
+		"exit 0\n"
+	k3dScript := "#!/bin/sh\n" +
+		"set -eu\n" +
+		"printf 'k3d %s\\n' \"$*\" >> \"" + logPath + "\"\n"
+	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(dockerScript), 0o755); err != nil {
+		t.Fatalf("write docker stub: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "k3d"), []byte(k3dScript), 0o755); err != nil {
+		t.Fatalf("write k3d stub: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(oldWD)
+	t.Setenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES", "")
+
+	buildAndImportLocalImages(&config.Config{ConfigDir: cfgDir, BinDir: binDir}, ui.NewWithOptions(false, true))
+
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	log := string(logData)
+	for _, want := range []string{
+		"docker exec k3d-obol-stack-test-stack-server-0 crictl pull ghcr.io/obolnetwork/openclaw:",
+		"docker exec k3d-obol-stack-test-stack-server-0 crictl pull nousresearch/hermes-agent:",
+	} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("expected runtime preload via node crictl command %q, log:\n%s", want, log)
+		}
+	}
+	for _, unwanted := range []string{
+		"docker pull ghcr.io/obolnetwork/openclaw",
+		"docker pull nousresearch/hermes-agent",
+		"k3d image import ghcr.io/obolnetwork/openclaw",
+		"k3d image import nousresearch/hermes-agent",
+	} {
+		if strings.Contains(log, unwanted) {
+			t.Fatalf("runtime preload should not use host docker pull or k3d image import (%q), log:\n%s", unwanted, log)
+		}
+	}
+}
+
+func TestPreloadRuntimeImage_FallsBackToK3sCrictl(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	logPath := filepath.Join(root, "commands.log")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir binDir: %v", err)
+	}
+	dockerScript := "#!/bin/sh\n" +
+		"set -eu\n" +
+		"printf 'docker %s\\n' \"$*\" >> \"" + logPath + "\"\n" +
+		"if [ \"${1:-}\" = \"exec\" ] && [ \"${2:-}\" = \"k3d-obol-stack-test-stack-server-0\" ] && [ \"${3:-}\" = \"crictl\" ]; then\n" +
+		"  exit 42\n" +
+		"fi\n" +
+		"if [ \"${1:-}\" = \"exec\" ] && [ \"${2:-}\" = \"k3d-obol-stack-test-stack-server-0\" ] && [ \"${3:-}\" = \"k3s\" ]; then\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		"exit 1\n"
+	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(dockerScript), 0o755); err != nil {
+		t.Fatalf("write docker stub: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath)
+
+	if ok := preloadRuntimeImageIntoCluster("obol-stack-test-stack", "example.com/runtime:tag", ui.NewWithOptions(false, true)); !ok {
+		t.Fatal("expected k3s crictl fallback to succeed")
+	}
+
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	log := string(logData)
+	for _, want := range []string{
+		"docker exec k3d-obol-stack-test-stack-server-0 crictl pull example.com/runtime:tag",
+		"docker exec k3d-obol-stack-test-stack-server-0 k3s crictl pull example.com/runtime:tag",
+	} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("expected command %q, log:\n%s", want, log)
+		}
+	}
+}
+
 // newCaptureUI returns a UI that writes stdout and stderr into the returned
 // buffers. Warn → stderr, Dim/Blank/Info → stdout.
 func newCaptureUI() (*ui.UI, *bytes.Buffer, *bytes.Buffer) {
@@ -985,7 +1105,7 @@ func TestWarnIfNoChatModel_EmitsWarnWhenNoModels(t *testing.T) {
 	u, stdout, stderr := newCaptureUI()
 	warnIfNoChatModel(nil, u)
 
-	if !strings.Contains(stderr.String(), "No chat-capable LLM detected") {
+	if !strings.Contains(stderr.String(), "No chat-capable model detected") {
 		t.Fatalf("expected warn on stderr, got: %q", stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "ollama pull") {
@@ -1013,7 +1133,7 @@ func TestWarnIfNoChatModel_SilentWhenConcretePaidModelPresent(t *testing.T) {
 	u, _, stderr := newCaptureUI()
 	warnIfNoChatModel([]string{"paid/aeon"}, u)
 
-	if strings.Contains(stderr.String(), "No chat-capable LLM detected") {
+	if strings.Contains(stderr.String(), "No chat-capable model detected") {
 		t.Fatalf("concrete paid/aeon should suppress warn, got: %q", stderr.String())
 	}
 }
