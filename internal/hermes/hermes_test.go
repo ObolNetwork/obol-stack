@@ -142,9 +142,8 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		"/data/.hermes/obol-skills",
 		"containerPort: 8642",
 		"containerPort: 9119",
-		"init-hermes-perms",
+		"fsGroupChangePolicy: OnRootMismatch",
 		"init-hermes-data",
-		"chown -R 10000:10000 /data",
 		`Hermes binary missing from image: /opt/hermes/.venv/bin/hermes`,
 		`Hermes image is missing required extras: web,messaging,mcp,pty,cli,acp,google`,
 		`import fastapi, uvicorn, telegram, mcp, ptyprocess, simple_term_menu, googleapiclient`,
@@ -166,9 +165,11 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		"git clone",
 		"uv pip install",
 		"/data/.hermes/hermes-agent",
+		"init-hermes-perms",
+		"chown -R 10000:10000 /data",
 	} {
 		if strings.Contains(values, banned) {
-			t.Fatalf("generateValues() should not rebuild Hermes inside the PVC, found %q:\n%s", banned, values)
+			t.Fatalf("generateValues() contains banned fragment %q:\n%s", banned, values)
 		}
 	}
 
@@ -349,50 +350,5 @@ func mkdirInstance(t *testing.T, cfg *config.Config, id string) {
 	t.Helper()
 	if err := os.MkdirAll(DeploymentPath(cfg, id), 0o755); err != nil {
 		t.Fatalf("create Hermes instance %q: %v", id, err)
-	}
-}
-
-// TestHermesPVCPaths pins the host-side directories that
-// ensureHermesPVCOwnership chowns. Renaming the Hermes data PVC or
-// relocating the namespace prefix in agentruntime without updating this
-// list would silently regress the #475 fix on Linux k3d, because the chown
-// would land on a non-existent path while the real PVC backing dir kept
-// its local-path-provisioner default ownership of 1000:1000.
-func TestHermesPVCPaths(t *testing.T) {
-	cfg := testConfig(t)
-	const id = "obol-agent"
-	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
-
-	got := hermesPVCPaths(cfg, id)
-	want := []string{
-		filepath.Join(cfg.DataDir, namespace, "hermes-data"),
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("hermesPVCPaths(%q) = %#v; want %#v", id, got, want)
-	}
-}
-
-// TestHermesPVCPaths_ExcludesRemoteSignerKeystores pins the negative half of
-// the contract: the helper MUST NOT include the remote-signer-keystores PVC
-// path. The first revision of this fix included it, which chowned the
-// volume to 10000:10000 (Hermes' UID) and broke the remote-signer pod —
-// remote-signer runs as runAsUser=65532 with fsGroup=1000, expecting the
-// local-path-provisioner default ownership of 1000:1000. The result was
-// a remote-signer CrashLoopBackOff with
-//
-//	failed to load keystores: Permission denied (os error 13)
-//
-// against /data/keystores. This guard makes that regression impossible to
-// re-introduce by accident.
-func TestHermesPVCPaths_ExcludesRemoteSignerKeystores(t *testing.T) {
-	cfg := testConfig(t)
-	const id = "obol-agent"
-	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
-
-	keystoreVolume := filepath.Join(cfg.DataDir, namespace, "remote-signer-keystores")
-	for _, p := range hermesPVCPaths(cfg, id) {
-		if p == keystoreVolume {
-			t.Fatalf("hermesPVCPaths included %q — the remote-signer pod (runAsUser=65532, fsGroup=1000) crash-loops when this volume is chowned to Hermes' containerUID:containerGID", keystoreVolume)
-		}
 	}
 }
