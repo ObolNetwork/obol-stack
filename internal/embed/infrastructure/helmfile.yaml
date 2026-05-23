@@ -70,6 +70,32 @@ releases:
                   path: /metrics
                   interval: 30s
 
+  - name: x402-verifier-podmonitor
+    namespace: x402
+    createNamespace: false
+    chart: bedag/raw
+    version: 2.0.2
+    needs:
+      - monitoring/monitoring
+      - kube-system/base
+    values:
+      - resources:
+          - apiVersion: monitoring.coreos.com/v1
+            kind: PodMonitor
+            metadata:
+              name: x402-verifier
+              namespace: x402
+              labels:
+                release: monitoring
+            spec:
+              selector:
+                matchLabels:
+                  app: x402-verifier
+              podMetricsEndpoints:
+                - port: http
+                  path: /metrics
+                  interval: 30s
+
   # Traefik ingress controller with Gateway API support
   # Traefik v38+ bundles Gateway API CRDs in its crds/ directory
   - name: traefik

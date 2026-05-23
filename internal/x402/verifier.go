@@ -144,6 +144,7 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 	case tracker.status == http.StatusOK && r.Header.Get("X-Payment") != "":
 		v.metrics.paymentVerified.With(labels).Inc()
 		v.metrics.chargedRequests.With(labels).Inc()
+		v.metrics.lastPaymentSuccess.With(labels).SetToCurrentTime()
 	case tracker.status == http.StatusPaymentRequired && r.Header.Get("X-Payment") != "":
 		v.metrics.paymentFailed.With(labels).Inc()
 	case tracker.status == http.StatusPaymentRequired:
@@ -198,6 +199,7 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		v.metrics.paymentVerified.With(labels).Inc()
 		if tracker.Header().Get("X-PAYMENT-RESPONSE") != "" {
 			v.metrics.chargedRequests.With(labels).Inc()
+			v.metrics.lastPaymentSuccess.With(labels).SetToCurrentTime()
 		}
 	}
 }

@@ -10,11 +10,12 @@ import (
 type verifierMetrics struct {
 	registry *prometheus.Registry
 
-	requestsTotal   *prometheus.CounterVec
-	paymentRequired *prometheus.CounterVec
-	paymentVerified *prometheus.CounterVec
-	paymentFailed   *prometheus.CounterVec
-	chargedRequests *prometheus.CounterVec
+	requestsTotal       *prometheus.CounterVec
+	paymentRequired     *prometheus.CounterVec
+	paymentVerified     *prometheus.CounterVec
+	paymentFailed       *prometheus.CounterVec
+	chargedRequests     *prometheus.CounterVec
+	lastPaymentSuccess  *prometheus.GaugeVec
 }
 
 func newVerifierMetrics() *verifierMetrics {
@@ -55,6 +56,13 @@ func newVerifierMetrics() *verifierMetrics {
 			},
 			[]string{"route", "offer_namespace", "offer_name", "chain"},
 		),
+		lastPaymentSuccess: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "obol_x402_verifier_last_payment_success_seconds",
+				Help: "Unix timestamp (seconds) of the most recent successful paid x402 charge for a route.",
+			},
+			[]string{"route", "offer_namespace", "offer_name", "chain"},
+		),
 	}
 
 	m.registry.MustRegister(
@@ -63,6 +71,7 @@ func newVerifierMetrics() *verifierMetrics {
 		m.paymentVerified,
 		m.paymentFailed,
 		m.chargedRequests,
+		m.lastPaymentSuccess,
 	)
 
 	return m
