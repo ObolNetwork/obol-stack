@@ -70,9 +70,13 @@ const TitleRow = styled('div', {
   alignItems: 'center',
   gap: '$xxs',
   minWidth: 0,
+  maxWidth: '100%',
+  overflow: 'hidden',
 });
 
 const Title = styled(Text, {
+  flex: '0 1 auto',
+  minWidth: 0,
   fontSize: '$5',
   fontWeight: '$semibold',
   color: '$light',
@@ -81,6 +85,13 @@ const Title = styled(Text, {
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
+});
+
+const TypeBadgeSlot = styled('span', {
+  display: 'inline-flex',
+  flex: '0 0 auto',
+  maxWidth: '45%',
+  overflow: 'hidden',
 });
 
 const SubRow = styled('div', {
@@ -102,6 +113,7 @@ const Sub = styled(Text, {
 });
 
 const Mono = styled(Text, {
+  flexShrink: 0,
   fontFamily: 'monospace',
   fontSize: '$1',
   color: '$body',
@@ -118,6 +130,7 @@ const StatusPillBox = styled('div', {
   gap: '$xxs',
   flexShrink: 0,
   width: 'fit-content',
+  whiteSpace: 'nowrap',
   padding: '4px 12px 4px 8px',
   borderRadius: '$pill',
   fontSize: '$1',
@@ -228,9 +241,11 @@ const SkillLink = styled('a', {
 });
 
 const Rail = styled('aside', {
-  background:
-    'linear-gradient(180deg, rgba(47,228,171,0.05), rgba(47,228,171,0))',
+  backgroundColor: '$bg02',
+  backgroundImage:
+    'linear-gradient(180deg, rgba(47,228,171,0.06), rgba(47,228,171,0))',
   borderLeft: '1px solid $stroke',
+  boxShadow: 'inset 1px 0 0 rgba(255,255,255,0.03)',
   padding: '$sm $md',
   display: 'flex',
   flexDirection: 'column',
@@ -405,9 +420,11 @@ function MarketplaceCardImpl({ item, onDetails, onBuy }: MarketplaceCardProps) {
           <TitleStack>
             <TitleRow>
               <Title title={item.name}>{item.name}</Title>
-              <Badge variant={BADGE_VARIANT[item.type]}>
-                {BADGE_LABEL[item.type]}
-              </Badge>
+              <TypeBadgeSlot>
+                <Badge variant={BADGE_VARIANT[item.type]}>
+                  {BADGE_LABEL[item.type]}
+                </Badge>
+              </TypeBadgeSlot>
             </TitleRow>
             <SubRow>
               <Sub>{provider}</Sub>
