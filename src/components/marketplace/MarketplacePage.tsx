@@ -80,9 +80,11 @@ const ResultsBar = styled(Flex, {
   gap: '$xs',
 });
 
-const ResultsCount = styled(Text, {
+const ResultsCount = styled('span', {
   color: '$body',
   fontSize: '$3',
+  lineHeight: 1,
+  whiteSpace: 'nowrap',
 });
 
 const ResultsCountStrong = styled('span', {
@@ -95,9 +97,11 @@ const SourceBreakdown = styled('span', {
   color: '$muted',
 });
 
-const SortLabel = styled(Text, {
+const SortLabel = styled('span', {
   color: '$body',
   fontSize: '$2',
+  lineHeight: 1,
+  whiteSpace: 'nowrap',
 });
 
 const Results = styled(Box, {
