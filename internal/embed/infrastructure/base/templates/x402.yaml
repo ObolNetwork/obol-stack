@@ -271,7 +271,10 @@ metadata:
   labels:
     app: serviceoffer-controller
 spec:
-  replicas: 1  # Do not scale — multiple replicas race on ERC-8004 on-chain registration
+  # Single replica by default; bumping to 2+ is now safe — leader election
+  # (client-go Lease in this namespace) prevents split-brain on the reconcile
+  # loop and the resulting double on-chain ERC-8004 registration.
+  replicas: 1
   selector:
     matchLabels:
       app: serviceoffer-controller
@@ -286,6 +289,10 @@ spec:
           image: ghcr.io/obolnetwork/serviceoffer-controller:b13254e
           imagePullPolicy: IfNotPresent
           env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
