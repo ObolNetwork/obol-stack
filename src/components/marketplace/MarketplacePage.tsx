@@ -24,6 +24,7 @@ import { MarketplaceFacets } from './MarketplaceFacets';
 import { MarketplaceGrid } from './MarketplaceGrid';
 import { MarketplaceTable } from './MarketplaceTable';
 import { SortDropdown } from './SortDropdown';
+import { FilterChip } from '@/components/atoms/FilterChip';
 
 import type { BuyDrawerProps } from './BuyDrawer';
 
@@ -57,27 +58,53 @@ const RightCol = styled(Box, {
   gap: '$md',
 });
 
-const TitleBlock = styled(Box, {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '$xxxs',
-});
-
-const Title = styled(Text, {
-  fontSize: '$6',
-  fontWeight: '$semibold',
-  color: '$light',
-  letterSpacing: '-0.01em',
-});
-
 const Subtitle = styled(Text, {
   fontSize: '$2',
   color: '$body',
 });
 
-const ResultsBar = styled(Flex, {
+const SubNav = styled('div', {
+  display: 'flex',
   alignItems: 'center',
   gap: '$xs',
+  flexWrap: 'wrap',
+  marginBottom: '$lg',
+});
+
+const ChipCount = styled('span', {
+  marginLeft: '$xxxs',
+  fontFamily: 'monospace',
+  fontSize: '$1',
+  opacity: 0.55,
+
+  variants: {
+    active: {
+      true: { opacity: 0.75 },
+    },
+  },
+});
+
+const NewListingBtn = styled('button', {
+  height: 32,
+  padding: '0 $sm',
+  borderRadius: '$pill',
+  border: 'none',
+  background: '$obolGreen',
+  color: '$obolDarkDark',
+  fontSize: '$2',
+  fontWeight: '$semibold',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '$xxxs',
+  whiteSpace: 'nowrap',
+
+  '&:hover': { filter: 'brightness(1.05)' },
+});
+
+const ResultsBar = styled(Flex, {
+  alignItems: 'center',
+  gap: '$sm',
 });
 
 const ResultsCount = styled('span', {
@@ -249,12 +276,22 @@ export function MarketplacePage({
       />
 
       <RightCol>
-        <TitleBlock>
-          <Title>Marketplace</Title>
-          <Subtitle>
-            Discover x402-gated services published by Obol Stack operators.
-          </Subtitle>
-        </TitleBlock>
+        <SubNav>
+          <FilterChip active aria-current="page">
+            Browse
+            <ChipCount active>{data?.total ?? 0}</ChipCount>
+          </FilterChip>
+          <FilterChip type="button" disabled title="Coming soon">
+            My Purchases<ChipCount>0</ChipCount>
+          </FilterChip>
+          <FilterChip type="button" disabled title="Coming soon">
+            My Listings<ChipCount>0</ChipCount>
+          </FilterChip>
+          <Box css={{ flex: 1 }} />
+          <NewListingBtn type="button" disabled title="Coming soon">
+            + New listing
+          </NewListingBtn>
+        </SubNav>
 
         <ResultsBar>
           <ResultsCount>
