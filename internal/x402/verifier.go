@@ -450,5 +450,6 @@ func prometheusLabels(rule *RouteRule) prometheus.Labels {
 		"route":           rule.Pattern,
 		"offer_namespace": rule.OfferNamespace,
 		"offer_name":      rule.OfferName,
+		"chain":           rule.Network,
 	}
 }

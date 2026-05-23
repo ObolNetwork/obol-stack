@@ -276,9 +276,11 @@ type PreSignedAuth struct {
 }
 
 type PurchaseAutoRefill struct {
-	Enabled   bool `json:"enabled,omitempty"`
-	Threshold int  `json:"threshold,omitempty"`
-	Count     int  `json:"count,omitempty"`
+	Enabled        bool   `json:"enabled,omitempty"`
+	Threshold      int    `json:"threshold,omitempty"`
+	Count          int    `json:"count,omitempty"`
+	MaxTotal       int    `json:"maxTotal,omitempty"`
+	MaxSpendPerDay string `json:"maxSpendPerDay,omitempty"`
 }
 
 type PurchasePayment struct {

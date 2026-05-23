@@ -755,6 +755,7 @@ func TestVerifier_MetricsPaymentRequired(t *testing.T) {
 		"route":           "/rpc/*",
 		"offer_namespace": "llm",
 		"offer_name":      "paid-rpc",
+		"chain":           "",
 	}
 	assertVerifierMetricValue(t, metrics["obol_x402_verifier_requests_total"], labels, 1)
 	assertVerifierMetricValue(t, metrics["obol_x402_verifier_payment_required_total"], labels, 1)
@@ -768,6 +769,7 @@ func TestVerifier_MetricsVerifiedAndRejectedPayments(t *testing.T) {
 		"route":           "/rpc/*",
 		"offer_namespace": "llm",
 		"offer_name":      "paid-rpc",
+		"chain":           "",
 	}
 
 	okFac := newMockFacilitator(t, mockFacilitatorOpts{})
