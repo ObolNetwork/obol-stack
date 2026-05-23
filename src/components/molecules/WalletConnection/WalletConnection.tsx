@@ -7,25 +7,23 @@ import { truncateAddress } from '../../../utils/address';
 import { useWalletAssetBalances } from '../../../hooks/useWalletAssetBalances';
 
 const ConnectedButton = styled('button', {
-  display: 'flex',
-  height: '$2xl',
-  padding: '$xxxs $xs $xxxs $xxxs',
-  justifyContent: 'center',
+  display: 'inline-flex',
+  height: 36,
+  padding: '0 6px 0 10px',
   alignItems: 'center',
-  gap: '$xs',
+  gap: 8,
   borderRadius: '$pill',
-  border: '1px solid $bg05',
-  opacity: 0.9,
-  background: '$bg01',
-  backdropFilter: 'blur(2px)',
+  border: '1px solid $stroke',
+  background: '$bg02',
   color: '$light',
   cursor: 'pointer',
-  fontSize: '$3',
+  fontSize: '$2',
   transition: 'border-color 150ms ease, background 150ms ease',
+  flexShrink: 0,
 
   '&:hover': {
-    borderColor: '$stroke',
-    background: '$bg02',
+    borderColor: '$bg05',
+    background: '$bg03',
   },
 });
 
