@@ -255,7 +255,7 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 }
 
 // Down stops the cluster and the DNS resolver container.
-func Down(cfg *config.Config, u *ui.UI) error {
+func Down(cfg *config.Config, u *ui.UI, skipConfirm bool) error {
 	stackID := getStackID(cfg)
 	if stackID == "" {
 		return errors.New("stack ID not found, stack may not be initialized")
@@ -264,6 +264,20 @@ func Down(cfg *config.Config, u *ui.UI) error {
 	backend, err := LoadBackend(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to load backend: %w", err)
+	}
+
+	// Refuse to tear down a stack that is currently serving paid traffic
+	// without explicit operator confirmation. Failing closed here is the
+	// safety bar that prevents a stray non-interactive invocation (the
+	// 2026-05-22 inference.v1337.org outage was an `ssh host '<cmd>'`
+	// against the wrong stack ID).
+	proceed, err := ConfirmRunningServicesLoss(cfg, u, "obol stack down", skipConfirm)
+	if err != nil {
+		return err
+	}
+	if !proceed {
+		u.Info("Aborted.")
+		return nil
 	}
 
 	// Cluster delete invalidates any active quick tunnel URL. Warn first so
@@ -282,7 +296,21 @@ func Down(cfg *config.Config, u *ui.UI) error {
 }
 
 // Purge deletes the cluster config and optionally data
-func Purge(cfg *config.Config, u *ui.UI, force bool) error {
+func Purge(cfg *config.Config, u *ui.UI, force, skipConfirm bool) error {
+	// Refuse to purge a stack that is currently serving paid traffic
+	// without explicit operator confirmation. --force keeps its existing
+	// meaning ("delete data dir even when root-owned") and does NOT imply
+	// --yes — operator muscle memory for `obol stack purge --force` still
+	// hits this gate.
+	proceed, err := ConfirmRunningServicesLoss(cfg, u, "obol stack purge", skipConfirm)
+	if err != nil {
+		return err
+	}
+	if !proceed {
+		u.Info("Aborted.")
+		return nil
+	}
+
 	// When --force is set, data dir will be deleted — offer wallet backup.
 	if force {
 		openclaw.PromptBackupBeforePurge(cfg, u)
@@ -422,7 +450,9 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 			}
 		}
 
-		if downErr := Down(cfg, u); downErr != nil {
+		// Internal cleanup of a half-deployed stack — skip the safety
+		// prompt; the operator did not invoke `obol stack down` here.
+		if downErr := Down(cfg, u, true); downErr != nil {
 			u.Warnf("Failed to stop cluster during cleanup: %v", downErr)
 		}
 
