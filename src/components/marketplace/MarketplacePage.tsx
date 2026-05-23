@@ -24,7 +24,6 @@ import { MarketplaceFacets } from './MarketplaceFacets';
 import { MarketplaceGrid } from './MarketplaceGrid';
 import { MarketplaceTable } from './MarketplaceTable';
 import { SortDropdown } from './SortDropdown';
-import { FilterChip } from '@/components/atoms/FilterChip';
 
 import type { BuyDrawerProps } from './BuyDrawer';
 
@@ -71,8 +70,41 @@ const SubNav = styled('div', {
   marginBottom: '$lg',
 });
 
+// SubNav chip — matches the design canvas's FilterChip (fs-2 / 6px 12px /
+// pill radius). We don't reuse the shared FilterChip atom because it's
+// sized smaller (fs-1 / $xxxs $xs) and is also used by the home dashboard's
+// AgentRegistry — bumping it there would break that surface.
+const SubNavChip = styled('button', {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '$xxxs',
+  padding: '6px 12px',
+  borderRadius: '$pill',
+  border: '1px solid $stroke',
+  background: '$bg03',
+  color: '$body',
+  fontFamily: 'inherit',
+  fontSize: '$2',
+  fontWeight: '$medium',
+  lineHeight: 1,
+  cursor: 'pointer',
+  transition: 'background 150ms, color 150ms, border-color 150ms',
+
+  '&:hover': { color: '$light' },
+  '&:disabled': { cursor: 'not-allowed', opacity: 0.55 },
+
+  variants: {
+    active: {
+      true: {
+        background: '$obolMidGreen',
+        borderColor: '$obolGreen',
+        color: '$obolGreen',
+      },
+    },
+  },
+});
+
 const ChipCount = styled('span', {
-  marginLeft: '$xxxs',
   fontFamily: 'monospace',
   fontSize: '$1',
   opacity: 0.55,
@@ -277,16 +309,18 @@ export function MarketplacePage({
 
       <RightCol>
         <SubNav>
-          <FilterChip active aria-current="page">
+          <SubNavChip type="button" active aria-current="page">
             Browse
             <ChipCount active>{data?.total ?? 0}</ChipCount>
-          </FilterChip>
-          <FilterChip type="button" disabled title="Coming soon">
-            My Purchases<ChipCount>0</ChipCount>
-          </FilterChip>
-          <FilterChip type="button" disabled title="Coming soon">
-            My Listings<ChipCount>0</ChipCount>
-          </FilterChip>
+          </SubNavChip>
+          <SubNavChip type="button" disabled title="Coming soon">
+            My Purchases
+            <ChipCount>0</ChipCount>
+          </SubNavChip>
+          <SubNavChip type="button" disabled title="Coming soon">
+            My Listings
+            <ChipCount>0</ChipCount>
+          </SubNavChip>
           <Box css={{ flex: 1 }} />
           <NewListingBtn type="button" disabled title="Coming soon">
             + New listing
