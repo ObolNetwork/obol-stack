@@ -331,7 +331,12 @@ spec:
 # that is NOT exposed via the litellm Service. Lives alongside the
 # Deployment that hosts it so changing the buyer port here is one edit.
 #
-# Picked up by kube-prometheus-stack via the `release: monitoring` label.
+# Relocated from helmfile.yaml `llm-buyer-podmonitor` bedag/raw release;
+# chart layout is now the single source of truth for what ships in the
+# llm namespace. The PodMonitor CRD comes from kube-prometheus-stack, so
+# `base` declares `needs: [monitoring/monitoring]` in helmfile.yaml to
+# guarantee CRD presence before this template applies. Picked up by
+# kube-prometheus-stack via the `release: monitoring` label.
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:

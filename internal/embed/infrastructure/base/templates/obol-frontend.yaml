@@ -1,0 +1,57 @@
+# Relocated from helmfile.yaml `obol-frontend-httproute` bedag/raw
+# release. The HTTPRoute and namespace live alongside their workload
+# (the obol-frontend Helm release in the `obol-frontend` namespace)
+# instead of being inlined in helmfile so the chart layout is the
+# single source of truth for what ships in the obol-frontend
+# namespace.
+#
+# The obol-frontend Deployment + Service themselves still come from
+# the `obol/obol-app` upstream chart (separate release in
+# helmfile.yaml); only the HTTPRoute and Namespace are owned here.
+# RBAC for the obol-frontend ServiceAccount lives in
+# `obol-frontend-rbac.yaml` (kept separate so the tighter, security-
+# reviewed RBAC from PR #513 is preserved verbatim — no `secrets`
+# grant, read-only `purchaserequests` list/watch).
+#
+# CRD prerequisite: HTTPRoute -> gateway.networking.k8s.io/v1
+# (shipped by the Traefik v38+ chart's bundled CRDs). `base` now
+# declares `needs: [traefik/traefik]` in helmfile.yaml to guarantee
+# the CRDs are present before this template applies.
+
+---
+# obol-frontend namespace. Pre-created here so the HTTPRoute and
+# ClusterRoleBinding subject reference can resolve during the `base`
+# release without waiting for the `obol-frontend` upstream chart
+# release to create it. The chart release still sets
+# `createNamespace: true` — kubectl apply on an existing namespace is
+# a no-op.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: obol-frontend
+
+---
+# obol-frontend HTTPRoute. The `hostnames: ["obol.stack"]` restriction
+# keeps the frontend UI off the public cloudflared tunnel — removing
+# it is a critical security regression (see CLAUDE.md "Security:
+# Tunnel Exposure").
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: obol-frontend
+  namespace: obol-frontend
+spec:
+  hostnames:
+    - "obol.stack"
+  parentRefs:
+    - name: traefik-gateway
+      namespace: traefik
+      sectionName: web
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: obol-frontend-obol-app
+          port: 3000
