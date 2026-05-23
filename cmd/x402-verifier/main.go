@@ -60,6 +60,13 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	// File-sourced routes are populated synchronously by LoadConfig above,
+	// so they are "loaded" as soon as NewVerifier returns. The kube branch
+	// below flips this flag only after the first informer apply succeeds.
+	if *routeSource == "file" {
+		v.MarkRoutesLoaded()
+	}
+
 	if *watch {
 		switch *routeSource {
 		case "file":
@@ -76,7 +83,7 @@ func main() {
 				log.Fatalf("load kube route source config: %v", err)
 			}
 			go func() {
-				if err := x402verifier.WatchServiceOffers(ctx, kubeCfg, accumulator.SetRoutes); err != nil {
+				if err := x402verifier.WatchServiceOffers(ctx, kubeCfg, accumulator.SetRoutes, v.MarkRoutesLoaded); err != nil {
 					log.Printf("x402-serviceoffer-source: stopped: %v", err)
 				}
 			}()

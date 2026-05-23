@@ -21,7 +21,18 @@ type Verifier struct {
 	chain   atomic.Pointer[ChainInfo]
 	chains  atomic.Pointer[map[string]ChainInfo] // pre-resolved: chain name → config
 	metrics *verifierMetrics
+
+	// routesLoaded is set true after the first route source apply completes.
+	// Until then HandleReadyz returns 503 so kubelet keeps the pod out of
+	// the Service Endpoints, preventing the "no rule -> 200 free pass"
+	// window during informer warmup (CLAUDE.md pitfall #14).
+	routesLoaded atomic.Bool
 }
+
+// MarkRoutesLoaded signals that the route source has produced its first
+// non-error apply. Idempotent. After this, HandleReadyz returns 200
+// once config is also loaded.
+func (v *Verifier) MarkRoutesLoaded() { v.routesLoaded.Store(true) }
 
 // NewVerifier creates a Verifier with the given initial configuration.
 func NewVerifier(cfg *PricingConfig) (*Verifier, error) {
@@ -224,10 +235,18 @@ func (v *Verifier) HandleHealthz(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, `{"status":"ok"}`)
 }
 
-// HandleReadyz returns 200 OK if pricing config is loaded, 503 otherwise.
+// HandleReadyz returns 200 OK once BOTH pricing config and the first route
+// source apply have completed. Until then it returns 503 with a cause-specific
+// body so kubelet keeps the pod out of Service Endpoints, preventing the
+// "no rule -> 200 free pass" window during informer warmup
+// (CLAUDE.md pitfall #14).
 func (v *Verifier) HandleReadyz(w http.ResponseWriter, r *http.Request) {
 	if v.config.Load() == nil {
-		http.Error(w, "not ready", http.StatusServiceUnavailable)
+		http.Error(w, "not ready: config not loaded", http.StatusServiceUnavailable)
+		return
+	}
+	if !v.routesLoaded.Load() {
+		http.Error(w, "not ready: routes not loaded", http.StatusServiceUnavailable)
 		return
 	}
 
