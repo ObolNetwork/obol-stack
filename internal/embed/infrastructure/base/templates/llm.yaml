@@ -298,3 +298,27 @@ spec:
       port: 4000
       targetPort: http
       protocol: TCP
+
+---
+# PodMonitor for the x402-buyer sidecar — kept as PodMonitor (not
+# ServiceMonitor) because the sidecar listens on a per-pod port (8402)
+# that is NOT exposed via the litellm Service. Lives alongside the
+# Deployment that hosts it so changing the buyer port here is one edit.
+#
+# Picked up by kube-prometheus-stack via the `release: monitoring` label.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: litellm-x402-buyer
+  namespace: llm
+  labels:
+    release: monitoring
+    app: litellm
+spec:
+  selector:
+    matchLabels:
+      app: litellm
+  podMetricsEndpoints:
+    - port: buyer-http
+      path: /metrics
+      interval: 30s

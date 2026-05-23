@@ -44,31 +44,12 @@ releases:
     values:
       - ./values/monitoring.yaml.gotmpl
 
-  - name: llm-buyer-podmonitor
-    namespace: llm
-    createNamespace: true
-    chart: bedag/raw
-    version: 2.0.2
-    needs:
-      - monitoring/monitoring
-      - kube-system/base
-    values:
-      - resources:
-          - apiVersion: monitoring.coreos.com/v1
-            kind: PodMonitor
-            metadata:
-              name: litellm-x402-buyer
-              namespace: llm
-              labels:
-                release: monitoring
-            spec:
-              selector:
-                matchLabels:
-                  app: litellm
-              podMetricsEndpoints:
-                - port: buyer-http
-                  path: /metrics
-                  interval: 30s
+  # NOTE: PodMonitor for litellm-x402-buyer and ServiceMonitor for
+  # x402-verifier moved into base/templates/llm.yaml and
+  # base/templates/x402.yaml respectively. They live alongside the
+  # workloads they observe so a port/selector edit is one-file. Kills
+  # two `bedag/raw` releases. kube-prometheus-stack picks them up via
+  # the `release: monitoring` label.
 
   # Traefik ingress controller with Gateway API support
   # Traefik v38+ bundles Gateway API CRDs in its crds/ directory
@@ -279,43 +260,11 @@ releases:
                     - name: obol-frontend-obol-app
                       port: 3000
 
-  # Obol Frontend RBAC (OpenClaw instance discovery via Kubernetes API)
-  - name: obol-frontend-rbac
-    namespace: obol-frontend
-    chart: bedag/raw
-    version: 2.0.2
-    needs:
-      - obol-frontend/obol-frontend
-    values:
-      - resources:
-          - apiVersion: rbac.authorization.k8s.io/v1
-            kind: ClusterRole
-            metadata:
-              name: obol-frontend-openclaw-discovery
-              labels:
-                app.kubernetes.io/name: obol-frontend
-            rules:
-              - apiGroups: [""]
-                resources: ["namespaces"]
-                verbs: ["get", "list"]
-              - apiGroups: [""]
-                resources: ["pods", "configmaps", "secrets"]
-                verbs: ["get", "list"]
-              # ServiceOffer CRD — frontend sell modal creates offers
-              - apiGroups: ["obol.org"]
-                resources: ["serviceoffers", "serviceoffers/status"]
-                verbs: ["get", "list", "create", "update", "patch", "delete"]
-          - apiVersion: rbac.authorization.k8s.io/v1
-            kind: ClusterRoleBinding
-            metadata:
-              name: obol-frontend-openclaw-discovery
-              labels:
-                app.kubernetes.io/name: obol-frontend
-            roleRef:
-              apiGroup: rbac.authorization.k8s.io
-              kind: ClusterRole
-              name: obol-frontend-openclaw-discovery
-            subjects:
-              - kind: ServiceAccount
-                name: obol-frontend
-                namespace: obol-frontend
+  # NOTE: obol-frontend-rbac ClusterRole + ClusterRoleBinding moved into
+  # base/templates/obol-frontend-rbac.yaml. Co-located with the workload
+  # they grant; kills a `bedag/raw` release. Frontend-egress NetworkPolicy
+  # was attempted and reverted — on k3s + Flannel (k3d's default CNI) the
+  # kubernetes apiserver Service Endpoints point at the host process,
+  # outside the cluster pod/service CIDRs. A clean allowlist can't target
+  # the apiserver portably without an install-specific ipBlock for the k3s
+  # host IP. Tracking as a deferred hardening item.
