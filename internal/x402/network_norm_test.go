@@ -33,7 +33,7 @@ func TestRoutesFromStore_NetworkCAIP2Normalization(t *testing.T) {
 						},
 					},
 					Status: monetizeapi.ServiceOfferStatus{
-						Conditions: []monetizeapi.Condition{{Type: "RoutePublished", Status: "True"}},
+						Conditions: []metav1.Condition{{Type: "RoutePublished", Status: "True"}},
 					},
 				}),
 			}

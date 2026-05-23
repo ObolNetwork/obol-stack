@@ -106,7 +106,7 @@ func TestBuildReferenceGrant(t *testing.T) {
 
 func TestSetConditionUpdatesExistingEntry(t *testing.T) {
 	status := monetizeapi.ServiceOfferStatus{
-		Conditions: []monetizeapi.Condition{{
+		Conditions: []metav1.Condition{{
 			Type:   "Ready",
 			Status: "False",
 		}},
@@ -162,7 +162,7 @@ func TestBuildAgentIdentityRegistrationHTTPRoute(t *testing.T) {
 }
 
 func TestBuildActiveRegistrationDocument(t *testing.T) {
-	readyConditions := []monetizeapi.Condition{
+	readyConditions := []metav1.Condition{
 		{Type: "ModelReady", Status: "True"},
 		{Type: "UpstreamHealthy", Status: "True"},
 		{Type: "PaymentGateReady", Status: "True"},
@@ -283,7 +283,7 @@ func TestBuildActiveRegistrationDocument_KeepsOperatorDescription(t *testing.T) 
 			},
 		},
 		Status: monetizeapi.ServiceOfferStatus{
-			Conditions: []monetizeapi.Condition{
+			Conditions: []metav1.Condition{
 				{Type: "ModelReady", Status: "True"},
 				{Type: "UpstreamHealthy", Status: "True"},
 				{Type: "PaymentGateReady", Status: "True"},
@@ -388,7 +388,7 @@ func TestBuildRegistrationServices_IncludesOwnerWhenOwnerNotYetPublished(t *test
 			},
 		},
 		Status: monetizeapi.ServiceOfferStatus{
-			Conditions: []monetizeapi.Condition{
+			Conditions: []metav1.Condition{
 				{Type: "ModelReady", Status: "True"},
 				{Type: "UpstreamHealthy", Status: "True"},
 				{Type: "PaymentGateReady", Status: "True"},
@@ -410,7 +410,7 @@ func TestBuildRegistrationServices_IncludesOwnerWhenOwnerNotYetPublished(t *test
 }
 
 func TestBuildRegistrationConfigMap_PublishesAggregatedAgentRegistration(t *testing.T) {
-	readyConditions := []monetizeapi.Condition{
+	readyConditions := []metav1.Condition{
 		{Type: "ModelReady", Status: "True"},
 		{Type: "UpstreamHealthy", Status: "True"},
 		{Type: "PaymentGateReady", Status: "True"},
@@ -548,13 +548,13 @@ func TestBuildSkillCatalogMarkdown(t *testing.T) {
 			},
 		},
 		Status: monetizeapi.ServiceOfferStatus{
-			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+			Conditions: []metav1.Condition{{Type: "Ready", Status: "True"}},
 		},
 	}
 	notReadyOffer := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "pending", Namespace: "llm"},
 		Status: monetizeapi.ServiceOfferStatus{
-			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "False"}},
+			Conditions: []metav1.Condition{{Type: "Ready", Status: "False"}},
 		},
 	}
 
@@ -615,13 +615,13 @@ func TestBuildServiceCatalogJSON(t *testing.T) {
 			},
 		},
 		Status: monetizeapi.ServiceOfferStatus{
-			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+			Conditions: []metav1.Condition{{Type: "Ready", Status: "True"}},
 		},
 	}
 	notReadyOffer := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "pending", Namespace: "demo"},
 		Status: monetizeapi.ServiceOfferStatus{
-			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "False"}},
+			Conditions: []metav1.Condition{{Type: "Ready", Status: "False"}},
 		},
 	}
 
@@ -689,7 +689,7 @@ func TestBuildServiceCatalogJSON_AgentOfferUsesResolvedModel(t *testing.T) {
 				Model:   "qwen3.5:9b",
 				Runtime: "hermes",
 			},
-			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+			Conditions: []metav1.Condition{{Type: "Ready", Status: "True"}},
 		},
 	}
 
@@ -722,7 +722,7 @@ func TestBuildServiceCatalogJSON_AgentOfferUsesResolvedModel(t *testing.T) {
 // nil offers, paused offers, and offers with a DeletionTimestamp must never
 // leak onto the public storefront, even if they carry Ready=True.
 func TestBuildServiceCatalogJSON_ExcludesNonReady(t *testing.T) {
-	readyCond := []monetizeapi.Condition{{Type: "Ready", Status: "True"}}
+	readyCond := []metav1.Condition{{Type: "Ready", Status: "True"}}
 
 	deleting := metav1.Now()
 	offers := []*monetizeapi.ServiceOffer{
@@ -744,7 +744,7 @@ func TestBuildServiceCatalogJSON_ExcludesNonReady(t *testing.T) {
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "not-ready-svc", Namespace: "llm"},
 			Status: monetizeapi.ServiceOfferStatus{
-				Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "False"}},
+				Conditions: []metav1.Condition{{Type: "Ready", Status: "False"}},
 			},
 		},
 		{
@@ -780,7 +780,7 @@ func TestBuildServiceCatalogJSON_ExcludesNonReady(t *testing.T) {
 // store yields items in arbitrary order, so without a sort the public
 // storefront reorders itself between reconciles.
 func TestBuildServiceCatalogJSON_SortOrder(t *testing.T) {
-	readyCond := []monetizeapi.Condition{{Type: "Ready", Status: "True"}}
+	readyCond := []metav1.Condition{{Type: "Ready", Status: "True"}}
 	makeOffer := func(name string) *monetizeapi.ServiceOffer {
 		return &monetizeapi.ServiceOffer{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "llm"},
@@ -830,7 +830,7 @@ func TestBuildServiceCatalogJSON_PerMTokPricing(t *testing.T) {
 			},
 		},
 		Status: monetizeapi.ServiceOfferStatus{
-			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+			Conditions: []metav1.Condition{{Type: "Ready", Status: "True"}},
 		},
 	}
 
@@ -878,7 +878,7 @@ func TestBuildServiceCatalogJSON_FallbackDescription(t *testing.T) {
 			// Spec.Registration.Description intentionally omitted.
 		},
 		Status: monetizeapi.ServiceOfferStatus{
-			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+			Conditions: []metav1.Condition{{Type: "Ready", Status: "True"}},
 		},
 	}
 
@@ -908,7 +908,7 @@ func TestBuildServiceCatalogJSON_BaseURLTrailingSlash(t *testing.T) {
 			},
 		},
 		Status: monetizeapi.ServiceOfferStatus{
-			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+			Conditions: []metav1.Condition{{Type: "Ready", Status: "True"}},
 		},
 	}
 
@@ -947,7 +947,7 @@ func TestBuildServiceCatalogJSON_AssetAndCAIP2Defaults(t *testing.T) {
 			},
 		},
 		Status: monetizeapi.ServiceOfferStatus{
-			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+			Conditions: []metav1.Condition{{Type: "Ready", Status: "True"}},
 		},
 	}
 
@@ -1034,7 +1034,7 @@ func TestBuildServiceCatalogJSON_ExplicitOBOLToken(t *testing.T) {
 			},
 		},
 		Status: monetizeapi.ServiceOfferStatus{
-			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+			Conditions: []metav1.Condition{{Type: "Ready", Status: "True"}},
 		},
 	}
 
@@ -1132,7 +1132,7 @@ func TestOfferOperationallyReady_IncludesAwaitingExternalRegistration(t *testing
 	awaiting := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "aeon", Namespace: "llm"},
 		Status: monetizeapi.ServiceOfferStatus{
-			Conditions: []monetizeapi.Condition{
+			Conditions: []metav1.Condition{
 				{Type: "ModelReady", Status: "True"},
 				{Type: "UpstreamHealthy", Status: "True"},
 				{Type: "PaymentGateReady", Status: "True"},
@@ -1157,7 +1157,7 @@ func TestOfferOperationallyReady_RejectsRealNotReady(t *testing.T) {
 	notUsable := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "broken", Namespace: "llm"},
 		Status: monetizeapi.ServiceOfferStatus{
-			Conditions: []monetizeapi.Condition{
+			Conditions: []metav1.Condition{
 				{Type: "ModelReady", Status: "True"},
 				{Type: "UpstreamHealthy", Status: "False", Reason: "Unhealthy"},
 				{Type: "PaymentGateReady", Status: "False", Reason: "WaitingForUpstream"},
@@ -1196,7 +1196,7 @@ func TestBuildServiceCatalogJSON_IncludesPendingRegistrationOffers(t *testing.T)
 				},
 			},
 			Status: monetizeapi.ServiceOfferStatus{
-				Conditions: []monetizeapi.Condition{
+				Conditions: []metav1.Condition{
 					{Type: "ModelReady", Status: "True"},
 					{Type: "UpstreamHealthy", Status: "True"},
 					{Type: "PaymentGateReady", Status: "True"},
@@ -1237,7 +1237,7 @@ func TestBuildServiceCatalogJSON_RegistrationPendingFalseForFullyReady(t *testin
 				},
 			},
 			Status: monetizeapi.ServiceOfferStatus{
-				Conditions: []monetizeapi.Condition{
+				Conditions: []metav1.Condition{
 					{Type: "ModelReady", Status: "True"},
 					{Type: "UpstreamHealthy", Status: "True"},
 					{Type: "PaymentGateReady", Status: "True"},

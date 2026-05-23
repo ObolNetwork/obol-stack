@@ -40,6 +40,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/urfave/cli/v3"
 	"gopkg.in/yaml.v3"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func sellCommand(cfg *config.Config) *cli.Command {
@@ -1236,7 +1237,7 @@ func explorerTxURL(network, txHash string) string {
 //	    or "Disabled", non-failure paths
 //	⚠  Status=False                       — failure / blocked
 //	⏳  Status=Unknown / empty             — pending
-func formatConditionLine(cond monetizeapi.Condition) string {
+func formatConditionLine(cond metav1.Condition) string {
 	icon := conditionIcon(cond)
 	parts := []string{cond.Type}
 	if cond.Reason != "" {
@@ -1252,7 +1253,7 @@ func formatConditionLine(cond monetizeapi.Condition) string {
 // conditionIcon picks a glyph based on the condition's status + reason. The
 // glyphs are plain unicode (no lipgloss) so the function is safe to call from
 // pure unit tests; coloring is applied at print time via the ui package.
-func conditionIcon(cond monetizeapi.Condition) string {
+func conditionIcon(cond metav1.Condition) string {
 	switch cond.Status {
 	case "True":
 		switch cond.Reason {
@@ -2105,7 +2106,7 @@ func explorerBaseURL(canonicalName string) string {
 }
 
 // isConditionTrue reports whether the named condition exists with Status=True.
-func isConditionTrue(conds []monetizeapi.Condition, name string) bool {
+func isConditionTrue(conds []metav1.Condition, name string) bool {
 	for _, c := range conds {
 		if c.Type == name {
 			return c.Status == "True"

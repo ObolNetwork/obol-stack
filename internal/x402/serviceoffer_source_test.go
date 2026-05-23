@@ -21,7 +21,7 @@ func TestRoutesFromStore(t *testing.T) {
 				},
 			},
 			Status: monetizeapi.ServiceOfferStatus{
-				Conditions: []monetizeapi.Condition{{Type: "RoutePublished", Status: "True"}},
+				Conditions: []metav1.Condition{{Type: "RoutePublished", Status: "True"}},
 			},
 		}),
 		mustOfferObject(t, monetizeapi.ServiceOffer{
@@ -34,7 +34,7 @@ func TestRoutesFromStore(t *testing.T) {
 				},
 			},
 			Status: monetizeapi.ServiceOfferStatus{
-				Conditions: []monetizeapi.Condition{{Type: "RoutePublished", Status: "True"}},
+				Conditions: []metav1.Condition{{Type: "RoutePublished", Status: "True"}},
 			},
 		}),
 		mustOfferObject(t, monetizeapi.ServiceOffer{
@@ -47,7 +47,7 @@ func TestRoutesFromStore(t *testing.T) {
 				},
 			},
 			Status: monetizeapi.ServiceOfferStatus{
-				Conditions: []monetizeapi.Condition{{Type: "RoutePublished", Status: "True"}},
+				Conditions: []metav1.Condition{{Type: "RoutePublished", Status: "True"}},
 			},
 		}),
 	}
@@ -101,7 +101,7 @@ func TestRoutesFromStore_IgnoresUnpublishedOffers(t *testing.T) {
 				},
 			},
 			Status: monetizeapi.ServiceOfferStatus{
-				Conditions: []monetizeapi.Condition{{Type: "PaymentGateReady", Status: "True"}},
+				Conditions: []metav1.Condition{{Type: "PaymentGateReady", Status: "True"}},
 			},
 		}),
 	}

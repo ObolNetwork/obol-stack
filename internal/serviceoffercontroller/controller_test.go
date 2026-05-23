@@ -104,7 +104,7 @@ func TestPurchaseReadyRequiresRuntimePoolToMatchSpec(t *testing.T) {
 
 func TestApplySharedRegistrationStatus_NonOwnerUsesSharedAgent(t *testing.T) {
 	status := &monetizeapi.ServiceOfferStatus{
-		Conditions: []monetizeapi.Condition{{Type: "RoutePublished", Status: "True"}},
+		Conditions: []metav1.Condition{{Type: "RoutePublished", Status: "True"}},
 	}
 	owner := &monetizeapi.ServiceOffer{ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "demo"}}
 	offer := &monetizeapi.ServiceOffer{ObjectMeta: metav1.ObjectMeta{Name: "beta", Namespace: "demo"}}
