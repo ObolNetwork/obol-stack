@@ -14,9 +14,9 @@ export interface MarketplaceGridProps {
 const Grid = styled(Box, {
   display: 'grid',
   gap: '$sm',
-  // Match the reference card view: two cards per row when space allows, but
-  // collapse empty tracks so a single service uses the available result width.
-  gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 500px), 1fr))',
+  // Match the reference card view: preserve the two-column grid when space
+  // allows so a single card does not stretch across the full result area.
+  gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 500px), 1fr))',
 });
 
 export function MarketplaceGrid({
