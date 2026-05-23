@@ -491,7 +491,11 @@ func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
 		`name: buyer-http`,
 		`name: x402-buyer-config`,
 		`name: x402-buyer-auths`,
-		`emptyDir: {}`,
+		// PSS Restricted: emptyDirs now declare sizeLimits (PR #521); the
+		// bare `emptyDir: {}` literal has been replaced everywhere by
+		// emptyDirs with explicit sizeLimit blocks. Assert that any
+		// emptyDir at all is present alongside the buyer ConfigMap volumes.
+		`emptyDir:`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("llm template missing %q:\n%s", want, out)
@@ -990,7 +994,7 @@ func TestWarnIfNoChatModel_EmitsWarnWhenNoModels(t *testing.T) {
 	u, stdout, stderr := newCaptureUI()
 	warnIfNoChatModel(nil, u)
 
-	if !strings.Contains(stderr.String(), "No chat-capable LLM detected") {
+	if !strings.Contains(stderr.String(), "No chat-capable model detected") {
 		t.Fatalf("expected warn on stderr, got: %q", stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "ollama pull") {
