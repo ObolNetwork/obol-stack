@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { useAccount } from 'wagmi';
 
@@ -362,6 +362,7 @@ const RowAction = styled('button', {
 type ListingStatus = 'live' | 'paused' | 'unreachable' | 'degraded';
 
 function deriveStatus(offer: ServiceOffer): ListingStatus {
+  if (offer.paused) return 'paused';
   const conditions = offer.conditions ?? [];
   const upstream = conditions.find(c => c.type === 'UpstreamHealthy');
   if (upstream && upstream.status !== 'True') return 'unreachable';
@@ -370,7 +371,19 @@ function deriveStatus(offer: ServiceOffer): ListingStatus {
   return 'live';
 }
 
-function ListingRow({ offer }: { offer: ServiceOffer }) {
+interface RowMutators {
+  onPauseToggle: (offer: ServiceOffer) => void;
+  onDelete: (offer: ServiceOffer) => void;
+  pending: boolean;
+}
+
+function ListingRow({
+  offer,
+  mutators,
+}: {
+  offer: ServiceOffer;
+  mutators: RowMutators;
+}) {
   const status = deriveStatus(offer);
   const stuck =
     status === 'paused'
@@ -462,13 +475,37 @@ function ListingRow({ offer }: { offer: ServiceOffer }) {
         </Box>
 
         <Flex css={{ justifyContent: 'flex-end', gap: 6 }}>
-          {status === 'paused' || status === 'unreachable' ? (
-            <RowAction tone="primary">
-              {status === 'paused' ? 'Resume' : 'Restart'}
+          {status === 'paused' ? (
+            <RowAction
+              tone="primary"
+              disabled={mutators.pending}
+              onClick={() => mutators.onPauseToggle(offer)}
+            >
+              {mutators.pending ? '…' : 'Resume'}
+            </RowAction>
+          ) : status === 'unreachable' ? (
+            <RowAction
+              tone="primary"
+              disabled={mutators.pending}
+              onClick={() => mutators.onPauseToggle(offer)}
+            >
+              {mutators.pending ? '…' : 'Pause'}
             </RowAction>
           ) : (
-            <RowAction>Pause</RowAction>
+            <RowAction
+              disabled={mutators.pending}
+              onClick={() => mutators.onPauseToggle(offer)}
+            >
+              {mutators.pending ? '…' : 'Pause'}
+            </RowAction>
           )}
+          <RowAction
+            disabled={mutators.pending}
+            onClick={() => mutators.onDelete(offer)}
+            title="Delete listing"
+          >
+            ×
+          </RowAction>
         </Flex>
       </RowBody>
     </RowCard>
@@ -536,38 +573,104 @@ interface SellListResp {
   error?: string;
 }
 
+function offerKey(o: ServiceOffer): string {
+  return `${o.namespace}/${o.name}`;
+}
+
 export function MyListingsPage() {
   const { address } = useAccount();
   const [offers, setOffers] = useState<ServiceOffer[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
+
+  const fetchOffers = useCallback(async () => {
+    setErr(null);
+    try {
+      const r = await fetch('/api/sell/list', { cache: 'no-store' });
+      const body: SellListResp = await r.json();
+      if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
+      setOffers(body.offers ?? []);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to load listings');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    const fetchOffers = async () => {
-      setLoading(true);
-      setErr(null);
-      try {
-        const r = await fetch('/api/sell/list', { cache: 'no-store' });
-        const body: SellListResp = await r.json();
-        if (cancelled) return;
-        if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
-        setOffers(body.offers ?? []);
-      } catch (e) {
-        if (cancelled) return;
-        setErr(e instanceof Error ? e.message : 'Failed to load listings');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
     fetchOffers();
     const id = setInterval(fetchOffers, 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
+    return () => clearInterval(id);
+  }, [fetchOffers]);
+
+  const markPending = useCallback((key: string, on: boolean) => {
+    setPending(prev => {
+      const next = new Set(prev);
+      if (on) next.add(key);
+      else next.delete(key);
+      return next;
+    });
   }, []);
+
+  const handlePauseToggle = useCallback(
+    async (offer: ServiceOffer) => {
+      const key = offerKey(offer);
+      const action = offer.paused ? 'resume' : 'pause';
+      markPending(key, true);
+      try {
+        const r = await fetch(
+          `/api/sell/${encodeURIComponent(offer.name)}?ns=${encodeURIComponent(offer.namespace)}&action=${action}`,
+          { method: 'PATCH' }
+        );
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.error ?? `HTTP ${r.status}`);
+        }
+        await fetchOffers();
+      } catch (e) {
+        setErr(
+          e instanceof Error ? e.message : `Failed to ${action} ${offer.name}`
+        );
+      } finally {
+        markPending(key, false);
+      }
+    },
+    [fetchOffers, markPending]
+  );
+
+  const handleDelete = useCallback(
+    async (offer: ServiceOffer) => {
+      const confirmed =
+        typeof window === 'undefined'
+          ? false
+          : window.confirm(
+              `Delete listing "${offer.name}" in ${offer.namespace}? This removes the HTTPRoute, Middleware, and ERC-8004 registration request. Cannot be undone.`
+            );
+      if (!confirmed) return;
+      const key = offerKey(offer);
+      markPending(key, true);
+      try {
+        const r = await fetch(
+          `/api/sell/${encodeURIComponent(offer.name)}?ns=${encodeURIComponent(offer.namespace)}`,
+          { method: 'DELETE' }
+        );
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.error ?? `HTTP ${r.status}`);
+        }
+        await fetchOffers();
+      } catch (e) {
+        setErr(
+          e instanceof Error ? e.message : `Failed to delete ${offer.name}`
+        );
+      } finally {
+        markPending(key, false);
+      }
+    },
+    [fetchOffers, markPending]
+  );
 
   const myOffers = useMemo(() => {
     if (!address) return offers;
@@ -633,12 +736,20 @@ export function MyListingsPage() {
               <span style={{ textAlign: 'right' }}>Actions</span>
             </TableHeaderRow>
             <Box css={{ display: 'flex', flexDirection: 'column', gap: '$xs' }}>
-              {myOffers.map(offer => (
-                <ListingRow
-                  key={`${offer.namespace}/${offer.name}`}
-                  offer={offer}
-                />
-              ))}
+              {myOffers.map(offer => {
+                const key = offerKey(offer);
+                return (
+                  <ListingRow
+                    key={key}
+                    offer={offer}
+                    mutators={{
+                      onPauseToggle: handlePauseToggle,
+                      onDelete: handleDelete,
+                      pending: pending.has(key),
+                    }}
+                  />
+                );
+              })}
             </Box>
             <ListMoreHint onOpen={() => setDialogOpen(true)} />
           </>

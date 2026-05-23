@@ -68,6 +68,10 @@ export interface ServiceOffer {
   namespace: string;
   type: ServiceOfferType;
   status?: string;
+  /** True when the controller annotation `obol.org/paused` is set. */
+  paused?: boolean;
+  /** ISO-8601 of CR creation (from metadata.creationTimestamp). */
+  createdAt?: string;
   endpoint?: string;
   conditions?: ServiceOfferCondition[];
   model?: ServiceOfferModel;

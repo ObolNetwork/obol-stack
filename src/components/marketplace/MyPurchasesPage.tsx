@@ -10,6 +10,7 @@ import { Identicon } from './Identicon';
 import { ServicesSubNav } from './ServicesSubNav';
 import { NewListingDialog } from './NewListingDialog';
 import { toChainName } from '@/lib/marketplace/chain';
+import { useWalletAssetBalances } from '@/hooks/useWalletAssetBalances';
 import type { PurchaseListResponse, PurchaseRequest } from '@/types/purchase';
 
 const Layout = styled(Box, {
@@ -95,7 +96,40 @@ function shortAddr(addr: string, prefix = 6, suffix = 4): string {
   return `${addr.slice(0, prefix)}…${addr.slice(-suffix)}`;
 }
 
+// Maps our short chain key to (chainId, label, ChainIcon name).
+const STRIP_CHAINS: ReadonlyArray<{
+  key: 'mainnet' | 'base' | 'base-sepolia';
+  chainId: number;
+  label: string;
+  icon: 'mainnet' | 'base' | 'base-sepolia';
+}> = [
+  { key: 'base', chainId: 8453, label: 'Base', icon: 'base' },
+  {
+    key: 'base-sepolia',
+    chainId: 84532,
+    label: 'Base Sepolia',
+    icon: 'base-sepolia',
+  },
+  { key: 'mainnet', chainId: 1, label: 'Mainnet', icon: 'mainnet' },
+];
+
 function WalletStrip({ address }: { address: string | undefined }) {
+  // useWalletAssetBalances handles its own polling (60s) + per-chain
+  // multicall3 batching via eRPC. When address is empty, the hook short-circuits
+  // and returns an empty array — safe to call unconditionally per Rules of Hooks.
+  const { balances } = useWalletAssetBalances(address ?? null);
+  const [lastFetched, setLastFetched] = useState<Date | null>(null);
+  useEffect(() => {
+    if (balances.length > 0) setLastFetched(new Date());
+  }, [balances]);
+
+  const findBalance = (chainId: number, symbol: 'USDC' | 'OBOL'): string => {
+    const hit = balances.find(
+      b => b.chain.chainId === chainId && b.token.symbol === symbol
+    );
+    return hit?.formatted ?? '0';
+  };
+
   return (
     <Card css={{ padding: '$md' }}>
       <StripGrid>
@@ -118,34 +152,34 @@ function WalletStrip({ address }: { address: string | undefined }) {
           )}
         </StripCell>
 
-        {(['base', 'sepolia', 'mainnet'] as const).map(c => {
-          const label = c === 'sepolia' ? 'base-sepolia' : c;
-          const niceName =
-            c === 'sepolia'
-              ? 'Base Sepolia'
-              : c === 'base'
-                ? 'Base'
-                : 'Mainnet';
+        {STRIP_CHAINS.map(c => {
+          const usdc = findBalance(c.chainId, 'USDC');
+          const obol = findBalance(c.chainId, 'OBOL');
+          const empty = usdc === '0' && obol === '0';
           return (
-            <StripCell key={c} css={{ opacity: 0.55 }}>
+            <StripCell key={c.key} css={empty ? { opacity: 0.55 } : {}}>
               <Flex css={{ gap: 6, alignItems: 'center' }}>
-                <ChainIcon chain={label} size={14} />
-                <Text css={{ fontSize: '$1', color: '$body' }}>{niceName}</Text>
+                <ChainIcon chain={c.icon} size={14} />
+                <Text css={{ fontSize: '$1', color: '$body' }}>{c.label}</Text>
               </Flex>
               <Flex css={{ alignItems: 'baseline', gap: 6 }}>
                 <Mono
                   css={{
                     fontSize: '$5',
-                    color: '$muted',
+                    color: empty ? '$muted' : '$light',
                     fontWeight: '$semibold',
                   }}
                 >
-                  0.00
+                  {usdc}
                 </Mono>
                 <Text css={{ fontSize: '$1', color: '$body' }}>USDC</Text>
               </Flex>
               <Flex css={{ alignItems: 'baseline', gap: 6 }}>
-                <Mono css={{ fontSize: '$3', color: '$muted' }}>0.00</Mono>
+                <Mono
+                  css={{ fontSize: '$3', color: empty ? '$muted' : '$body' }}
+                >
+                  {obol}
+                </Mono>
                 <Text css={{ fontSize: '$1', color: '$muted' }}>OBOL</Text>
               </Flex>
             </StripCell>
@@ -161,11 +195,22 @@ function WalletStrip({ address }: { address: string | undefined }) {
           }}
         >
           <FieldLabel>Last fetched</FieldLabel>
-          <Mono css={{ fontSize: '$2', color: '$light' }}>—</Mono>
+          <Mono css={{ fontSize: '$2', color: '$light' }}>
+            {lastFetched ? formatRelative(lastFetched) : '—'}
+          </Mono>
         </StripCell>
       </StripGrid>
     </Card>
   );
+}
+
+function formatRelative(d: Date): string {
+  const seconds = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const m = Math.floor(seconds / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  return `${h}h ago`;
 }
 
 // ── Purchase table ─────────────────────────────────────────────────────
@@ -294,7 +339,179 @@ const RowAction = styled('button', {
   },
 });
 
-function PurchaseRow({ p }: { p: PurchaseRequest }) {
+// ── Expansion drawer ───────────────────────────────────────────────────
+
+const Expansion = styled('div', {
+  borderTop: '1px solid $stroke',
+  padding: '$sm $md $md calc($md + 56px)',
+  display: 'grid',
+  gridTemplateColumns: '1.2fr 1fr',
+  gap: '$sm',
+
+  '@media (max-width: 900px)': {
+    gridTemplateColumns: 'minmax(0, 1fr)',
+    paddingLeft: '$md',
+  },
+});
+
+const InnerPanel = styled('div', {
+  background: '$bg02',
+  border: '1px solid $stroke',
+  borderRadius: '$2',
+  padding: '$sm $sm',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+});
+
+const RouteShell = styled(Flex, {
+  alignItems: 'center',
+  gap: 8,
+  padding: '8px 10px',
+  background: '$bg03',
+  border: '1px solid $stroke',
+  borderRadius: '$2',
+});
+
+function PurchaseExpansion({ p }: { p: PurchaseRequest }) {
+  const route = p.status.publicModel
+    ? `paid/${p.status.publicModel.replace(/^paid\//, '')}`
+    : '—';
+  const refill = p.spec.autoRefill;
+
+  return (
+    <Expansion>
+      <InnerPanel>
+        <FieldLabel>Settlement log</FieldLabel>
+        <Text css={{ fontSize: '$1', color: '$muted', lineHeight: 1.5 }}>
+          The controller doesn&apos;t persist per-request settlements on the
+          PurchaseRequest. Wire the verifier&apos;s{' '}
+          <Mono css={{ color: '$body' }}>
+            obol_x402_verifier_charged_requests_total
+          </Mono>{' '}
+          or add an{' '}
+          <Mono css={{ color: '$body' }}>
+            obol_x402_verifier_last_payment_success_seconds
+          </Mono>{' '}
+          gauge to render the table the design canvas shows here.
+        </Text>
+        <Flex css={{ gap: 16, fontFamily: 'monospace', fontSize: '$2' }}>
+          <Box>
+            <FieldLabel>Total spent</FieldLabel>
+            <Mono css={{ color: '$light' }}>{p.status.totalSpent ?? '0'}</Mono>
+          </Box>
+          <Box>
+            <FieldLabel>Total signed</FieldLabel>
+            <Mono css={{ color: '$light' }}>{p.status.totalSigned}</Mono>
+          </Box>
+          <Box>
+            <FieldLabel>Wallet bal.</FieldLabel>
+            <Mono css={{ color: '$light' }}>
+              {p.status.walletBalance ?? '—'}
+            </Mono>
+          </Box>
+        </Flex>
+      </InnerPanel>
+
+      <Flex css={{ flexDirection: 'column', gap: '$sm' }}>
+        <InnerPanel>
+          <FieldLabel>LiteLLM route</FieldLabel>
+          <RouteShell>
+            <Mono
+              css={{
+                flex: 1,
+                fontSize: '$2',
+                color: '$obolGreen',
+                minWidth: 0,
+              }}
+            >
+              {route}
+            </Mono>
+            <CopyButton text={route} />
+          </RouteShell>
+          <Text css={{ fontSize: '$1', color: '$muted', lineHeight: 1.5 }}>
+            Call it like any model:{' '}
+            <Mono css={{ color: '$body' }}>model=&quot;{route}&quot;</Mono>.
+            Payments spend from the buyer sidecar pool.
+          </Text>
+        </InnerPanel>
+
+        <InnerPanel>
+          <FieldLabel>Auto-refill policy</FieldLabel>
+          <Flex css={{ gap: 12, fontSize: '$2' }}>
+            <Box css={{ flex: 1 }}>
+              <Text css={{ fontSize: '$1', color: '$muted' }}>Threshold</Text>
+              <Mono css={{ color: '$light' }}>
+                {refill?.threshold ?? 0} auths left
+              </Mono>
+            </Box>
+            <Box css={{ flex: 1 }}>
+              <Text css={{ fontSize: '$1', color: '$muted' }}>
+                Refill count
+              </Text>
+              <Mono css={{ color: '$light' }}>
+                {refill?.count ?? 0} × per cycle
+              </Mono>
+            </Box>
+            <Box css={{ flex: 1 }}>
+              <Text css={{ fontSize: '$1', color: '$muted' }}>Daily cap</Text>
+              <Mono css={{ color: '$light' }}>
+                {refill?.maxSpendPerDay ?? '—'}
+              </Mono>
+            </Box>
+          </Flex>
+        </InnerPanel>
+      </Flex>
+    </Expansion>
+  );
+}
+
+const ChevronBtn = styled('button', {
+  width: 22,
+  height: 22,
+  padding: 0,
+  background: 'transparent',
+  border: 0,
+  color: '$body',
+  cursor: 'pointer',
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  borderRadius: 4,
+  transition: 'transform 200ms, color 150ms',
+  flexShrink: 0,
+  '&:hover': { color: '$light' },
+
+  variants: {
+    open: {
+      true: { transform: 'rotate(180deg)' },
+    },
+  },
+});
+
+function ChevronIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
+      <path
+        d="M4 6l4 4 4-4"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function PurchaseRow({
+  p,
+  expanded,
+  onToggle,
+}: {
+  p: PurchaseRequest;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   const remaining = p.status.remaining;
   const total = p.spec.count || p.status.totalSigned || 0;
   const refillOn = p.spec.autoRefill?.enabled ?? false;
@@ -316,7 +533,16 @@ function PurchaseRow({ p }: { p: PurchaseRequest }) {
         </StuckStrip>
       ) : null}
       <RowBody>
-        <Flex css={{ alignItems: 'center', gap: 12, minWidth: 0 }}>
+        <Flex css={{ alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <ChevronBtn
+            type="button"
+            open={expanded}
+            onClick={onToggle}
+            aria-expanded={expanded}
+            aria-label={expanded ? 'Collapse details' : 'Expand details'}
+          >
+            <ChevronIcon />
+          </ChevronBtn>
           <Identicon seed={p.spec.payment.payTo || p.name} size={32} />
           <Box css={{ minWidth: 0 }}>
             <Mono
@@ -402,6 +628,7 @@ function PurchaseRow({ p }: { p: PurchaseRequest }) {
           </RowAction>
         </Flex>
       </RowBody>
+      {expanded ? <PurchaseExpansion p={p} /> : null}
     </RowCard>
   );
 }
@@ -414,6 +641,7 @@ export function MyPurchasesPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -509,9 +737,19 @@ export function MyPurchasesPage() {
               <span style={{ textAlign: 'right' }}>Actions</span>
             </TableHeaderRow>
             <Box css={{ display: 'flex', flexDirection: 'column', gap: '$xs' }}>
-              {myPurchases.map(p => (
-                <PurchaseRow key={`${p.namespace}/${p.name}`} p={p} />
-              ))}
+              {myPurchases.map(p => {
+                const k = `${p.namespace}/${p.name}`;
+                return (
+                  <PurchaseRow
+                    key={k}
+                    p={p}
+                    expanded={expandedKey === k}
+                    onToggle={() =>
+                      setExpandedKey(prev => (prev === k ? null : k))
+                    }
+                  />
+                );
+              })}
             </Box>
           </>
         )}
