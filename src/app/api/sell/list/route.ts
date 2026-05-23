@@ -21,15 +21,43 @@ export async function GET() {
     const agentsClient = new AgentClient();
     const prom = new PrometheusClient();
 
-    const [offers, agents, sales, perChain, reqs24h, lastSettlements] =
-      await Promise.all([
-        sell.listServiceOffers(),
-        safeListAgents(agentsClient),
-        prom.chargedSalesByOffer(),
-        prom.chargedSalesByOfferAndChain(),
-        prom.chargedRequests24hByOffer(),
-        prom.lastSettlementByOffer(),
-      ]);
+    // Two trust tiers:
+    //  - offers + agents come from apiserver; failure here is fatal because
+    //    we have nothing to render.
+    //  - Prometheus queries are best-effort; if Prom is down/restarting we
+    //    still want to show the offers list, just with `usage: null` cells.
+    const [offers, agents] = await Promise.all([
+      sell.listServiceOffers(),
+      safeListAgents(agentsClient),
+    ]);
+
+    const promResults = await Promise.allSettled([
+      prom.chargedSalesByOffer(),
+      prom.chargedSalesByOfferAndChain(),
+      prom.chargedRequests24hByOffer(),
+      prom.lastSettlementByOffer(),
+    ]);
+    const [sales, perChain, reqs24h, lastSettlements] = promResults.map(
+      (r, i) => {
+        if (r.status === 'fulfilled') return r.value;
+        const names = [
+          'chargedSalesByOffer',
+          'chargedSalesByOfferAndChain',
+          'chargedRequests24hByOffer',
+          'lastSettlementByOffer',
+        ];
+        console.warn(
+          `[Sell List] PromQL ${names[i]} failed, returning empty:`,
+          r.reason
+        );
+        return new Map<string, unknown>();
+      }
+    ) as [
+      Map<string, number>,
+      Map<string, Array<{ chain: string; requests: number }>>,
+      Map<string, number>,
+      Map<string, number>,
+    ];
 
     const enriched: ServiceOffer[] = offers.map(offer => {
       const key = `${offer.namespace}/${offer.name}`;

@@ -44,16 +44,21 @@ export class PrometheusClient {
   }
 
   /**
-   * Map of "<namespace>/<offer-name>" -> charged-request count, summed across
-   * x402-verifier replicas. Returns an empty Map if Prometheus is unavailable
-   * or the metric hasn't been scraped yet — callers render a "—" rather than
-   * surface an error to the user.
+   * Map of "<namespace>/<offer-name>" -> lifetime charged-request count,
+   * summed across x402-verifier replicas. Reads from the
+   * `x402:revenue:lifetime_by_offer` recording rule maintained by the
+   * PrometheusRule in internal/embed/infrastructure/base/templates/
+   * x402-prometheus-rules.yaml. Falls back to the raw counter so the page
+   * still works if the rule hasn't propagated yet.
+   *
+   * Returns an empty Map if Prometheus is unavailable or the metric hasn't
+   * been scraped yet — callers render a "—" rather than surface an error.
    */
   async chargedSalesByOffer(): Promise<Map<string, number>> {
     const result = new Map<string, number>();
     try {
       const response = await this.query(
-        'sum by (offer_namespace, offer_name) (obol_x402_verifier_charged_requests_total)'
+        'x402:revenue:lifetime_by_offer or sum by (offer_namespace, offer_name) (obol_x402_verifier_charged_requests_total)'
       );
       for (const row of response.data.result) {
         const ns = row.metric.offer_namespace;
@@ -83,10 +88,22 @@ export class PrometheusClient {
       string,
       Array<{ chain: string; requests: number }>
     >();
+    // Recording rules shipped in base/templates/x402-prometheus-rules.yaml
+    // pre-aggregate the 7d + 24h windows. Falling back to the raw
+    // `increase()` query keeps the page working if the rule hasn't
+    // propagated yet OR the operator is on a 1h/30d window we don't
+    // pre-record.
+    const recordingRule =
+      window === '24h'
+        ? 'x402:revenue:24h_by_offer_chain'
+        : window === '7d'
+          ? 'x402:revenue:7d_by_offer_chain'
+          : null;
+    const expr = recordingRule
+      ? `${recordingRule} or sum by (offer_namespace, offer_name, chain) (increase(obol_x402_verifier_charged_requests_total[${window}]))`
+      : `sum by (offer_namespace, offer_name, chain) (increase(obol_x402_verifier_charged_requests_total[${window}]))`;
     try {
-      const response = await this.query(
-        `sum by (offer_namespace, offer_name, chain) (increase(obol_x402_verifier_charged_requests_total[${window}]))`
-      );
+      const response = await this.query(expr);
       for (const row of response.data.result) {
         const ns = row.metric.offer_namespace;
         const name = row.metric.offer_name;
@@ -112,8 +129,9 @@ export class PrometheusClient {
   async chargedRequests24hByOffer(): Promise<Map<string, number>> {
     const result = new Map<string, number>();
     try {
+      // Reads the same 24h recording rule grouped by offer (sum across chains).
       const response = await this.query(
-        'sum by (offer_namespace, offer_name) (increase(obol_x402_verifier_charged_requests_total[24h]))'
+        'sum by (offer_namespace, offer_name) (x402:revenue:24h_by_offer_chain) or sum by (offer_namespace, offer_name) (increase(obol_x402_verifier_charged_requests_total[24h]))'
       );
       for (const row of response.data.result) {
         const ns = row.metric.offer_namespace;

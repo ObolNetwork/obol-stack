@@ -29,35 +29,32 @@ interface OperatorWalletsResponse {
 export async function GET() {
   try {
     const client = new AgentClient();
-    const instances = await client.listInstances();
+    // Two apiserver round-trips total (vs N+1 before): one list of
+    // instances + one labeled list of wallet-metadata ConfigMaps across
+    // all namespaces. We join by namespace string client-side.
+    const [instances, walletByNs] = await Promise.all([
+      client.listInstances(),
+      client.listAllWalletMetadata(),
+    ]);
 
-    const perAgent = await Promise.all(
-      instances.map(async (instance): Promise<OperatorWallet | null> => {
-        try {
-          const meta = await client.getWalletMetadata(instance);
-          return {
-            instanceId: instance.id,
-            runtime: instance.runtime,
-            addresses: (meta.addresses ?? [])
-              .map(w => (typeof w === 'string' ? w : w.address))
-              .filter(
-                (a): a is string => typeof a === 'string' && a.length > 0
-              ),
-          };
-        } catch (error) {
-          console.warn(
-            `[OperatorWallets] ${instance.runtime}/${instance.id} failed:`,
-            error
-          );
-          return null;
-        }
-      })
-    );
+    const perAgent: OperatorWallet[] = instances.map(instance => {
+      const meta = walletByNs.get(instance.namespace);
+      const addresses = (meta?.addresses ?? [])
+        .map(w => (typeof w === 'string' ? w : w.address))
+        .filter((a): a is string => typeof a === 'string' && a.length > 0);
+      return {
+        instanceId: instance.id,
+        runtime: instance.runtime,
+        addresses,
+      };
+    });
 
-    const agents = perAgent.filter((x): x is OperatorWallet => x !== null);
     const addresses = Array.from(
-      new Set(agents.flatMap(a => a.addresses.map(addr => addr.toLowerCase())))
+      new Set(
+        perAgent.flatMap(a => a.addresses.map(addr => addr.toLowerCase()))
+      )
     );
+    const agents = perAgent;
 
     const body: OperatorWalletsResponse = { agents, addresses };
     return NextResponse.json(body);
