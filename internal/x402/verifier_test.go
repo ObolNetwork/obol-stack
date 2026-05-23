@@ -753,7 +753,6 @@ func TestVerifier_MetricsPaymentRequired(t *testing.T) {
 
 	metrics := scrapeVerifierMetrics(t, v)
 	labels := map[string]string{
-		"route":           "/rpc/*",
 		"offer_namespace": "llm",
 		"offer_name":      "paid-rpc",
 		"chain":           "",
@@ -767,7 +766,6 @@ func TestVerifier_MetricsPaymentRequired(t *testing.T) {
 
 func TestVerifier_MetricsVerifiedAndRejectedPayments(t *testing.T) {
 	labels := map[string]string{
-		"route":           "/rpc/*",
 		"offer_namespace": "llm",
 		"offer_name":      "paid-rpc",
 		"chain":           "",
@@ -833,7 +831,6 @@ func TestVerifier_MetricsVerifiedAndRejectedPayments(t *testing.T) {
 // `chain` is the empty string because the test RouteRule has no Network set.
 func TestVerifier_LastPaymentSuccessGauge(t *testing.T) {
 	labels := map[string]string{
-		"route":           "/rpc/*",
 		"offer_namespace": "llm",
 		"offer_name":      "paid-rpc",
 		"chain":           "",

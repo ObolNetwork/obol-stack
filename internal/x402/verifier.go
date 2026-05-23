@@ -448,8 +448,11 @@ func (r *statusRecorder) WriteHeader(status int) {
 }
 
 func prometheusLabels(rule *RouteRule) prometheus.Labels {
+	// `route` (= rule.Pattern) was dropped in favor of (offer_namespace,
+	// offer_name) which already uniquely identifies a paid route — the
+	// pattern was redundant and unbounded by path fragments, which would
+	// have ballooned series count for sellers running many granular routes.
 	return prometheus.Labels{
-		"route":           rule.Pattern,
 		"offer_namespace": rule.OfferNamespace,
 		"offer_name":      rule.OfferName,
 		"chain":           rule.Network,
