@@ -915,6 +915,89 @@ func TestVerifier_LastPaymentSuccessGauge(t *testing.T) {
 	}
 }
 
+// TestVerifier_Reload_PrunesDeletedOfferSeries asserts that when an offer is
+// removed from the route set (via Reload, the same path used by both the
+// file-config watcher and the kube ServiceOffer informer), its previously
+// stamped metric series are dropped from the registry. Without this, deleted
+// offers' last_payment_success_seconds gauge would survive forever and keep
+// firing/silencing alerts on dead labels.
+func TestVerifier_Reload_PrunesDeletedOfferSeries(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	keptRoute := RouteRule{
+		Pattern:        "/keep/*",
+		Price:          "0.0001",
+		OfferNamespace: "llm",
+		OfferName:      "keep",
+	}
+	removedRoute := RouteRule{
+		Pattern:        "/gone/*",
+		Price:          "0.0001",
+		OfferNamespace: "llm",
+		OfferName:      "gone",
+	}
+	v := newTestVerifier(t, fac.URL, []RouteRule{keptRoute, removedRoute})
+
+	// Stamp metrics for both offers with a successful paid request each.
+	for _, path := range []string{"/keep/x", "/gone/x"} {
+		req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+		req.Header.Set("X-Forwarded-Uri", path)
+		req.Header.Set("X-Forwarded-Host", "obol.stack")
+		req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+		rec := httptest.NewRecorder()
+		v.HandleVerify(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("setup paid request to %s: status=%d", path, rec.Code)
+		}
+	}
+
+	keptLabels := map[string]string{"offer_namespace": "llm", "offer_name": "keep", "chain": ""}
+	goneLabels := map[string]string{"offer_namespace": "llm", "offer_name": "gone", "chain": ""}
+
+	families := scrapeVerifierMetrics(t, v)
+	for _, name := range []string{
+		"obol_x402_verifier_charged_requests_total",
+		"obol_x402_verifier_last_payment_success_seconds",
+	} {
+		family := families[name]
+		if family == nil {
+			t.Fatalf("baseline: missing %s before reload", name)
+		}
+		findVerifierMetricValue(t, family, keptLabels)
+		findVerifierMetricValue(t, family, goneLabels)
+	}
+
+	// Reload with the second offer dropped — the same path ServiceOffer
+	// deletion takes through ConfigAccumulator.SetRoutes.
+	if err := v.Reload(&PricingConfig{
+		Wallet:         "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		Chain:          "base-sepolia",
+		FacilitatorURL: fac.URL,
+		Routes:         []RouteRule{keptRoute},
+	}); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	families = scrapeVerifierMetrics(t, v)
+	for _, name := range []string{
+		"obol_x402_verifier_requests_total",
+		"obol_x402_verifier_payment_required_total",
+		"obol_x402_verifier_payment_verified_total",
+		"obol_x402_verifier_payment_failed_total",
+		"obol_x402_verifier_charged_requests_total",
+		"obol_x402_verifier_last_payment_success_seconds",
+	} {
+		assertVerifierMetricMissing(t, families[name], goneLabels)
+	}
+
+	// Kept offer's series must survive the prune.
+	if charged := families["obol_x402_verifier_charged_requests_total"]; charged != nil {
+		findVerifierMetricValue(t, charged, keptLabels)
+	}
+	if gauge := families["obol_x402_verifier_last_payment_success_seconds"]; gauge != nil {
+		findVerifierMetricValue(t, gauge, keptLabels)
+	}
+}
+
 // findVerifierMetricValue returns the value of the series in `family` whose
 // labels match `wantLabels` exactly, failing the test if no such series exists.
 func findVerifierMetricValue(t *testing.T, family *dto.MetricFamily, wantLabels map[string]string) float64 {

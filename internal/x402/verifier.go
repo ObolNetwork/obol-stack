@@ -64,6 +64,20 @@ func (v *Verifier) load(cfg *PricingConfig) error {
 	v.chains.Store(&chains)
 	v.config.Store(cfg)
 
+	// Drop metric series for offers that are no longer in the route set.
+	// Without this, deleting an offer leaves its counters + last-success
+	// gauge in the registry forever, polluting dashboards and silently
+	// keeping alerts (e.g. "no settlements after challenge") tied to dead
+	// labels.
+	live := make(map[string]struct{}, len(cfg.Routes))
+	for _, r := range cfg.Routes {
+		if r.OfferNamespace == "" && r.OfferName == "" {
+			continue
+		}
+		live[r.OfferNamespace+"\x00"+r.OfferName+"\x00"+r.Network] = struct{}{}
+	}
+	v.metrics.pruneSeriesNotIn(live)
+
 	return nil
 }
 

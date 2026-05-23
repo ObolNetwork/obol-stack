@@ -258,7 +258,11 @@ func TestX402Manifest_UsesServiceOfferControllerModel(t *testing.T) {
 	if !strings.Contains(manifest, "resources: [\"serviceoffers\"]") {
 		t.Fatalf("x402 manifest missing serviceoffer watch RBAC:\n%s", manifest)
 	}
-	if strings.Contains(manifest, "kind: ServiceMonitor") {
-		t.Fatalf("x402 manifest still includes legacy ServiceMonitor stanza:\n%s", manifest)
+	// ServiceMonitor now lives in this manifest by design — relocated here
+	// from a bedag/raw helmfile release so the scrape config sits next to
+	// the Service it observes. Assert presence so a future cleanup can't
+	// silently drop it.
+	if !strings.Contains(manifest, "kind: ServiceMonitor") {
+		t.Fatalf("x402 manifest missing ServiceMonitor (relocated from bedag/raw helmfile in PR #513 hardening):\n%s", manifest)
 	}
 }
