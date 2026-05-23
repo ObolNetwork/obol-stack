@@ -331,6 +331,12 @@ releases:
               - apiGroups: ["obol.org"]
                 resources: ["serviceoffers", "serviceoffers/status"]
                 verbs: ["get", "list", "create", "update", "patch", "delete"]
+              # PurchaseRequest CRD — frontend My Purchases page lists buyer-side
+              # purchase records. Read-only; agent buy.py and the controller
+              # remain the only writers.
+              - apiGroups: ["obol.org"]
+                resources: ["purchaserequests", "purchaserequests/status"]
+                verbs: ["get", "list", "watch"]
           - apiVersion: rbac.authorization.k8s.io/v1
             kind: ClusterRoleBinding
             metadata:

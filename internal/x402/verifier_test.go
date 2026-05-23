@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	x402types "github.com/coinbase/x402/go/types"
 	dto "github.com/prometheus/client_model/go"
@@ -821,6 +822,114 @@ func TestVerifier_MetricsVerifiedAndRejectedPayments(t *testing.T) {
 	assertVerifierMetricMissing(t, rejectMetrics["obol_x402_verifier_payment_required_total"], labels)
 	assertVerifierMetricMissing(t, rejectMetrics["obol_x402_verifier_payment_verified_total"], labels)
 	assertVerifierMetricMissing(t, rejectMetrics["obol_x402_verifier_charged_requests_total"], labels)
+}
+
+// TestVerifier_LastPaymentSuccessGauge asserts that the
+// obol_x402_verifier_last_payment_success_seconds gauge is stamped to the
+// current wall-clock time when a paid request succeeds, and is NOT touched
+// when an unpaid request is rejected with 402.
+//
+// The gauge is labeled identically to the verifier counters; for this rule
+// `chain` is the empty string because the test RouteRule has no Network set.
+func TestVerifier_LastPaymentSuccessGauge(t *testing.T) {
+	labels := map[string]string{
+		"route":           "/rpc/*",
+		"offer_namespace": "llm",
+		"offer_name":      "paid-rpc",
+		"chain":           "",
+	}
+
+	tests := []struct {
+		name           string
+		setPayment     bool
+		rejectPayment  bool
+		wantStatus     int
+		wantGaugeFresh bool // assert gauge ~= now()
+	}{
+		{
+			name:           "successful paid request stamps gauge",
+			setPayment:     true,
+			rejectPayment:  false,
+			wantStatus:     http.StatusOK,
+			wantGaugeFresh: true,
+		},
+		{
+			name:           "unpaid 402 leaves gauge untouched",
+			setPayment:     false,
+			rejectPayment:  false,
+			wantStatus:     http.StatusPaymentRequired,
+			wantGaugeFresh: false,
+		},
+		{
+			name:           "rejected payment leaves gauge untouched",
+			setPayment:     true,
+			rejectPayment:  true,
+			wantStatus:     http.StatusPaymentRequired,
+			wantGaugeFresh: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fac := newMockFacilitator(t, mockFacilitatorOpts{rejectPayment: tt.rejectPayment})
+			v := newTestVerifier(t, fac.URL, []RouteRule{{
+				Pattern:        "/rpc/*",
+				Price:          "0.0001",
+				OfferNamespace: "llm",
+				OfferName:      "paid-rpc",
+			}})
+
+			req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+			req.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
+			req.Header.Set("X-Forwarded-Host", "obol.stack")
+			if tt.setPayment {
+				req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+			}
+
+			before := time.Now().Unix()
+			rec := httptest.NewRecorder()
+			v.HandleVerify(rec, req)
+			after := time.Now().Unix()
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+
+			families := scrapeVerifierMetrics(t, v)
+			gauge := families["obol_x402_verifier_last_payment_success_seconds"]
+
+			if !tt.wantGaugeFresh {
+				// Either the family is absent (no series emitted) or no
+				// series exists for these labels — both are acceptable for
+				// an untouched gauge.
+				assertVerifierMetricMissing(t, gauge, labels)
+				return
+			}
+
+			if gauge == nil {
+				t.Fatalf("missing metric family obol_x402_verifier_last_payment_success_seconds")
+			}
+			got := findVerifierMetricValue(t, gauge, labels)
+			// Allow ±5s slack for clock skew / slow CI.
+			if got < float64(before-5) || got > float64(after+5) {
+				t.Fatalf("gauge = %v, want within [%d, %d]", got, before-5, after+5)
+			}
+		})
+	}
+}
+
+// findVerifierMetricValue returns the value of the series in `family` whose
+// labels match `wantLabels` exactly, failing the test if no such series exists.
+func findVerifierMetricValue(t *testing.T, family *dto.MetricFamily, wantLabels map[string]string) float64 {
+	t.Helper()
+
+	for _, metric := range family.GetMetric() {
+		if verifierLabelsMatch(metric, wantLabels) {
+			return verifierMetricValue(metric)
+		}
+	}
+	t.Fatalf("metric %s missing labels %v", family.GetName(), wantLabels)
+	return 0
 }
 
 func scrapeVerifierMetrics(t *testing.T, v *Verifier) map[string]*dto.MetricFamily {
