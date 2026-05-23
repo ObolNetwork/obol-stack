@@ -3,7 +3,12 @@
  * via the Kubernetes CustomObjectsApi.
  */
 
-import { CustomObjectsApi, KubeConfig } from '@kubernetes/client-node';
+import {
+  CustomObjectsApi,
+  KubeConfig,
+  PatchStrategy,
+  setHeaderOptions,
+} from '@kubernetes/client-node';
 import { ObjectCustomObjectsApi } from '@kubernetes/client-node/dist/gen/types/ObjectParamAPI';
 import type {
   CreateServiceOfferRequest,
@@ -85,20 +90,23 @@ export class SellClient {
     namespace: string,
     paused: boolean
   ): Promise<void> {
-    await this.customApi.patchNamespacedCustomObject({
-      group: CRD_GROUP,
-      version: CRD_VERSION,
-      namespace,
-      plural: CRD_PLURAL,
-      name,
-      body: {
-        metadata: {
-          annotations: {
-            'obol.org/paused': paused ? 'true' : null,
+    await this.customApi.patchNamespacedCustomObject(
+      {
+        group: CRD_GROUP,
+        version: CRD_VERSION,
+        namespace,
+        plural: CRD_PLURAL,
+        name,
+        body: {
+          metadata: {
+            annotations: {
+              'obol.org/paused': paused ? 'true' : null,
+            },
           },
         },
       },
-    });
+      setHeaderOptions('Content-Type', PatchStrategy.MergePatch)
+    );
   }
 
   /**
