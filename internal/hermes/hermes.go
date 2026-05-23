@@ -245,11 +245,6 @@ func Sync(cfg *config.Config, id string, u *ui.UI) error {
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
 
-	// Host-side chown the PVC backing dirs to the in-pod UID/GID, bypassing
-	// the user-namespacing that defeats the in-pod `init-hermes-perms`
-	// chown from #446 (see ensureHermesPVCOwnership doc comment for details).
-	ensureHermesPVCOwnership(cfg, id, u)
-
 	// Publish wallet-metadata ConfigMap for the frontend (namespace now exists).
 	applyWalletMetadataConfigMap(cfg, id, deploymentDir)
 
