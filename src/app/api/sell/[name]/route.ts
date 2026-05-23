@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { SellClient } from '@/lib/services/sell';
+import { rejectCrossOrigin } from '@/lib/middleware/origin-check';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,6 +17,9 @@ interface Ctx {
  * down / republishes the HTTPRoute + Middleware accordingly.
  */
 export async function PATCH(req: NextRequest, ctx: Ctx) {
+  const csrfReject = rejectCrossOrigin(req);
+  if (csrfReject) return csrfReject;
+
   const { name } = await ctx.params;
   const url = new URL(req.url);
   const namespace = url.searchParams.get('ns');
@@ -59,6 +63,9 @@ export async function PATCH(req: NextRequest, ctx: Ctx) {
  * cleanup of HTTPRoute, Middleware, ReferenceGrant, RegistrationRequest.
  */
 export async function DELETE(req: NextRequest, ctx: Ctx) {
+  const csrfReject = rejectCrossOrigin(req);
+  if (csrfReject) return csrfReject;
+
   const { name } = await ctx.params;
   const url = new URL(req.url);
   const namespace = url.searchParams.get('ns');

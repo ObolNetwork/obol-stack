@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { SellClient } from '@/lib/services/sell';
+import { rejectCrossOrigin } from '@/lib/middleware/origin-check';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,6 +27,9 @@ function isAllowedNamespace(ns: string): boolean {
  */
 export async function POST(request: NextRequest) {
   try {
+    const csrfReject = rejectCrossOrigin(request);
+    if (csrfReject) return csrfReject;
+
     const body = await request.json();
     const {
       name,

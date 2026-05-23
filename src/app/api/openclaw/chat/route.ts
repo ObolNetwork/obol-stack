@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { OpenClawClient } from '@/lib/services/openclaw';
+import { rejectCrossOrigin } from '@/lib/middleware/origin-check';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -17,6 +18,9 @@ export const dynamic = 'force-dynamic';
  */
 export async function POST(request: NextRequest) {
   try {
+    const csrfReject = rejectCrossOrigin(request);
+    if (csrfReject) return csrfReject;
+
     const body = await request.json();
     const { instanceId, messages, stream = false, ...otherParams } = body;
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AgentClient } from '@/lib/services/agents';
 import type { AgentInstance, AgentRuntime } from '@/types/agent';
+import { rejectCrossOrigin } from '@/lib/middleware/origin-check';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -9,6 +10,9 @@ const DEFAULT_HERMES_INSTANCE_ID = 'obol-agent';
 
 export async function POST(request: NextRequest) {
   try {
+    const csrfReject = rejectCrossOrigin(request);
+    if (csrfReject) return csrfReject;
+
     const body = await request.json();
     const runtime = (body.runtime || 'hermes') as AgentRuntime;
     const instanceId =
