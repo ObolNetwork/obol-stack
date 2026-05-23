@@ -47,10 +47,11 @@ spec:
               increase(obol_x402_verifier_charged_requests_total[7d])
             )
 
-        # Lifetime charged-request count per offer (sum across replicas
-        # + chains). Used in the My Listings "today · X earned" header
-        # text and the Browse catalog usage badge.
-        - record: x402:revenue:lifetime_by_offer
+        # Sum of currently-running verifier replicas' counters — resets
+        # on rollout; for true lifetime, query against a long-retention
+        # store or use `sum_over_time(...[Nd])`. Used in the My Listings
+        # "today · X earned" header text and the Browse catalog usage badge.
+        - record: x402:revenue:total_by_offer_current
           expr: |
             sum by (offer_namespace, offer_name) (
               obol_x402_verifier_charged_requests_total
