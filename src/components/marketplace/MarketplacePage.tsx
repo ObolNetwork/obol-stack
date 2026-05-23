@@ -24,6 +24,8 @@ import { MarketplaceFacets } from './MarketplaceFacets';
 import { MarketplaceGrid } from './MarketplaceGrid';
 import { MarketplaceTable } from './MarketplaceTable';
 import { SortDropdown } from './SortDropdown';
+import { ServicesSubNav } from './ServicesSubNav';
+import { NewListingDialog } from './NewListingDialog';
 
 import type { BuyDrawerProps } from './BuyDrawer';
 
@@ -60,78 +62,6 @@ const RightCol = styled(Box, {
 const Subtitle = styled(Text, {
   fontSize: '$2',
   color: '$body',
-});
-
-const SubNav = styled('div', {
-  display: 'flex',
-  alignItems: 'center',
-  gap: '$xs',
-  flexWrap: 'wrap',
-  marginBottom: '$lg',
-});
-
-// SubNav chip — matches the design canvas's FilterChip (fs-2 / 6px 12px /
-// pill radius). We don't reuse the shared FilterChip atom because it's
-// sized smaller (fs-1 / $xxxs $xs) and is also used by the home dashboard's
-// AgentRegistry — bumping it there would break that surface.
-const SubNavChip = styled('button', {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: '$xxxs',
-  padding: '6px 12px',
-  borderRadius: '$pill',
-  border: '1px solid $stroke',
-  background: '$bg03',
-  color: '$body',
-  fontFamily: 'inherit',
-  fontSize: '$2',
-  fontWeight: '$medium',
-  lineHeight: 1,
-  cursor: 'pointer',
-  transition: 'background 150ms, color 150ms, border-color 150ms',
-
-  '&:hover': { color: '$light' },
-  '&:disabled': { cursor: 'not-allowed', opacity: 0.55 },
-
-  variants: {
-    active: {
-      true: {
-        background: '$obolMidGreen',
-        borderColor: '$obolGreen',
-        color: '$obolGreen',
-      },
-    },
-  },
-});
-
-const ChipCount = styled('span', {
-  fontFamily: 'monospace',
-  fontSize: '$1',
-  opacity: 0.55,
-
-  variants: {
-    active: {
-      true: { opacity: 0.75 },
-    },
-  },
-});
-
-const NewListingBtn = styled('button', {
-  height: 32,
-  padding: '0 $sm',
-  borderRadius: '$pill',
-  border: 'none',
-  background: '$obolGreen',
-  color: '$obolDarkDark',
-  fontSize: '$2',
-  fontWeight: '$semibold',
-  cursor: 'pointer',
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: '$xxxs',
-  whiteSpace: 'nowrap',
-
-  '&:hover': { filter: 'brightness(1.05)' },
 });
 
 const ResultsBar = styled(Flex, {
@@ -239,6 +169,7 @@ export function MarketplacePage({
   const [view, setView] = useState<MarketplaceView>(initialView);
   const [filters, setFilters] = useState<MarketplaceFilters>(DEFAULT_FILTERS);
   const [buyTarget, setBuyTarget] = useState<ServiceListItem | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   // Hydration safety: localStorage is only available client-side. Read once
   // on mount; the initial render uses initialView to avoid SSR mismatch.
@@ -298,128 +229,124 @@ export function MarketplacePage({
   };
 
   return (
-    <Layout>
-      <MarketplaceFacets
-        filters={filters}
-        facets={
-          data?.facets ?? { type: [], network: [], asset: [], source: [] }
-        }
-        onChange={setFilters}
+    <Box css={{ display: 'flex', flexDirection: 'column' }}>
+      <ServicesSubNav
+        active="browse"
+        counts={{ browse: data?.total ?? null }}
+        onNewListing={() => setDialogOpen(true)}
       />
+      <Layout>
+        <MarketplaceFacets
+          filters={filters}
+          facets={
+            data?.facets ?? { type: [], network: [], asset: [], source: [] }
+          }
+          onChange={setFilters}
+        />
 
-      <RightCol>
-        <SubNav>
-          <SubNavChip type="button" active aria-current="page">
-            Browse
-            <ChipCount active>{data?.total ?? 0}</ChipCount>
-          </SubNavChip>
-          <SubNavChip type="button" disabled title="Coming soon">
-            My Purchases
-            <ChipCount>0</ChipCount>
-          </SubNavChip>
-          <SubNavChip type="button" disabled title="Coming soon">
-            My Listings
-            <ChipCount>0</ChipCount>
-          </SubNavChip>
-          <Box css={{ flex: 1 }} />
-          <NewListingBtn type="button" disabled title="Coming soon">
-            + New listing
-          </NewListingBtn>
-        </SubNav>
-
-        <ResultsBar>
-          <ResultsCount>
-            <ResultsCountStrong>{data?.total ?? '—'}</ResultsCountStrong>{' '}
-            service{data?.total === 1 ? '' : 's'}
-            {sourceBreakdown ? (
-              <SourceBreakdown>· {sourceBreakdown}</SourceBreakdown>
-            ) : null}
-          </ResultsCount>
-          <Box css={{ flex: 1 }} />
-          <SortLabel>Sort</SortLabel>
-          <SortDropdown
-            value={filters.sort ?? 'recent'}
-            onChange={sort => setFilters(prev => ({ ...prev, sort, page: 1 }))}
-          />
-          <ViewToggle value={view} onChange={setView} />
-        </ResultsBar>
-
-        <Results>
-          {isLoading ? (
-            <LoadingState message="Loading services…" />
-          ) : isError && isStackUnreachable(error) ? (
-            <StackUnreachableState
-              detail={error.message}
-              onRetry={() => refetch()}
-            />
-          ) : isError ? (
-            <ErrorState message={error?.message ?? 'Failed to load catalog'} />
-          ) : !data || (data.items.length === 0 && hasActiveFilters) ? (
-            <EmptyMessage>
-              No services match your filters. Try clearing the search or
-              widening the price range.
-            </EmptyMessage>
-          ) : data.items.length === 0 ? (
-            <EmptyPanel>
-              <EmptyTitle>No services listed yet</EmptyTitle>
-              <EmptyBody>
-                Launch the demo quant agent to create the first x402-gated
-                ServiceOffer, or publish your own endpoint with obol sell.
-              </EmptyBody>
-              <CommandRow>
-                <CommandText title={LAUNCH_DEMO_COMMAND}>
-                  {LAUNCH_DEMO_COMMAND}
-                </CommandText>
-                <CopyButton text={LAUNCH_DEMO_COMMAND} title="Copy command" />
-              </CommandRow>
-            </EmptyPanel>
-          ) : view === 'list' ? (
-            <MarketplaceTable
-              items={data.items}
-              sort={filters.sort ?? 'recent'}
-              onSortChange={sort =>
+        <RightCol>
+          <ResultsBar>
+            <ResultsCount>
+              <ResultsCountStrong>{data?.total ?? '—'}</ResultsCountStrong>{' '}
+              service{data?.total === 1 ? '' : 's'}
+              {sourceBreakdown ? (
+                <SourceBreakdown>· {sourceBreakdown}</SourceBreakdown>
+              ) : null}
+            </ResultsCount>
+            <Box css={{ flex: 1 }} />
+            <SortLabel>Sort</SortLabel>
+            <SortDropdown
+              value={filters.sort ?? 'recent'}
+              onChange={sort =>
                 setFilters(prev => ({ ...prev, sort, page: 1 }))
               }
-              onDetails={onDetails}
-              onBuy={onBuy}
             />
-          ) : (
-            <MarketplaceGrid
-              items={data.items}
-              onDetails={onDetails}
-              onBuy={onBuy}
-            />
-          )}
-          {data && data.total > 0 ? (
-            <PaginationRow>
-              <Subtitle>
-                Page {filters.page ?? 1} of {totalPages}
-              </Subtitle>
-              <Pagination
-                page={filters.page ?? 1}
-                totalPages={totalPages}
-                onPrev={() =>
-                  setFilters(prev => ({
-                    ...prev,
-                    page: Math.max(1, (prev.page ?? 1) - 1),
-                  }))
-                }
-                onNext={() =>
-                  setFilters(prev => ({
-                    ...prev,
-                    page: Math.min(totalPages, (prev.page ?? 1) + 1),
-                  }))
-                }
+            <ViewToggle value={view} onChange={setView} />
+          </ResultsBar>
+
+          <Results>
+            {isLoading ? (
+              <LoadingState message="Loading services…" />
+            ) : isError && isStackUnreachable(error) ? (
+              <StackUnreachableState
+                detail={error.message}
+                onRetry={() => refetch()}
               />
-            </PaginationRow>
-          ) : null}
-        </Results>
-      </RightCol>
+            ) : isError ? (
+              <ErrorState
+                message={error?.message ?? 'Failed to load catalog'}
+              />
+            ) : !data || (data.items.length === 0 && hasActiveFilters) ? (
+              <EmptyMessage>
+                No services match your filters. Try clearing the search or
+                widening the price range.
+              </EmptyMessage>
+            ) : data.items.length === 0 ? (
+              <EmptyPanel>
+                <EmptyTitle>No services listed yet</EmptyTitle>
+                <EmptyBody>
+                  Launch the demo quant agent to create the first x402-gated
+                  ServiceOffer, or publish your own endpoint with obol sell.
+                </EmptyBody>
+                <CommandRow>
+                  <CommandText title={LAUNCH_DEMO_COMMAND}>
+                    {LAUNCH_DEMO_COMMAND}
+                  </CommandText>
+                  <CopyButton text={LAUNCH_DEMO_COMMAND} title="Copy command" />
+                </CommandRow>
+              </EmptyPanel>
+            ) : view === 'list' ? (
+              <MarketplaceTable
+                items={data.items}
+                sort={filters.sort ?? 'recent'}
+                onSortChange={sort =>
+                  setFilters(prev => ({ ...prev, sort, page: 1 }))
+                }
+                onDetails={onDetails}
+                onBuy={onBuy}
+              />
+            ) : (
+              <MarketplaceGrid
+                items={data.items}
+                onDetails={onDetails}
+                onBuy={onBuy}
+              />
+            )}
+            {data && data.total > 0 ? (
+              <PaginationRow>
+                <Subtitle>
+                  Page {filters.page ?? 1} of {totalPages}
+                </Subtitle>
+                <Pagination
+                  page={filters.page ?? 1}
+                  totalPages={totalPages}
+                  onPrev={() =>
+                    setFilters(prev => ({
+                      ...prev,
+                      page: Math.max(1, (prev.page ?? 1) - 1),
+                    }))
+                  }
+                  onNext={() =>
+                    setFilters(prev => ({
+                      ...prev,
+                      page: Math.min(totalPages, (prev.page ?? 1) + 1),
+                    }))
+                  }
+                />
+              </PaginationRow>
+            ) : null}
+          </Results>
+        </RightCol>
+      </Layout>
       <BuyDrawer
         item={buyTarget}
         open={buyTarget !== null}
         onClose={() => setBuyTarget(null)}
       />
-    </Layout>
+      <NewListingDialog
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+      />
+    </Box>
   );
 }
