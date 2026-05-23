@@ -200,7 +200,11 @@ metadata:
   labels:
     app: x402-verifier
 spec:
-  replicas: 2
+  # Single replica — verifier holds per-pod metric registries and per-pod
+  # informer caches; multiple replicas produce metric series drift across
+  # ServiceMonitor scrape rotations and the pruneSeriesNotIn GC (metrics.go)
+  # becomes inconsistent. Single-node k3d gains no HA from 2 replicas.
+  replicas: 1
   selector:
     matchLabels:
       app: x402-verifier
@@ -320,18 +324,6 @@ spec:
       port: 8080
       targetPort: http
       protocol: TCP
-
----
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: x402-verifier
-  namespace: x402
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app: x402-verifier
 
 ---
 # ServiceMonitor for x402-verifier — scrapes the stable Service endpoint
