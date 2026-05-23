@@ -61,6 +61,21 @@ var (
 	PVCGVR            = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"}
 )
 
+// ── ServiceOffer ────────────────────────────────────────────────────────────
+
+// +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Namespaced,shortName=so
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
+// +kubebuilder:printcolumn:name="Model",type=string,JSONPath=`.spec.model.name`
+// +kubebuilder:printcolumn:name="Price",type=string,JSONPath=`.spec.payment.price.perRequest`
+// +kubebuilder:printcolumn:name="Network",type=string,JSONPath=`.spec.payment.network`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+
+// ServiceOffer declares a compute service that can be exposed publicly,
+// gated with x402 payments, and optionally registered on an ERC-8004
+// service registry. Field names align with x402 and ERC-8004 standards.
 type ServiceOffer struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -68,14 +83,48 @@ type ServiceOffer struct {
 	Status            ServiceOfferStatus `json:"status,omitempty"`
 }
 
+// +kubebuilder:object:root=true
+
+// ServiceOfferList is the list form for kubectl/list operations.
+type ServiceOfferList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []ServiceOffer `json:"items"`
+}
+
 type ServiceOfferSpec struct {
-	Type         string                   `json:"type,omitempty"`
-	Agent        ServiceOfferAgent        `json:"agent,omitempty"`
-	Model        ServiceOfferModel        `json:"model,omitempty"`
-	Upstream     ServiceOfferUpstream     `json:"upstream,omitempty"`
-	Payment      ServiceOfferPayment      `json:"payment,omitempty"`
-	Path         string                   `json:"path,omitempty"`
-	Provenance   map[string]string        `json:"provenance,omitempty"`
+	// Service type. 'inference' enables model management; 'http' for any HTTP
+	// service; 'agent' references an Agent CR via spec.agent.ref and the
+	// controller derives upstream + model + skills from the agent's status.
+	// +kubebuilder:default="http"
+	// +kubebuilder:validation:Enum=inference;fine-tuning;http;agent
+	Type string `json:"type,omitempty"`
+
+	// Required when type='agent'. The controller resolves spec.agent.ref to
+	// the referenced Agent CR, derives upstream from Agent.status.endpoint,
+	// and surfaces the agent's pinned model + skills in the 402 response.
+	Agent ServiceOfferAgent `json:"agent,omitempty"`
+
+	// LLM model metadata. Required when the upstream serves an LLM.
+	Model ServiceOfferModel `json:"model,omitempty"`
+
+	// In-cluster service that handles the actual workload.
+	Upstream ServiceOfferUpstream `json:"upstream,omitempty"`
+
+	// +kubebuilder:validation:Required
+	Payment ServiceOfferPayment `json:"payment"`
+
+	// URL path prefix for the HTTPRoute, defaults to /services/<name>.
+	// +kubebuilder:validation:Pattern=`^/[a-zA-Z0-9/_.-]*$`
+	Path string `json:"path,omitempty"`
+
+	// Optional provenance metadata for the service. Tracks how the model or
+	// service was produced (e.g. autoresearch experiment data). Included in
+	// the ERC-8004 registration document when present.
+	Provenance map[string]string `json:"provenance,omitempty"`
+
+	// ERC-8004 registration metadata. Field names align with the
+	// AgentRegistration document schema (ERC-8004 spec).
 	Registration ServiceOfferRegistration `json:"registration,omitempty"`
 }
 
@@ -88,72 +137,148 @@ type ServiceOfferAgent struct {
 }
 
 type ServiceOfferAgentRef struct {
-	Name      string `json:"name,omitempty"`
-	Namespace string `json:"namespace,omitempty"`
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+	// +kubebuilder:validation:Required
+	Namespace string `json:"namespace"`
 }
 
 type ServiceOfferModel struct {
-	Name    string `json:"name,omitempty"`
-	Runtime string `json:"runtime,omitempty"`
+	// Model identifier (e.g. qwen3.5:35b).
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+	// Runtime serving the model.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=ollama;vllm;tgi
+	Runtime string `json:"runtime"`
 }
 
 type ServiceOfferUpstream struct {
-	Service    string `json:"service,omitempty"`
-	Namespace  string `json:"namespace,omitempty"`
-	Port       int64  `json:"port,omitempty"`
+	// Kubernetes Service name.
+	// +kubebuilder:validation:Required
+	Service string `json:"service"`
+	// Namespace of the upstream Service.
+	// +kubebuilder:validation:Required
+	Namespace string `json:"namespace"`
+	// Port on the upstream Service.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:default=11434
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port int64 `json:"port"`
+	// HTTP path used for health probes against the upstream.
+	// +kubebuilder:default="/health"
 	HealthPath string `json:"healthPath,omitempty"`
 }
 
 type ServiceOfferPayment struct {
-	Scheme            string                 `json:"scheme,omitempty"`
-	Network           string                 `json:"network,omitempty"`
-	PayTo             string                 `json:"payTo,omitempty"`
-	MaxTimeoutSeconds int64                  `json:"maxTimeoutSeconds,omitempty"`
-	Asset             ServiceOfferAsset      `json:"asset,omitempty"`
-	Price             ServiceOfferPriceTable `json:"price,omitempty"`
+	// x402 payment scheme.
+	// +kubebuilder:default="exact"
+	// +kubebuilder:validation:Enum=exact
+	Scheme string `json:"scheme,omitempty"`
+	// Chain identifier for payments (human-friendly). Reconciler resolves
+	// to CAIP-2 format (e.g., "base-sepolia" → "eip155:84532").
+	// +kubebuilder:validation:Required
+	Network string `json:"network"`
+	// USDC recipient wallet address (x402: payTo).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^0x[0-9a-fA-F]{40}$`
+	PayTo string `json:"payTo"`
+	// Payment validity window in seconds (x402: maxTimeoutSeconds).
+	// +kubebuilder:default=300
+	MaxTimeoutSeconds int64 `json:"maxTimeoutSeconds,omitempty"`
+	// Optional token metadata override for x402 settlement. When omitted,
+	// the verifier uses the chain default asset.
+	Asset ServiceOfferAsset `json:"asset,omitempty"`
+	// Pricing table with per-unit prices in USDC (human-readable decimals).
+	// Which fields are applicable depends on the workload type.
+	// +kubebuilder:validation:Required
+	Price ServiceOfferPriceTable `json:"price"`
 }
 
 type ServiceOfferAsset struct {
-	Address        string `json:"address,omitempty"`
-	Symbol         string `json:"symbol,omitempty"`
-	Decimals       int64  `json:"decimals,omitempty"`
+	// ERC-20 contract address.
+	// +kubebuilder:validation:Pattern=`^0x[0-9a-fA-F]{40}$`
+	Address string `json:"address,omitempty"`
+	// Human-friendly token symbol (e.g. USDC, OBOL).
+	Symbol string `json:"symbol,omitempty"`
+	// Token decimals in atomic units.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=255
+	Decimals int64 `json:"decimals,omitempty"`
+	// x402 transfer method for the asset.
+	// +kubebuilder:validation:Enum=eip3009;permit2
 	TransferMethod string `json:"transferMethod,omitempty"`
-	EIP712Name     string `json:"eip712Name,omitempty"`
-	EIP712Version  string `json:"eip712Version,omitempty"`
+	// EIP-712 domain name used by the token.
+	EIP712Name string `json:"eip712Name,omitempty"`
+	// EIP-712 domain version used by the token.
+	EIP712Version string `json:"eip712Version,omitempty"`
 }
 
 type ServiceOfferPriceTable struct {
+	// Flat per-request price in USDC. Applicable to all types.
 	PerRequest string `json:"perRequest,omitempty"`
-	PerMTok    string `json:"perMTok,omitempty"`
-	PerHour    string `json:"perHour,omitempty"`
-	PerEpoch   string `json:"perEpoch,omitempty"`
+	// Per-million-tokens price in USDC. Inference only.
+	PerMTok string `json:"perMTok,omitempty"`
+	// Per-compute-hour price in USDC. Fine-tuning only.
+	PerHour string `json:"perHour,omitempty"`
+	// Per-training-epoch price in USDC. Fine-tuning only.
+	PerEpoch string `json:"perEpoch,omitempty"`
 }
 
 type ServiceOfferRegistration struct {
-	Enabled        bool                  `json:"enabled,omitempty"`
-	Name           string                `json:"name,omitempty"`
-	Description    string                `json:"description,omitempty"`
-	Image          string                `json:"image,omitempty"`
-	Services       []ServiceOfferService `json:"services,omitempty"`
-	SupportedTrust []string              `json:"supportedTrust,omitempty"`
-	Skills         []string              `json:"skills,omitempty"`
-	Domains        []string              `json:"domains,omitempty"`
-	Metadata       map[string]string     `json:"metadata,omitempty"`
+	// If true, register on ERC-8004 after routing is live.
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled,omitempty"`
+	// Agent name (ERC-8004: AgentRegistration.name).
+	Name string `json:"name,omitempty"`
+	// Agent description (ERC-8004: AgentRegistration.description).
+	Description string `json:"description,omitempty"`
+	// Agent icon URL (ERC-8004: AgentRegistration.image).
+	Image string `json:"image,omitempty"`
+	// Service endpoints (ERC-8004: AgentRegistration.services[]).
+	Services []ServiceOfferService `json:"services,omitempty"`
+	// Trust verification methods (ERC-8004: AgentRegistration.supportedTrust[]).
+	// Valid values: reputation, crypto-economic, tee-attestation.
+	SupportedTrust []string `json:"supportedTrust,omitempty"`
+	// OASF skills for discovery (e.g.
+	// natural_language_processing/text_generation). Mapped to an OASF
+	// service entry in the registration JSON.
+	Skills []string `json:"skills,omitempty"`
+	// OASF domains for discovery (e.g. technology/artificial_intelligence).
+	// Mapped to an OASF service entry in the registration JSON.
+	Domains []string `json:"domains,omitempty"`
+	// Additional registration metadata published into the generated
+	// agent-registration.json for discovery and ranking.
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 type ServiceOfferService struct {
-	Name     string `json:"name,omitempty"`
-	Endpoint string `json:"endpoint,omitempty"`
-	Version  string `json:"version,omitempty"`
+	// Service type: web, A2A, MCP, OASF, ENS, DID, email.
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+	// Service URL. Auto-filled from tunnel URL if empty.
+	// +kubebuilder:validation:Required
+	Endpoint string `json:"endpoint"`
+	// Protocol version (SHOULD per ERC-8004 spec).
+	Version string `json:"version,omitempty"`
 }
 
 type ServiceOfferStatus struct {
-	Conditions         []Condition                  `json:"conditions,omitempty"`
-	Endpoint           string                       `json:"endpoint,omitempty"`
-	AgentID            string                       `json:"agentId,omitempty"`
-	RegistrationTxHash string                       `json:"registrationTxHash,omitempty"`
-	ObservedGeneration int64                        `json:"observedGeneration,omitempty"`
-	AgentResolution    *ServiceOfferAgentResolution `json:"agentResolution,omitempty"`
+	// Condition types: ModelReady, UpstreamHealthy, PaymentGateReady,
+	// RoutePublished, Registered, Ready.
+	Conditions []Condition `json:"conditions,omitempty"`
+	// The public endpoint URL once the route is published.
+	Endpoint string `json:"endpoint,omitempty"`
+	// ERC-8004 agent NFT token ID after on-chain registration.
+	AgentID string `json:"agentId,omitempty"`
+	// Transaction hash of the ERC-8004 registration.
+	RegistrationTxHash string `json:"registrationTxHash,omitempty"`
+	// The generation observed by the controller.
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// Controller's resolved view of an agent-type offer's referenced Agent.
+	// Populated only when type=agent and the Agent is Ready.
+	AgentResolution *ServiceOfferAgentResolution `json:"agentResolution,omitempty"`
 }
 
 // ServiceOfferAgentResolution is the controller's resolved view of an
@@ -169,13 +294,35 @@ type ServiceOfferAgentResolution struct {
 }
 
 type Condition struct {
-	Type               string      `json:"type"`
-	Status             string      `json:"status"`
-	Reason             string      `json:"reason,omitempty"`
-	Message            string      `json:"message,omitempty"`
+	// Condition type.
+	// +kubebuilder:validation:Required
+	Type string `json:"type"`
+	// Status of the condition.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=True;False;Unknown
+	Status string `json:"status"`
+	// Machine-readable reason for the condition.
+	Reason string `json:"reason,omitempty"`
+	// Human-readable message with details.
+	Message string `json:"message,omitempty"`
+	// Last time the condition transitioned.
 	LastTransitionTime metav1.Time `json:"lastTransitionTime,omitempty"`
 }
 
+// ── RegistrationRequest ─────────────────────────────────────────────────────
+
+// +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Namespaced,shortName=rr
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Offer",type=string,JSONPath=`.spec.serviceOfferName`
+// +kubebuilder:printcolumn:name="State",type=string,JSONPath=`.spec.desiredState`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="AgentID",type=string,JSONPath=`.status.agentId`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+
+// RegistrationRequest isolates ERC-8004 publication and on-chain side
+// effects from the main ServiceOffer reconciliation loop. ServiceOffer
+// remains the source of truth.
 type RegistrationRequest struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -183,11 +330,25 @@ type RegistrationRequest struct {
 	Status            RegistrationRequestStatus `json:"status,omitempty"`
 }
 
+// +kubebuilder:object:root=true
+
+// RegistrationRequestList is the list form for kubectl/list operations.
+type RegistrationRequestList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []RegistrationRequest `json:"items"`
+}
+
 type RegistrationRequestSpec struct {
-	ServiceOfferName      string `json:"serviceOfferName,omitempty"`
-	ServiceOfferNamespace string `json:"serviceOfferNamespace,omitempty"`
-	DesiredState          string `json:"desiredState,omitempty"`
-	Chain                 string `json:"chain,omitempty"`
+	// +kubebuilder:validation:Required
+	ServiceOfferName string `json:"serviceOfferName"`
+	// +kubebuilder:validation:Required
+	ServiceOfferNamespace string `json:"serviceOfferNamespace"`
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=Active;Tombstoned
+	DesiredState string `json:"desiredState"`
+	// ERC-8004 registration chain alias for this request.
+	Chain string `json:"chain,omitempty"`
 }
 
 type RegistrationRequestStatus struct {
@@ -247,6 +408,19 @@ func (o *ServiceOffer) IsPaused() bool {
 
 // ── PurchaseRequest ─────────────────────────────────────────────────────────
 
+// +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Namespaced,shortName=pr
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Endpoint",type=string,JSONPath=`.spec.endpoint`
+// +kubebuilder:printcolumn:name="Model",type=string,JSONPath=`.spec.model`
+// +kubebuilder:printcolumn:name="Price",type=string,JSONPath=`.spec.payment.price`
+// +kubebuilder:printcolumn:name="Remaining",type=integer,JSONPath=`.status.remaining`
+// +kubebuilder:printcolumn:name="Spent",type=integer,JSONPath=`.status.spent`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+
+// PurchaseRequest is the buyer-side request for pre-signed x402 auths
+// against a remote inference endpoint.
 type PurchaseRequest struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -254,59 +428,110 @@ type PurchaseRequest struct {
 	Status            PurchaseRequestStatus `json:"status,omitempty"`
 }
 
+// +kubebuilder:object:root=true
+
+// PurchaseRequestList is the list form for kubectl/list operations.
+type PurchaseRequestList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []PurchaseRequest `json:"items"`
+}
+
 type PurchaseRequestSpec struct {
-	Endpoint       string             `json:"endpoint"`
-	Model          string             `json:"model"`
-	Count          int                `json:"count"`
+	// Full URL to the x402-gated inference endpoint.
+	// +kubebuilder:validation:Required
+	Endpoint string `json:"endpoint"`
+	// Remote model ID (used as paid/<model> in LiteLLM).
+	// +kubebuilder:validation:Required
+	Model string `json:"model"`
+	// Number of pre-signed auths to create.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=2500
+	Count int `json:"count"`
+	// Pre-signed x402 payments (legacy ERC-3009 auths still supported).
 	PreSignedAuths []PreSignedAuth    `json:"preSignedAuths,omitempty"`
 	AutoRefill     PurchaseAutoRefill `json:"autoRefill,omitempty"`
-	Payment        PurchasePayment    `json:"payment"`
+	// +kubebuilder:validation:Required
+	Payment PurchasePayment `json:"payment"`
 }
 
+// +kubebuilder:object:generate=false
+
+// PreSignedAuth carries a pre-signed x402 payment authorization. The
+// Payment map is opaque (forwarded verbatim to the buyer sidecar / x402
+// facilitator) which can't be deep-copied by controller-gen; DeepCopy
+// methods for this type are hand-written in deepcopy_manual.go.
 type PreSignedAuth struct {
-	ID          string                 `json:"id,omitempty"`
+	ID string `json:"id,omitempty"`
+	// +kubebuilder:pruning:PreserveUnknownFields
+	// +kubebuilder:validation:Schemaless
 	Payment     map[string]interface{} `json:"payment,omitempty"`
-	Signature   string                 `json:"signature"`
-	From        string                 `json:"from"`
-	To          string                 `json:"to"`
-	Value       string                 `json:"value"`
-	ValidAfter  string                 `json:"validAfter"`
-	ValidBefore string                 `json:"validBefore"`
-	Nonce       string                 `json:"nonce"`
+	Signature   string                 `json:"signature,omitempty"`
+	From        string                 `json:"from,omitempty"`
+	To          string                 `json:"to,omitempty"`
+	Value       string                 `json:"value,omitempty"`
+	ValidAfter  string                 `json:"validAfter,omitempty"`
+	ValidBefore string                 `json:"validBefore,omitempty"`
+	Nonce       string                 `json:"nonce,omitempty"`
 }
 
+// PurchaseAutoRefill drives the agent-managed auto-refill policy for a
+// PurchaseRequest. The reconciler reads MaxTotal + MaxSpendPerDay as
+// budget caps before signing more auths; without these fields populated
+// the agent will not auto-refill beyond the initial Count.
 type PurchaseAutoRefill struct {
-	Enabled        bool   `json:"enabled,omitempty"`
-	Threshold      int    `json:"threshold,omitempty"`
-	Count          int    `json:"count,omitempty"`
-	MaxTotal       int    `json:"maxTotal,omitempty"`
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled,omitempty"`
+	// Refill when remaining < threshold.
+	// +kubebuilder:validation:Minimum=0
+	Threshold int `json:"threshold,omitempty"`
+	// Number of auths to sign on refill.
+	// +kubebuilder:validation:Minimum=1
+	Count int `json:"count,omitempty"`
+	// Cap total auths ever signed.
+	MaxTotal int `json:"maxTotal,omitempty"`
+	// Max micro-USDC spend per day.
 	MaxSpendPerDay string `json:"maxSpendPerDay,omitempty"`
 }
 
 type PurchasePayment struct {
-	Network             string `json:"network"`
-	PayTo               string `json:"payTo"`
-	Price               string `json:"price"`
-	Asset               string `json:"asset"`
-	AssetSymbol         string `json:"assetSymbol,omitempty"`
-	AssetDecimals       int64  `json:"assetDecimals,omitempty"`
+	// +kubebuilder:validation:Required
+	Network string `json:"network"`
+	// +kubebuilder:validation:Required
+	PayTo string `json:"payTo"`
+	// Atomic token units per request.
+	// +kubebuilder:validation:Required
+	Price string `json:"price"`
+	// ERC-20 contract address.
+	// +kubebuilder:validation:Required
+	Asset string `json:"asset"`
+	// Human-friendly token symbol (e.g. USDC, OBOL).
+	AssetSymbol string `json:"assetSymbol,omitempty"`
+	// Token decimals in atomic units.
+	AssetDecimals int64 `json:"assetDecimals,omitempty"`
+	// x402 transfer method used for this asset.
 	AssetTransferMethod string `json:"assetTransferMethod,omitempty"`
-	EIP712Name          string `json:"eip712Name,omitempty"`
-	EIP712Version       string `json:"eip712Version,omitempty"`
+	// EIP-712 domain name used for signing.
+	EIP712Name string `json:"eip712Name,omitempty"`
+	// EIP-712 domain version used for signing.
+	EIP712Version string `json:"eip712Version,omitempty"`
 }
 
 type PurchaseRequestStatus struct {
 	ObservedGeneration int64       `json:"observedGeneration,omitempty"`
 	Conditions         []Condition `json:"conditions,omitempty"`
-	PublicModel        string      `json:"publicModel,omitempty"`
-	Remaining          int         `json:"remaining,omitempty"`
-	Spent              int         `json:"spent,omitempty"`
-	TotalSigned        int         `json:"totalSigned,omitempty"`
-	TotalSpent         string      `json:"totalSpent,omitempty"`
-	ProbedAt           string      `json:"probedAt,omitempty"`
-	ProbedPrice        string      `json:"probedPrice,omitempty"`
-	WalletBalance      string      `json:"walletBalance,omitempty"`
-	SignerAddress      string      `json:"signerAddress,omitempty"`
+	// LiteLLM model name (paid/<model>).
+	PublicModel string `json:"publicModel,omitempty"`
+	Remaining   int    `json:"remaining,omitempty"`
+	Spent       int    `json:"spent,omitempty"`
+	TotalSigned int    `json:"totalSigned,omitempty"`
+	TotalSpent  string `json:"totalSpent,omitempty"`
+	// +kubebuilder:validation:Format=date-time
+	ProbedAt      string `json:"probedAt,omitempty"`
+	ProbedPrice   string `json:"probedPrice,omitempty"`
+	WalletBalance string `json:"walletBalance,omitempty"`
+	SignerAddress string `json:"signerAddress,omitempty"`
 }
 
 func (pr *PurchaseRequest) EffectiveBuyerNamespace() string {
@@ -315,6 +540,21 @@ func (pr *PurchaseRequest) EffectiveBuyerNamespace() string {
 
 // ── Agent ───────────────────────────────────────────────────────────────────
 
+// +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Namespaced,shortName=ag
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Runtime",type=string,JSONPath=`.spec.runtime`
+// +kubebuilder:printcolumn:name="Model",type=string,JSONPath=`.status.pinnedModel`
+// +kubebuilder:printcolumn:name="Wallet",type=string,JSONPath=`.status.walletAddress`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+
+// Agent is the declarative spec for an Obol Stack agent (Hermes today,
+// OpenClaw later). Decouples agent lifecycle from selling: `obol sell
+// agent <name>` references an existing Agent rather than provisioning
+// one inline. Internal manager agents with RBAC can also create Agent
+// resources to spawn sub-agents.
 type Agent struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -322,25 +562,58 @@ type Agent struct {
 	Status            AgentStatus `json:"status,omitempty"`
 }
 
+// +kubebuilder:object:root=true
+
+// AgentList is the list form for kubectl/list operations.
+type AgentList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Agent `json:"items"`
+}
+
 type AgentSpec struct {
-	Runtime   string      `json:"runtime,omitempty"`
-	Model     string      `json:"model,omitempty"`
-	Skills    []string    `json:"skills,omitempty"`
+	// Agent runtime (only hermes today; openclaw planned).
+	// +kubebuilder:default=hermes
+	// +kubebuilder:validation:Enum=hermes
+	Runtime string `json:"runtime,omitempty"`
+	// LiteLLM model name to pin. Empty = controller picks cluster
+	// top-of-rank on first deploy and writes status.pinnedModel.
+	// +kubebuilder:validation:MaxLength=256
+	Model string `json:"model,omitempty"`
+	// Allow-listed skills written to the per-agent skills dir on first
+	// reconcile. Agent can edit afterwards; this is a seed, not a sandbox.
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:Pattern=`^[a-z0-9][a-z0-9-]*$`
+	// +kubebuilder:validation:items:MaxLength=64
+	Skills []string `json:"skills,omitempty"`
+	// Operator-supplied objective text. Substituted into the SOUL.md
+	// template by the seeder on first write. Agent owns SOUL.md after that.
+	// +kubebuilder:validation:MaxLength=4096
 	Objective string      `json:"objective,omitempty"`
 	Wallet    AgentWallet `json:"wallet,omitempty"`
 }
 
 type AgentWallet struct {
+	// Provision a per-namespace remote-signer keystore. Address is
+	// published in status.walletAddress.
+	// +kubebuilder:default=false
 	Create bool `json:"create,omitempty"`
 }
 
 type AgentStatus struct {
-	ObservedGeneration int64       `json:"observedGeneration,omitempty"`
-	Phase              string      `json:"phase,omitempty"`
-	PinnedModel        string      `json:"pinnedModel,omitempty"`
-	WalletAddress      string      `json:"walletAddress,omitempty"`
-	Endpoint           string      `json:"endpoint,omitempty"`
-	Conditions         []Condition `json:"conditions,omitempty"`
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// Pending | Provisioning | Ready | Failed
+	Phase string `json:"phase,omitempty"`
+	// Actual model the agent is using (= spec.model when set, otherwise
+	// the auto-picked top-of-rank).
+	PinnedModel string `json:"pinnedModel,omitempty"`
+	// Agent's signing address when wallet.create=true. Empty otherwise.
+	// +kubebuilder:validation:Pattern=`^(0x[0-9a-fA-F]{40})?$`
+	WalletAddress string `json:"walletAddress,omitempty"`
+	// Cluster-internal URL for the agent runtime (e.g.
+	// http://hermes.agent-quant.svc.cluster.local:8642).
+	Endpoint   string      `json:"endpoint,omitempty"`
+	Conditions []Condition `json:"conditions,omitempty"`
 }
 
 func (a *Agent) EffectiveRuntime() string {
@@ -365,12 +638,22 @@ func (a *Agent) IsReady() bool {
 	return a.Status.Phase == AgentPhaseReady
 }
 
-// AgentIdentity is the durable, on-chain identity an operator controls in the
-// ERC-8004 Identity Registry. A single AgentIdentity outlives ServiceOffers:
-// deleting the last ServiceOffer that references it does not delete the NFT,
-// the published registration document, or the recorded agentId; instead the
-// renderer publishes a tombstone (active:false, x402Support:false) so external
-// observers still see the historical record.
+// ── AgentIdentity ───────────────────────────────────────────────────────────
+
+// +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Namespaced,shortName=aid
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Chains",type=string,JSONPath=`.status.registrations[*].chain`
+// +kubebuilder:printcolumn:name="AgentIDs",type=string,JSONPath=`.status.registrations[*].agentId`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+
+// AgentIdentity is the durable, on-chain identity an operator controls in
+// the ERC-8004 Identity Registry. A single AgentIdentity outlives
+// ServiceOffers: deleting the last ServiceOffer that references it does
+// not delete the NFT, the published registration document, or the
+// recorded agentId; instead the renderer publishes a tombstone
+// (active:false, x402Support:false) so external observers still see the
+// historical record.
 type AgentIdentity struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -378,16 +661,31 @@ type AgentIdentity struct {
 	Status            AgentIdentityStatus `json:"status,omitempty"`
 }
 
+// +kubebuilder:object:root=true
+
+// AgentIdentityList is the list form for kubectl/list operations.
+type AgentIdentityList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []AgentIdentity `json:"items"`
+}
+
 type AgentIdentitySpec struct {
 }
 
 type AgentIdentityStatus struct {
+	// Per-chain ERC-8004 registrations for this identity document.
 	Registrations []AgentIdentityRegistration `json:"registrations,omitempty"`
 }
 
 type AgentIdentityRegistration struct {
-	Chain   string `json:"chain,omitempty"`
-	AgentID string `json:"agentId,omitempty"`
+	// ERC-8004 registration chain alias.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=64
+	Chain string `json:"chain"`
+	// On-chain ERC-721 tokenId on the given chain.
+	// +kubebuilder:validation:Required
+	AgentID string `json:"agentId"`
 }
 
 func AgentIdentityAgentIDForChain(status AgentIdentityStatus, chain string) string {
