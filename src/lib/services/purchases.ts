@@ -3,7 +3,7 @@
  * Kubernetes CustomObjectsApi. Mirrors SellClient.
  */
 
-import { CustomObjectsApi, KubeConfig } from '@kubernetes/client-node';
+import { CustomObjectsApi } from '@kubernetes/client-node';
 import { ObjectCustomObjectsApi } from '@kubernetes/client-node/dist/gen/types/ObjectParamAPI';
 import type {
   PurchaseAutoRefill,
@@ -12,6 +12,7 @@ import type {
   PurchaseRequest,
   PurchaseStatus,
 } from '@/types/purchase';
+import { sharedKubeConfig } from '@/lib/services/kube';
 
 const CRD_GROUP = 'obol.org';
 const CRD_VERSION = 'v1alpha1';
@@ -21,17 +22,7 @@ export class PurchasesClient {
   private customApi: ObjectCustomObjectsApi;
 
   constructor() {
-    const kc = new KubeConfig();
-    if (process.env.KUBERNETES_SERVICE_HOST) {
-      kc.loadFromCluster();
-    } else {
-      if (!process.env.NEXT_PUBLIC_KUBECONFIG) {
-        throw new Error(
-          'NEXT_PUBLIC_KUBECONFIG required for local development'
-        );
-      }
-      kc.loadFromFile(process.env.NEXT_PUBLIC_KUBECONFIG);
-    }
+    const kc = sharedKubeConfig();
     this.customApi = kc.makeApiClient(CustomObjectsApi);
   }
 

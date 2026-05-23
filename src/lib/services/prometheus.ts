@@ -44,9 +44,11 @@ export class PrometheusClient {
   }
 
   /**
-   * Map of "<namespace>/<offer-name>" -> lifetime charged-request count,
-   * summed across x402-verifier replicas. Reads from the
-   * `x402:revenue:lifetime_by_offer` recording rule maintained by the
+   * Map of "<namespace>/<offer-name>" -> total charged-request count
+   * (summed across currently-alive verifier replicas; resets on rollout —
+   * the rule was renamed in obol-stack PR #516 from lifetime_by_offer to
+   * total_by_offer_current to match its actual semantics). Reads from the
+   * `x402:revenue:total_by_offer_current` recording rule maintained by the
    * PrometheusRule in internal/embed/infrastructure/base/templates/
    * x402-prometheus-rules.yaml. Falls back to the raw counter so the page
    * still works if the rule hasn't propagated yet.
@@ -58,7 +60,7 @@ export class PrometheusClient {
     const result = new Map<string, number>();
     try {
       const response = await this.query(
-        'x402:revenue:lifetime_by_offer or sum by (offer_namespace, offer_name) (obol_x402_verifier_charged_requests_total)'
+        'x402:revenue:total_by_offer_current or sum by (offer_namespace, offer_name) (obol_x402_verifier_charged_requests_total)'
       );
       for (const row of response.data.result) {
         const ns = row.metric.offer_namespace;

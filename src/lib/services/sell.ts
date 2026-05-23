@@ -5,7 +5,6 @@
 
 import {
   CustomObjectsApi,
-  KubeConfig,
   PatchStrategy,
   setHeaderOptions,
 } from '@kubernetes/client-node';
@@ -17,6 +16,7 @@ import type {
   ServiceOfferCondition,
   ServiceOfferType,
 } from '@/types/sell';
+import { sharedKubeConfig } from '@/lib/services/kube';
 
 const CRD_GROUP = 'obol.org';
 const CRD_VERSION = 'v1alpha1';
@@ -26,17 +26,7 @@ export class SellClient {
   private customApi: ObjectCustomObjectsApi;
 
   constructor() {
-    const kc = new KubeConfig();
-    if (process.env.KUBERNETES_SERVICE_HOST) {
-      kc.loadFromCluster();
-    } else {
-      if (!process.env.NEXT_PUBLIC_KUBECONFIG) {
-        throw new Error(
-          'NEXT_PUBLIC_KUBECONFIG required for local development'
-        );
-      }
-      kc.loadFromFile(process.env.NEXT_PUBLIC_KUBECONFIG);
-    }
+    const kc = sharedKubeConfig();
     this.customApi = kc.makeApiClient(CustomObjectsApi);
   }
 
