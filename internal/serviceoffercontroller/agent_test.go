@@ -454,7 +454,7 @@ func getAgent(t *testing.T, c *Controller, namespace, name string) *monetizeapi.
 	return &a
 }
 
-func agentCondition(t *testing.T, a *monetizeapi.Agent, condType string) monetizeapi.Condition {
+func agentCondition(t *testing.T, a *monetizeapi.Agent, condType string) metav1.Condition {
 	t.Helper()
 	for _, c := range a.Status.Conditions {
 		if c.Type == condType {
@@ -462,5 +462,5 @@ func agentCondition(t *testing.T, a *monetizeapi.Agent, condType string) monetiz
 		}
 	}
 	t.Fatalf("missing agent condition %q", condType)
-	return monetizeapi.Condition{}
+	return metav1.Condition{}
 }

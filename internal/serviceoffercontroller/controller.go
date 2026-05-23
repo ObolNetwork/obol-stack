@@ -77,6 +77,12 @@ type Controller struct {
 
 	pendingAuths sync.Map // key: "ns/name" → []map[string]string
 
+	// loggedPausedAnnotationMigration tracks "ns/name" → struct{} for
+	// offers that have already had their annotation-based-pause read
+	// logged once, so we don't spam the controller log every reconcile.
+	// Will be removed alongside the annotation read in v0.11.0.
+	loggedPausedAnnotationMigration sync.Map
+
 	httpClient *http.Client
 
 	// litellmURLOverride is used in tests to point at a local httptest server
@@ -431,6 +437,16 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 	status.ObservedGeneration = offer.Generation
 	status.Endpoint = offer.EffectivePath()
 
+	// Mirror the (spec.paused | legacy annotation) intent as a typed
+	// status condition so observers can read pause state from the
+	// canonical status block, not by parsing other-condition reasons.
+	paused := offer.IsPaused()
+	pausedByAnnotation := offer.IsPausedByAnnotation()
+	c.recordPausedCondition(&status, offer, paused, pausedByAnnotation)
+	if pausedByAnnotation {
+		c.logPausedAnnotationDeprecationOnce(offer)
+	}
+
 	if offer.IsAgent() {
 		ready, resolveErr := c.resolveAgentOffer(ctx, offer, &status)
 		if resolveErr != nil {
@@ -441,7 +457,11 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 			setCondition(&status, "UpstreamHealthy", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
 			setCondition(&status, "PaymentGateReady", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
 			setCondition(&status, "RoutePublished", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
-			setCondition(&status, "Ready", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
+			// Ready is now a pure rollup computed at end-of-reconcile from
+			// the predicate conditions above. Don't set it independently
+			// here; the rollup will naturally evaluate to False because
+			// the predicates are False.
+			rollupReady(&status, offer.Generation)
 			return c.updateOfferStatus(ctx, raw, status)
 		}
 	}
@@ -455,7 +475,7 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		return err
 	}
 
-	if offer.IsPaused() {
+	if paused {
 		if err := c.deleteRouteChildren(ctx, offer); err != nil {
 			return err
 		}
@@ -479,16 +499,7 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		return err
 	}
 
-	ready := isConditionTrue(status, "ModelReady") &&
-		isConditionTrue(status, "UpstreamHealthy") &&
-		isConditionTrue(status, "PaymentGateReady") &&
-		isConditionTrue(status, "RoutePublished") &&
-		isConditionTrue(status, "Registered")
-	if ready {
-		setCondition(&status, "Ready", "True", "Reconciled", "Offer reconciled successfully")
-	} else {
-		setCondition(&status, "Ready", "False", "Reconciling", "Offer is not fully reconciled yet")
-	}
+	ready := rollupReady(&status, offer.Generation)
 
 	if err := c.updateOfferStatus(ctx, raw, status); err != nil {
 		return err
@@ -1392,4 +1403,57 @@ func httpRouteAccepted(route *unstructured.Unstructured) bool {
 
 func md5Sum(content string) [16]byte {
 	return md5.Sum([]byte(content))
+}
+
+// recordPausedCondition writes the typed Paused condition to status,
+// distinguishing whether the pause came from spec.paused (the canonical
+// path) or the legacy obol.org/paused annotation (one-release back-compat).
+// The condition mirrors observed state so observers can read pause from
+// status.conditions[type==Paused], not by parsing other-condition reasons.
+func (c *Controller) recordPausedCondition(status *monetizeapi.ServiceOfferStatus, offer *monetizeapi.ServiceOffer, paused, byAnnotation bool) {
+	switch {
+	case paused && byAnnotation:
+		setConditionWithGeneration(status, "Paused", "True", "PausedByAnnotation",
+			"Offer paused via legacy obol.org/paused annotation (migrate to spec.paused before v0.11.0)",
+			offer.Generation)
+	case paused:
+		setConditionWithGeneration(status, "Paused", "True", "PausedBySpec",
+			"Offer paused via spec.paused=true",
+			offer.Generation)
+	default:
+		setConditionWithGeneration(status, "Paused", "False", "NotPaused",
+			"Offer is not paused", offer.Generation)
+	}
+}
+
+// logPausedAnnotationDeprecationOnce emits a single warning per offer
+// when the controller observes pause state via the legacy annotation
+// instead of spec.paused. The dedupe map prevents log spam across
+// reconcile passes. Will be removed alongside the annotation read in
+// v0.11.0.
+func (c *Controller) logPausedAnnotationDeprecationOnce(offer *monetizeapi.ServiceOffer) {
+	key := offer.Namespace + "/" + offer.Name
+	if _, loaded := c.loggedPausedAnnotationMigration.LoadOrStore(key, struct{}{}); loaded {
+		return
+	}
+	log.Printf("ServiceOffer %s: paused via legacy obol.org/paused annotation; migrate to spec.paused. Annotation read will be removed in v0.11.0", key)
+}
+
+// rollupReady computes the canonical Ready condition as the AND of the
+// predicate conditions and writes it back to status. Returns the final
+// boolean so callers can decide whether to requeue. Centralising this
+// removes drift between independent setCondition("Ready", ...) call
+// sites that previously made Ready disagree with the predicates.
+func rollupReady(status *monetizeapi.ServiceOfferStatus, generation int64) bool {
+	ready := isConditionTrue(*status, "ModelReady") &&
+		isConditionTrue(*status, "UpstreamHealthy") &&
+		isConditionTrue(*status, "PaymentGateReady") &&
+		isConditionTrue(*status, "RoutePublished") &&
+		isConditionTrue(*status, "Registered")
+	if ready {
+		setConditionWithGeneration(status, "Ready", "True", "Reconciled", "Offer reconciled successfully", generation)
+	} else {
+		setConditionWithGeneration(status, "Ready", "False", "Reconciling", "Offer is not fully reconciled yet", generation)
+	}
+	return ready
 }

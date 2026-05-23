@@ -13,6 +13,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"k8s.io/apimachinery/pkg/api/equality"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -55,7 +56,7 @@ func (c *Controller) reconcilePurchase(ctx context.Context, key string) error {
 		status = monetizeapi.PurchaseRequestStatus{}
 	}
 	status.ObservedGeneration = pr.Generation
-	status.Conditions = append([]monetizeapi.Condition{}, status.Conditions...)
+	status.Conditions = append([]metav1.Condition{}, status.Conditions...)
 
 	// Stage 1: Probe
 	if !purchaseConditionIsTrue(status.Conditions, "Probed") {
@@ -380,33 +381,36 @@ func (c *Controller) updatePurchaseStatus(ctx context.Context, raw *unstructured
 	return err
 }
 
-func purchaseConditionIsTrue(conditions []monetizeapi.Condition, condType string) bool {
-	for _, c := range conditions {
-		if c.Type == condType {
-			return c.Status == "True"
-		}
-	}
-	return false
+func purchaseConditionIsTrue(conditions []metav1.Condition, condType string) bool {
+	return apimeta.IsStatusConditionTrue(conditions, condType)
 }
 
-func setPurchaseCondition(conditions *[]monetizeapi.Condition, condType, status, reason, message string) {
-	now := metav1.Now()
-	for i, c := range *conditions {
-		if c.Type == condType {
-			if c.Status != status {
-				(*conditions)[i].LastTransitionTime = now
-			}
-			(*conditions)[i].Status = status
-			(*conditions)[i].Reason = reason
-			(*conditions)[i].Message = message
-			return
-		}
-	}
-	*conditions = append(*conditions, monetizeapi.Condition{
-		Type:               condType,
-		Status:             status,
-		Reason:             reason,
-		Message:            message,
-		LastTransitionTime: now,
+// setPurchaseCondition uses apimeta.SetStatusCondition for SSA-safe
+// dedupe-by-type and LastTransitionTime semantics. Callers that have
+// the PurchaseRequest's observedGeneration handy should pass it
+// through; the lifecycle reconciler stamps it on each cycle so we
+// take it from the in-progress status.
+func setPurchaseCondition(conditions *[]metav1.Condition, condType, status, reason, message string) {
+	apimeta.SetStatusCondition(conditions, metav1.Condition{
+		Type:    condType,
+		Status:  metav1.ConditionStatus(status),
+		Reason:  reason,
+		Message: message,
 	})
+}
+
+// setPurchaseConditionWithGeneration is the generation-aware variant.
+// New call sites (and any sites that already plumb the PurchaseRequest
+// in) should prefer this so observers can detect stale-view conditions.
+func setPurchaseConditionWithGeneration(conditions *[]metav1.Condition, condType, status, reason, message string, generation int64) {
+	cond := metav1.Condition{
+		Type:    condType,
+		Status:  metav1.ConditionStatus(status),
+		Reason:  reason,
+		Message: message,
+	}
+	if generation > 0 {
+		cond.ObservedGeneration = generation
+	}
+	apimeta.SetStatusCondition(conditions, cond)
 }

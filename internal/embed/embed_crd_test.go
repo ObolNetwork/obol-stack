@@ -194,7 +194,7 @@ func TestServiceOfferCRD_PrinterColumns(t *testing.T) {
 		t.Fatal("additionalPrinterColumns missing or wrong type")
 	}
 
-	expected := []string{"Type", "Model", "Price", "Network", "Ready", "Age"}
+	expected := []string{"Type", "Model", "Price", "Network", "Ready", "Paused", "Age"}
 	if len(cols) != len(expected) {
 		t.Fatalf("got %d printer columns, want %d", len(cols), len(expected))
 	}

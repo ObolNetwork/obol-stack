@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -567,32 +567,18 @@ func (c *Controller) isAgentDeploymentReady(ctx context.Context, namespace strin
 // same as the rest of the controller; Go resolves them by receiver.)
 
 // setAgentCondition is the AgentStatus equivalent of setCondition in
-// render.go. Kept separate from the ServiceOffer flavour because the
-// existing helper is typed against ServiceOfferStatus; refactoring both
-// onto a shared []Condition helper is a clean follow-up but out of scope
-// for the agent reconciler skeleton.
+// render.go. Wraps apimeta.SetStatusCondition and threads
+// status.ObservedGeneration into ObservedGeneration so observers can
+// tell stale-view conditions from current-view (api-conventions).
 func setAgentCondition(status *monetizeapi.AgentStatus, conditionType, conditionStatus, reason, message string) {
-	now := metav1.NewTime(time.Now().UTC())
-	for i := range status.Conditions {
-		if status.Conditions[i].Type != conditionType {
-			continue
-		}
-		if status.Conditions[i].Status != conditionStatus {
-			status.Conditions[i].LastTransitionTime = now
-		}
-		status.Conditions[i].Status = conditionStatus
-		status.Conditions[i].Reason = reason
-		status.Conditions[i].Message = message
-		if status.Conditions[i].LastTransitionTime.IsZero() {
-			status.Conditions[i].LastTransitionTime = now
-		}
-		return
+	cond := metav1.Condition{
+		Type:    conditionType,
+		Status:  metav1.ConditionStatus(conditionStatus),
+		Reason:  reason,
+		Message: message,
 	}
-	status.Conditions = append(status.Conditions, monetizeapi.Condition{
-		Type:               conditionType,
-		Status:             conditionStatus,
-		Reason:             reason,
-		Message:            message,
-		LastTransitionTime: now,
-	})
+	if status.ObservedGeneration > 0 {
+		cond.ObservedGeneration = status.ObservedGeneration
+	}
+	apimeta.SetStatusCondition(&status.Conditions, cond)
 }

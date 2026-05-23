@@ -71,6 +71,7 @@ var (
 // +kubebuilder:printcolumn:name="Price",type=string,JSONPath=`.spec.payment.price.perRequest`
 // +kubebuilder:printcolumn:name="Network",type=string,JSONPath=`.spec.payment.network`
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
+// +kubebuilder:printcolumn:name="Paused",type=boolean,JSONPath=`.status.conditions[?(@.type=="Paused")].status`,priority=1
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // ServiceOffer declares a compute service that can be exposed publicly,
@@ -126,6 +127,20 @@ type ServiceOfferSpec struct {
 	// ERC-8004 registration metadata. Field names align with the
 	// AgentRegistration document schema (ERC-8004 spec).
 	Registration ServiceOfferRegistration `json:"registration,omitempty"`
+
+	// Paused, when true, signals the controller to tear down the
+	// published route and stop serving traffic for this offer. The
+	// ServiceOffer CR itself is preserved (annotations, status,
+	// payment config) so resume is a single-byte spec flip.
+	//
+	// Compare Deployment.spec.paused, CronJob.spec.suspend — typed
+	// spec fields are the K8s api-conventions canonical way to gate
+	// reconciler behaviour. The legacy obol.org/paused annotation is
+	// still honoured for one release; see IsPaused().
+	//
+	// +optional
+	// +kubebuilder:default=false
+	Paused bool `json:"paused,omitempty"`
 }
 
 // ServiceOfferAgent is populated when Spec.Type == "agent". The controller
@@ -266,8 +281,14 @@ type ServiceOfferService struct {
 
 type ServiceOfferStatus struct {
 	// Condition types: ModelReady, UpstreamHealthy, PaymentGateReady,
-	// RoutePublished, Registered, Ready.
-	Conditions []Condition `json:"conditions,omitempty"`
+	// RoutePublished, Registered, Paused, Ready.
+	//
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	// +patchStrategy=merge
+	// +patchMergeKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 	// The public endpoint URL once the route is published.
 	Endpoint string `json:"endpoint,omitempty"`
 	// ERC-8004 agent NFT token ID after on-chain registration.
@@ -291,22 +312,6 @@ type ServiceOfferAgentResolution struct {
 	Skills   []string `json:"skills,omitempty"`
 	Runtime  string   `json:"runtime,omitempty"`
 	Endpoint string   `json:"endpoint,omitempty"`
-}
-
-type Condition struct {
-	// Condition type.
-	// +kubebuilder:validation:Required
-	Type string `json:"type"`
-	// Status of the condition.
-	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Enum=True;False;Unknown
-	Status string `json:"status"`
-	// Machine-readable reason for the condition.
-	Reason string `json:"reason,omitempty"`
-	// Human-readable message with details.
-	Message string `json:"message,omitempty"`
-	// Last time the condition transitioned.
-	LastTransitionTime metav1.Time `json:"lastTransitionTime,omitempty"`
 }
 
 // ── RegistrationRequest ─────────────────────────────────────────────────────
@@ -402,7 +407,24 @@ func (o *ServiceOffer) IsAgent() bool {
 	return o.Spec.Type == "agent"
 }
 
+// IsPaused returns true if the offer is paused via spec.paused
+// (preferred) or the legacy obol.org/paused annotation. The
+// annotation read will be dropped in v0.11.0 — migrate now.
 func (o *ServiceOffer) IsPaused() bool {
+	if o.Spec.Paused {
+		return true
+	}
+	return o.Annotations != nil && o.Annotations[PausedAnnotation] == "true"
+}
+
+// IsPausedByAnnotation returns true when the offer is paused only
+// because of the legacy obol.org/paused annotation (spec.paused is
+// false). Callers use this to emit a one-time deprecation log so
+// operators know to migrate to spec.paused before v0.11.0.
+func (o *ServiceOffer) IsPausedByAnnotation() bool {
+	if o.Spec.Paused {
+		return false
+	}
 	return o.Annotations != nil && o.Annotations[PausedAnnotation] == "true"
 }
 
@@ -519,8 +541,13 @@ type PurchasePayment struct {
 }
 
 type PurchaseRequestStatus struct {
-	ObservedGeneration int64       `json:"observedGeneration,omitempty"`
-	Conditions         []Condition `json:"conditions,omitempty"`
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	// +patchStrategy=merge
+	// +patchMergeKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 	// LiteLLM model name (paid/<model>).
 	PublicModel string `json:"publicModel,omitempty"`
 	Remaining   int    `json:"remaining,omitempty"`
@@ -612,8 +639,13 @@ type AgentStatus struct {
 	WalletAddress string `json:"walletAddress,omitempty"`
 	// Cluster-internal URL for the agent runtime (e.g.
 	// http://hermes.agent-quant.svc.cluster.local:8642).
-	Endpoint   string      `json:"endpoint,omitempty"`
-	Conditions []Condition `json:"conditions,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	// +patchStrategy=merge
+	// +patchMergeKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 }
 
 func (a *Agent) EffectiveRuntime() string {

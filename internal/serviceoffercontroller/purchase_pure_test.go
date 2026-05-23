@@ -5,12 +5,13 @@ import (
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // --- purchaseConditionIsTrue ------------------------------------------------
 
 func TestPurchaseConditionIsTrue(t *testing.T) {
-	conds := []monetizeapi.Condition{
+	conds := []metav1.Condition{
 		{Type: "Signed", Status: "True"},
 		{Type: "Configured", Status: "False"},
 		{Type: "Ready", Status: "Unknown"},
@@ -35,7 +36,7 @@ func TestPurchaseConditionIsTrue(t *testing.T) {
 // --- setPurchaseCondition ---------------------------------------------------
 
 func TestSetPurchaseCondition_AppendsNew(t *testing.T) {
-	var conds []monetizeapi.Condition
+	var conds []metav1.Condition
 
 	setPurchaseCondition(&conds, "Signed", "True", "SignedOK", "ok")
 
@@ -51,7 +52,7 @@ func TestSetPurchaseCondition_AppendsNew(t *testing.T) {
 }
 
 func TestSetPurchaseCondition_UpdatesExistingNoStatusChange(t *testing.T) {
-	conds := []monetizeapi.Condition{
+	conds := []metav1.Condition{
 		{Type: "Signed", Status: "True", Reason: "Old", Message: "old msg"},
 	}
 	// Capture the original timestamp (zero value is fine — we just want it to remain unchanged).
@@ -76,7 +77,7 @@ func TestSetPurchaseCondition_UpdatesExistingNoStatusChange(t *testing.T) {
 }
 
 func TestSetPurchaseCondition_StatusFlipBumpsTimestamp(t *testing.T) {
-	conds := []monetizeapi.Condition{
+	conds := []metav1.Condition{
 		{Type: "Signed", Status: "False"},
 	}
 

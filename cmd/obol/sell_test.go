@@ -16,6 +16,7 @@ import (
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	"github.com/urfave/cli/v3"
 	"gopkg.in/yaml.v3"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -315,7 +316,7 @@ func TestServiceOfferStatusLines(t *testing.T) {
 			Endpoint:           "/services/demo",
 			AgentID:            "5008",
 			RegistrationTxHash: "0xabc",
-			Conditions: []monetizeapi.Condition{
+			Conditions: []metav1.Condition{
 				{Type: "Registered", Status: "True", Reason: "Registered", Message: "Published registration document and recorded agent 5008"},
 			},
 		},
@@ -455,15 +456,15 @@ func TestExplorerTxURL(t *testing.T) {
 func TestConditionIcon(t *testing.T) {
 	tests := []struct {
 		name string
-		cond monetizeapi.Condition
+		cond metav1.Condition
 		want string
 	}{
-		{"true succeeded", monetizeapi.Condition{Status: "True", Reason: "Reconciled"}, "✓"},
-		{"true skipped", monetizeapi.Condition{Status: "True", Reason: "Skipped"}, "ℹ"},
-		{"true disabled", monetizeapi.Condition{Status: "True", Reason: "Disabled"}, "ℹ"},
-		{"false failed", monetizeapi.Condition{Status: "False", Reason: "Unhealthy"}, "⚠"},
-		{"unknown pending", monetizeapi.Condition{Status: "Unknown"}, "⏳"},
-		{"empty pending", monetizeapi.Condition{}, "⏳"},
+		{"true succeeded", metav1.Condition{Status: "True", Reason: "Reconciled"}, "✓"},
+		{"true skipped", metav1.Condition{Status: "True", Reason: "Skipped"}, "ℹ"},
+		{"true disabled", metav1.Condition{Status: "True", Reason: "Disabled"}, "ℹ"},
+		{"false failed", metav1.Condition{Status: "False", Reason: "Unhealthy"}, "⚠"},
+		{"unknown pending", metav1.Condition{Status: "Unknown"}, "⏳"},
+		{"empty pending", metav1.Condition{}, "⏳"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -504,7 +505,7 @@ func TestAgentRegistryNFTURL(t *testing.T) {
 }
 
 func TestIsConditionTrue(t *testing.T) {
-	conds := []monetizeapi.Condition{
+	conds := []metav1.Condition{
 		{Type: "Ready", Status: "True"},
 		{Type: "Registered", Status: "False"},
 		{Type: "Pending", Status: "Unknown"},

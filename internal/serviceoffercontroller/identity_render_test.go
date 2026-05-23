@@ -21,7 +21,7 @@ func readyOffer(name string) *monetizeapi.ServiceOffer {
 	o.Spec.Registration.Name = name
 	o.Spec.Registration.Skills = []string{"chat/general"}
 	for _, t := range []string{"ModelReady", "UpstreamHealthy", "PaymentGateReady", "RoutePublished"} {
-		o.Status.Conditions = append(o.Status.Conditions, monetizeapi.Condition{Type: t, Status: "True"})
+		o.Status.Conditions = append(o.Status.Conditions, metav1.Condition{Type: t, Status: "True"})
 	}
 	return o
 }

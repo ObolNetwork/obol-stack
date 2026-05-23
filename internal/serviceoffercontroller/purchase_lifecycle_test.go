@@ -217,7 +217,7 @@ func getPurchaseRequest(t *testing.T, c *Controller, namespace, name string) *mo
 	return &pr
 }
 
-func purchaseCondition(t *testing.T, pr *monetizeapi.PurchaseRequest, condType string) monetizeapi.Condition {
+func purchaseCondition(t *testing.T, pr *monetizeapi.PurchaseRequest, condType string) metav1.Condition {
 	t.Helper()
 
 	for _, condition := range pr.Status.Conditions {
@@ -226,7 +226,7 @@ func purchaseCondition(t *testing.T, pr *monetizeapi.PurchaseRequest, condType s
 		}
 	}
 	t.Fatalf("missing purchase condition %q", condType)
-	return monetizeapi.Condition{}
+	return metav1.Condition{}
 }
 
 func seedBuyerConfigMaps(t *testing.T, c *Controller, entries map[string]string) {
@@ -551,7 +551,7 @@ func TestReconcilePurchaseReadyKeepsReadyWhileUpdatingLiveSpend(t *testing.T) {
 			Remaining:          3,
 			Spent:              0,
 			PublicModel:        "paid/qwen3.5:9b",
-			Conditions: []monetizeapi.Condition{
+			Conditions: []metav1.Condition{
 				{Type: "Probed", Status: "True", Reason: "Validated"},
 				{Type: "AuthsLoaded", Status: "True", Reason: "Loaded"},
 				{Type: "Configured", Status: "True", Reason: "Written"},
@@ -638,7 +638,7 @@ func TestReconcilePurchaseConfigureRebuildsPendingAuthsFromSpecAfterRestart(t *t
 		},
 		Status: monetizeapi.PurchaseRequestStatus{
 			ObservedGeneration: 1,
-			Conditions: []monetizeapi.Condition{
+			Conditions: []metav1.Condition{
 				{Type: "Probed", Status: "True", Reason: "Validated"},
 				{Type: "AuthsLoaded", Status: "True", Reason: "Loaded"},
 			},
@@ -746,7 +746,7 @@ func TestUpdatePurchaseStatusNoOpWhenUnchanged(t *testing.T) {
 		Status: monetizeapi.PurchaseRequestStatus{
 			ObservedGeneration: 1,
 			Remaining:          3,
-			Conditions: []monetizeapi.Condition{
+			Conditions: []metav1.Condition{
 				{Type: "Ready", Status: "True", Reason: "Reconciled", Message: "ok"},
 			},
 		},
@@ -858,7 +858,7 @@ func TestReconcileDeletingPurchaseDrainsUntilRemainingZero(t *testing.T) {
 			ObservedGeneration: 1,
 			Remaining:          2,
 			Spent:              1,
-			Conditions: []monetizeapi.Condition{
+			Conditions: []metav1.Condition{
 				{Type: "Configured", Status: "True", Reason: "Written"},
 				{Type: "Ready", Status: "True", Reason: "Reconciled"},
 			},
@@ -978,7 +978,7 @@ func TestReconcileDeletingPurchaseWaitsForRuntimeStatusToDisappear(t *testing.T)
 			ObservedGeneration: 2,
 			Remaining:          0,
 			Spent:              7,
-			Conditions: []monetizeapi.Condition{
+			Conditions: []metav1.Condition{
 				{Type: "Configured", Status: "True", Reason: "Written"},
 				{Type: "Ready", Status: "True", Reason: "Reconciled"},
 			},

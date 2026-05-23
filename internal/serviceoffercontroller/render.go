@@ -9,11 +9,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -565,39 +565,37 @@ func ownerRefMapFor(apiVersion, kind, name string, uid types.UID) map[string]any
 	}
 }
 
+// setCondition is the back-compat shim that callers without easy
+// access to offer.Generation use. It defers to
+// setConditionWithGeneration, passing status.ObservedGeneration so
+// existing call sites preserve the most recently observed generation
+// without a signature change. New code paths should call
+// setConditionWithGeneration directly.
 func setCondition(status *monetizeapi.ServiceOfferStatus, conditionType, conditionStatus, reason, message string) {
-	now := metav1.NewTime(time.Now().UTC())
-	for i := range status.Conditions {
-		if status.Conditions[i].Type != conditionType {
-			continue
-		}
-		if status.Conditions[i].Status != conditionStatus {
-			status.Conditions[i].LastTransitionTime = now
-		}
-		status.Conditions[i].Status = conditionStatus
-		status.Conditions[i].Reason = reason
-		status.Conditions[i].Message = message
-		if status.Conditions[i].LastTransitionTime.IsZero() {
-			status.Conditions[i].LastTransitionTime = now
-		}
-		return
+	setConditionWithGeneration(status, conditionType, conditionStatus, reason, message, status.ObservedGeneration)
+}
+
+// setConditionWithGeneration updates (or appends) a condition entry
+// of the given type using metav1.Condition semantics. Wraps
+// apimeta.SetStatusCondition (dedupe-by-type, LastTransitionTime
+// flips, ObservedGeneration preserved when caller leaves it unset)
+// instead of hand-rolling the merge — that hand-rolled loop was the
+// drift surface this PR removes.
+func setConditionWithGeneration(status *monetizeapi.ServiceOfferStatus, conditionType, conditionStatus, reason, message string, generation int64) {
+	cond := metav1.Condition{
+		Type:    conditionType,
+		Status:  metav1.ConditionStatus(conditionStatus),
+		Reason:  reason,
+		Message: message,
 	}
-	status.Conditions = append(status.Conditions, monetizeapi.Condition{
-		Type:               conditionType,
-		Status:             conditionStatus,
-		Reason:             reason,
-		Message:            message,
-		LastTransitionTime: now,
-	})
+	if generation > 0 {
+		cond.ObservedGeneration = generation
+	}
+	apimeta.SetStatusCondition(&status.Conditions, cond)
 }
 
 func isConditionTrue(status monetizeapi.ServiceOfferStatus, conditionType string) bool {
-	for _, condition := range status.Conditions {
-		if condition.Type == conditionType {
-			return condition.Status == "True"
-		}
-	}
-	return false
+	return apimeta.IsStatusConditionTrue(status.Conditions, conditionType)
 }
 
 func buildActiveRegistrationDocument(owner *monetizeapi.ServiceOffer, offers []*monetizeapi.ServiceOffer, baseURL, agentID string) erc8004.AgentRegistration {
