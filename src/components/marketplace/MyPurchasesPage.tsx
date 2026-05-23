@@ -11,6 +11,7 @@ import { ServicesSubNav } from './ServicesSubNav';
 import { NewListingDialog } from './NewListingDialog';
 import { toChainName } from '@/lib/marketplace/chain';
 import { useWalletAssetBalances } from '@/hooks/useWalletAssetBalances';
+import { useOperatorWallets } from '@/hooks/useOperatorWallets';
 import type { PurchaseListResponse, PurchaseRequest } from '@/types/purchase';
 
 const Layout = styled(Box, {
@@ -113,7 +114,13 @@ const STRIP_CHAINS: ReadonlyArray<{
   { key: 'mainnet', chainId: 1, label: 'Mainnet', icon: 'mainnet' },
 ];
 
-function WalletStrip({ address }: { address: string | undefined }) {
+function WalletStrip({
+  address,
+  agentCount,
+}: {
+  address: string | undefined;
+  agentCount: number;
+}) {
   // useWalletAssetBalances handles its own polling (60s) + per-chain
   // multicall3 batching via eRPC. When address is empty, the hook short-circuits
   // and returns an empty array — safe to call unconditionally per Rules of Hooks.
@@ -134,7 +141,9 @@ function WalletStrip({ address }: { address: string | undefined }) {
     <Card css={{ padding: '$md' }}>
       <StripGrid>
         <StripCell first>
-          <FieldLabel>Agent wallet</FieldLabel>
+          <FieldLabel>
+            Agent wallet{agentCount > 1 ? `s · ${agentCount}` : ''}
+          </FieldLabel>
           {address ? (
             <Flex css={{ gap: 10, alignItems: 'center' }}>
               <Identicon seed={address} size={28} />
@@ -147,7 +156,9 @@ function WalletStrip({ address }: { address: string | undefined }) {
             </Flex>
           ) : (
             <Text css={{ fontSize: '$2', color: '$muted' }}>
-              Connect a wallet from the top nav.
+              {agentCount > 0
+                ? 'Balances aggregate across agent wallets.'
+                : 'No agent wallets discovered yet.'}
             </Text>
           )}
         </StripCell>
@@ -637,6 +648,7 @@ function PurchaseRow({
 
 export function MyPurchasesPage() {
   const { address } = useAccount();
+  const operator = useOperatorWallets();
   const [purchases, setPurchases] = useState<PurchaseRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -673,13 +685,29 @@ export function MyPurchasesPage() {
     };
   }, []);
 
+  // Primary wallet for the WalletStrip header: prefer the first agent's
+  // first address (most operators have a single obol-agent), falling back
+  // to the browser-connected wallet so the strip still shows something
+  // when no agents are discovered (purely-operator-driven stacks).
+  const primaryWallet = useMemo<string | undefined>(() => {
+    const first = operator.agents
+      .flatMap(a => a.addresses)
+      .find(addr => typeof addr === 'string' && addr.length > 0);
+    return first ?? address;
+  }, [operator.agents, address]);
+
   const myPurchases = useMemo(() => {
-    if (!address) return purchases;
-    const lower = address.toLowerCase();
-    return purchases.filter(
-      p => (p.status.signerAddress ?? '').toLowerCase() === lower
-    );
-  }, [purchases, address]);
+    // Until the operator-wallet set has been fetched at least once, show
+    // everything so the table isn't empty during the cold-load round-trip.
+    if (operator.isLoading && operator.addressSet.size === 0) return purchases;
+    // If we never resolved any operator wallets (no agents listed, no
+    // browser wallet connected), fall back to showing all purchases.
+    if (operator.addressSet.size === 0) return purchases;
+    return purchases.filter(p => {
+      const signer = (p.status.signerAddress ?? '').toLowerCase();
+      return signer && operator.addressSet.has(signer);
+    });
+  }, [purchases, operator.addressSet, operator.isLoading]);
 
   const counts = useMemo(
     () => ({ purchases: myPurchases.length }),
@@ -694,7 +722,10 @@ export function MyPurchasesPage() {
         onNewListing={() => setDialogOpen(true)}
       />
 
-      <WalletStrip address={address} />
+      <WalletStrip
+        address={primaryWallet}
+        agentCount={operator.agents.length}
+      />
 
       <Card>
         <SectionHeader>
@@ -707,12 +738,25 @@ export function MyPurchasesPage() {
           <FilterBtn type="button">Filter</FilterBtn>
         </SectionHeader>
 
-        {!address ? (
-          <Text css={{ fontSize: '$2', color: '$muted' }}>
-            Connect a wallet in the top nav to see only your purchases. Showing
-            all {purchases.length} purchases on this stack.
+        {operator.addressSet.size > 0 ? (
+          <Text
+            css={{
+              fontSize: '$1',
+              color: '$muted',
+              marginBottom: '$xs',
+            }}
+          >
+            Showing purchases signed by {operator.agents.length} agent wallet
+            {operator.agents.length === 1 ? '' : 's'}
+            {address ? ' + your connected wallet' : ''}.
           </Text>
-        ) : null}
+        ) : (
+          <Text css={{ fontSize: '$2', color: '$muted' }}>
+            No agent wallets discovered yet and no browser wallet connected —
+            showing all {purchases.length} purchase
+            {purchases.length === 1 ? '' : 's'} on this stack.
+          </Text>
+        )}
 
         {err ? (
           <Text css={{ fontSize: '$2', color: '#DD603C' }}>{err}</Text>
