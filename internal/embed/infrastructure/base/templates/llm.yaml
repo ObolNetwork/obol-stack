@@ -21,6 +21,15 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: llm
+  labels:
+    # Pod Security Standards: Restricted profile enforced at admission.
+    # The litellm pod (litellm + x402-buyer sidecar) runs as non-root with
+    # all caps dropped, seccomp=RuntimeDefault, and readOnlyRootFilesystem;
+    # write paths are routed to named emptyDir mounts.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
 
 ---
 # ClusterIP Service + Endpoints: routes ollama.llm.svc.cluster.local → host Ollama.
@@ -167,6 +176,17 @@ spec:
         secret.reloader.stakater.com/reload: "litellm-secrets"
     spec:
       terminationGracePeriodSeconds: 60
+      # PSS Restricted: pod-level identity. UID/GID 65532 is the nonroot
+      # distroless convention; the Obol LiteLLM fork's working dirs are
+      # routed onto emptyDir mounts below so readOnlyRootFilesystem can
+      # stay on without breaking Python's tempfile / cache writes.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: litellm
           # Obol fork of LiteLLM with config-only model management API.
@@ -175,6 +195,13 @@ spec:
           # Source: https://github.com/ObolNetwork/litellm
           image: ghcr.io/obolnetwork/litellm:sha-c16b156@sha256:9f112b51ac5a57d73cdd54103fb98d24eabaddd8689a9a285884dca6456dc86e
           imagePullPolicy: IfNotPresent
+          # PSS Restricted: drop all caps, no privilege escalation, RO rootfs.
+          # Python writes are funneled to the emptyDir mounts below.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           args:
             - --config
             - /etc/litellm/config.yaml
@@ -192,10 +219,22 @@ spec:
               value: "false"
             - name: DISABLE_SCHEMA_UPDATE
               value: "true"
+            # Redirect Python / HF / pip cache lookups onto the writeable
+            # emptyDir at /home/litellm so readOnlyRootFilesystem=true holds.
+            - name: HOME
+              value: /home/litellm
+            - name: XDG_CACHE_HOME
+              value: /home/litellm/.cache
+            - name: HF_HOME
+              value: /home/litellm/.cache/huggingface
           volumeMounts:
             - name: litellm-config
               mountPath: /etc/litellm/config.yaml
               subPath: config.yaml
+            - name: litellm-tmp
+              mountPath: /tmp
+            - name: litellm-home
+              mountPath: /home/litellm
           startupProbe:
             httpGet:
               path: /health/readiness
@@ -239,6 +278,14 @@ spec:
           # across flow-08/11/14/13. See internal/embed/embed_image_pin_test.go.
           image: ghcr.io/obolnetwork/x402-buyer:b13254e@sha256:446d730fefbe1860e8b3245289aa8979d765ae977b7f0eaa053543e2468313cb
           imagePullPolicy: IfNotPresent
+          # PSS Restricted: Go distroless:nonroot image already runs as
+          # UID 65532; only the state dir under /state needs to be writeable
+          # and it's already an emptyDir mount.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           args:
             - --config-dir=/config/buyer-config
             - --auths-dir=/config/buyer-auths
@@ -283,6 +330,16 @@ spec:
             items:
               - key: config.yaml
                 path: config.yaml
+        # Writable /tmp for Python tempfile / multipart uploads. Sized
+        # modestly — LiteLLM streams responses rather than buffering them.
+        - name: litellm-tmp
+          emptyDir:
+            sizeLimit: 128Mi
+        # Writable HOME for LiteLLM's pip/HF/XDG cache lookups so the
+        # container can run with readOnlyRootFilesystem=true.
+        - name: litellm-home
+          emptyDir:
+            sizeLimit: 256Mi
         - name: buyer-config
           configMap:
             name: x402-buyer-config
