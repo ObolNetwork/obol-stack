@@ -23,6 +23,7 @@ import { ViewToggle, readStoredView } from './ViewToggle';
 import { MarketplaceFacets } from './MarketplaceFacets';
 import { MarketplaceGrid } from './MarketplaceGrid';
 import { MarketplaceTable } from './MarketplaceTable';
+import { SortDropdown } from './SortDropdown';
 
 import type { BuyDrawerProps } from './BuyDrawer';
 
@@ -87,6 +88,16 @@ const ResultsCount = styled(Text, {
 const ResultsCountStrong = styled('span', {
   color: '$light',
   fontWeight: '$semibold',
+});
+
+const SourceBreakdown = styled('span', {
+  marginLeft: '$xxs',
+  color: '$muted',
+});
+
+const SortLabel = styled(Text, {
+  color: '$body',
+  fontSize: '$2',
 });
 
 const Results = styled(Box, {
@@ -185,6 +196,17 @@ export function MarketplacePage({
   const { data, isLoading, isError, error, refetch } =
     useMarketplaceCatalog(filters);
 
+  const sourceBreakdown = useMemo(() => {
+    const buckets = data?.facets?.source ?? [];
+    if (buckets.length === 0) return '';
+    const local = buckets.find(b => b.value === 'local')?.count ?? 0;
+    const remote = buckets.find(b => b.value === 'remote')?.count ?? 0;
+    const parts: string[] = [];
+    if (local > 0) parts.push(`${local} local`);
+    if (remote > 0) parts.push(`${remote} remote`);
+    return parts.join(' · ');
+  }, [data?.facets?.source]);
+
   const totalPages = useMemo(() => {
     if (!data) return 1;
     return Math.max(1, Math.ceil(data.total / (filters.pageSize ?? 24)));
@@ -234,8 +256,16 @@ export function MarketplacePage({
           <ResultsCount>
             <ResultsCountStrong>{data?.total ?? '—'}</ResultsCountStrong>{' '}
             service{data?.total === 1 ? '' : 's'}
+            {sourceBreakdown ? (
+              <SourceBreakdown>· {sourceBreakdown}</SourceBreakdown>
+            ) : null}
           </ResultsCount>
           <Box css={{ flex: 1 }} />
+          <SortLabel>Sort</SortLabel>
+          <SortDropdown
+            value={filters.sort ?? 'recent'}
+            onChange={sort => setFilters(prev => ({ ...prev, sort, page: 1 }))}
+          />
           <ViewToggle value={view} onChange={setView} />
         </ResultsBar>
 
