@@ -1,6 +1,6 @@
 'use client';
 
-import { Flex, styled } from '@obolnetwork/obol-ui';
+import { styled } from '@obolnetwork/obol-ui';
 
 import type { MarketplaceView } from '@/lib/marketplace/types';
 
@@ -14,7 +14,7 @@ export interface ViewToggleProps {
   onChange: (next: MarketplaceView) => void;
 }
 
-const Group = styled(Flex, {
+const Group = styled('div', {
   display: 'inline-flex',
   alignItems: 'center',
   gap: 2,
@@ -22,6 +22,8 @@ const Group = styled(Flex, {
   borderRadius: '$2',
   border: '1px solid $stroke',
   background: '$bg03',
+  width: 'max-content',
+  flexShrink: 0,
 });
 
 const ToggleButton = styled('button', {
