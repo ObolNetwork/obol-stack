@@ -316,9 +316,10 @@ func agentPodSpec(agent *monetizeapi.Agent) map[string]any {
 		"serviceAccountName":           hermesServiceName,
 		"automountServiceAccountToken": true,
 		"securityContext": map[string]any{
-			"runAsUser":  int64(hermesContainerUID),
-			"runAsGroup": int64(hermesContainerGID),
-			"fsGroup":    int64(hermesContainerGID),
+			"runAsUser":           int64(hermesContainerUID),
+			"runAsGroup":          int64(hermesContainerGID),
+			"fsGroup":             int64(hermesContainerGID),
+			"fsGroupChangePolicy": "OnRootMismatch",
 		},
 		"initContainers": []any{
 			buildAgentProfileInitContainer(),
