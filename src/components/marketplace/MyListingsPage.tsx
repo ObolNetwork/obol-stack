@@ -114,15 +114,24 @@ interface EarningsRollup {
   lastSettlement: string;
 }
 
-const EMPTY_ROLLUP: EarningsRollup = {
-  total7d: { USDC: '0', OBOL: '0' },
-  perChain: {
-    base: { USDC: '0', OBOL: '0' },
-    sepolia: { USDC: '0', OBOL: '0' },
-    mainnet: { USDC: '0', OBOL: '0' },
-  },
-  lastSettlement: '—',
-};
+function toRollupBucket(chain: string): 'base' | 'sepolia' | 'mainnet' | null {
+  const c = chain.toLowerCase();
+  if (c === 'base' || c === 'eip155:8453') return 'base';
+  if (c === 'base-sepolia' || c === 'sepolia' || c === 'eip155:84532')
+    return 'sepolia';
+  if (c === 'mainnet' || c === 'ethereum' || c === 'eip155:1') return 'mainnet';
+  return null;
+}
+
+function formatAgo(d: Date): string {
+  const seconds = Math.max(0, Math.floor((Date.now() - d.getTime()) / 1000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const m = Math.floor(seconds / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.floor(h / 24)}d ago`;
+}
 
 function EarningsStrip({ rollup }: { rollup: EarningsRollup }) {
   return (
@@ -397,7 +406,7 @@ function ListingRow({
   const price = offer.payment?.price?.perRequest ?? '—';
   const asset = offer.payment?.asset?.symbol ?? 'USDC';
   const registered = Boolean(offer.agentResolution || offer.endpoint);
-  const reqs = offer.usage?.chargedRequests ?? 0;
+  const reqs = offer.usage?.requests24h ?? offer.usage?.chargedRequests ?? 0;
 
   return (
     <RowCard stuck={stuck}>
@@ -683,7 +692,57 @@ export function MyListingsPage() {
     [myOffers, offers]
   );
 
-  const rollup = EMPTY_ROLLUP; // wire to real earnings once chain-labeled metrics propagate
+  const rollup = useMemo<EarningsRollup>(() => {
+    const totals = {
+      base: { USDC: 0, OBOL: 0 },
+      sepolia: { USDC: 0, OBOL: 0 },
+      mainnet: { USDC: 0, OBOL: 0 },
+    };
+    let lastSettlementUnix = 0;
+
+    for (const o of myOffers) {
+      const priceStr = o.payment?.price?.perRequest ?? '0';
+      const price = Number(priceStr);
+      if (!Number.isFinite(price) || price <= 0) continue;
+      const asset = (o.payment?.asset?.symbol ?? 'USDC').toUpperCase();
+      if (asset !== 'USDC' && asset !== 'OBOL') continue;
+
+      for (const c of o.usage?.chargedByChain ?? []) {
+        const bucket = toRollupBucket(c.chain);
+        if (!bucket) continue;
+        totals[bucket][asset] += c.requests * price;
+      }
+
+      const t = o.usage?.lastSettlementUnix ?? 0;
+      if (t > lastSettlementUnix) lastSettlementUnix = t;
+    }
+
+    const fmt = (n: number) => (n === 0 ? '0' : n.toFixed(4));
+    const sumAcrossChains = (asset: 'USDC' | 'OBOL') =>
+      totals.base[asset] + totals.sepolia[asset] + totals.mainnet[asset];
+
+    return {
+      total7d: {
+        USDC: fmt(sumAcrossChains('USDC')),
+        OBOL: fmt(sumAcrossChains('OBOL')),
+      },
+      perChain: {
+        base: { USDC: fmt(totals.base.USDC), OBOL: fmt(totals.base.OBOL) },
+        sepolia: {
+          USDC: fmt(totals.sepolia.USDC),
+          OBOL: fmt(totals.sepolia.OBOL),
+        },
+        mainnet: {
+          USDC: fmt(totals.mainnet.USDC),
+          OBOL: fmt(totals.mainnet.OBOL),
+        },
+      },
+      lastSettlement:
+        lastSettlementUnix > 0
+          ? formatAgo(new Date(lastSettlementUnix * 1000))
+          : '—',
+    };
+  }, [myOffers]);
 
   return (
     <Layout>

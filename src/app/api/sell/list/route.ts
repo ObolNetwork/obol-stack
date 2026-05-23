@@ -21,20 +21,30 @@ export async function GET() {
     const agentsClient = new AgentClient();
     const prom = new PrometheusClient();
 
-    const [offers, agents, sales] = await Promise.all([
-      sell.listServiceOffers(),
-      safeListAgents(agentsClient),
-      prom.chargedSalesByOffer(),
-    ]);
+    const [offers, agents, sales, perChain, reqs24h, lastSettlements] =
+      await Promise.all([
+        sell.listServiceOffers(),
+        safeListAgents(agentsClient),
+        prom.chargedSalesByOffer(),
+        prom.chargedSalesByOfferAndChain(),
+        prom.chargedRequests24hByOffer(),
+        prom.lastSettlementByOffer(),
+      ]);
 
     const enriched: ServiceOffer[] = offers.map(offer => {
       const key = `${offer.namespace}/${offer.name}`;
       const charged = sales.get(key);
+      const chainBreakdown = perChain.get(key) ?? [];
+      const r24 = reqs24h.get(key);
+      const last = lastSettlements.get(key);
       return {
         ...offer,
         agentLink: linkOfferToAgent(offer, agents),
         usage: {
           chargedRequests: charged === undefined ? null : charged,
+          chargedByChain: chainBreakdown,
+          requests24h: r24 === undefined ? null : r24,
+          lastSettlementUnix: last === undefined ? null : last,
         },
       };
     });
