@@ -998,6 +998,88 @@ func TestVerifier_Reload_PrunesDeletedOfferSeries(t *testing.T) {
 	}
 }
 
+// TestVerifier_HandleVerify_FailClosed_ManualPrefixInjection sanity checks
+// that an arbitrary prefix in paidPrefixes triggers fail-closed (403) when
+// no rule matches. The manual prefix injection simulates the case where the
+// verifier KNOWS about a paid prefix (because a route was previously loaded)
+// but the matcher rejects the URI — config drift, code bug, etc.
+func TestVerifier_HandleVerify_FailClosed_ManualPrefixInjection(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	v := newTestVerifier(t, fac.URL, []RouteRule{
+		// No rules; matchRoute will return nil for everything.
+	})
+
+	// Manually inject a paid prefix (simulating a stale prefix state).
+	prefixes := []string{"/services/gated/"}
+	v.paidPrefixes.Store(&prefixes)
+
+	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/services/gated/foo")
+	rec := httptest.NewRecorder()
+	v.HandleVerify(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected 403 (fail-closed) for URI under tracked paid prefix, got %d", rec.Code)
+	}
+}
+
+// TestVerifier_HandleVerify_FreeRoute_OutsidePrefixes asserts that URIs
+// outside all tracked paid prefixes still return 200 (legitimate free pass).
+// The verifier is mounted on routes that may or may not be paid; only URIs
+// under a known paid prefix should fail closed.
+func TestVerifier_HandleVerify_FreeRoute_OutsidePrefixes(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	v := newTestVerifier(t, fac.URL, []RouteRule{
+		{Pattern: "/services/known/*", Price: "0.0001"},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/health") // Not under any paid prefix.
+	rec := httptest.NewRecorder()
+	v.HandleVerify(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 for free route outside paid prefixes, got %d", rec.Code)
+	}
+}
+
+// TestVerifier_HandleVerify_PrefixBoundary_NoFalseMatch verifies that the
+// trailing slash on paid prefixes prevents false matches between siblings
+// like /services/foo/ and /services/foobar/. Without the trailing slash,
+// a request to /services/foobar/x would falsely match /services/foo/*.
+func TestVerifier_HandleVerify_PrefixBoundary_NoFalseMatch(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	v := newTestVerifier(t, fac.URL, []RouteRule{
+		{Pattern: "/services/foo/*", Price: "0.0001"},
+	})
+
+	// /services/foobar/x is NOT under /services/foo/ — must return 200.
+	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/services/foobar/x")
+	rec := httptest.NewRecorder()
+	v.HandleVerify(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 for sibling path not under prefix, got %d", rec.Code)
+	}
+}
+
+func TestPatternToPrefix(t *testing.T) {
+	cases := []struct{ pattern, want string }{
+		{"/services/foo/*", "/services/foo/"},
+		{"/rpc/*", "/rpc/"},
+		{"/health", ""}, // No glob, returns empty.
+		{"/*", "/"},
+		{"", ""},
+		{"/exact/match", ""}, // Exact pattern, not a prefix.
+	}
+	for _, c := range cases {
+		if got := patternToPrefix(c.pattern); got != c.want {
+			t.Errorf("patternToPrefix(%q) = %q, want %q", c.pattern, got, c.want)
+		}
+	}
+}
+
 // findVerifierMetricValue returns the value of the series in `family` whose
 // labels match `wantLabels` exactly, failing the test if no such series exists.
 func findVerifierMetricValue(t *testing.T, family *dto.MetricFamily, wantLabels map[string]string) float64 {

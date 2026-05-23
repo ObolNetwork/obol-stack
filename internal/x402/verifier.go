@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sort"
 	"strings"
 	"sync/atomic"
 
@@ -21,6 +22,16 @@ type Verifier struct {
 	chain   atomic.Pointer[ChainInfo]
 	chains  atomic.Pointer[map[string]ChainInfo] // pre-resolved: chain name → config
 	metrics *verifierMetrics
+
+	// paidPrefixes is the list of URI prefixes the verifier KNOWS are
+	// paid routes (derived from cfg.Routes patterns on each load). Used
+	// by HandleVerify to fail-closed when a URI is under a paid prefix
+	// but no rule matches — the alternative (200 → ForwardAuth allow)
+	// would silently make the route free.
+	//
+	// Sorted by length descending so longer-prefix matches win first
+	// (defensive — fixes nothing today but cheap insurance).
+	paidPrefixes atomic.Pointer[[]string]
 }
 
 // NewVerifier creates a Verifier with the given initial configuration.
@@ -64,6 +75,19 @@ func (v *Verifier) load(cfg *PricingConfig) error {
 	v.chains.Store(&chains)
 	v.config.Store(cfg)
 
+	// Derive paid-prefix tracker from the route patterns. HandleVerify
+	// uses this to fail-closed when a URI is under a tracked prefix but
+	// no rule matches (see isUnderPaidPrefix for the rationale).
+	prefixes := make([]string, 0, len(cfg.Routes))
+	for _, r := range cfg.Routes {
+		prefix := patternToPrefix(r.Pattern)
+		if prefix != "" {
+			prefixes = append(prefixes, prefix)
+		}
+	}
+	sort.Slice(prefixes, func(i, j int) bool { return len(prefixes[i]) > len(prefixes[j]) })
+	v.paidPrefixes.Store(&prefixes)
+
 	// Drop metric series for offers that are no longer in the route set.
 	// Without this, deleting an offer leaves its counters + last-success
 	// gauge in the registry forever, polluting dashboards and silently
@@ -104,7 +128,17 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 
 	rule, requirement, extensions, _, chain, asset, ok := v.matchPaidRouteFull(cfg, uri)
 	if !ok {
-		// No pricing rule matches — route is free.
+		// Check if this URI is under a tracked paid prefix. If yes,
+		// the route was supposed to match but didn't — fail closed
+		// rather than silently make it free (Traefik ForwardAuth 200
+		// means "allow").
+		if v.isUnderPaidPrefix(uri) {
+			log.Printf("x402-verifier: URI %q is under a paid prefix but no rule matches — fail closed", uri)
+			http.Error(w, "no rule matches; route appears to be a paid prefix with stale or missing rule", http.StatusForbidden)
+
+			return
+		}
+		// Not under any paid prefix — legitimately free route.
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -275,6 +309,38 @@ func (v *Verifier) matchPaidRouteFull(cfg *PricingConfig, uri string) (*RouteRul
 	mergeAgentExtras(&requirement, rule)
 	extensions := BuildExtensionsForAsset(asset)
 	return rule, requirement, extensions, prometheusLabels(rule), chain, asset, true
+}
+
+// isUnderPaidPrefix reports whether uri starts with any of the URI
+// prefixes the verifier knows are paid routes. Used by HandleVerify
+// to fail-closed when matchRoute returns nil but the URI is still
+// under a tracked prefix — i.e. the route was supposed to match but
+// didn't (stale route table, code bug, etc.).
+func (v *Verifier) isUnderPaidPrefix(uri string) bool {
+	prefixes := v.paidPrefixes.Load()
+	if prefixes == nil {
+		return false
+	}
+	for _, p := range *prefixes {
+		if strings.HasPrefix(uri, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// patternToPrefix converts a route Pattern like "/services/foo/*"
+// into a directory-style prefix "/services/foo/" suitable for
+// strings.HasPrefix matching. Returns "" for patterns without a
+// trailing glob — exact-match patterns aren't paid prefixes, so
+// fail-closed only applies to the broader "any URI under this path"
+// semantic. The trailing slash is preserved so HasPrefix
+// distinguishes /services/foo/ from /services/foobar/.
+func patternToPrefix(pattern string) string {
+	if !strings.HasSuffix(pattern, "/*") {
+		return ""
+	}
+	return strings.TrimSuffix(pattern, "*")
 }
 
 // mergeAgentExtras adds the agent fields from a RouteRule to the
