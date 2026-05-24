@@ -52,7 +52,7 @@ func TestAgentSecretsCommand_ExposesBitwarden(t *testing.T) {
 	flags := flagMap(setup)
 	requireFlags(t, flags, "runtime", "project-id", "server-url", "access-token", "access-token-env", "cache-ttl")
 	assertStringDefault(t, flags, "runtime", "hermes")
-	assertStringDefault(t, flags, "server-url", "https://vault.bitwarden.com")
+	assertStringDefault(t, flags, "server-url", "")
 	assertStringDefault(t, flags, "access-token-env", "BWS_ACCESS_TOKEN")
 }
 

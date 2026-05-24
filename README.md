@@ -183,10 +183,10 @@ Use `obol agent` for Obol-managed lifecycle and auth flows. Use `obol hermes` fo
 ### Bitwarden Secrets
 
 Hermes agents can sync runtime environment variables from Bitwarden Secrets
-Manager. Obol stores only the Bitwarden bootstrap token in the agent namespace's
-`hermes-env` Secret; non-secret metadata is kept in the agent deployment config.
-The setup command validates project access with the Bitwarden `bws` CLI on the
-host.
+Manager. Obol stores the Bitwarden bootstrap token, plus an optional server
+override, in the agent namespace's `hermes-env` Secret; non-secret metadata is
+kept in the agent deployment config. Hermes owns the Bitwarden fetch path at
+runtime.
 
 ```bash
 obol agent secrets bitwarden setup obol-agent \
@@ -197,7 +197,7 @@ obol agent secrets bitwarden status obol-agent
 ```
 
 Provider setup can then fetch the provider key from the configured Bitwarden
-project, validate it, and write the active key to LiteLLM:
+project with the Bitwarden `bws` CLI and write the active key to LiteLLM:
 
 ```bash
 obol model setup --provider openai --api-key-source bitwarden
@@ -205,7 +205,8 @@ obol model setup --provider openai --api-key-source bitwarden
 
 Bitwarden secret names should match environment variable names such as
 `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. This integration is Hermes-only;
-OpenClaw runtimes are not supported.
+OpenClaw runtimes are not supported. Leave `--server-url` unset unless you use
+EU Cloud or a self-hosted Bitwarden endpoint.
 
 ### Skills
 

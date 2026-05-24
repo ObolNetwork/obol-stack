@@ -617,7 +617,7 @@ func agentBitwardenSecretsCommand(cfg *config.Config) *cli.Command {
 				Flags: []cli.Flag{
 					agentRuntimeFlag("hermes"),
 					&cli.StringFlag{Name: "project-id", Usage: "Bitwarden Secrets Manager project ID", Required: true},
-					&cli.StringFlag{Name: "server-url", Usage: "Bitwarden server URL", Value: "https://vault.bitwarden.com"},
+					&cli.StringFlag{Name: "server-url", Usage: "Optional Bitwarden server URL; empty uses the bws default"},
 					&cli.StringFlag{Name: "access-token", Usage: "Bitwarden machine-account access token", Sources: cli.EnvVars("BWS_ACCESS_TOKEN")},
 					&cli.StringFlag{Name: "access-token-env", Usage: "Environment variable name Hermes reads for the bootstrap token", Value: "BWS_ACCESS_TOKEN"},
 					&cli.IntFlag{Name: "cache-ttl", Usage: "Hermes Bitwarden cache TTL in seconds", Value: 300},

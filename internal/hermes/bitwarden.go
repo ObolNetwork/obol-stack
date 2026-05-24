@@ -6,12 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -21,12 +19,11 @@ import (
 )
 
 const (
-	bitwardenConfigFileName     = "bitwarden.yaml"
-	bitwardenEnvSecretName      = "hermes-env"
-	defaultBitwardenTokenEnv    = "BWS_ACCESS_TOKEN"
-	defaultBitwardenCacheTTL    = 300
-	defaultBitwardenServerEnv   = "BWS_SERVER_URL"
-	defaultBitwardenCommandName = "bws"
+	bitwardenConfigFileName   = "bitwarden.yaml"
+	bitwardenEnvSecretName    = "hermes-env"
+	defaultBitwardenTokenEnv  = "BWS_ACCESS_TOKEN"
+	defaultBitwardenCacheTTL  = 300
+	defaultBitwardenServerEnv = "BWS_SERVER_URL"
 )
 
 // BitwardenConfig is Obol's non-secret metadata for Hermes' native
@@ -55,18 +52,10 @@ type BitwardenStatus struct {
 	ProjectID        string `json:"project_id,omitempty"`
 	ServerURL        string `json:"server_url,omitempty"`
 	AccessTokenEnv   string `json:"access_token_env"`
-	CacheTTLSeconds  int    `json:"cache_ttl_seconds"`
-	OverrideExisting bool   `json:"override_existing"`
-	AutoInstall      bool   `json:"auto_install"`
 	MetadataPath     string `json:"metadata_path"`
 	EnvSecretExists  bool   `json:"env_secret_exists"`
 	TokenKeyPresent  bool   `json:"token_key_present"`
 	ServerURLPresent bool   `json:"server_url_present"`
-}
-
-type bitwardenSecret struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
 }
 
 func DefaultBitwardenConfig() BitwardenConfig {
@@ -85,14 +74,6 @@ func (c BitwardenConfig) normalized() BitwardenConfig {
 	}
 	if c.CacheTTLSeconds <= 0 {
 		c.CacheTTLSeconds = def.CacheTTLSeconds
-	}
-	// Metadata written by this implementation always includes these booleans.
-	// If an older/incomplete file omits them, prefer the Hermes defaults.
-	if !c.OverrideExisting {
-		c.OverrideExisting = def.OverrideExisting
-	}
-	if !c.AutoInstall {
-		c.AutoInstall = def.AutoInstall
 	}
 	return c
 }
@@ -155,18 +136,6 @@ func SetupBitwarden(cfg *config.Config, id string, opts BitwardenSetupOptions, u
 	if bw.ProjectID == "" {
 		return errors.New("Bitwarden project ID is required")
 	}
-	if err := validateBitwardenConfig(bw); err != nil {
-		return err
-	}
-
-	u.Info("Validating Bitwarden project access")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	secrets, err := FetchBitwardenSecrets(ctx, bw, token)
-	if err != nil {
-		return err
-	}
-	u.Successf("Validated Bitwarden project (%d secret(s) readable)", len(secrets))
 
 	if err := saveBitwardenConfig(deploymentDir, bw); err != nil {
 		return err
@@ -216,9 +185,6 @@ func GetBitwardenStatus(cfg *config.Config, id string) (BitwardenStatus, error) 
 		ProjectID:        bw.ProjectID,
 		ServerURL:        bw.ServerURL,
 		AccessTokenEnv:   bw.AccessTokenEnv,
-		CacheTTLSeconds:  bw.CacheTTLSeconds,
-		OverrideExisting: bw.OverrideExisting,
-		AutoInstall:      bw.AutoInstall,
 		MetadataPath:     bitwardenConfigPath(deploymentDir),
 		EnvSecretExists:  exists,
 		TokenKeyPresent:  hasToken,
@@ -238,14 +204,11 @@ func FetchBitwardenSecretForAgent(ctx context.Context, cfg *config.Config, id, k
 	if strings.TrimSpace(bw.ProjectID) == "" {
 		return "", fmt.Errorf("Bitwarden project ID is not configured for hermes/%s", id)
 	}
-	if err := validateBitwardenConfig(bw); err != nil {
-		return "", err
-	}
 	token, err := readBitwardenBootstrapToken(cfg, id, bw.AccessTokenEnv)
 	if err != nil {
 		return "", err
 	}
-	secrets, err := FetchBitwardenSecrets(ctx, bw, token)
+	secrets, err := fetchBitwardenSecrets(ctx, bw, token)
 	if err != nil {
 		return "", err
 	}
@@ -256,7 +219,7 @@ func FetchBitwardenSecretForAgent(ctx context.Context, cfg *config.Config, id, k
 	return value, nil
 }
 
-func FetchBitwardenSecrets(ctx context.Context, bw BitwardenConfig, token string) (map[string]string, error) {
+func fetchBitwardenSecrets(ctx context.Context, bw BitwardenConfig, token string) (map[string]string, error) {
 	bw = bw.normalized()
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -265,17 +228,15 @@ func FetchBitwardenSecrets(ctx context.Context, bw BitwardenConfig, token string
 	if strings.TrimSpace(bw.ProjectID) == "" {
 		return nil, errors.New("Bitwarden project ID is required")
 	}
-	if err := validateBitwardenConfig(bw); err != nil {
-		return nil, err
-	}
 
 	bin := strings.TrimSpace(os.Getenv("OBOL_BWS_BIN"))
 	if bin == "" {
-		bin = defaultBitwardenCommandName
+		bin = "bws"
 	}
 
 	cmd := exec.CommandContext(ctx, bin, "secret", "list", bw.ProjectID, "--output", "json")
 	cmd.Env = append(os.Environ(),
+		"NO_COLOR=1",
 		defaultBitwardenTokenEnv+"="+token,
 		bw.AccessTokenEnv+"="+token,
 	)
@@ -283,18 +244,17 @@ func FetchBitwardenSecrets(ctx context.Context, bw BitwardenConfig, token string
 		cmd.Env = append(cmd.Env, defaultBitwardenServerEnv+"="+strings.TrimSpace(bw.ServerURL))
 	}
 
-	out, err := cmd.CombinedOutput()
+	out, err := cmd.Output()
 	if err != nil {
-		msg := strings.TrimSpace(redactBitwardenToken(string(out), token))
-		if msg != "" {
-			return nil, fmt.Errorf("bws secret list failed: %w: %s", err, msg)
-		}
 		return nil, fmt.Errorf("bws secret list failed: %w", err)
 	}
 
-	items, err := parseBitwardenSecretList(out)
-	if err != nil {
-		return nil, err
+	var items []struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}
+	if err := json.Unmarshal(out, &items); err != nil {
+		return nil, fmt.Errorf("parse bws secret list output: %w", err)
 	}
 	secrets := make(map[string]string, len(items))
 	for _, item := range items {
@@ -304,48 +264,6 @@ func FetchBitwardenSecrets(ctx context.Context, bw BitwardenConfig, token string
 		secrets[item.Key] = item.Value
 	}
 	return secrets, nil
-}
-
-func validateBitwardenConfig(bw BitwardenConfig) error {
-	if strings.TrimSpace(bw.AccessTokenEnv) == "" {
-		return errors.New("Bitwarden access token env var is required")
-	}
-	if strings.ContainsAny(bw.AccessTokenEnv, " \t\r\n=") {
-		return fmt.Errorf("invalid Bitwarden access token env var %q", bw.AccessTokenEnv)
-	}
-	if strings.TrimSpace(bw.ServerURL) != "" {
-		u, err := url.Parse(strings.TrimSpace(bw.ServerURL))
-		if err != nil || u.Scheme == "" || u.Host == "" {
-			return fmt.Errorf("invalid Bitwarden server URL %q", bw.ServerURL)
-		}
-		if u.Scheme != "https" && u.Scheme != "http" {
-			return fmt.Errorf("invalid Bitwarden server URL scheme %q", u.Scheme)
-		}
-	}
-	return nil
-}
-
-func parseBitwardenSecretList(raw []byte) ([]bitwardenSecret, error) {
-	var items []bitwardenSecret
-	if err := json.Unmarshal(raw, &items); err == nil {
-		return items, nil
-	}
-	var wrapped struct {
-		Data    []bitwardenSecret `json:"data"`
-		Secrets []bitwardenSecret `json:"secrets"`
-		Items   []bitwardenSecret `json:"items"`
-	}
-	if err := json.Unmarshal(raw, &wrapped); err != nil {
-		return nil, fmt.Errorf("parse bws secret list output: %w", err)
-	}
-	switch {
-	case wrapped.Data != nil:
-		return wrapped.Data, nil
-	case wrapped.Secrets != nil:
-		return wrapped.Secrets, nil
-	default:
-		return wrapped.Items, nil
-	}
 }
 
 func applyBitwardenEnvSecret(cfg *config.Config, id string, bw BitwardenConfig, token string) error {
@@ -457,12 +375,4 @@ func restartHermesDeployment(cfg *config.Config, id string, u *ui.UI) error {
 	}
 	u.Success("Hermes restarted")
 	return nil
-}
-
-func redactBitwardenToken(value, token string) string {
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return value
-	}
-	return strings.ReplaceAll(value, token, "[REDACTED]")
 }

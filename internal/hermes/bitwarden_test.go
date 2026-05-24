@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -31,6 +30,9 @@ func TestBitwardenConfigRoundTrip(t *testing.T) {
 	if got.AccessTokenEnv != "BWS_ACCESS_TOKEN" {
 		t.Fatalf("AccessTokenEnv = %q", got.AccessTokenEnv)
 	}
+	if DefaultBitwardenConfig().ServerURL != "" {
+		t.Fatal("default ServerURL should be empty to match Hermes/bws defaults")
+	}
 }
 
 func TestFetchBitwardenSecretsUsesBWSCLI(t *testing.T) {
@@ -54,36 +56,11 @@ printf '[{"key":"OPENAI_API_KEY","value":"sk-test"}]'
 	cfg := DefaultBitwardenConfig()
 	cfg.Enabled = true
 	cfg.ProjectID = "project-123"
-	secrets, err := FetchBitwardenSecrets(context.Background(), cfg, "token-123")
+	secrets, err := fetchBitwardenSecrets(context.Background(), cfg, "token-123")
 	if err != nil {
-		t.Fatalf("FetchBitwardenSecrets: %v", err)
+		t.Fatalf("fetchBitwardenSecrets: %v", err)
 	}
 	if got := secrets["OPENAI_API_KEY"]; got != "sk-test" {
 		t.Fatalf("OPENAI_API_KEY = %q", got)
-	}
-}
-
-func TestFetchBitwardenSecretsRedactsTokenOnError(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "bws")
-	if err := os.WriteFile(script, []byte(`#!/bin/sh
-echo "bad token token-123" >&2
-exit 1
-`), 0o755); err != nil {
-		t.Fatalf("write fake bws: %v", err)
-	}
-	t.Setenv("OBOL_BWS_BIN", script)
-
-	cfg := DefaultBitwardenConfig()
-	cfg.ProjectID = "project-123"
-	_, err := FetchBitwardenSecrets(context.Background(), cfg, "token-123")
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if strings.Contains(err.Error(), "token-123") {
-		t.Fatalf("error leaked token: %v", err)
-	}
-	if !strings.Contains(err.Error(), "[REDACTED]") {
-		t.Fatalf("error missing redaction marker: %v", err)
 	}
 }

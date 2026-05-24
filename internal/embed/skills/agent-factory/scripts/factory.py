@@ -566,7 +566,7 @@ def build_parser():
     create.add_argument("--create-wallet", action="store_true")
     create.add_argument("--env", action="append", default=[], help="Child env Secret entry KEY=VALUE")
     create.add_argument("--bitwarden-project-id", help="Enable Hermes Bitwarden secret sync for this child Agent")
-    create.add_argument("--bitwarden-server-url", default="https://vault.bitwarden.com")
+    create.add_argument("--bitwarden-server-url")
     create.add_argument("--bitwarden-access-token-env", default="BWS_ACCESS_TOKEN")
     create.add_argument("--bitwarden-cache-ttl", type=int, default=300)
     create.add_argument("--bitwarden-no-override-existing", action="store_true")
