@@ -239,6 +239,24 @@ spec:
                   type: string
                   description: "URL path prefix for the HTTPRoute, defaults to /services/<name>."
                   pattern: "^/[a-zA-Z0-9/_.-]*$"
+                drainAt:
+                  type: string
+                  format: date-time
+                  description: >-
+                    When set, marks the offer as draining. Discovery surfaces
+                    (/skill.md and /.well-known/agent-registration.json) advertise
+                    the offer with available=false and drainEndsAt set, so external
+                    observers can react before the route is removed. The HTTPRoute
+                    and payment gate stay up until drainAt + drainGracePeriod so
+                    in-flight buyers can settle. Set by `obol sell stop`.
+                drainGracePeriod:
+                  type: string
+                  description: >-
+                    How long after drainAt the HTTPRoute remains up. Go duration
+                    format (e.g. "1h", "30m", "0s"). Defaults to "1h" when unset.
+                    A zero duration tears the route down on the next reconcile
+                    (the `obol sell stop --force` path).
+                  pattern: "^([0-9]+(ns|us|µs|ms|s|m|h))+$"
                 registration:
                   type: object
                   description: >-
@@ -312,7 +330,9 @@ spec:
                   type: array
                   description: >-
                     Condition types: ModelReady, UpstreamHealthy, PaymentGateReady,
-                    RoutePublished, Registered, Ready.
+                    RoutePublished, Registered, Ready, Draining. Draining is True
+                    while spec.drainAt is set and the grace window has not elapsed;
+                    transitions to False reason=Drained once the route is torn down.
                   items:
                     type: object
                     required:

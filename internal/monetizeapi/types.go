@@ -3,10 +3,17 @@ package monetizeapi
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
+
+// DefaultDrainGracePeriod is the grace period applied to a draining
+// ServiceOffer when spec.drainGracePeriod is unset. Buyers using the
+// offer can complete in-flight payments and migrate to alternative
+// providers within this window before the HTTPRoute is torn down.
+const DefaultDrainGracePeriod = time.Hour
 
 const (
 	Group   = "obol.org"
@@ -28,8 +35,6 @@ const (
 	// file. The registration file can contain multiple per-chain registrations.
 	AgentIdentityDefaultNamespace = "x402"
 	AgentIdentityDefaultName      = "default"
-
-	PausedAnnotation = "obol.org/paused"
 
 	AgentRuntimeHermes = "hermes"
 
@@ -77,6 +82,21 @@ type ServiceOfferSpec struct {
 	Path         string                   `json:"path,omitempty"`
 	Provenance   map[string]string        `json:"provenance,omitempty"`
 	Registration ServiceOfferRegistration `json:"registration,omitempty"`
+
+	// DrainAt marks the offer as draining when non-nil. While the offer
+	// is in the drain window, discovery surfaces (/skill.md and
+	// /.well-known/agent-registration.json) advertise the offer with
+	// available=false and drainEndsAt set, so buyers can migrate before
+	// the route is torn down. The route + payment gate stay up until
+	// DrainEndsAt() so in-flight payments can complete. Replaces the
+	// legacy obol.org/paused annotation.
+	DrainAt *metav1.Time `json:"drainAt,omitempty"`
+
+	// DrainGracePeriod is how long after DrainAt the HTTPRoute remains
+	// up. Defaults to DefaultDrainGracePeriod when nil. A zero duration
+	// is honored as "tear down immediately on the next reconcile" (the
+	// equivalent of `obol sell stop --force`).
+	DrainGracePeriod *metav1.Duration `json:"drainGracePeriod,omitempty"`
 }
 
 // ServiceOfferAgent is populated when Spec.Type == "agent". The controller
@@ -241,8 +261,41 @@ func (o *ServiceOffer) IsAgent() bool {
 	return o.Spec.Type == "agent"
 }
 
-func (o *ServiceOffer) IsPaused() bool {
-	return o.Annotations != nil && o.Annotations[PausedAnnotation] == "true"
+// IsDraining reports whether spec.drainAt has been set. Drained offers
+// transition through three phases: pre-drain (DrainAt nil), draining
+// (DrainAt set, now < DrainEndsAt), and drain-expired (DrainAt set,
+// now >= DrainEndsAt). The controller keeps the route up during
+// "draining" and tears it down once "drain-expired" is reached.
+func (o *ServiceOffer) IsDraining() bool {
+	return o.Spec.DrainAt != nil
+}
+
+// DrainEndsAt returns DrainAt + DrainGracePeriod. When DrainAt is nil
+// the zero time is returned (caller should gate on IsDraining first).
+// When DrainGracePeriod is nil the default grace period is applied; a
+// zero grace period is honored as "drain ends at DrainAt", i.e. tear
+// down on the next reconcile (the --force/--now path).
+func (o *ServiceOffer) DrainEndsAt() time.Time {
+	if o.Spec.DrainAt == nil {
+		return time.Time{}
+	}
+	grace := DefaultDrainGracePeriod
+	if o.Spec.DrainGracePeriod != nil {
+		grace = o.Spec.DrainGracePeriod.Duration
+	}
+	return o.Spec.DrainAt.Time.Add(grace)
+}
+
+// DrainExpired reports whether the drain grace period has elapsed.
+// Returns false when the offer is not draining at all. Callers should
+// use this rather than IsDraining when deciding whether to tear down
+// the HTTPRoute or filter the offer from the live x402 verifier rules.
+func (o *ServiceOffer) DrainExpired(now time.Time) bool {
+	if !o.IsDraining() {
+		return false
+	}
+	end := o.DrainEndsAt()
+	return !now.Before(end)
 }
 
 // ── PurchaseRequest ─────────────────────────────────────────────────────────

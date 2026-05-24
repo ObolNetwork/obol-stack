@@ -626,9 +626,20 @@ func TestSellStop_Structure(t *testing.T) {
 	stop := findSubcommand(t, cmd, "stop")
 	flags := flagMap(stop)
 
-	requireFlags(t, flags, "namespace")
+	requireFlags(t, flags, "namespace", "grace", "force")
 	assertFlagRequired(t, flags, "namespace")
 	assertFlagHasAlias(t, flags, "namespace", "n")
+	// --now is the documented alias for --force; if it disappears,
+	// scripted operators that rely on it break silently.
+	assertFlagHasAlias(t, flags, "force", "now")
+
+	graceFlag, ok := flags["grace"].(*cli.DurationFlag)
+	if !ok {
+		t.Fatalf("--grace should be *cli.DurationFlag, got %T", flags["grace"])
+	}
+	if graceFlag.Value != monetizeapi.DefaultDrainGracePeriod {
+		t.Errorf("--grace default = %v, want %v", graceFlag.Value, monetizeapi.DefaultDrainGracePeriod)
+	}
 }
 
 func TestSellDelete_Structure(t *testing.T) {

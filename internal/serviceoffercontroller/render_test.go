@@ -719,18 +719,27 @@ func TestBuildServiceCatalogJSON_AgentOfferUsesResolvedModel(t *testing.T) {
 }
 
 // TestBuildServiceCatalogJSON_ExcludesNonReady locks in the filter pipeline:
-// nil offers, paused offers, and offers with a DeletionTimestamp must never
-// leak onto the public storefront, even if they carry Ready=True.
+// nil offers, drain-expired offers, and offers with a DeletionTimestamp
+// must never leak onto the public storefront, even if they carry
+// Ready=True. Mid-drain offers DO stay in the catalog with available=false
+// and drainEndsAt set — that's the whole point of the drain replacement.
 func TestBuildServiceCatalogJSON_ExcludesNonReady(t *testing.T) {
 	readyCond := []monetizeapi.Condition{{Type: "Ready", Status: "True"}}
 
 	deleting := metav1.Now()
+	drainedAt := metav1.NewTime(time.Now().Add(-2 * time.Hour))
+	zeroGrace := metav1.Duration{Duration: 0}
+
 	offers := []*monetizeapi.ServiceOffer{
 		nil,
 		{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: "paused-svc", Namespace: "llm",
-				Annotations: map[string]string{monetizeapi.PausedAnnotation: "true"},
+			ObjectMeta: metav1.ObjectMeta{Name: "drained-svc", Namespace: "llm"},
+			Spec: monetizeapi.ServiceOfferSpec{
+				DrainAt:          &drainedAt,
+				DrainGracePeriod: &zeroGrace,
+				Payment: monetizeapi.ServiceOfferPayment{
+					Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+				},
 			},
 			Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
 		},
@@ -772,6 +781,89 @@ func TestBuildServiceCatalogJSON_ExcludesNonReady(t *testing.T) {
 	}
 	if services[0].Name != "ready-svc" {
 		t.Errorf("got %q, want ready-svc — filter pipeline leaked another offer", services[0].Name)
+	}
+	if !services[0].Available {
+		t.Errorf("ready-svc.available = false, want true (offer is not draining)")
+	}
+}
+
+// TestBuildServiceCatalogJSON_DrainLifecycle covers the three drain
+// states explicitly: pre-drain (available=true, no drainEndsAt), mid-drain
+// (in catalog, available=false, drainEndsAt populated), and drain-expired
+// (filtered out of the catalog because the controller has torn down the
+// underlying route).
+func TestBuildServiceCatalogJSON_DrainLifecycle(t *testing.T) {
+	readyCond := []monetizeapi.Condition{{Type: "Ready", Status: "True"}}
+	mkOffer := func(name string) monetizeapi.ServiceOffer {
+		return monetizeapi.ServiceOffer{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "llm"},
+			Spec: monetizeapi.ServiceOfferSpec{
+				Type: "http",
+				Payment: monetizeapi.ServiceOfferPayment{
+					Network: "base",
+					PayTo:   "0x1111111111111111111111111111111111111111",
+					Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+				},
+			},
+			Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
+		}
+	}
+
+	// Pre-drain.
+	pre := mkOffer("pre")
+
+	// Mid-drain: drainAt = now, grace = 1h → ends ~1h from now.
+	midDrainAt := metav1.NewTime(time.Now())
+	midGrace := metav1.Duration{Duration: time.Hour}
+	mid := mkOffer("mid")
+	mid.Spec.DrainAt = &midDrainAt
+	mid.Spec.DrainGracePeriod = &midGrace
+
+	// Drain-expired.
+	expDrainAt := metav1.NewTime(time.Now().Add(-2 * time.Hour))
+	expGrace := metav1.Duration{Duration: time.Hour}
+	exp := mkOffer("expired")
+	exp.Spec.DrainAt = &expDrainAt
+	exp.Spec.DrainGracePeriod = &expGrace
+
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{&pre, &mid, &exp}, "https://example.com")
+	var services []schemas.ServiceCatalogEntry
+	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
+	}
+	if len(services) != 2 {
+		t.Fatalf("expected 2 services (pre + mid; expired filtered out), got %d: %+v", len(services), services)
+	}
+
+	byName := map[string]schemas.ServiceCatalogEntry{}
+	for _, s := range services {
+		byName[s.Name] = s
+	}
+	if pre, ok := byName["pre"]; !ok {
+		t.Fatal("pre-drain offer missing from catalog")
+	} else {
+		if !pre.Available {
+			t.Errorf("pre.available = false, want true")
+		}
+		if pre.DrainEndsAt != "" {
+			t.Errorf("pre.drainEndsAt = %q, want empty", pre.DrainEndsAt)
+		}
+	}
+	if mid, ok := byName["mid"]; !ok {
+		t.Fatal("mid-drain offer missing from catalog")
+	} else {
+		if mid.Available {
+			t.Errorf("mid.available = true, want false (offer is draining)")
+		}
+		if mid.DrainEndsAt == "" {
+			t.Errorf("mid.drainEndsAt is empty, want RFC3339 timestamp")
+		}
+		if _, err := time.Parse(time.RFC3339, mid.DrainEndsAt); err != nil {
+			t.Errorf("mid.drainEndsAt = %q is not RFC3339: %v", mid.DrainEndsAt, err)
+		}
+	}
+	if _, ok := byName["expired"]; ok {
+		t.Error("drain-expired offer leaked into catalog; should be filtered")
 	}
 }
 
