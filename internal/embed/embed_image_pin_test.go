@@ -136,3 +136,135 @@ func TestEmbeddedImages_NoNewLatestTags(t *testing.T) {
 			strings.Join(stale, "\n  "))
 	}
 }
+
+// TestEmbeddedImages_NamedImagesAreDigestPinned guards the @sha256: discipline
+// for the cluster-side container images that ship as part of the embedded
+// infrastructure. Tag-only refs (e.g. `:b13254e`) are vulnerable to mutable-tag
+// rewrites — the class of supply-chain bug CLAUDE.md pitfall #12 documented
+// after a real local-cluster incident.
+//
+// Adding a new image to this list MUST be accompanied by an `@sha256:<digest>`
+// suffix on the `image:` line (or, for Helm value files, on the `tag:` field
+// such that the rendered manifest produces `<repo>:<tag>@sha256:<digest>`).
+//
+// To regenerate a digest:
+//
+//	docker buildx imagetools inspect <repo>:<tag> --format '{{ .Manifest.Digest }}'
+func TestEmbeddedImages_NamedImagesAreDigestPinned(t *testing.T) {
+	cases := []struct {
+		file string
+		// repo is the substring used to locate the relevant line. The match
+		// is line-scoped — the line must also contain @sha256: to pass.
+		repo string
+	}{
+		// internal/embed/infrastructure/base/templates/x402.yaml
+		{file: "base/templates/x402.yaml", repo: "ghcr.io/obolnetwork/x402-verifier"},
+		{file: "base/templates/x402.yaml", repo: "ghcr.io/obolnetwork/serviceoffer-controller"},
+		// internal/embed/infrastructure/base/templates/llm.yaml
+		{file: "base/templates/llm.yaml", repo: "ghcr.io/obolnetwork/litellm"},
+		{file: "base/templates/llm.yaml", repo: "ghcr.io/obolnetwork/x402-buyer"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.repo, func(t *testing.T) {
+			data, err := ReadInfrastructureFile(tc.file)
+			if err != nil {
+				t.Fatalf("read %s: %v", tc.file, err)
+			}
+
+			var (
+				found     bool
+				offenders []string
+			)
+
+			scanner := bufio.NewScanner(bytes.NewReader(data))
+			scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+
+			lineNum := 0
+			for scanner.Scan() {
+				lineNum++
+				line := scanner.Text()
+
+				trimmed := strings.TrimSpace(line)
+				if strings.HasPrefix(trimmed, "#") {
+					continue
+				}
+				// Must look like a Kubernetes container `image:` field, not a
+				// random doc-comment or env var.
+				if !strings.Contains(trimmed, "image:") {
+					continue
+				}
+				if !strings.Contains(line, tc.repo) {
+					continue
+				}
+
+				found = true
+				if !strings.Contains(line, "@sha256:") {
+					offenders = append(offenders,
+						fmt.Sprintf("%s:%d → %q lacks @sha256: digest pin", tc.file, lineNum, strings.TrimSpace(line)))
+				}
+			}
+
+			if err := scanner.Err(); err != nil {
+				t.Fatalf("scan %s: %v", tc.file, err)
+			}
+
+			if !found {
+				t.Fatalf("no image: line containing %q found in %s — has the image been renamed or moved? "+
+					"Update this test alongside the manifest change.", tc.repo, tc.file)
+			}
+
+			if len(offenders) > 0 {
+				t.Fatalf("digest-pin discipline broken in %s:\n  %s\n\n"+
+					"Pin the image as `<repo>:<tag>@sha256:<digest>`. Resolve with:\n"+
+					"  docker buildx imagetools inspect %s:<tag> --format '{{ .Manifest.Digest }}'",
+					tc.file, strings.Join(offenders, "\n  "), tc.repo)
+			}
+		})
+	}
+}
+
+// TestEmbeddedImages_CloudflaredHelmTagIsDigestPinned covers the cloudflared
+// chart, which uses the Helm idiom `image.repository` + `image.tag` rather
+// than a literal `image:` line. The chart template renders
+// `<repository>:<tag>`; embedding `@sha256:<digest>` inside `.tag` produces
+// a valid digest-pinned ref at render time and preserves the same
+// mutable-tag protection.
+func TestEmbeddedImages_CloudflaredHelmTagIsDigestPinned(t *testing.T) {
+	data, err := ReadInfrastructureFile("cloudflared/values.yaml")
+	if err != nil {
+		t.Fatalf("read cloudflared/values.yaml: %v", err)
+	}
+
+	var tagLine string
+
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "tag:") {
+			tagLine = line
+			break
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan cloudflared/values.yaml: %v", err)
+	}
+
+	if tagLine == "" {
+		t.Fatal("no `tag:` field found in cloudflared/values.yaml — chart layout changed; update this test.")
+	}
+
+	if !strings.Contains(tagLine, "@sha256:") {
+		t.Fatalf("cloudflared image tag is not digest-pinned: %q\n\n"+
+			"Pin it as `tag: \"<tag>@sha256:<digest>\"`. Resolve with:\n"+
+			"  docker buildx imagetools inspect cloudflare/cloudflared:<tag> --format '{{ .Manifest.Digest }}'",
+			strings.TrimSpace(tagLine))
+	}
+}
