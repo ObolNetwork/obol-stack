@@ -767,7 +767,7 @@ export function MyListingsPage() {
           <CountChip>{myOffers.length}</CountChip>
           <Box css={{ flex: 1 }} />
           <Text css={{ fontSize: '$2', color: '$body' }}>
-            today ·{' '}
+            7d ·{' '}
             <Mono css={{ color: '$obolGreen' }}>
               {rollup.total7d.USDC} USDC
             </Mono>{' '}

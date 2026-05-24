@@ -61,7 +61,7 @@ export interface ServiceOfferAgentResolution {
 
 export interface ServiceOfferUsage {
   chargedRequests: number | null;
-  /** Per-chain charged-request lifetime counts, keyed by `payment.network`. */
+  /** Per-chain charged-request counts over 7d window, keyed by `payment.network`. */
   chargedByChain?: Array<{ chain: string; requests: number }>;
   /** Charged requests over the last 24h (from PromQL increase()). */
   requests24h?: number | null;
