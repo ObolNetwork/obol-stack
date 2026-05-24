@@ -12,6 +12,9 @@ on:
       - 'internal/embed/infrastructure/**'
       - '.github/workflows/helm-template-smoke.yml'
 
+permissions:
+  contents: read
+
 jobs:
   helm-template-smoke:
     name: helm template embedded chart
