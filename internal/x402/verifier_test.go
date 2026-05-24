@@ -100,6 +100,8 @@ func testPaymentHeaderFor(t *testing.T, payTo, amount string) string {
 }
 
 // newTestVerifier creates a Verifier backed by the given facilitator URL.
+// It also marks routes as loaded so /readyz returns 200 immediately, which
+// matches what the production wire-up does once the route source warms up.
 func newTestVerifier(t *testing.T, facilitatorURL string, routes []RouteRule) *Verifier {
 	t.Helper()
 	v, err := NewVerifier(&PricingConfig{
@@ -112,6 +114,7 @@ func newTestVerifier(t *testing.T, facilitatorURL string, routes []RouteRule) *V
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
+	v.MarkRoutesLoaded()
 	return v
 }
 
@@ -487,6 +490,55 @@ func TestVerifier_ReadyzNotReady(t *testing.T) {
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503 when config is nil, got %d", w.Code)
+	}
+	if got := w.Body.String(); !strings.Contains(got, "config not loaded") {
+		t.Errorf("expected body to mention %q, got %q", "config not loaded", got)
+	}
+}
+
+// TestVerifier_Readyz_BlocksUntilRoutesLoaded asserts the fix for
+// CLAUDE.md pitfall #14: /readyz must return 503 between "config loaded"
+// and "first route source apply completed" so kubelet keeps the pod out
+// of the Service Endpoints during informer warm-up.
+func TestVerifier_Readyz_BlocksUntilRoutesLoaded(t *testing.T) {
+	v, err := NewVerifier(&PricingConfig{
+		Wallet:         "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		Chain:          "base-sepolia",
+		FacilitatorURL: "http://example.invalid",
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+
+	// Config is loaded by NewVerifier, but routes have NOT been marked
+	// loaded yet — /readyz must still 503 with a routes-specific message
+	// so kubectl describe pod surfaces the actual cause.
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	w := httptest.NewRecorder()
+	v.HandleReadyz(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 before routes loaded, got %d", w.Code)
+	}
+	if got := w.Body.String(); !strings.Contains(got, "routes not loaded") {
+		t.Errorf("expected body to mention %q, got %q", "routes not loaded", got)
+	}
+
+	// After the route source signals first apply, /readyz flips to 200.
+	v.MarkRoutesLoaded()
+
+	w = httptest.NewRecorder()
+	v.HandleReadyz(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 after MarkRoutesLoaded, got %d (body=%q)", w.Code, w.Body.String())
+	}
+
+	// MarkRoutesLoaded is idempotent — calling it again must not regress.
+	v.MarkRoutesLoaded()
+	w = httptest.NewRecorder()
+	v.HandleReadyz(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 after second MarkRoutesLoaded, got %d", w.Code)
 	}
 }
 

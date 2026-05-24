@@ -21,7 +21,12 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-func WatchServiceOffers(ctx context.Context, cfg *rest.Config, apply func([]RouteRule) error) error {
+// WatchServiceOffers runs the ServiceOffer + litellm-secrets informers and
+// pushes rendered RouteRules to apply on every change. The optional
+// onFirstApply callback is invoked exactly once after the post-cache-sync
+// refresh succeeds; it is the signal that the route source has produced its
+// first usable snapshot. Pass nil to skip.
+func WatchServiceOffers(ctx context.Context, cfg *rest.Config, apply func([]RouteRule) error, onFirstApply func()) error {
 	client, err := dynamic.NewForConfig(cfg)
 	if err != nil {
 		return fmt.Errorf("create dynamic client: %w", err)
@@ -34,17 +39,18 @@ func WatchServiceOffers(ctx context.Context, cfg *rest.Config, apply func([]Rout
 	offers := offerFactory.ForResource(monetizeapi.ServiceOfferGVR).Informer()
 	secrets := secretFactory.ForResource(monetizeapi.SecretGVR).Informer()
 
-	refresh := func() {
+	refresh := func() (ok bool) {
 		routes, err := routesFromStore(offers.GetStore().List(), secrets.GetStore().List())
 		if err != nil {
 			log.Printf("x402-serviceoffer-source: render routes: %v", err)
-			return
+			return false
 		}
 		if err := apply(routes); err != nil {
 			log.Printf("x402-serviceoffer-source: apply routes: %v", err)
-			return
+			return false
 		}
 		log.Printf("x402-serviceoffer-source: routes reloaded (%d routes)", len(routes))
+		return true
 	}
 
 	handler := cache.ResourceEventHandlerFuncs{
@@ -61,7 +67,9 @@ func WatchServiceOffers(ctx context.Context, cfg *rest.Config, apply func([]Rout
 		return fmt.Errorf("wait for serviceoffer informer sync")
 	}
 
-	refresh()
+	if refresh() && onFirstApply != nil {
+		onFirstApply()
+	}
 	<-ctx.Done()
 	return nil
 }
