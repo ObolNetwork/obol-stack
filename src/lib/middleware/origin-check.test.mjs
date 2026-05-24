@@ -47,6 +47,23 @@ describe('rejectCrossOrigin', () => {
     assert.equal(res, null);
   });
 
+  it('passes POST with default-port Origin http://obol.stack (port-omitted = 80)', () => {
+    // Real browser requests to http://obol.stack/ send Origin: http://obol.stack
+    // (no port — default port 80 is omitted per RFC 6454). Production Traefik
+    // binds port 80; without this case the prod browser flow gets 403.
+    const res = rejectCrossOrigin(
+      makeRequest('POST', { origin: 'http://obol.stack' })
+    );
+    assert.equal(res, null);
+  });
+
+  it('passes POST with default-port Origin https://obol.stack (port-omitted = 443)', () => {
+    const res = rejectCrossOrigin(
+      makeRequest('POST', { origin: 'https://obol.stack' })
+    );
+    assert.equal(res, null);
+  });
+
   it('blocks POST from evil.com Origin with 403', async () => {
     const res = rejectCrossOrigin(
       makeRequest('POST', { origin: 'http://evil.com' })
