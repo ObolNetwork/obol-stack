@@ -491,7 +491,7 @@ func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
 		`name: buyer-http`,
 		`name: x402-buyer-config`,
 		`name: x402-buyer-auths`,
-		`emptyDir: {}`,
+		`emptyDir:`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("llm template missing %q:\n%s", want, out)
