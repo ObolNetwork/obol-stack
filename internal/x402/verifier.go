@@ -64,6 +64,20 @@ func (v *Verifier) load(cfg *PricingConfig) error {
 	v.chains.Store(&chains)
 	v.config.Store(cfg)
 
+	// Drop metric series for offers that are no longer in the route set.
+	// Without this, deleting an offer leaves its counters + last-success
+	// gauge in the registry forever, polluting dashboards and silently
+	// keeping alerts (e.g. "no settlements after challenge") tied to dead
+	// labels.
+	live := make(map[string]struct{}, len(cfg.Routes))
+	for _, r := range cfg.Routes {
+		if r.OfferNamespace == "" && r.OfferName == "" {
+			continue
+		}
+		live[r.OfferNamespace+"\x00"+r.OfferName+"\x00"+r.Network] = struct{}{}
+	}
+	v.metrics.pruneSeriesNotIn(live)
+
 	return nil
 }
 
@@ -144,6 +158,7 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 	case tracker.status == http.StatusOK && r.Header.Get("X-Payment") != "":
 		v.metrics.paymentVerified.With(labels).Inc()
 		v.metrics.chargedRequests.With(labels).Inc()
+		v.metrics.lastPaymentSuccess.With(labels).SetToCurrentTime()
 	case tracker.status == http.StatusPaymentRequired && r.Header.Get("X-Payment") != "":
 		v.metrics.paymentFailed.With(labels).Inc()
 	case tracker.status == http.StatusPaymentRequired:
@@ -198,6 +213,7 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		v.metrics.paymentVerified.With(labels).Inc()
 		if tracker.Header().Get("X-PAYMENT-RESPONSE") != "" {
 			v.metrics.chargedRequests.With(labels).Inc()
+			v.metrics.lastPaymentSuccess.With(labels).SetToCurrentTime()
 		}
 	}
 }
@@ -446,9 +462,13 @@ func (r *statusRecorder) WriteHeader(status int) {
 }
 
 func prometheusLabels(rule *RouteRule) prometheus.Labels {
+	// `route` (= rule.Pattern) was dropped in favor of (offer_namespace,
+	// offer_name) which already uniquely identifies a paid route — the
+	// pattern was redundant and unbounded by path fragments, which would
+	// have ballooned series count for sellers running many granular routes.
 	return prometheus.Labels{
-		"route":           rule.Pattern,
 		"offer_namespace": rule.OfferNamespace,
 		"offer_name":      rule.OfferName,
+		"chain":           rule.Network,
 	}
 }

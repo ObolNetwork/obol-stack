@@ -36,6 +36,14 @@ releases:
     values:
       - ./values/monitoring.yaml.gotmpl
 
+  # NOTE: PodMonitor for litellm-x402-buyer and ServiceMonitor for
+  # x402-verifier moved into base/templates/llm.yaml and
+  # base/templates/x402.yaml respectively. They live alongside the
+  # workloads they observe so a port/selector edit is one-file. Kills
+  # two `bedag/raw` releases. kube-prometheus-stack picks them up via
+  # the `release: monitoring` label.
+
+
   # Traefik ingress controller with Gateway API support
   # Traefik v38+ bundles Gateway API CRDs in its crds/ directory.
   # Declared before `base` so the Traefik CRDs (Middleware,
@@ -176,3 +184,13 @@ releases:
       - erpc/erpc
     values:
       - ./values/obol-frontend.yaml.gotmpl
+
+  # NOTE: Obol frontend HTTPRoute and obol-frontend-rbac ClusterRole +
+  # ClusterRoleBinding moved into base/templates/obol-frontend.yaml.
+  # Co-located with the workload they configure; kills two `bedag/raw`
+  # releases. Frontend-egress NetworkPolicy was attempted and reverted —
+  # on k3s + Flannel (k3d's default CNI) the kubernetes apiserver Service
+  # Endpoints point at the host process, outside the cluster pod/service
+  # CIDRs. A clean allowlist can't target the apiserver portably without
+  # an install-specific ipBlock for the k3s host IP. Tracking as a
+  # deferred hardening item.

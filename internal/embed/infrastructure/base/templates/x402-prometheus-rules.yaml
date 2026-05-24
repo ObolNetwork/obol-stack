@@ -1,0 +1,139 @@
+---
+# Recording + alerting rules for x402 verifier traffic.
+#
+# Recording rules pre-aggregate the queries that the frontend's
+# /api/sell/list joins use (chargedSalesByOfferAndChain,
+# chargedRequests24hByOffer). The frontend reads the recorded series
+# directly, which:
+#   * removes the `increase()` 2-sample minimum quirk (cold offers no
+#     longer show "0" for the first 30s after they receive traffic),
+#   * decouples the page from raw metric names (renaming
+#     obol_x402_verifier_charged_requests_total no longer breaks the UI),
+#   * cuts query cost on dashboards / page reloads (sum is done once at
+#     evaluation time, not per page-load).
+#
+# Alerting rules surface the two operator-meaningful failure modes the
+# release-smoke flows historically caught manually.
+#
+# Picked up by kube-prometheus-stack via the `release: monitoring` label
+# (configured in values/monitoring.yaml.gotmpl).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: x402-verifier
+  namespace: x402
+  labels:
+    release: monitoring
+    app: x402-verifier
+spec:
+  groups:
+    - name: x402.recording
+      interval: 30s
+      rules:
+        # 24h charged-request count per (offer, chain). Replaces the
+        # frontend's `increase(charged_requests_total[24h])` query — same
+        # math, pre-computed every 30s.
+        - record: x402:revenue:24h_by_offer_chain
+          expr: |
+            sum by (offer_namespace, offer_name, chain) (
+              increase(obol_x402_verifier_charged_requests_total[24h])
+            )
+
+        # 7d charged-request count per (offer, chain). Powers the
+        # EarningsStrip per-chain × CRD price multiplication.
+        - record: x402:revenue:7d_by_offer_chain
+          expr: |
+            sum by (offer_namespace, offer_name, chain) (
+              increase(obol_x402_verifier_charged_requests_total[7d])
+            )
+
+        # Lifetime charged-request count per offer (sum across replicas
+        # + chains). Used in the My Listings "today · X earned" header
+        # text and the Browse catalog usage badge.
+        - record: x402:revenue:lifetime_by_offer
+          expr: |
+            sum by (offer_namespace, offer_name) (
+              obol_x402_verifier_charged_requests_total
+            )
+
+        # Settlement rate (verified / attempted) over the last hour, per
+        # (offer, chain). Useful for the dashboard + the alert below.
+        - record: x402:settlement_rate:1h_by_offer_chain
+          expr: |
+            sum by (offer_namespace, offer_name, chain) (
+              rate(obol_x402_verifier_payment_verified_total[1h])
+            )
+            /
+            clamp_min(
+              sum by (offer_namespace, offer_name, chain) (
+                rate(obol_x402_verifier_payment_required_total[1h])
+                +
+                rate(obol_x402_verifier_payment_verified_total[1h])
+                +
+                rate(obol_x402_verifier_payment_failed_total[1h])
+              ),
+              1
+            )
+
+    - name: x402.alerting
+      rules:
+        # Payment-failure ratio crossed 10% over the last hour for a paid
+        # route that's actually receiving traffic. Typical cause:
+        # facilitator unreachable, chain pruning, or seller's CA bundle
+        # missing (CLAUDE.md pitfall #8).
+        - alert: X402PaymentFailureRateHigh
+          expr: |
+            (
+              sum by (offer_namespace, offer_name, chain) (
+                rate(obol_x402_verifier_payment_failed_total[1h])
+              )
+              /
+              clamp_min(
+                sum by (offer_namespace, offer_name, chain) (
+                  rate(obol_x402_verifier_payment_failed_total[1h])
+                  +
+                  rate(obol_x402_verifier_payment_verified_total[1h])
+                ),
+                1
+              )
+            ) > 0.10
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "x402 payment failures > 10% on {{ $labels.offer_namespace }}/{{ $labels.offer_name }} ({{ $labels.chain }})"
+            description: |
+              More than 10% of paid requests to
+              {{ $labels.offer_namespace }}/{{ $labels.offer_name }} on
+              {{ $labels.chain }} have failed verification over the last
+              hour. Check the verifier logs for x509/facilitator errors and
+              the seller's `ca-certificates` ConfigMap.
+
+        # An offer received a 402 (payment_required) within the last hour
+        # but no charged_requests happened in the same window. Either
+        # buyers aren't completing the flow, or settlement is broken
+        # downstream of the verifier.
+        - alert: X402NoSettlementsAfterChallenge
+          expr: |
+            (
+              sum by (offer_namespace, offer_name) (
+                increase(obol_x402_verifier_payment_required_total[1h])
+              ) > 0
+            )
+            and
+            (
+              sum by (offer_namespace, offer_name) (
+                increase(obol_x402_verifier_charged_requests_total[1h])
+              ) == 0
+            )
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.offer_namespace }}/{{ $labels.offer_name }} returns 402 but never settles"
+            description: |
+              The x402 verifier issued 402 responses for
+              {{ $labels.offer_namespace }}/{{ $labels.offer_name }} in the
+              last hour but observed no settled requests. Check the buyer
+              sidecar's auth pool (/status) and the facilitator's settlement
+              endpoint.

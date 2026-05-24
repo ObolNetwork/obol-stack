@@ -1045,7 +1045,7 @@ func TestProxy_ModelRoutingAndMetrics(t *testing.T) {
 	}
 
 	metrics := scrapeMetricFamilies(t, proxy)
-	labels := map[string]string{"upstream": "seller-qwen", "remote_model": "qwen3:32b"}
+	labels := map[string]string{"upstream": "seller-qwen", "remote_model": "qwen3:32b", "chain": "base-sepolia"}
 	assertMetricValue(t, metrics["obol_x402_buyer_requests_total"], labels, 1)
 	assertMetricValue(t, metrics["obol_x402_buyer_payment_attempts_total"], labels, 1)
 	assertMetricValue(t, metrics["obol_x402_buyer_payment_success_total"], labels, 1)
@@ -1295,10 +1295,10 @@ func TestProxy_ReloadSkipsConsumedAuthsAndReplacesModelMapping(t *testing.T) {
 		t.Fatalf("active model mapping series = %d, want 1", metricFamilyLen(activeMappings))
 	}
 
-	assertMetricValue(t, activeMappings, map[string]string{"upstream": "seller-new", "remote_model": "new-model"}, 1)
-	assertMetricMissing(t, activeMappings, map[string]string{"upstream": "seller-old", "remote_model": "old-model"})
-	assertMetricValue(t, metrics["obol_x402_buyer_auth_remaining"], map[string]string{"upstream": "seller-new", "remote_model": "new-model"}, 1)
-	assertMetricMissing(t, metrics["obol_x402_buyer_auth_remaining"], map[string]string{"upstream": "seller-old", "remote_model": "old-model"})
+	assertMetricValue(t, activeMappings, map[string]string{"upstream": "seller-new", "remote_model": "new-model", "chain": "base-sepolia"}, 1)
+	assertMetricMissing(t, activeMappings, map[string]string{"upstream": "seller-old", "remote_model": "old-model", "chain": "base-sepolia"})
+	assertMetricValue(t, metrics["obol_x402_buyer_auth_remaining"], map[string]string{"upstream": "seller-new", "remote_model": "new-model", "chain": "base-sepolia"}, 1)
+	assertMetricMissing(t, metrics["obol_x402_buyer_auth_remaining"], map[string]string{"upstream": "seller-old", "remote_model": "old-model", "chain": "base-sepolia"})
 }
 
 func TestProxy_ReloadSamePurchasePreservesSpentAndAppendsAuthPool(t *testing.T) {
@@ -1752,6 +1752,7 @@ func TestProxy_UpstreamSuccessNoSettlementHeader_IncrementsUnsettledMetric(t *te
 	assertMetricValue(t, family, map[string]string{
 		"upstream":     "paid",
 		"remote_model": "paid",
+		"chain":        "base-sepolia",
 	}, 1)
 }
 
@@ -1826,6 +1827,7 @@ func TestProxy_UpstreamSuccessWithSettlementHeader_DoesNotIncrementUnsettledMetr
 	assertMetricMissing(t, metrics["obol_x402_buyer_payment_unsettled_confirmations_total"], map[string]string{
 		"upstream":     "paid",
 		"remote_model": "paid",
+		"chain":        "base-sepolia",
 	})
 }
 
@@ -1901,6 +1903,7 @@ func TestProxy_ConfirmSpendFailure_IncrementsMetric(t *testing.T) {
 	assertMetricValue(t, metrics["obol_x402_buyer_confirm_spend_failure_total"], map[string]string{
 		"upstream":     "paid",
 		"remote_model": "paid",
+		"chain":        "base-sepolia",
 	}, 1)
 }
 
