@@ -18,6 +18,7 @@ import type {
   ServiceOfferCondition,
   ServiceOfferType,
 } from '@/types/sell';
+import { sharedKubeConfig } from '@/lib/services/kube';
 
 const CRD_GROUP = 'obol.org';
 const CRD_VERSION = 'v1alpha1';
@@ -28,17 +29,7 @@ export class SellClient {
   private kc: KubeConfig;
 
   constructor() {
-    const kc = new KubeConfig();
-    if (process.env.KUBERNETES_SERVICE_HOST) {
-      kc.loadFromCluster();
-    } else {
-      if (!process.env.NEXT_PUBLIC_KUBECONFIG) {
-        throw new Error(
-          'NEXT_PUBLIC_KUBECONFIG required for local development'
-        );
-      }
-      kc.loadFromFile(process.env.NEXT_PUBLIC_KUBECONFIG);
-    }
+    const kc = sharedKubeConfig();
     this.kc = kc;
     this.customApi = kc.makeApiClient(CustomObjectsApi);
   }

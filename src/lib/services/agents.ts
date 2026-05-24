@@ -1,4 +1,4 @@
-import { CoreV1Api, KubeConfig } from '@kubernetes/client-node';
+import { CoreV1Api } from '@kubernetes/client-node';
 import { ObjectCoreV1Api } from '@kubernetes/client-node/dist/gen/types/ObjectParamAPI';
 import type {
   AgentInstance,
@@ -11,6 +11,7 @@ import {
   DEFAULT_AGENT_ID,
   getAgentDashboardHostname,
 } from '@/lib/services/agent-runtime';
+import { sharedKubeConfig } from '@/lib/services/kube';
 
 const RUNTIME_CONFIG = {
   hermes: {
@@ -44,27 +45,9 @@ export class AgentClient {
   private isInCluster: boolean;
 
   constructor() {
-    const kc = this.getKubeConfig();
+    const kc = sharedKubeConfig();
     this.coreV1Api = kc.makeApiClient(CoreV1Api);
     this.isInCluster = !!process.env.KUBERNETES_SERVICE_HOST;
-  }
-
-  private getKubeConfig(): KubeConfig {
-    const kc = new KubeConfig();
-    if (process.env.KUBERNETES_SERVICE_HOST) {
-      kc.loadFromCluster();
-      return kc;
-    }
-
-    if (!process.env.NEXT_PUBLIC_KUBECONFIG) {
-      throw new Error(
-        'NEXT_PUBLIC_KUBECONFIG environment variable is required for local development. ' +
-          'Set it to the path of your kubeconfig file.'
-      );
-    }
-
-    kc.loadFromFile(process.env.NEXT_PUBLIC_KUBECONFIG);
-    return kc;
   }
 
   private descriptor(runtime: AgentRuntime): RuntimeDescriptor {
