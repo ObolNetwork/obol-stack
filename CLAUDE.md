@@ -342,6 +342,8 @@ A registry digest pin instead of `:latest` on the verifier means your dev rewrit
 
 For a fuller debug catalog with symptom→fix mapping, see `.agents/skills/obol-stack-dev/references/release-smoke-debugging.md`.
 
+For observability architecture decisions (Prometheus retention vs. on-chain canonical record, counter-reset semantics, recording-rule naming, label conventions, CRD versioning stance, `clamp_min` epsilon), see `docs/observability.md` — read this before adding a new metric, recording rule, or proposing counter persistence.
+
 ### Security: Tunnel Exposure
 
 The Cloudflare tunnel exposes the cluster to the public internet. Only x402-gated endpoints and discovery metadata should be reachable via the tunnel hostname. Internal services (frontend, eRPC, LiteLLM, monitoring) MUST have `hostnames: ["obol.stack"]` on their HTTPRoutes to restrict them to local access.
