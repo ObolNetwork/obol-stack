@@ -808,6 +808,7 @@ func TestVerifier_MetricsPaymentRequired(t *testing.T) {
 		"offer_namespace": "llm",
 		"offer_name":      "paid-rpc",
 		"chain":           "",
+		"asset_symbol":    "unknown",
 	}
 	assertVerifierMetricValue(t, metrics["obol_x402_verifier_requests_total"], labels, 1)
 	assertVerifierMetricValue(t, metrics["obol_x402_verifier_payment_required_total"], labels, 1)
@@ -821,6 +822,7 @@ func TestVerifier_MetricsVerifiedAndRejectedPayments(t *testing.T) {
 		"offer_namespace": "llm",
 		"offer_name":      "paid-rpc",
 		"chain":           "",
+		"asset_symbol":    "unknown",
 	}
 
 	okFac := newMockFacilitator(t, mockFacilitatorOpts{})
@@ -880,12 +882,15 @@ func TestVerifier_MetricsVerifiedAndRejectedPayments(t *testing.T) {
 // when an unpaid request is rejected with 402.
 //
 // The gauge is labeled identically to the verifier counters; for this rule
-// `chain` is the empty string because the test RouteRule has no Network set.
+// `chain` is the empty string because the test RouteRule has no Network set,
+// and `asset_symbol` is "unknown" because AssetSymbol is unset (the defensive
+// fallback emitted by prometheusLabels).
 func TestVerifier_LastPaymentSuccessGauge(t *testing.T) {
 	labels := map[string]string{
 		"offer_namespace": "llm",
 		"offer_name":      "paid-rpc",
 		"chain":           "",
+		"asset_symbol":    "unknown",
 	}
 
 	tests := []struct {
@@ -1002,8 +1007,8 @@ func TestVerifier_Reload_PrunesDeletedOfferSeries(t *testing.T) {
 		}
 	}
 
-	keptLabels := map[string]string{"offer_namespace": "llm", "offer_name": "keep", "chain": ""}
-	goneLabels := map[string]string{"offer_namespace": "llm", "offer_name": "gone", "chain": ""}
+	keptLabels := map[string]string{"offer_namespace": "llm", "offer_name": "keep", "chain": "", "asset_symbol": "unknown"}
+	goneLabels := map[string]string{"offer_namespace": "llm", "offer_name": "gone", "chain": "", "asset_symbol": "unknown"}
 
 	families := scrapeVerifierMetrics(t, v)
 	for _, name := range []string{
@@ -1218,5 +1223,142 @@ func verifierMetricValue(metric *dto.Metric) float64 {
 		return metric.GetGauge().GetValue()
 	default:
 		return 0
+	}
+}
+
+// TestVerifier_PrometheusLabels_IncludesAssetSymbol asserts that the
+// asset_symbol label is emitted with the value from RouteRule.AssetSymbol
+// (which the serviceoffer_source populates from
+// offer.Spec.Payment.Asset.Symbol). This is what makes "what's my OBOL
+// revenue?" a single PromQL aggregation instead of a metric × CR join.
+func TestVerifier_PrometheusLabels_IncludesAssetSymbol(t *testing.T) {
+	rule := &RouteRule{
+		OfferNamespace: "llm",
+		OfferName:      "demo-hello",
+		Network:        "eip155:84532",
+		AssetSymbol:    "USDC",
+	}
+	labels := prometheusLabels(rule)
+	if got := labels["asset_symbol"]; got != "USDC" {
+		t.Errorf("asset_symbol = %q, want %q (full labels: %v)", got, "USDC", labels)
+	}
+	if got := labels["chain"]; got != "eip155:84532" {
+		t.Errorf("chain = %q, want %q", got, "eip155:84532")
+	}
+}
+
+// TestVerifier_PrometheusLabels_DefaultsToUnknownIfEmpty asserts the
+// defensive fallback: when AssetSymbol is empty (legacy offers, parsing
+// hiccup, etc.) the label value is "unknown" rather than "" — empty-string
+// labels are legal in Prometheus but render as bare selectors that are
+// awkward to filter in dashboards.
+func TestVerifier_PrometheusLabels_DefaultsToUnknownIfEmpty(t *testing.T) {
+	rule := &RouteRule{
+		OfferNamespace: "llm",
+		OfferName:      "no-asset",
+		Network:        "eip155:84532",
+		AssetSymbol:    "",
+	}
+	labels := prometheusLabels(rule)
+	if got := labels["asset_symbol"]; got != "unknown" {
+		t.Errorf("asset_symbol = %q, want %q (full labels: %v)", got, "unknown", labels)
+	}
+}
+
+// TestVerifier_PruneSeriesNotIn_DistinguishesAssetSymbol asserts that
+// pruning treats asset_symbol as part of the series key, so an asset-repin
+// scenario (USDC route gets dropped, OBOL route for the same offer is
+// retained) prunes the dead USDC series without taking the live OBOL one
+// with it. Without asset_symbol in the key, both series would map to the
+// same (ns, name, chain) tuple and pruning would either drop both or
+// neither — leaking a stale per-asset series.
+func TestVerifier_PruneSeriesNotIn_DistinguishesAssetSymbol(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	usdcRoute := RouteRule{
+		Pattern:        "/svc/*",
+		Price:          "0.0001",
+		OfferNamespace: "llm",
+		OfferName:      "demo",
+		Network:        "base-sepolia",
+		AssetSymbol:    "USDC",
+	}
+	obolRoute := RouteRule{
+		Pattern:        "/svc-obol/*",
+		Price:          "0.0001",
+		OfferNamespace: "llm",
+		OfferName:      "demo",
+		Network:        "base-sepolia",
+		AssetSymbol:    "OBOL",
+	}
+	v := newTestVerifier(t, fac.URL, []RouteRule{usdcRoute, obolRoute})
+
+	// Stamp a successful paid request through each asset variant so both
+	// series exist in the registry before pruning.
+	for _, path := range []string{"/svc/x", "/svc-obol/x"} {
+		req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+		req.Header.Set("X-Forwarded-Uri", path)
+		req.Header.Set("X-Forwarded-Host", "obol.stack")
+		req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+		rec := httptest.NewRecorder()
+		v.HandleVerify(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("setup paid request to %s: status=%d", path, rec.Code)
+		}
+	}
+
+	usdcLabels := map[string]string{
+		"offer_namespace": "llm",
+		"offer_name":      "demo",
+		"chain":           "base-sepolia",
+		"asset_symbol":    "USDC",
+	}
+	obolLabels := map[string]string{
+		"offer_namespace": "llm",
+		"offer_name":      "demo",
+		"chain":           "base-sepolia",
+		"asset_symbol":    "OBOL",
+	}
+
+	families := scrapeVerifierMetrics(t, v)
+	for _, name := range []string{
+		"obol_x402_verifier_charged_requests_total",
+		"obol_x402_verifier_last_payment_success_seconds",
+	} {
+		family := families[name]
+		if family == nil {
+			t.Fatalf("baseline: missing %s before reload", name)
+		}
+		findVerifierMetricValue(t, family, usdcLabels)
+		findVerifierMetricValue(t, family, obolLabels)
+	}
+
+	// Drop the USDC route, keep OBOL. If pruneSeriesNotIn ignored
+	// asset_symbol, both series would key to (llm, demo, base-sepolia)
+	// and the OBOL series would survive (because the OBOL route is in
+	// the keep set) — masking the bug. Conversely, if the key didn't
+	// distinguish at all, both could be wiped. Including asset_symbol
+	// in the key keeps USDC prunable and OBOL alive.
+	if err := v.Reload(&PricingConfig{
+		Wallet:         "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		Chain:          "base-sepolia",
+		FacilitatorURL: fac.URL,
+		Routes:         []RouteRule{obolRoute},
+	}); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	families = scrapeVerifierMetrics(t, v)
+	for _, name := range []string{
+		"obol_x402_verifier_requests_total",
+		"obol_x402_verifier_charged_requests_total",
+		"obol_x402_verifier_last_payment_success_seconds",
+	} {
+		assertVerifierMetricMissing(t, families[name], usdcLabels)
+	}
+
+	if charged := families["obol_x402_verifier_charged_requests_total"]; charged != nil {
+		findVerifierMetricValue(t, charged, obolLabels)
+	} else {
+		t.Errorf("OBOL charged series was pruned along with USDC — asset_symbol was ignored in prune key")
 	}
 }

@@ -33,9 +33,25 @@ spec:
         # 24h charged-request count per (offer, chain). Replaces the
         # frontend's `increase(charged_requests_total[24h])` query — same
         # math, pre-computed every 30s.
+        #
+        # Kept unchanged for backwards compatibility. The
+        # _by_offer_chain_asset_symbol sibling below is the migration
+        # target for the frontend's per-token EarningsStrip columns.
         - record: x402:revenue:24h_by_offer_chain
           expr: |
             sum by (offer_namespace, offer_name, chain) (
+              increase(obol_x402_verifier_charged_requests_total[24h])
+            )
+
+        # 24h charged-request count per (offer, chain, asset_symbol).
+        # Same math as :24h_by_offer_chain but keeps the asset dimension
+        # so the frontend can answer "what's my OBOL revenue?" with a
+        # single PromQL query instead of joining metrics with the
+        # ServiceOffer CR. Adding asset_symbol is non-multiplicative
+        # because each offer pins exactly one asset (A=1 per offer).
+        - record: x402:revenue:24h_by_offer_chain_asset_symbol
+          expr: |
+            sum by (offer_namespace, offer_name, chain, asset_symbol) (
               increase(obol_x402_verifier_charged_requests_total[24h])
             )
 
@@ -44,6 +60,17 @@ spec:
         - record: x402:revenue:7d_by_offer_chain
           expr: |
             sum by (offer_namespace, offer_name, chain) (
+              increase(obol_x402_verifier_charged_requests_total[7d])
+            )
+
+        # 7d charged-request count per (offer, chain, asset_symbol).
+        # Sibling of :7d_by_offer_chain — once the frontend migrates to
+        # the per-asset rule, the EarningsStrip can drop its
+        # CR-join-at-query-time for per-token columns. Cardinality is
+        # non-multiplicative because each offer pins exactly one asset.
+        - record: x402:revenue:7d_by_offer_chain_asset_symbol
+          expr: |
+            sum by (offer_namespace, offer_name, chain, asset_symbol) (
               increase(obol_x402_verifier_charged_requests_total[7d])
             )
 
