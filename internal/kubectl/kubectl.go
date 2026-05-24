@@ -12,19 +12,156 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 )
 
-// EnsureCluster checks that the kubeconfig file exists, returning a
-// descriptive error when the cluster is not running.
+// probeAPIServerFn is a package-level hook so tests can replace the live
+// `kubectl version` probe with an in-process stub. It returns the kubectl
+// stderr text (used by wrapClusterDown to classify the failure) and the
+// underlying error. nil error means the API server is reachable.
+var probeAPIServerFn = probeAPIServerExec
+
+// refreshKubeconfigFn is a package-level hook so tests can replace the
+// k3d kubeconfig-write step without shelling out. It must overwrite the
+// kubeconfig file at cfg.ConfigDir/kubeconfig.yaml in-place.
+var refreshKubeconfigFn = refreshK3dKubeconfig
+
+// clusterProbeTimeout bounds the live API server probe and the post-refresh
+// retry. Three seconds is enough for a healthy k3d API server on loopback
+// (typical response is sub-100ms) and short enough that a stopped cluster
+// surfaces an actionable error before the user wonders if the CLI hung.
+const clusterProbeTimeout = 3 * time.Second
+
+// EnsureCluster verifies that the Kubernetes API server is reachable using
+// the kubeconfig under cfg.ConfigDir. It checks the kubeconfig file exists,
+// then actively probes the API server (kubectl is the source of truth — file
+// presence alone does not mean ops will succeed). When the probe fails with a
+// "cluster down"-shaped error AND the deployment looks like a k3d stack, it
+// attempts ONE kubeconfig refresh via `k3d kubeconfig write` and retries the
+// probe before giving up. This recovers from the common port-drift case after
+// `k3d cluster stop && k3d cluster start`, where the kubeconfig on disk still
+// points at the previous (now-defunct) API server port.
 func EnsureCluster(cfg *config.Config) error {
 	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfig); os.IsNotExist(err) {
 		return errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
-	return nil
+	bin, kc := Paths(cfg)
+	stderr, err := probeAPIServerFn(bin, kc, clusterProbeTimeout)
+	if err == nil {
+		return nil
+	}
+
+	// If the failure does not look like a cluster-down condition (e.g. the
+	// kubectl binary is missing), surface the original error verbatim rather
+	// than misleading the user with the "cluster appears to be stopped" hint.
+	if wrapped := wrapClusterDown(err, stderr); !errors.Is(wrapped, ErrClusterDown) {
+		return wrapped
+	}
+
+	// Attempt a single best-effort k3d kubeconfig refresh, then re-probe.
+	// This handles the port-drift case after `k3d cluster stop && start`.
+	if refreshed := refreshKubeconfigFn(cfg); refreshed {
+		stderr, err := probeAPIServerFn(bin, kc, clusterProbeTimeout)
+		if err == nil {
+			return nil
+		}
+		return wrapClusterDown(err, stderr)
+	}
+
+	return ErrClusterDown
+}
+
+// probeAPIServerExec runs `kubectl version --request-timeout` against the
+// API server pointed at by kubeconfig, returning (stderr, error). A successful
+// response means the K8s control plane is reachable and serving the discovery
+// endpoint — the same RTT a real CLI command would experience.
+func probeAPIServerExec(binary, kubeconfig string, timeout time.Duration) (string, error) {
+	// --request-timeout bounds the HTTP request; we still bound the overall
+	// exec via the same timeout in case the kubectl binary hangs on DNS.
+	args := []string{
+		"version",
+		"-o", "json",
+		"--request-timeout=" + timeout.String(),
+	}
+
+	cmd := exec.Command(binary, args...)
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
+
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+
+	done := make(chan error, 1)
+	if err := cmd.Start(); err != nil {
+		return "", err
+	}
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case err := <-done:
+		return strings.TrimSpace(stderr.String()), err
+	case <-time.After(timeout + time.Second):
+		_ = cmd.Process.Kill()
+		<-done
+		// Synthesise an "Unable to connect" stderr so wrapClusterDown
+		// classifies a hung kubectl as a cluster-down condition.
+		return "Unable to connect to the server: timed out waiting for API server",
+			fmt.Errorf("kubectl version timed out after %s", timeout)
+	}
+}
+
+// refreshK3dKubeconfig attempts to overwrite cfg.ConfigDir/kubeconfig.yaml
+// from `k3d kubeconfig write` for the persisted stack ID. Returns true when
+// the refresh actually ran (regardless of whether it changed the file).
+// Returns false when prerequisites are missing — in that case the caller
+// should treat the original probe failure as authoritative.
+//
+// Prerequisites:
+//   - cfg.BinDir/k3d exists and is executable
+//   - cfg.ConfigDir/.stack-id is present (records the petname)
+//   - cfg.ConfigDir/.stack-backend is "k3d" (or missing, which we treat as k3d
+//     because that is the historical default — see internal/stack.LoadBackend
+//     which falls back to k3d when the file is absent)
+func refreshK3dKubeconfig(cfg *config.Config) bool {
+	if cfg == nil {
+		return false
+	}
+
+	k3dBin := filepath.Join(cfg.BinDir, "k3d")
+	if _, err := os.Stat(k3dBin); err != nil {
+		return false
+	}
+
+	backendPath := filepath.Join(cfg.ConfigDir, ".stack-backend")
+	if data, err := os.ReadFile(backendPath); err == nil {
+		if name := strings.TrimSpace(string(data)); name != "" && name != "k3d" {
+			return false
+		}
+	}
+
+	stackIDPath := filepath.Join(cfg.ConfigDir, ".stack-id")
+	stackIDBytes, err := os.ReadFile(stackIDPath)
+	if err != nil {
+		return false
+	}
+	stackID := strings.TrimSpace(string(stackIDBytes))
+	if stackID == "" {
+		return false
+	}
+
+	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	clusterName := "obol-stack-" + stackID
+
+	cmd := exec.Command(k3dBin, "kubeconfig", "write", clusterName,
+		"-o", kubeconfig, "--overwrite")
+	if err := cmd.Run(); err != nil {
+		return false
+	}
+
+	return true
 }
 
 // ErrClusterDown indicates the Kubernetes API server is unreachable,
