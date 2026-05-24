@@ -96,6 +96,13 @@ repositories or docs.]
 ## Breaking changes / Migration notes
 
 - [Delete this section if there are no breaking changes.]
+- **Upgrading from a pre-PR #523 cluster**: PR #523 relocated six `bedag/raw`
+  helmfile releases into the `base` chart. Existing clusters must run
+  `bash hack/migrate-bedag-raw-to-base.sh` once before `obol stack up` to
+  transfer Helm ownership annotations; otherwise `helm upgrade base` fails
+  with `invalid ownership metadata`. See
+  [`docs/upgrade-from-pre-pr-523.md`](../docs/upgrade-from-pre-pr-523.md).
+  Fresh installs are unaffected.
 
 ## Known issues
 
