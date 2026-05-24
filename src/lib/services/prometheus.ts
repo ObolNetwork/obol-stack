@@ -44,22 +44,24 @@ export class PrometheusClient {
   }
 
   /**
-   * Map of "<namespace>/<offer-name>" -> lifetime charged-request count,
-   * summed across x402-verifier replicas. Reads from the
-   * `x402:revenue:lifetime_by_offer` recording rule maintained by the
+   * Map of "<namespace>/<offer-name>" -> charged-request count over the
+   * last 7d window, summed across x402-verifier replicas. Reads from the
+   * `x402:revenue:7d_by_offer` recording rule maintained by the
    * PrometheusRule in internal/embed/infrastructure/base/templates/
-   * x402-prometheus-rules.yaml. Falls back to the raw counter so the page
-   * still works if the rule hasn't propagated yet.
+   * x402-prometheus-rules.yaml.
+   *
+   * The rule uses `sum(increase(counter[7d]))` so the value is reset-safe
+   * across verifier restarts — DO NOT add an `or sum(counter)` fallback;
+   * the raw counter would re-introduce the per-process reset bug the
+   * recording rule fixes.
    *
    * Returns an empty Map if Prometheus is unavailable or the metric hasn't
    * been scraped yet — callers render a "—" rather than surface an error.
    */
-  async chargedSalesByOffer(): Promise<Map<string, number>> {
+  async chargedSales7dByOffer(): Promise<Map<string, number>> {
     const result = new Map<string, number>();
     try {
-      const response = await this.query(
-        'x402:revenue:lifetime_by_offer or sum by (offer_namespace, offer_name) (obol_x402_verifier_charged_requests_total)'
-      );
+      const response = await this.query('x402:revenue:7d_by_offer');
       for (const row of response.data.result) {
         const ns = row.metric.offer_namespace;
         const name = row.metric.offer_name;
@@ -69,7 +71,7 @@ export class PrometheusClient {
         result.set(`${ns}/${name}`, value);
       }
     } catch (error) {
-      console.warn('[Prometheus] chargedSalesByOffer failed:', error);
+      console.warn('[Prometheus] chargedSales7dByOffer failed:', error);
     }
     return result;
   }
@@ -124,7 +126,8 @@ export class PrometheusClient {
 
   /**
    * 24h request counts per offer — used by ListingRow's "Traffic · 24h" cell.
-   * Falls back to the lifetime counter if the range query fails.
+   * Falls back to a raw `increase()` over the 7d window if the recording
+   * rule hasn't propagated yet.
    */
   async chargedRequests24hByOffer(): Promise<Map<string, number>> {
     const result = new Map<string, number>();

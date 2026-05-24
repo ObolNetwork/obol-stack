@@ -32,7 +32,7 @@ export async function GET() {
     ]);
 
     const promResults = await Promise.allSettled([
-      prom.chargedSalesByOffer(),
+      prom.chargedSales7dByOffer(),
       prom.chargedSalesByOfferAndChain(),
       prom.chargedRequests24hByOffer(),
       prom.lastSettlementByOffer(),
@@ -41,7 +41,7 @@ export async function GET() {
       (r, i) => {
         if (r.status === 'fulfilled') return r.value;
         const names = [
-          'chargedSalesByOffer',
+          'chargedSales7dByOffer',
           'chargedSalesByOfferAndChain',
           'chargedRequests24hByOffer',
           'lastSettlementByOffer',
