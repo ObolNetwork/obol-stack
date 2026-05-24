@@ -105,6 +105,15 @@ spec:
 
         # Settlement rate (verified / attempted) over the last hour, per
         # (offer, chain). Useful for the dashboard + the alert below.
+        #
+        # The `clamp_min(..., 1e-9)` is a division-by-zero guard, not a
+        # traffic floor. An earlier revision used `clamp_min(..., 1)`,
+        # which floored the denominator at 1 req/s and silently
+        # distorted the ratio on low-traffic offers (e.g. verified=
+        # 0.001/s ÷ floored_denominator=1 ≈ 0 instead of the real
+        # 0.001/0.002 = 0.5). Epsilon keeps the answer accurate at any
+        # non-zero traffic level while still avoiding a NaN when no
+        # samples exist in the window.
         - record: x402:settlement_rate:1h_by_offer_chain
           expr: |
             sum by (offer_namespace, offer_name, chain) (
@@ -119,7 +128,7 @@ spec:
                 +
                 rate(obol_x402_verifier_payment_failed_total[1h])
               ),
-              1
+              1e-9
             )
 
     - name: x402.alerting
@@ -128,6 +137,14 @@ spec:
         # route that's actually receiving traffic. Typical cause:
         # facilitator unreachable, chain pruning, or seller's CA bundle
         # missing (CLAUDE.md pitfall #8).
+        #
+        # The `clamp_min(..., 1e-9)` here is a div-by-zero guard only.
+        # A prior `clamp_min(..., 1)` floored the denominator at 1 req/s,
+        # which under-reports the failure ratio on light-traffic
+        # endpoints (failed=0.001/s ÷ floored_denominator=1 = 0.001
+        # instead of the true 0.001/0.002 = 0.5) and prevented the
+        # alert from ever firing at sub-1 req/s. Epsilon avoids NaN
+        # without distorting the ratio.
         - alert: X402PaymentFailureRateHigh
           expr: |
             (
@@ -141,7 +158,7 @@ spec:
                   +
                   rate(obol_x402_verifier_payment_verified_total[1h])
                 ),
-                1
+                1e-9
               )
             ) > 0.10
           for: 10m
