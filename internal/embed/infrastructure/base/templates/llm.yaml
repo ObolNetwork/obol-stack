@@ -381,3 +381,27 @@ spec:
       port: 4000
       targetPort: http
       protocol: TCP
+
+---
+# Relocated from helmfile.yaml `llm-buyer-podmonitor` bedag/raw release.
+# Lives alongside its workload (litellm + x402-buyer sidecar) instead of
+# inlined in helmfile so the chart layout is the single source of truth
+# for what ships in the llm namespace. The PodMonitor CRD comes from the
+# monitoring release (kube-prometheus-stack), so `base` now declares a
+# `needs: [monitoring/monitoring]` in helmfile.yaml to guarantee CRD
+# presence before this template applies.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: litellm-x402-buyer
+  namespace: llm
+  labels:
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app: litellm
+  podMetricsEndpoints:
+    - port: buyer-http
+      path: /metrics
+      interval: 30s
