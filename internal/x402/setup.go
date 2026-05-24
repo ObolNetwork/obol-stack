@@ -4,14 +4,31 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
+	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"gopkg.in/yaml.v3"
 )
+
+// x402Manifest is the raw embedded x402.yaml. It is no longer applied
+// directly via kubectl — helmfile renders the same file via the `base`
+// release (see EnsureVerifier). Retained as a package-level value so
+// shape/content tests can assert invariants about the embedded source.
+var x402Manifest = mustReadX402Manifest()
+
+func mustReadX402Manifest() []byte {
+	data, err := embed.ReadInfrastructureFile("base/templates/x402.yaml")
+	if err != nil {
+		panic(fmt.Sprintf("read embedded x402 manifest: %v", err))
+	}
+	return data
+}
 
 const (
 	x402Namespace    = "x402"
@@ -37,77 +54,88 @@ const (
 	// Used only as a hint in error messages; the actual chain is taken
 	// from the seller's 402 response by buy.py.
 	DefaultBuySellerChain = "base-sepolia"
+
+	// baseReleaseName matches the helmfile release in
+	// internal/embed/infrastructure/helmfile.yaml whose `chart: ./base`
+	// renders the x402 manifests. EnsureVerifier targets this release
+	// via --selector so the verifier deployment is reconciled the same
+	// way `obol stack up` deploys it — single source of truth.
+	baseReleaseName = "base"
 )
 
-var x402Manifest = mustReadX402Manifest()
-
-func mustReadX402Manifest() []byte {
-	data, err := embed.ReadInfrastructureFile("base/templates/x402.yaml")
-	if err != nil {
-		panic(fmt.Sprintf("read embedded x402 manifest: %v", err))
-	}
-	return data
-}
-
-// devLocallyBuiltImageBases mirrors internal/defaults.devLocallyBuiltImageBases
-// — duplicated here to avoid a defaults → x402 → defaults import cycle.
-// Must stay in lockstep with the canonical list there.
-var devLocallyBuiltImageBases = []string{
-	"ghcr.io/obolnetwork/x402-verifier",
-	"ghcr.io/obolnetwork/serviceoffer-controller",
-	"ghcr.io/obolnetwork/x402-buyer",
-	"ghcr.io/obolnetwork/demo-server",
-	"ghcr.io/obolnetwork/obol-stack-public-storefront",
-}
-
-// rewriteDevImagePinsInManifest applies the same `:tag@sha256:digest` /
-// `@sha256:digest` / `:tag` → `:latest` rewrite the defaults pipeline uses,
-// so kubectl-applied manifests inside EnsureVerifier honor the local-build
-// path under OBOL_DEVELOPMENT=true. Without this rewrite, the embedded
-// x402.yaml carrying `:b13254e` pins beats the helmfile-rendered :latest
-// deployment, and the cluster runs the stale registry image regardless of
-// OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES (root cause of the missing
-// HandleProxy debug-log saga during flow-11 step 43 chase, May 2026).
-//
-// Pattern parity with internal/defaults.rewriteDevDigestPins is enforced
-// by the regression test in TestX402Manifest_DevModeRewritesPins.
-func rewriteDevImagePinsInManifest(data []byte) []byte {
-	out := data
-	for _, base := range devLocallyBuiltImageBases {
-		re := regexp.MustCompile(regexp.QuoteMeta(base) +
-			`(:[a-f0-9]{7,40}@sha256:[a-f0-9]{64}|@sha256:[a-f0-9]{64}|:[a-f0-9]{7,40})`)
-		out = re.ReplaceAll(out, []byte(base+":latest"))
-	}
-	return out
-}
-
-// x402ManifestForApply returns the kubectl-apply-ready bytes, rewriting
-// immutable image pins to `:latest` when OBOL_DEVELOPMENT=true so the
-// in-cluster verifier/controller uses the freshly-built local image.
-// In production (OBOL_DEVELOPMENT unset/false) returns the embedded
-// manifest verbatim — the pins are intentional and immutable.
-func x402ManifestForApply() []byte {
-	if os.Getenv("OBOL_DEVELOPMENT") != "true" {
-		return x402Manifest
-	}
-	return rewriteDevImagePinsInManifest(x402Manifest)
-}
-
 // EnsureVerifier deploys the x402 verifier subsystem if it doesn't exist.
-// Idempotent — kubectl apply is safe to run multiple times.
+// Idempotent — helmfile sync is safe to run multiple times.
+//
+// Historical note: this used to read embed.FS x402.yaml directly and
+// `kubectl apply` it, which fought helmfile's field manager and forced
+// us to duplicate the dev-mode image-pin rewrite (formerly in this file,
+// now lives canonically in internal/defaults/defaults.go). Driving the
+// deployment through helmfile against the already-populated
+// $OBOL_CONFIG_DIR/defaults/ tree picks up the canonical dev rewrite
+// for free and removes the entire footgun. See CLAUDE.md pitfall #9.
 func EnsureVerifier(cfg *config.Config) error {
 	if err := kubectl.EnsureCluster(cfg); err != nil {
 		return err
 	}
-	bin, kc := kubectl.Paths(cfg)
 
-	fmt.Println("Applying x402 payment components...")
-	if err := kubectl.Apply(bin, kc, x402ManifestForApply()); err != nil {
-		return err
+	// Refresh the defaults tree so the helmfile sync below reads the
+	// most recent embedded manifests. Under OBOL_DEVELOPMENT=true this
+	// also applies the canonical digest-pin -> :latest rewrite via
+	// defaults.rewriteDevDigestPins so freshly built local images are
+	// honored. No-op when the stamp is up to date.
+	backendName := stackdefaults.DetectedBackendName(cfg)
+	stackID := stackdefaults.StackID(cfg)
+	if stackID == "" {
+		return fmt.Errorf("stack ID not found, run 'obol stack init' first")
 	}
+	if _, err := stackdefaults.RefreshInfrastructureIfChanged(cfg, backendName, stackID); err != nil {
+		return fmt.Errorf("refresh infrastructure defaults: %w", err)
+	}
+
+	if err := helmfileSyncBaseRelease(cfg); err != nil {
+		return fmt.Errorf("helmfile sync %s: %w", baseReleaseName, err)
+	}
+
 	// Populate the CA bundle after deploying the verifier so TLS verification
 	// of the facilitator works immediately. Idempotent — safe to call multiple times.
+	bin, kc := kubectl.Paths(cfg)
 	populateCABundle(bin, kc)
+	return nil
+}
+
+// helmfileSyncBaseRelease runs `helmfile --selector name=base sync`
+// against the defaults helmfile rendered into $OBOL_CONFIG_DIR/defaults.
+// This is the same invocation pattern used by `internal/stack.syncDefaults`
+// and `internal/update.ApplyUpgrades`, scoped to the single release that
+// owns the x402 manifests.
+func helmfileSyncBaseRelease(cfg *config.Config) error {
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	helmfilePath := filepath.Join(cfg.ConfigDir, "defaults", "helmfile.yaml")
+
+	if _, err := os.Stat(helmfilePath); err != nil {
+		return fmt.Errorf("defaults helmfile not found at %s (run 'obol stack init' first): %w", helmfilePath, err)
+	}
+
+	helmfileBin := filepath.Join(cfg.BinDir, "helmfile")
+	helmBin := filepath.Join(cfg.BinDir, "helm")
+
+	args := []string{
+		"--file", helmfilePath,
+		"--kubeconfig", kubeconfigPath,
+		"--selector", "name=" + baseReleaseName,
+		"sync",
+	}
+	args = append(args, helmcmd.SyncFlagsForVersion(helmBin)...)
+
+	cmd := exec.Command(helmfileBin, args...)
+	cmd.Env = append(os.Environ(),
+		"KUBECONFIG="+kubeconfigPath,
+		"STACK_DATA_DIR="+cfg.DataDir,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w: %s", err, strings.TrimSpace(string(out)))
+	}
 	return nil
 }
 
