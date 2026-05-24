@@ -236,6 +236,45 @@ export class AgentClient {
     return this.getHermesAPIServerKey(instance.namespace);
   }
 
+  /**
+   * Single apiserver call that returns wallet metadata for every namespace
+   * that hosts a `wallet-metadata` ConfigMap. Used by /api/agents/wallets
+   * to avoid N+1 reads when the operator runs many agents.
+   *
+   * Returns Map<namespace, WalletMetadata>; namespaces with no parseable
+   * payload are still entries (empty addresses).
+   */
+  public async listAllWalletMetadata(): Promise<Map<string, WalletMetadata>> {
+    const out = new Map<string, WalletMetadata>();
+    try {
+      const response = await this.coreV1Api.listConfigMapForAllNamespaces({
+        fieldSelector: 'metadata.name=wallet-metadata',
+      });
+      for (const cm of response.items ?? []) {
+        const ns = cm.metadata?.namespace ?? '';
+        if (!ns) continue;
+        const raw = cm.data?.['addresses.json'];
+        if (!raw) {
+          out.set(ns, { instanceId: '', addresses: [], count: 0 });
+          continue;
+        }
+        try {
+          const parsed = JSON.parse(raw);
+          out.set(ns, {
+            instanceId: parsed.instanceId ?? '',
+            addresses: parsed.addresses ?? [],
+            count: parsed.count ?? parsed.addresses?.length ?? 0,
+          });
+        } catch {
+          out.set(ns, { instanceId: '', addresses: [], count: 0 });
+        }
+      }
+    } catch (error) {
+      console.warn('[AgentClient.listAllWalletMetadata] failed:', error);
+    }
+    return out;
+  }
+
   public async getWalletMetadata(
     instance: AgentInstance
   ): Promise<WalletMetadata> {

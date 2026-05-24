@@ -3,7 +3,12 @@
  * via the Kubernetes CustomObjectsApi.
  */
 
-import { CustomObjectsApi, KubeConfig } from '@kubernetes/client-node';
+import {
+  CustomObjectsApi,
+  KubeConfig,
+  PatchStrategy,
+  setHeaderOptions,
+} from '@kubernetes/client-node';
 import { ObjectCustomObjectsApi } from '@kubernetes/client-node/dist/gen/types/ObjectParamAPI';
 import type {
   CreateServiceOfferRequest,
@@ -76,6 +81,49 @@ export class SellClient {
   }
 
   /**
+   * Set or clear the `obol.org/paused` annotation on a ServiceOffer.
+   * The controller honors this annotation: paused offers have their
+   * HTTPRoute + Middleware torn down (see internal/serviceoffercontroller).
+   */
+  async setPaused(
+    name: string,
+    namespace: string,
+    paused: boolean
+  ): Promise<void> {
+    await this.customApi.patchNamespacedCustomObject(
+      {
+        group: CRD_GROUP,
+        version: CRD_VERSION,
+        namespace,
+        plural: CRD_PLURAL,
+        name,
+        body: {
+          metadata: {
+            annotations: {
+              'obol.org/paused': paused ? 'true' : null,
+            },
+          },
+        },
+      },
+      setHeaderOptions('Content-Type', PatchStrategy.MergePatch)
+    );
+  }
+
+  /**
+   * Delete a ServiceOffer CR. The controller's finalizer handles cleanup of
+   * downstream HTTPRoute, Middleware, ReferenceGrant, and RegistrationRequest.
+   */
+  async deleteServiceOffer(name: string, namespace: string): Promise<void> {
+    await this.customApi.deleteNamespacedCustomObject({
+      group: CRD_GROUP,
+      version: CRD_VERSION,
+      namespace,
+      plural: CRD_PLURAL,
+      name,
+    });
+  }
+
+  /**
    * List ServiceOffer CRs across all namespaces (or a specific one).
    */
   async listServiceOffers(namespace?: string): Promise<ServiceOffer[]> {
@@ -102,6 +150,7 @@ function normalizeServiceOffer(raw: unknown): ServiceOffer {
   const metadata = (item.metadata as Record<string, unknown>) || {};
   const spec = (item.spec as Record<string, unknown>) || {};
   const status = (item.status as Record<string, unknown>) || {};
+  const annotations = (metadata.annotations as Record<string, unknown>) || {};
 
   const type = normalizeType(spec.type);
   const conditions = normalizeConditions(status.conditions);
@@ -111,6 +160,11 @@ function normalizeServiceOffer(raw: unknown): ServiceOffer {
     namespace: String(metadata.namespace ?? ''),
     type,
     status: deriveReadyStatus(conditions),
+    paused: annotations['obol.org/paused'] === 'true',
+    createdAt:
+      typeof metadata.creationTimestamp === 'string'
+        ? metadata.creationTimestamp
+        : undefined,
     endpoint: typeof status.endpoint === 'string' ? status.endpoint : undefined,
     conditions,
     model: normalizeModel(spec.model),
