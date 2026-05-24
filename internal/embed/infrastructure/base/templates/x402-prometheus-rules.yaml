@@ -102,11 +102,11 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: "x402 payment failures > 10% on {{ $labels.offer_namespace }}/{{ $labels.offer_name }} ({{ $labels.chain }})"
+            summary: "x402 payment failures > 10% on {{ "{{" }} $labels.offer_namespace {{ "}}" }}/{{ "{{" }} $labels.offer_name {{ "}}" }} ({{ "{{" }} $labels.chain {{ "}}" }})"
             description: |
               More than 10% of paid requests to
-              {{ $labels.offer_namespace }}/{{ $labels.offer_name }} on
-              {{ $labels.chain }} have failed verification over the last
+              {{ "{{" }} $labels.offer_namespace {{ "}}" }}/{{ "{{" }} $labels.offer_name {{ "}}" }} on
+              {{ "{{" }} $labels.chain {{ "}}" }} have failed verification over the last
               hour. Check the verifier logs for x509/facilitator errors and
               the seller's `ca-certificates` ConfigMap.
 
@@ -131,10 +131,10 @@ spec:
           labels:
             severity: warning
           annotations:
-            summary: "{{ $labels.offer_namespace }}/{{ $labels.offer_name }} returns 402 but never settles"
+            summary: "{{ "{{" }} $labels.offer_namespace {{ "}}" }}/{{ "{{" }} $labels.offer_name {{ "}}" }} returns 402 but never settles"
             description: |
               The x402 verifier issued 402 responses for
-              {{ $labels.offer_namespace }}/{{ $labels.offer_name }} in the
+              {{ "{{" }} $labels.offer_namespace {{ "}}" }}/{{ "{{" }} $labels.offer_name {{ "}}" }} in the
               last hour but observed no settled requests. Check the buyer
               sidecar's auth pool (/status) and the facilitator's settlement
               endpoint.
