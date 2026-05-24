@@ -6,6 +6,16 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: x402
+  labels:
+    # Pod Security Standards: Restricted profile enforced at admission.
+    # Future Deployment edits that omit the per-pod securityContext will be
+    # rejected by the apiserver. Both x402-verifier and serviceoffer-controller
+    # run as non-root with all caps dropped, seccomp=RuntimeDefault, and
+    # readOnlyRootFilesystem.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
 
 ---
 # Static gateway settings plus optional manual routes. In cluster mode the
@@ -210,10 +220,25 @@ spec:
         app: x402-verifier
     spec:
       serviceAccountName: x402-verifier
+      # PSS Restricted: pod-level identity.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: verifier
           image: ghcr.io/obolnetwork/x402-verifier:b13254e@sha256:a8a7aa0ca4c35b0ddf6983fa6e3e5f8a3f64e44d8e506ebfd55e39de2bc0342d
           imagePullPolicy: IfNotPresent
+          # PSS Restricted: per-container hardening. Verifier is a Go binary
+          # reading two RO ConfigMaps; no writeable rootfs paths required.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: http
               containerPort: 8080
@@ -284,10 +309,27 @@ spec:
         app: serviceoffer-controller
     spec:
       serviceAccountName: serviceoffer-controller
+      # PSS Restricted: pod-level identity. Paired with Dockerfile
+      # FROM gcr.io/distroless/static-debian12:nonroot which default-runs
+      # as UID/GID 65532. Container escape via a Go-runtime CVE on a
+      # UID-0 / no-seccomp / no-cap-drop / RW-rootfs container was the
+      # easiest path to host pivot on k3s single-node; this closes it.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: controller
           image: ghcr.io/obolnetwork/serviceoffer-controller:b13254e@sha256:f83bd7e55bdc5d87edb49c04e7fd9257097364e2d43e769c19dfd7c8b47d07af
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           env:
             - name: POD_NAME
               valueFrom:
