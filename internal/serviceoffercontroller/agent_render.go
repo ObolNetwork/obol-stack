@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -69,7 +70,7 @@ func agentManifests(agent *monetizeapi.Agent, litellmKey, apiKey string) ([]*uns
 		return nil, fmt.Errorf("agentManifests: agent has no resolved model")
 	}
 
-	configYAML := renderHermesConfig(model, litellmKey)
+	configYAML := renderHermesConfig(model, litellmKey, agent.Spec.Secrets.Bitwarden)
 
 	out := []*unstructured.Unstructured{
 		buildAgentNamespace(agent.Namespace),
@@ -88,8 +89,9 @@ func agentManifests(agent *monetizeapi.Agent, litellmKey, apiKey string) ([]*uns
 // so the embedded indentation in the ConfigMap stays exactly as Hermes
 // expects, matching the master agent's known-good shape from
 // internal/hermes.generateConfig.
-func renderHermesConfig(model, litellmKey string) string {
-	return fmt.Sprintf(`model:
+func renderHermesConfig(model, litellmKey string, bw monetizeapi.AgentBitwardenSecrets) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `model:
   default: %q
   provider: custom
   base_url: http://litellm.llm.svc.cluster.local:4000/v1
@@ -104,6 +106,35 @@ skills:
   external_dirs:
     - /data/.hermes/obol-skills
 `, model, litellmKey)
+	if bw.Enabled {
+		accessTokenKey := bw.AccessTokenKey
+		if strings.TrimSpace(accessTokenKey) == "" {
+			accessTokenKey = "BWS_ACCESS_TOKEN"
+		}
+		cacheTTL := 300
+		if bw.CacheTTLSeconds != nil && *bw.CacheTTLSeconds > 0 {
+			cacheTTL = *bw.CacheTTLSeconds
+		}
+		overrideExisting := true
+		if bw.OverrideExisting != nil {
+			overrideExisting = *bw.OverrideExisting
+		}
+		autoInstall := true
+		if bw.AutoInstall != nil {
+			autoInstall = *bw.AutoInstall
+		}
+		fmt.Fprintf(&b, `secrets:
+  bitwarden:
+    enabled: true
+    access_token_env: %q
+    project_id: %q
+    server_url: %q
+    cache_ttl_seconds: %d
+    override_existing: %t
+    auto_install: %t
+`, accessTokenKey, bw.ProjectID, bw.ServerURL, cacheTTL, overrideExisting, autoInstall)
+	}
+	return b.String()
 }
 
 func buildAgentNamespace(ns string) *unstructured.Unstructured {

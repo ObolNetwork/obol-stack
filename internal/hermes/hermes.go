@@ -641,7 +641,11 @@ func writeDeploymentFiles(cfg *config.Config, id, deploymentDir, agentBaseURL st
 	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
 	hostname := agentruntime.Hostname(agentruntime.Hermes, id)
 	dashboardHost := dashboardHostname(id)
-	configData, err := generateConfig(cfg, primary)
+	bw, _, err := LoadBitwardenConfig(deploymentDir)
+	if err != nil {
+		return err
+	}
+	configData, err := generateConfig(cfg, primary, bw)
 	if err != nil {
 		return err
 	}
@@ -852,6 +856,11 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
 	if agentBaseURL != "" {
 		fmt.Fprintf(&b, "                - name: AGENT_BASE_URL\n                  value: %s\n", quoteYAML(agentBaseURL))
 	}
+	fmt.Fprintf(&b, `              envFrom:
+                - secretRef:
+                    name: %s
+                    optional: true
+`, bitwardenEnvSecretName)
 
 	fmt.Fprintf(&b, `              readinessProbe:
                 httpGet:
@@ -1068,7 +1077,7 @@ func configuredModels(cfg *config.Config, u *ui.UI) ([]string, string, error) {
 	return names, primary, nil
 }
 
-func generateConfig(cfg *config.Config, primary string) ([]byte, error) {
+func generateConfig(cfg *config.Config, primary string, bw BitwardenConfig) ([]byte, error) {
 	payload := map[string]any{
 		"model": map[string]any{
 			"default":  primary,
@@ -1086,6 +1095,20 @@ func generateConfig(cfg *config.Config, primary string) ([]byte, error) {
 		"skills": map[string]any{
 			"external_dirs": []string{"/data/.hermes/" + obolSkillsDirName},
 		},
+	}
+	bw = bw.normalized()
+	if bw.Enabled {
+		payload["secrets"] = map[string]any{
+			"bitwarden": map[string]any{
+				"enabled":           true,
+				"access_token_env":  bw.AccessTokenEnv,
+				"project_id":        bw.ProjectID,
+				"server_url":        bw.ServerURL,
+				"cache_ttl_seconds": bw.CacheTTLSeconds,
+				"override_existing": bw.OverrideExisting,
+				"auto_install":      bw.AutoInstall,
+			},
+		}
 	}
 	return yaml.Marshal(payload)
 }

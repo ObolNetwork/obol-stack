@@ -74,7 +74,7 @@ func TestBuildAgent_OmitsEmpties(t *testing.T) {
 		t.Errorf("runtime = %v, want hermes", spec["runtime"])
 	}
 	// Empties should not be present so YAML stays small + diffs clean.
-	for _, k := range []string{"model", "objective", "wallet"} {
+	for _, k := range []string{"model", "objective", "wallet", "secrets"} {
 		if _, ok := spec[k]; ok {
 			t.Errorf("spec.%s set despite empty input: %v", k, spec[k])
 		}

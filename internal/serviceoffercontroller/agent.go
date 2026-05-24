@@ -247,6 +247,18 @@ func validateAgentSpec(agent *monetizeapi.Agent) (reason, message string, ok boo
 			return "InvalidSkillEntry", "spec.skills contains an empty entry", false
 		}
 	}
+	bw := agent.Spec.Secrets.Bitwarden
+	if bw.Enabled {
+		if strings.TrimSpace(bw.ProjectID) == "" {
+			return "InvalidBitwardenConfig", "spec.secrets.bitwarden.projectID is required when Bitwarden is enabled", false
+		}
+		if bw.AccessTokenSecretName != "" && bw.AccessTokenSecretName != hermesEnvSecret {
+			return "InvalidBitwardenConfig", fmt.Sprintf("spec.secrets.bitwarden.accessTokenSecretName must be %q", hermesEnvSecret), false
+		}
+		if bw.AccessTokenKey != "" && strings.TrimSpace(bw.AccessTokenKey) == "" {
+			return "InvalidBitwardenConfig", "spec.secrets.bitwarden.accessTokenKey cannot be blank", false
+		}
+	}
 
 	// Objective is optional at the CRD level (defaults to a neutral SOUL.md
 	// when empty), so we don't reject on its absence here.

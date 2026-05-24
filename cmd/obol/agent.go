@@ -241,6 +241,7 @@ Hermes/OpenClaw onboard flow used by the master agent.`,
 				},
 			},
 			agentUpdateCommand(cfg),
+			agentSecretsCommand(cfg),
 			agentWalletCommand(cfg),
 		},
 	}
@@ -592,6 +593,131 @@ func agentRuntimeFlag(value string) cli.Flag {
 		Usage: "Agent runtime: hermes, openclaw, or all",
 		Value: value,
 	}
+}
+
+func agentSecretsCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:  "secrets",
+		Usage: "Manage agent runtime secret sources",
+		Commands: []*cli.Command{
+			agentBitwardenSecretsCommand(cfg),
+		},
+	}
+}
+
+func agentBitwardenSecretsCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:  "bitwarden",
+		Usage: "Configure Hermes Bitwarden Secrets Manager sync",
+		Commands: []*cli.Command{
+			{
+				Name:      "setup",
+				Usage:     "Enable Bitwarden Secrets Manager for a Hermes instance",
+				ArgsUsage: "[instance-name]",
+				Flags: []cli.Flag{
+					agentRuntimeFlag("hermes"),
+					&cli.StringFlag{Name: "project-id", Usage: "Bitwarden Secrets Manager project ID", Required: true},
+					&cli.StringFlag{Name: "server-url", Usage: "Optional Bitwarden server URL; empty uses the bws default"},
+					&cli.StringFlag{Name: "access-token", Usage: "Bitwarden machine-account access token", Sources: cli.EnvVars("BWS_ACCESS_TOKEN")},
+					&cli.StringFlag{Name: "access-token-env", Usage: "Environment variable name Hermes reads for the bootstrap token", Value: "BWS_ACCESS_TOKEN"},
+					&cli.IntFlag{Name: "cache-ttl", Usage: "Hermes Bitwarden cache TTL in seconds", Value: 300},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					u := getUI(cmd)
+					target, err := resolveHermesBitwardenTarget(cfg, cmd.String("runtime"), cmd.Args().Slice())
+					if err != nil {
+						return err
+					}
+					token := cmd.String("access-token")
+					if strings.TrimSpace(token) == "" {
+						token, err = u.SecretInput("Bitwarden access token (BWS_ACCESS_TOKEN)")
+						if err != nil {
+							return err
+						}
+					}
+					return hermes.SetupBitwarden(cfg, target.ID, hermes.BitwardenSetupOptions{
+						AccessToken:     token,
+						ProjectID:       cmd.String("project-id"),
+						ServerURL:       cmd.String("server-url"),
+						AccessTokenEnv:  cmd.String("access-token-env"),
+						CacheTTLSeconds: cmd.Int("cache-ttl"),
+					}, u)
+				},
+			},
+			{
+				Name:      "status",
+				Usage:     "Show Obol-managed Bitwarden config and Secret presence",
+				ArgsUsage: "[instance-name]",
+				Flags:     []cli.Flag{agentRuntimeFlag("hermes")},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					u := getUI(cmd)
+					target, err := resolveHermesBitwardenTarget(cfg, cmd.String("runtime"), cmd.Args().Slice())
+					if err != nil {
+						return err
+					}
+					status, err := hermes.GetBitwardenStatus(cfg, target.ID)
+					if err != nil {
+						return err
+					}
+					if u.IsJSON() {
+						return u.JSON(status)
+					}
+					u.Bold(fmt.Sprintf("Bitwarden secrets: hermes/%s", target.ID))
+					u.Detail("Enabled", fmt.Sprint(status.Enabled))
+					u.Detail("Project", emptyDisplay(status.ProjectID))
+					u.Detail("Server", emptyDisplay(status.ServerURL))
+					u.Detail("Access token env", status.AccessTokenEnv)
+					u.Detail("Metadata", status.MetadataPath)
+					u.Detail("Env Secret", boolPresent(status.EnvSecretExists))
+					u.Detail("Token key", boolPresent(status.TokenKeyPresent))
+					u.Detail("Server URL key", boolPresent(status.ServerURLPresent))
+					return nil
+				},
+			},
+			{
+				Name:      "disable",
+				Usage:     "Disable Hermes Bitwarden config without deleting the env Secret",
+				ArgsUsage: "[instance-name]",
+				Flags:     []cli.Flag{agentRuntimeFlag("hermes")},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					target, err := resolveHermesBitwardenTarget(cfg, cmd.String("runtime"), cmd.Args().Slice())
+					if err != nil {
+						return err
+					}
+					return hermes.DisableBitwarden(cfg, target.ID, getUI(cmd))
+				},
+			},
+		},
+	}
+}
+
+func resolveHermesBitwardenTarget(cfg *config.Config, runtimeValue string, args []string) (agentTarget, error) {
+	runtime, err := parseAgentRuntime(runtimeValue)
+	if err != nil {
+		return agentTarget{}, err
+	}
+	if runtime != agentruntime.Hermes {
+		return agentTarget{}, errors.New("Bitwarden secrets are supported for Hermes agents only; OpenClaw is not supported")
+	}
+	id, err := resolveRuntimeInstance(cfg, agentruntime.Hermes, args, true)
+	if err != nil {
+		return agentTarget{}, err
+	}
+	return agentTarget{Runtime: agentruntime.Hermes, ID: id}, nil
+}
+
+func boolPresent(v bool) string {
+	if v {
+		return "present"
+	}
+	return "missing"
+}
+
+func emptyDisplay(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return "(unset)"
+	}
+	return v
 }
 
 func parseAgentRuntime(value string) (agentruntime.Runtime, error) {

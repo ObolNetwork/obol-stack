@@ -50,7 +50,7 @@ func TestGenerateConfig_PrimaryIsRoundTrippable(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			raw, err := generateConfig(testConfig(t), tc.primary)
+			raw, err := generateConfig(testConfig(t), tc.primary, DefaultBitwardenConfig())
 			if err != nil {
 				t.Fatalf("generateConfig: %v", err)
 			}
@@ -70,7 +70,7 @@ func TestGenerateConfig_PrimaryIsRoundTrippable(t *testing.T) {
 }
 
 func TestGenerateConfig_UsesLiteLLMCustomProvider(t *testing.T) {
-	raw, err := generateConfig(testConfig(t), "gpt-5.2")
+	raw, err := generateConfig(testConfig(t), "gpt-5.2", DefaultBitwardenConfig())
 	if err != nil {
 		t.Fatalf("generateConfig() error = %v", err)
 	}
@@ -140,6 +140,8 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		`value: "hermes-obol-agent"`,
 		"OBOL_SKILLS_DIR",
 		"/data/.hermes/obol-skills",
+		"name: hermes-env",
+		"optional: true",
 		"containerPort: 8642",
 		"containerPort: 9119",
 		"fsGroupChangePolicy: OnRootMismatch",
@@ -176,6 +178,57 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 	var parsed any
 	if err := yaml.Unmarshal([]byte(values), &parsed); err != nil {
 		t.Fatalf("generateValues() produced invalid YAML: %v\n%s", err, values)
+	}
+}
+
+func TestGenerateConfig_BitwardenDisabledByDefault(t *testing.T) {
+	raw, err := generateConfig(testConfig(t), "gpt-5.2", DefaultBitwardenConfig())
+	if err != nil {
+		t.Fatalf("generateConfig() error = %v", err)
+	}
+	var cfg map[string]any
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal() error = %v", err)
+	}
+	if _, ok := cfg["secrets"]; ok {
+		t.Fatalf("secrets config present when Bitwarden disabled: %#v", cfg["secrets"])
+	}
+}
+
+func TestGenerateConfig_RendersBitwardenSecrets(t *testing.T) {
+	bw := DefaultBitwardenConfig()
+	bw.Enabled = true
+	bw.ProjectID = "project-123"
+	bw.ServerURL = "https://vault.bitwarden.eu"
+	raw, err := generateConfig(testConfig(t), "gpt-5.2", bw)
+	if err != nil {
+		t.Fatalf("generateConfig() error = %v", err)
+	}
+	var cfg map[string]any
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal() error = %v", err)
+	}
+	secretsCfg, ok := cfg["secrets"].(map[string]any)
+	if !ok {
+		t.Fatalf("secrets config missing: %#v", cfg)
+	}
+	bitwardenCfg, ok := secretsCfg["bitwarden"].(map[string]any)
+	if !ok {
+		t.Fatalf("bitwarden config missing: %#v", secretsCfg)
+	}
+	want := map[string]any{
+		"enabled":           true,
+		"access_token_env":  "BWS_ACCESS_TOKEN",
+		"project_id":        "project-123",
+		"server_url":        "https://vault.bitwarden.eu",
+		"cache_ttl_seconds": 300,
+		"override_existing": true,
+		"auto_install":      true,
+	}
+	for key, expected := range want {
+		if got := bitwardenCfg[key]; got != expected {
+			t.Errorf("bitwarden.%s = %#v, want %#v", key, got, expected)
+		}
 	}
 }
 

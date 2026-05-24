@@ -137,6 +137,61 @@ func TestAgentManifests_DeploymentEnvCarriesContext(t *testing.T) {
 	}
 }
 
+func TestAgentManifests_RendersBitwardenConfig(t *testing.T) {
+	agent := &monetizeapi.Agent{}
+	agent.Name = "quant"
+	agent.Namespace = "agent-quant"
+	cacheTTL := 120
+	overrideExisting := false
+	autoInstall := true
+	agent.Spec = monetizeapi.AgentSpec{
+		Model: "qwen3.5:9b",
+		Secrets: monetizeapi.AgentSecrets{
+			Bitwarden: monetizeapi.AgentBitwardenSecrets{
+				Enabled:          true,
+				ProjectID:        "project-123",
+				ServerURL:        "https://vault.bitwarden.com",
+				AccessTokenKey:   "BWS_ACCESS_TOKEN",
+				CacheTTLSeconds:  &cacheTTL,
+				OverrideExisting: &overrideExisting,
+				AutoInstall:      &autoInstall,
+			},
+		},
+	}
+
+	out, err := agentManifests(agent, "litellm", "api")
+	if err != nil {
+		t.Fatalf("agentManifests: %v", err)
+	}
+	var cm map[string]any
+	for _, m := range out {
+		if m.GetKind() == "ConfigMap" && m.GetName() == hermesConfigMap {
+			cm = m.UnstructuredContent()
+			break
+		}
+	}
+	if cm == nil {
+		t.Fatal("ConfigMap manifest missing")
+	}
+	data := cm["data"].(map[string]any)
+	configYAML := data["config.yaml"].(string)
+	for _, needle := range []string{
+		"secrets:",
+		"bitwarden:",
+		"enabled: true",
+		`access_token_env: "BWS_ACCESS_TOKEN"`,
+		`project_id: "project-123"`,
+		`server_url: "https://vault.bitwarden.com"`,
+		"cache_ttl_seconds: 120",
+		"override_existing: false",
+		"auto_install: true",
+	} {
+		if !strings.Contains(configYAML, needle) {
+			t.Fatalf("config missing %q:\n%s", needle, configYAML)
+		}
+	}
+}
+
 func TestAgentManifests_DeploymentUsesFSGroup(t *testing.T) {
 	agent := &monetizeapi.Agent{}
 	agent.Name = "quant"
@@ -242,7 +297,7 @@ func TestAgentManifests_ProfileSeedInitContainer(t *testing.T) {
 }
 
 func TestRenderHermesConfig_HasModelAndSkillsDir(t *testing.T) {
-	cfg := renderHermesConfig("qwen3.5:9b", "lit-key")
+	cfg := renderHermesConfig("qwen3.5:9b", "lit-key", monetizeapi.AgentBitwardenSecrets{})
 	for _, must := range []string{
 		`default: "qwen3.5:9b"`,
 		`api_key: "lit-key"`,

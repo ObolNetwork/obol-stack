@@ -308,6 +308,19 @@ def agent_resource(args, parent_ns):
         spec["objective"] = args.objective.strip()
     if args.create_wallet:
         spec["wallet"] = {"create": True}
+    if args.bitwarden_project_id:
+        bitwarden = {
+            "enabled": True,
+            "projectID": args.bitwarden_project_id,
+            "accessTokenSecretName": ENV_SECRET,
+            "accessTokenKey": args.bitwarden_access_token_env,
+            "cacheTTLSeconds": args.bitwarden_cache_ttl,
+            "overrideExisting": not args.bitwarden_no_override_existing,
+            "autoInstall": True,
+        }
+        if args.bitwarden_server_url:
+            bitwarden["serverURL"] = args.bitwarden_server_url
+        spec["secrets"] = {"bitwarden": bitwarden}
     return {
         "apiVersion": f"{CRD_GROUP}/{CRD_VERSION}",
         "kind": "Agent",
@@ -403,6 +416,11 @@ def cmd_create(args, token, parent_ns, ssl_ctx):
         validate_positive_decimal(args.price, "--price")
     if args.pay_to and not ADDR_RE.match(args.pay_to):
         raise ValueError("--pay-to must be a 0x-prefixed EVM address")
+    if args.bitwarden_project_id:
+        if args.bitwarden_access_token_env not in env:
+            raise ValueError(f"--bitwarden-project-id requires --env {args.bitwarden_access_token_env}=<token>")
+        if args.bitwarden_cache_ttl < 0:
+            raise ValueError("--bitwarden-cache-ttl must be >= 0")
 
     ns = namespace_for(args.name)
     apply_resource("/api/v1/namespaces", ns, namespace_resource(args.name, parent_ns), token, ssl_ctx)
@@ -547,6 +565,11 @@ def build_parser():
     create.add_argument("--profile-archive", help="Use an existing Hermes profile export tar.gz")
     create.add_argument("--create-wallet", action="store_true")
     create.add_argument("--env", action="append", default=[], help="Child env Secret entry KEY=VALUE")
+    create.add_argument("--bitwarden-project-id", help="Enable Hermes Bitwarden secret sync for this child Agent")
+    create.add_argument("--bitwarden-server-url")
+    create.add_argument("--bitwarden-access-token-env", default="BWS_ACCESS_TOKEN")
+    create.add_argument("--bitwarden-cache-ttl", type=int, default=300)
+    create.add_argument("--bitwarden-no-override-existing", action="store_true")
     create.add_argument("--price", help="USDC per-request price; creates ServiceOffer when set")
     create.add_argument("--pay-to", help="Payment recipient wallet")
     create.add_argument("--network", default="base-sepolia")

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/model"
@@ -71,6 +72,15 @@ func modelSetupCommand(cfg *config.Config) *cli.Command {
 				Usage:   "API key for the provider",
 				Sources: cli.EnvVars("LLM_API_KEY"),
 			},
+			&cli.StringFlag{
+				Name:  "api-key-source",
+				Usage: "API key source: bitwarden",
+			},
+			&cli.StringFlag{
+				Name:  "agent",
+				Usage: "Hermes instance whose Bitwarden config supplies provider keys",
+				Value: agentruntime.DefaultInstanceID,
+			},
 			&cli.StringSliceFlag{
 				Name:  "model",
 				Usage: "Model(s) to configure (e.g. claude-sonnet-4-5-20250929, gpt-4o)",
@@ -83,7 +93,14 @@ func modelSetupCommand(cfg *config.Config) *cli.Command {
 			u := getUI(cmd)
 			provider := cmd.String("provider")
 			apiKey := cmd.String("api-key")
+			apiKeySource := strings.TrimSpace(cmd.String("api-key-source"))
 			models := cmd.StringSlice("model")
+			if apiKeySource != "" && apiKeySource != "bitwarden" {
+				return fmt.Errorf("unsupported api-key-source %q (expected bitwarden)", apiKeySource)
+			}
+			if apiKeySource == "bitwarden" && strings.TrimSpace(apiKey) != "" {
+				return errors.New("--api-key and --api-key-source bitwarden are mutually exclusive")
+			}
 
 			// Interactive mode if flags not provided
 			if provider == "" {
@@ -108,7 +125,7 @@ func modelSetupCommand(cfg *config.Config) *cli.Command {
 				provider = providers[idx].ID
 
 				// If a credential was detected for the chosen provider, offer to use it
-				if det, ok := creds[provider]; ok && det.key != "" && apiKey == "" {
+				if det, ok := creds[provider]; ok && det.key != "" && apiKey == "" && apiKeySource == "" {
 					u.Infof("%s API key detected (%s)", providers[idx].Name, det.source)
 
 					if u.Confirm("Use detected credential?", true) {
@@ -120,14 +137,46 @@ func modelSetupCommand(cfg *config.Config) *cli.Command {
 			// Provider-specific flow
 			switch provider {
 			case "ollama":
+				if apiKeySource == "bitwarden" {
+					return errors.New("ollama does not use an API key; --api-key-source bitwarden is not applicable")
+				}
 				return setupOllama(cfg, u, models)
 			case "anthropic", "openai":
+				if apiKeySource == "bitwarden" {
+					var err error
+					apiKey, err = readProviderKeyFromBitwarden(ctx, cfg, u, cmd.String("agent"), provider)
+					if err != nil {
+						return err
+					}
+				}
 				return setupCloudProvider(cfg, u, provider, apiKey, models)
 			default:
 				return fmt.Errorf("unknown provider %q — use anthropic, openai, or ollama", provider)
 			}
 		},
 	}
+}
+
+func readProviderKeyFromBitwarden(ctx context.Context, cfg *config.Config, u *ui.UI, agentID, provider string) (string, error) {
+	secretName := model.ProviderEnvVar(provider)
+	if strings.TrimSpace(secretName) == "" {
+		return "", fmt.Errorf("provider %q does not use an API key", provider)
+	}
+	if strings.TrimSpace(agentID) == "" {
+		agentID = agentruntime.DefaultInstanceID
+	}
+	u.Infof("Reading %s from Bitwarden via hermes/%s", secretName, agentID)
+	fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	key, err := hermes.FetchBitwardenSecretForAgent(fetchCtx, cfg, agentID, secretName)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(key) == "" {
+		return "", fmt.Errorf("Bitwarden secret %q is empty", secretName)
+	}
+	u.Successf("Fetched %s from Bitwarden", secretName)
+	return key, nil
 }
 
 func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
