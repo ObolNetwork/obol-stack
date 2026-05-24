@@ -3,19 +3,32 @@ import type { NextRequest, NextResponse } from 'next/server';
 /**
  * Allowed origins for mutating requests. The frontend is exposed only via
  * the Traefik HTTPRoute hostname-restricted to "obol.stack", so the only
- * legitimate Origin header value is the obol.stack URL.
+ * legitimate Origin header value comes from an obol.stack URL.
  *
  * Without this check, a malicious page on the same machine (another browser
  * tab pointed at evil.com) can submit a form POST cross-origin to
  * /api/sell/create — the browser blocks reading the response (SOP) but
  * does NOT block the side effect of creating a ServiceOffer.
  *
+ * Includes both the dev ports (8080 / 8443) AND the production-binding
+ * default ports (port-omitted = 80/443) because Traefik may bind either
+ * depending on the deployment. Real browser requests to `http://obol.stack/`
+ * send Origin: `http://obol.stack` (no port — the original allowlist that
+ * only listed :8080 / :8443 rejected those requests with 403).
+ *
  * Override via OBOL_FRONTEND_ALLOWED_ORIGINS (comma-separated) for dev.
  */
 function allowedOrigins(): Set<string> {
   const env = process.env.OBOL_FRONTEND_ALLOWED_ORIGINS;
   if (env) return new Set(env.split(',').map(o => o.trim()));
-  return new Set(['http://obol.stack:8080', 'https://obol.stack:8443']);
+  return new Set([
+    // Default ports (port omitted) — what browsers send for http://obol.stack
+    'http://obol.stack',
+    'https://obol.stack',
+    // Dev ports
+    'http://obol.stack:8080',
+    'https://obol.stack:8443',
+  ]);
 }
 
 function jsonResponse(body: unknown, status: number): NextResponse {
