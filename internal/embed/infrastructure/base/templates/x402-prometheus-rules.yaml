@@ -47,14 +47,33 @@ spec:
               increase(obol_x402_verifier_charged_requests_total[7d])
             )
 
-        # Sum of currently-running verifier replicas' counters — resets
-        # on rollout; for true lifetime, query against a long-retention
-        # store or use `sum_over_time(...[Nd])`. Used in the My Listings
-        # "today · X earned" header text and the Browse catalog usage badge.
-        - record: x402:revenue:total_by_offer_current
+        # 7d charged-request count per offer (chain-agnostic). Used in the
+        # My Listings "7d · X earned" header text and the Browse catalog
+        # usage badge.
+        #
+        # Why `increase()` and not `sum(counter)`:
+        #   Prometheus counters are per-process by design — they reset to
+        #   zero on every pod restart (rollout, OOM, eviction, node
+        #   reschedule). A naive `sum by (...) (counter)` query therefore
+        #   drops to zero whenever the verifier restarts, producing a
+        #   misleading "0 requests" reading on offers with real on-chain
+        #   traffic. `increase()` performs reset detection at query time
+        #   across the samples the TSDB holds, accounting for the wraps.
+        #
+        # Why `[7d]` and not `[8d]` (matching retention):
+        #   The TSDB is the canonical persistence layer. `increase()`
+        #   needs samples on both sides of the window edge to do reset
+        #   detection at the left edge; a 7d window inside 8d retention
+        #   gives a 1-day headroom so the rule keeps working at exactly
+        #   the moment data ages out, instead of silently producing
+        #   NaN/undercounts at the boundary.
+        #
+        # Canonical reference: Robust Perception, "avoiding the counter-
+        # reset undercount".
+        - record: x402:revenue:7d_by_offer
           expr: |
             sum by (offer_namespace, offer_name) (
-              obol_x402_verifier_charged_requests_total
+              increase(obol_x402_verifier_charged_requests_total[7d])
             )
 
         # Settlement rate (verified / attempted) over the last hour, per
