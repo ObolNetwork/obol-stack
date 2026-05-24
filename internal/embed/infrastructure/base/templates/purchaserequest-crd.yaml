@@ -1,6 +1,9 @@
+---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
   name: purchaserequests.obol.org
 spec:
   group: obol.org
@@ -8,162 +11,221 @@ spec:
     kind: PurchaseRequest
     listKind: PurchaseRequestList
     plural: purchaserequests
-    singular: purchaserequest
     shortNames:
-      - pr
+    - pr
+    singular: purchaserequest
   scope: Namespaced
   versions:
-    - name: v1alpha1
-      served: true
-      storage: true
-      subresources:
-        status: {}
-      additionalPrinterColumns:
-        - name: Endpoint
-          type: string
-          jsonPath: .spec.endpoint
-        - name: Model
-          type: string
-          jsonPath: .spec.model
-        - name: Price
-          type: string
-          jsonPath: .spec.payment.price
-        - name: Remaining
-          type: integer
-          jsonPath: .status.remaining
-        - name: Spent
-          type: integer
-          jsonPath: .status.spent
-        - name: Ready
-          type: string
-          jsonPath: .status.conditions[?(@.type=="Ready")].status
-        - name: Age
-          type: date
-          jsonPath: .metadata.creationTimestamp
-      schema:
-        openAPIV3Schema:
-          type: object
-          properties:
-            spec:
-              type: object
-              required: [endpoint, model, count, payment]
-              properties:
-                endpoint:
-                  type: string
-                  description: "Full URL to the x402-gated inference endpoint"
-                model:
-                  type: string
-                  description: "Remote model ID (used as paid/<model> in LiteLLM)"
-                count:
-                  type: integer
-                  minimum: 1
-                  maximum: 2500
-                  description: "Number of pre-signed auths to create"
-                preSignedAuths:
-                  type: array
-                  description: "Pre-signed x402 payments (legacy ERC-3009 auths still supported)"
-                  items:
-                    type: object
-                    properties:
-                      id: { type: string }
-                      payment:
-                        type: object
-                        x-kubernetes-preserve-unknown-fields: true
-                      signature: { type: string }
-                      from: { type: string }
-                      to: { type: string }
-                      value: { type: string }
-                      validAfter: { type: string }
-                      validBefore: { type: string }
-                      nonce: { type: string }
-                autoRefill:
-                  type: object
+  - additionalPrinterColumns:
+    - jsonPath: .spec.endpoint
+      name: Endpoint
+      type: string
+    - jsonPath: .spec.model
+      name: Model
+      type: string
+    - jsonPath: .spec.payment.price
+      name: Price
+      type: string
+    - jsonPath: .status.remaining
+      name: Remaining
+      type: integer
+    - jsonPath: .status.spent
+      name: Spent
+      type: integer
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          PurchaseRequest is the buyer-side request for pre-signed x402 auths
+          against a remote inference endpoint.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              autoRefill:
+                description: |-
+                  PurchaseAutoRefill drives the agent-managed auto-refill policy for a
+                  PurchaseRequest. The reconciler reads MaxTotal + MaxSpendPerDay as
+                  budget caps before signing more auths; without these fields populated
+                  the agent will not auto-refill beyond the initial Count.
+                properties:
+                  count:
+                    description: Number of auths to sign on refill.
+                    minimum: 1
+                    type: integer
+                  enabled:
+                    default: false
+                    type: boolean
+                  maxSpendPerDay:
+                    description: Max micro-USDC spend per day.
+                    type: string
+                  maxTotal:
+                    description: Cap total auths ever signed.
+                    type: integer
+                  threshold:
+                    description: Refill when remaining < threshold.
+                    minimum: 0
+                    type: integer
+                type: object
+              count:
+                description: Number of pre-signed auths to create.
+                maximum: 2500
+                minimum: 1
+                type: integer
+              endpoint:
+                description: Full URL to the x402-gated inference endpoint.
+                type: string
+              model:
+                description: Remote model ID (used as paid/<model> in LiteLLM).
+                type: string
+              payment:
+                properties:
+                  asset:
+                    description: ERC-20 contract address.
+                    type: string
+                  assetDecimals:
+                    description: Token decimals in atomic units.
+                    format: int64
+                    type: integer
+                  assetSymbol:
+                    description: Human-friendly token symbol (e.g. USDC, OBOL).
+                    type: string
+                  assetTransferMethod:
+                    description: x402 transfer method used for this asset.
+                    type: string
+                  eip712Name:
+                    description: EIP-712 domain name used for signing.
+                    type: string
+                  eip712Version:
+                    description: EIP-712 domain version used for signing.
+                    type: string
+                  network:
+                    type: string
+                  payTo:
+                    type: string
+                  price:
+                    description: Atomic token units per request.
+                    type: string
+                required:
+                - asset
+                - network
+                - payTo
+                - price
+                type: object
+              preSignedAuths:
+                description: Pre-signed x402 payments (legacy ERC-3009 auths still
+                  supported).
+                items:
+                  description: |-
+                    PreSignedAuth carries a pre-signed x402 payment authorization. The
+                    Payment map is opaque (forwarded verbatim to the buyer sidecar / x402
+                    facilitator) which can't be deep-copied by controller-gen; DeepCopy
+                    methods for this type are hand-written in deepcopy_manual.go.
                   properties:
-                    enabled:
-                      type: boolean
-                      default: false
-                    threshold:
-                      type: integer
-                      minimum: 0
-                      description: "Refill when remaining < threshold"
-                    count:
-                      type: integer
-                      minimum: 1
-                      description: "Number of auths to sign on refill"
-                    maxTotal:
-                      type: integer
-                      description: "Cap total auths ever signed"
-                    maxSpendPerDay:
+                    from:
                       type: string
-                      description: "Max micro-USDC spend per day"
-                payment:
+                    id:
+                      type: string
+                    nonce:
+                      type: string
+                    payment:
+                      x-kubernetes-preserve-unknown-fields: true
+                    signature:
+                      type: string
+                    to:
+                      type: string
+                    validAfter:
+                      type: string
+                    validBefore:
+                      type: string
+                    value:
+                      type: string
                   type: object
-                  required: [network, payTo, price, asset]
+                type: array
+            required:
+            - count
+            - endpoint
+            - model
+            - payment
+            type: object
+          status:
+            properties:
+              conditions:
+                items:
                   properties:
-                    network:
+                    lastTransitionTime:
+                      description: Last time the condition transitioned.
+                      format: date-time
                       type: string
-                    payTo:
+                    message:
+                      description: Human-readable message with details.
                       type: string
-                    price:
+                    reason:
+                      description: Machine-readable reason for the condition.
                       type: string
-                      description: "Atomic token units per request"
-                    asset:
+                    status:
+                      description: Status of the condition.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
                       type: string
-                      description: "ERC-20 contract address"
-                    assetSymbol:
+                    type:
+                      description: Condition type.
                       type: string
-                      description: "Human-friendly token symbol (e.g. USDC, OBOL)"
-                    assetDecimals:
-                      type: integer
-                      description: "Token decimals in atomic units"
-                    assetTransferMethod:
-                      type: string
-                      description: "x402 transfer method used for this asset"
-                    eip712Name:
-                      type: string
-                      description: "EIP-712 domain name used for signing"
-                    eip712Version:
-                      type: string
-                      description: "EIP-712 domain version used for signing"
-            status:
-              type: object
-              properties:
-                observedGeneration:
-                  type: integer
-                  format: int64
-                conditions:
-                  type: array
-                  items:
-                    type: object
-                    properties:
-                      type:
-                        type: string
-                      status:
-                        type: string
-                      reason:
-                        type: string
-                      message:
-                        type: string
-                      lastTransitionTime:
-                        type: string
-                        format: date-time
-                publicModel:
-                  type: string
-                  description: "LiteLLM model name (paid/<model>)"
-                remaining:
-                  type: integer
-                spent:
-                  type: integer
-                totalSigned:
-                  type: integer
-                totalSpent:
-                  type: string
-                probedAt:
-                  type: string
-                  format: date-time
-                probedPrice:
-                  type: string
-                walletBalance:
-                  type: string
-                signerAddress:
-                  type: string
+                  required:
+                  - status
+                  - type
+                  type: object
+                type: array
+              observedGeneration:
+                format: int64
+                type: integer
+              probedAt:
+                format: date-time
+                type: string
+              probedPrice:
+                type: string
+              publicModel:
+                description: LiteLLM model name (paid/<model>).
+                type: string
+              remaining:
+                type: integer
+              signerAddress:
+                type: string
+              spent:
+                type: integer
+              totalSigned:
+                type: integer
+              totalSpent:
+                type: string
+              walletBalance:
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

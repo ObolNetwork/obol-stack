@@ -81,6 +81,41 @@ dev-frontend-reset:
     obol kubectl rollout status deployment/obol-frontend-obol-app -n obol-frontend --timeout=120s
     echo "✓ Frontend reset to released image"
 
+# Regenerate CRD manifests + DeepCopy methods from kubebuilder markers
+# in internal/monetizeapi/. The Go types are the single source of truth;
+# CI (.github/workflows/lint-test.yaml::generate-check) fails if the
+# working tree is dirty after this command runs. See CLAUDE.md for the
+# edit-types -> just generate -> commit-both workflow.
+generate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # DeepCopy methods (zz_generated_deepcopy.go) next to the Go types.
+    go run sigs.k8s.io/controller-tools/cmd/controller-gen \
+        object:headerFile=hack/boilerplate.go.txt \
+        paths=./internal/monetizeapi/...
+    # CRD manifests into the embed dir. controller-gen names files
+    # obol.org_<plural>.yaml; rename to existing <singular>-crd.yaml
+    # naming so embed.FS readers don't need to change.
+    out=internal/embed/infrastructure/base/templates
+    go run sigs.k8s.io/controller-tools/cmd/controller-gen \
+        crd \
+        paths=./internal/monetizeapi/... \
+        output:crd:dir="$out"
+    for f in "$out"/obol.org_*.yaml; do
+        [ -e "$f" ] || continue
+        plural=$(basename "$f" .yaml | sed 's/^obol\.org_//')
+        case "$plural" in
+            agentidentities)      target="agentidentity-crd.yaml" ;;
+            agents)               target="agent-crd.yaml" ;;
+            purchaserequests)     target="purchaserequest-crd.yaml" ;;
+            registrationrequests) target="registrationrequest-crd.yaml" ;;
+            serviceoffers)        target="serviceoffer-crd.yaml" ;;
+            *)                    target="${plural%s}-crd.yaml" ;;
+        esac
+        mv "$f" "$out/$target"
+    done
+    echo "✓ Regenerated CRDs and DeepCopy methods"
+
 # Install pre-commit hooks (run once after cloning)
 setup:
     #!/usr/bin/env bash
