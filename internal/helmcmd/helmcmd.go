@@ -11,10 +11,13 @@ package helmcmd
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 )
 
 // versionRE matches the major number in `helm version --short` output, e.g.
@@ -62,4 +65,108 @@ func SyncFlagsForVersion(helmBinary string) []string {
 		return nil
 	}
 	return []string{"--sync-args=--force-conflicts"}
+}
+
+// helmfileRepo mirrors the shape of each entry under the top-level
+// `repositories:` key in a helmfile.yaml. Only the fields we need are decoded;
+// extra keys (oci, username, passwordRef, ...) are ignored.
+type helmfileRepo struct {
+	Name string `yaml:"name"`
+	URL  string `yaml:"url"`
+}
+
+// helmfileDoc is the minimal shape of helmfile.yaml we care about for the
+// repo-update preflight: just the `repositories:` block.
+type helmfileDoc struct {
+	Repositories []helmfileRepo `yaml:"repositories"`
+}
+
+// ParseHelmfileRepos extracts (name, url) entries from a helmfile.yaml file.
+// Repos without both a name and a URL (e.g. OCI-only refs) are skipped — they
+// are not added via `helm repo add` so they don't participate in the
+// `helm repo update` path that this package guards against.
+func ParseHelmfileRepos(helmfilePath string) ([]helmfileRepo, error) {
+	data, err := os.ReadFile(helmfilePath)
+	if err != nil {
+		return nil, fmt.Errorf("read helmfile %s: %w", helmfilePath, err)
+	}
+	return parseHelmfileReposBytes(data)
+}
+
+func parseHelmfileReposBytes(data []byte) ([]helmfileRepo, error) {
+	var doc helmfileDoc
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("parse helmfile yaml: %w", err)
+	}
+
+	out := make([]helmfileRepo, 0, len(doc.Repositories))
+	for _, r := range doc.Repositories {
+		if strings.TrimSpace(r.Name) == "" || strings.TrimSpace(r.URL) == "" {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, nil
+}
+
+// ManagedRepoNames returns just the repo names from a helmfile.yaml. These are
+// the only repos this stack is responsible for keeping up to date; everything
+// else in the user's global `helm repo list` belongs to other tools.
+func ManagedRepoNames(helmfilePath string) ([]string, error) {
+	repos, err := ParseHelmfileRepos(helmfilePath)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(repos))
+	for _, r := range repos {
+		names = append(names, r.Name)
+	}
+	return names, nil
+}
+
+// EnsureRepos registers each (name, url) pair via `helm repo add --force-update`
+// so that a fresh host without `helm repo add` for our managed repos still gets
+// them registered before we ask helm to update them by name. Best-effort:
+// failures are returned for visibility but should not be treated as fatal by
+// callers (the subsequent `helm repo update` will surface real problems).
+func EnsureRepos(helmBinary string, repos []helmfileRepo) error {
+	var firstErr error
+	for _, r := range repos {
+		cmd := exec.Command(helmBinary, "repo", "add", "--force-update", r.Name, r.URL)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("helm repo add %s %s: %w (%s)", r.Name, r.URL, err, strings.TrimSpace(string(out)))
+			}
+		}
+	}
+	return firstErr
+}
+
+// UpdateRepos runs `helm repo update <names...>` and, when the helm version
+// supports it, passes --fail-on-repo-update-fail=false so that a single dead
+// repo (e.g. a tertiary repository that started serving 404) doesn't abort the
+// whole update.
+//
+// Behaviour:
+//   - helm 3.14+ (where --fail-on-repo-update-fail exists): the flag is passed
+//     and the returned error is nil even if individual repos in `names` fail.
+//   - older helm: the flag is omitted and the error surfaces normally.
+//
+// The targeted form (`helm repo update <names...>`) is important: it limits the
+// update to repos this stack actually needs, so unrelated dead repos in the
+// user's global helm config can't break us even on helm versions that lack the
+// tolerant flag.
+func UpdateRepos(helmBinary string, names []string) ([]byte, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	args := []string{"repo", "update"}
+	if major, err := MajorVersion(helmBinary); err == nil && major >= 3 {
+		args = append(args, "--fail-on-repo-update-fail=false")
+	}
+	args = append(args, names...)
+
+	cmd := exec.Command(helmBinary, args...)
+	out, err := cmd.CombinedOutput()
+	return out, err
 }

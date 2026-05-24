@@ -107,10 +107,10 @@ func (b *K3dBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 	// existing-cluster and fresh-create branches. `k3d cluster start` does
 	// not auto-restart standalone registry containers attached via
 	// `--registry-use` at create time — it only starts the cluster's own
-	// nodes. Without this call, every retry after a `cluster stop` (or after
-	// the failure-recovery Down() call in syncDefaults) falls back to direct
-	// upstream pulls and re-fetches every image, costing minutes per
-	// attempt.
+	// nodes. Without this call, every retry after a `cluster stop` (or any
+	// other path that left the registry containers in an `Exited` state)
+	// falls back to direct upstream pulls and re-fetches every image,
+	// costing minutes per attempt.
 	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
 		setup, setupErr := ensureDevRegistries(cfg, u)
 		if setupErr != nil {
