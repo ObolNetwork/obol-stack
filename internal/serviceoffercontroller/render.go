@@ -26,6 +26,39 @@ const (
 	servicesJSONRouteName     = "obol-services-json-route"
 )
 
+// restrictedPodSecurityContext returns a Pod-level securityContext that
+// satisfies the Restricted Pod Security Standard (PSS). PR #521 enforces
+// Restricted PSS on the x402 namespace, so the controller-rendered httpd
+// workloads (obol-skill-md and agentidentity-*-registration) must ship a
+// compliant securityContext or they fail admission and never start.
+//
+// UID/GID 1000 is the canonical non-root user available in the busybox
+// image used by both Deployments. fsGroup keeps the projected ConfigMap
+// volumes readable by the httpd process.
+func restrictedPodSecurityContext() map[string]any {
+	return map[string]any{
+		"runAsNonRoot": true,
+		"runAsUser":    int64(1000),
+		"runAsGroup":   int64(1000),
+		"fsGroup":      int64(1000),
+		"seccompProfile": map[string]any{
+			"type": "RuntimeDefault",
+		},
+	}
+}
+
+// restrictedContainerSecurityContext returns a container-level
+// securityContext compliant with the Restricted PSS profile: privilege
+// escalation disabled and all Linux capabilities dropped.
+func restrictedContainerSecurityContext() map[string]any {
+	return map[string]any{
+		"allowPrivilegeEscalation": false,
+		"capabilities": map[string]any{
+			"drop": []any{"ALL"},
+		},
+	}
+}
+
 func buildRegistrationRequest(offer *monetizeapi.ServiceOffer, desiredState string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
@@ -92,11 +125,13 @@ func buildAgentIdentityRegistrationDeployment(identity *monetizeapi.AgentIdentit
 						},
 					},
 					"spec": map[string]any{
+						"securityContext": restrictedPodSecurityContext(),
 						"containers": []any{
 							map[string]any{
-								"name":    "httpd",
-								"image":   "busybox:1.36",
-								"command": []any{"httpd", "-f", "-p", "8080", "-h", "/www"},
+								"name":            "httpd",
+								"image":           "busybox:1.36",
+								"command":         []any{"httpd", "-f", "-p", "8080", "-h", "/www"},
+								"securityContext": restrictedContainerSecurityContext(),
 								"ports": []any{
 									map[string]any{"containerPort": int64(8080), "protocol": "TCP"},
 								},
@@ -259,11 +294,13 @@ func buildSkillCatalogDeployment(contentHash string) *unstructured.Unstructured 
 						},
 					},
 					"spec": map[string]any{
+						"securityContext": restrictedPodSecurityContext(),
 						"containers": []any{
 							map[string]any{
-								"name":    "httpd",
-								"image":   "busybox:1.36",
-								"command": []any{"httpd", "-f", "-p", "8080", "-h", "/www"},
+								"name":            "httpd",
+								"image":           "busybox:1.36",
+								"command":         []any{"httpd", "-f", "-p", "8080", "-h", "/www"},
+								"securityContext": restrictedContainerSecurityContext(),
 								"ports": []any{
 									map[string]any{"containerPort": int64(8080), "protocol": "TCP"},
 								},
