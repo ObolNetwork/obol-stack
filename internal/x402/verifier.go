@@ -74,7 +74,7 @@ func (v *Verifier) load(cfg *PricingConfig) error {
 		if r.OfferNamespace == "" && r.OfferName == "" {
 			continue
 		}
-		live[r.OfferNamespace+"\x00"+r.OfferName+"\x00"+r.Network] = struct{}{}
+		live[r.OfferNamespace+"\x00"+r.OfferName+"\x00"+r.Network+"\x00"+r.AssetSymbol] = struct{}{}
 	}
 	v.metrics.pruneSeriesNotIn(live)
 
@@ -466,9 +466,25 @@ func prometheusLabels(rule *RouteRule) prometheus.Labels {
 	// offer_name) which already uniquely identifies a paid route — the
 	// pattern was redundant and unbounded by path fragments, which would
 	// have ballooned series count for sellers running many granular routes.
+	//
+	// asset_symbol is included for direct per-token aggregation in PromQL
+	// (e.g. "what's my OBOL revenue?") without having to join the metric
+	// against the ServiceOffer CR at query time. Cardinality cost is zero
+	// because each offer pins exactly one asset — the new dimension is
+	// functionally constant within the existing (ns, name) group.
+	asset := rule.AssetSymbol
+	if asset == "" {
+		// Defensive: a missing symbol is operationally ugly in PromQL.
+		// Empty-string labels are legal in Prometheus but render as a
+		// bare "asset_symbol=" in selectors, which makes dashboard
+		// filters harder to write. "unknown" is unambiguous and matches
+		// the convention we use elsewhere for under-populated metadata.
+		asset = "unknown"
+	}
 	return prometheus.Labels{
 		"offer_namespace": rule.OfferNamespace,
 		"offer_name":      rule.OfferName,
 		"chain":           rule.Network,
+		"asset_symbol":    asset,
 	}
 }
