@@ -1,0 +1,109 @@
+# Relocated from helmfile.yaml `obol-frontend-httproute` and
+# `obol-frontend-rbac` bedag/raw releases. These resources live
+# alongside their workload (the obol-frontend Helm release in the
+# `obol-frontend` namespace) instead of inlined in helmfile so the
+# chart layout is the single source of truth for what ships in the
+# obol-frontend namespace.
+#
+# The obol-frontend Deployment + Service themselves still come from
+# the `obol/obol-app` upstream chart (separate release in
+# helmfile.yaml); only the HTTPRoute and discovery RBAC are owned
+# here.
+#
+# CRD prerequisite: HTTPRoute -> gateway.networking.k8s.io/v1
+# (shipped by the Traefik v38+ chart's bundled CRDs). `base` now
+# declares `needs: [traefik/traefik]` in helmfile.yaml to guarantee
+# the CRDs are present before this template applies.
+
+---
+# obol-frontend namespace. Pre-created here so the HTTPRoute and
+# ClusterRoleBinding subject reference can resolve during the `base`
+# release without waiting for the `obol-frontend` upstream chart
+# release to create it. The chart release still sets
+# `createNamespace: true` — kubectl apply on an existing namespace is
+# a no-op.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: obol-frontend
+
+---
+# obol-frontend HTTPRoute. The `hostnames: ["obol.stack"]` restriction
+# keeps the frontend UI off the public cloudflared tunnel — removing
+# it is a critical security regression (see CLAUDE.md "Security:
+# Tunnel Exposure").
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: obol-frontend
+  namespace: obol-frontend
+spec:
+  hostnames:
+    - "obol.stack"
+  parentRefs:
+    - name: traefik-gateway
+      namespace: traefik
+      sectionName: web
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: obol-frontend-obol-app
+          port: 3000
+
+---
+# obol-frontend RBAC for the pod ServiceAccount.
+#
+# Keep this as the single frontend RBAC template. A prior bundle carried a
+# second obol-frontend-rbac.yaml template with the same ClusterRole and
+# ClusterRoleBinding names, which made the rendered chart order-dependent.
+#
+# The frontend is local-only behind the obol.stack hostname restriction
+# (the operator owns the cluster), so this is a single trust boundary.
+# Defense-in-depth note: the `secrets` rule is intentionally omitted — no
+# frontend code path reads them and the SA token should not have that reach.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: obol-frontend-openclaw-discovery
+  labels:
+    app.kubernetes.io/name: obol-frontend
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["pods", "configmaps"]
+    verbs: ["get", "list"]
+  # ServiceOffer CRD — frontend sell modal creates offers
+  - apiGroups: ["obol.org"]
+    resources: ["serviceoffers", "serviceoffers/status"]
+    verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # PurchaseRequest CRD — My Purchases lists agent buys. Read-only: the
+  # agent and controller own writes.
+  - apiGroups: ["obol.org"]
+    resources: ["purchaserequests", "purchaserequests/status"]
+    verbs: ["get", "list", "watch"]
+  # RegistrationRequest CRD — listing rows surface ERC-8004 registration
+  # state. Read-only: the controller owns writes.
+  - apiGroups: ["obol.org"]
+    resources: ["registrationrequests", "registrationrequests/status"]
+    verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: obol-frontend-openclaw-discovery
+  labels:
+    app.kubernetes.io/name: obol-frontend
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: obol-frontend-openclaw-discovery
+subjects:
+  - kind: ServiceAccount
+    name: obol-frontend
+    namespace: obol-frontend

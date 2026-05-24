@@ -3,6 +3,7 @@ package x402
 import (
 	"encoding/base64"
 	"testing"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,13 +38,35 @@ func TestRoutesFromStore(t *testing.T) {
 				Conditions: []monetizeapi.Condition{{Type: "RoutePublished", Status: "True"}},
 			},
 		}),
+		// Drain-expired offer: drainAt + zero grace period in the past
+		// → route should already be torn down, and the verifier rule
+		// should be filtered out even though RoutePublished is still
+		// True in the cached status snapshot.
 		mustOfferObject(t, monetizeapi.ServiceOffer{
-			ObjectMeta: metav1.ObjectMeta{Name: "paused", Namespace: "alpha", Annotations: map[string]string{
-				monetizeapi.PausedAnnotation: "true",
-			}},
+			ObjectMeta: metav1.ObjectMeta{Name: "drained", Namespace: "alpha"},
 			Spec: monetizeapi.ServiceOfferSpec{
+				Upstream:         monetizeapi.ServiceOfferUpstream{Service: "httpbin"},
+				DrainAt:          &metav1.Time{Time: time.Now().Add(-2 * time.Hour)},
+				DrainGracePeriod: &metav1.Duration{Duration: time.Hour},
 				Payment: monetizeapi.ServiceOfferPayment{
 					Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "1"},
+				},
+			},
+			Status: monetizeapi.ServiceOfferStatus{
+				Conditions: []monetizeapi.Condition{{Type: "RoutePublished", Status: "True"}},
+			},
+		}),
+		// Mid-drain offer: drainAt = now, grace = 1h → still within the
+		// drain window, route stays up so in-flight buyers can settle.
+		// Should appear in the verifier rules.
+		mustOfferObject(t, monetizeapi.ServiceOffer{
+			ObjectMeta: metav1.ObjectMeta{Name: "c", Namespace: "alpha"},
+			Spec: monetizeapi.ServiceOfferSpec{
+				Upstream:         monetizeapi.ServiceOfferUpstream{Service: "httpbin"},
+				DrainAt:          &metav1.Time{Time: time.Now()},
+				DrainGracePeriod: &metav1.Duration{Duration: time.Hour},
+				Payment: monetizeapi.ServiceOfferPayment{
+					Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.1"},
 				},
 			},
 			Status: monetizeapi.ServiceOfferStatus{
@@ -62,11 +85,16 @@ func TestRoutesFromStore(t *testing.T) {
 		t.Fatalf("routesFromStore: %v", err)
 	}
 
-	if len(routes) != 2 {
-		t.Fatalf("len(routes) = %d, want 2", len(routes))
+	if len(routes) != 3 {
+		t.Fatalf("len(routes) = %d, want 3", len(routes))
 	}
-	if routes[0].OfferName != "a" || routes[1].OfferName != "b" {
-		t.Fatalf("routes not sorted by offer identity: %+v", routes)
+	// Expected sort order: alpha/a, alpha/c, beta/b.
+	// "drained" must be filtered out because its drain window expired.
+	if routes[0].OfferName != "a" || routes[1].OfferName != "c" || routes[2].OfferName != "b" {
+		t.Fatalf("routes not sorted by offer identity (drained leaked?): %+v", routes)
+	}
+	if routes[0].OfferNamespace != "alpha" || routes[1].OfferNamespace != "alpha" || routes[2].OfferNamespace != "beta" {
+		t.Fatalf("unexpected route namespaces: %+v", routes)
 	}
 	if routes[0].Pattern != "/services/a/*" {
 		t.Fatalf("routes[0].Pattern = %q, want /services/a/*", routes[0].Pattern)
@@ -83,11 +111,16 @@ func TestRoutesFromStore(t *testing.T) {
 	if routes[0].StripPrefix != "/services/a" {
 		t.Fatalf("routes[0].StripPrefix = %q, want /services/a", routes[0].StripPrefix)
 	}
-	if routes[1].UpstreamAuth != "" {
-		t.Fatalf("routes[1].UpstreamAuth = %q, want empty", routes[1].UpstreamAuth)
+	if routes[2].UpstreamAuth != "" {
+		t.Fatalf("routes[2].UpstreamAuth = %q, want empty", routes[2].UpstreamAuth)
 	}
-	if routes[1].UpstreamURL != "http://httpbin.beta.svc.cluster.local:11434" {
-		t.Fatalf("routes[1].UpstreamURL = %q, want httpbin upstream URL", routes[1].UpstreamURL)
+	if routes[2].UpstreamURL != "http://httpbin.beta.svc.cluster.local:11434" {
+		t.Fatalf("routes[2].UpstreamURL = %q, want httpbin upstream URL", routes[2].UpstreamURL)
+	}
+	// Mid-drain offer "c" stays in the rules but tracks its own
+	// upstream — verifies the drain window keeps the route alive.
+	if routes[1].UpstreamURL != "http://httpbin.alpha.svc.cluster.local:11434" {
+		t.Fatalf("routes[1] (mid-drain) UpstreamURL = %q, want httpbin upstream URL", routes[1].UpstreamURL)
 	}
 }
 

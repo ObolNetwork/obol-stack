@@ -39,6 +39,21 @@ type ServiceCatalogEntry struct {
 	// know the offer is usable for x402 payments today, even though
 	// ERC-8004 discovery via the chain still resolves to the prior state.
 	RegistrationPending bool `json:"registrationPending,omitempty"`
+
+	// Available is false when the offer is in its drain window. Buyers
+	// can still complete in-flight payments until DrainEndsAt, but
+	// discovery surfaces should advertise the wind-down so external
+	// observers can react. When false, DrainEndsAt is set to the RFC3339
+	// timestamp at which the HTTPRoute will be torn down. Catalog
+	// consumers should treat unset Available (the default-true field) as
+	// "available" for backwards compatibility — the field is only written
+	// false during drain.
+	Available bool `json:"available"`
+
+	// DrainEndsAt is the RFC3339 timestamp at which the offer's
+	// HTTPRoute will be removed. Set only when Available=false. Buyers
+	// SHOULD migrate to alternative providers before this time.
+	DrainEndsAt string `json:"drainEndsAt,omitempty"`
 }
 
 // ServiceCatalogAsset describes the settlement token resolved for a catalog

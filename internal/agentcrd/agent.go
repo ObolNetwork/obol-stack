@@ -32,7 +32,7 @@ func Namespace(name string) string {
 }
 
 // HostHomePath is where the agent's .hermes data lives on the host. The
-// cluster mounts this into the Hermes pod via hostPath; writing
+// cluster mounts this into the Hermes pod via the data PVC; writing
 // SOUL.md/skills here puts them inside the pod automatically.
 func HostHomePath(cfg *config.Config, name string) string {
 	desc := agentruntime.Describe(agentruntime.Hermes)

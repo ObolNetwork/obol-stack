@@ -434,33 +434,38 @@ func TestDockerBridgeGatewayIP(t *testing.T) {
 	t.Logf("docker0 gateway IP: %s", ip)
 }
 
+// TestHelmfile_IncludesBuyerPodMonitor asserts the litellm-x402-buyer
+// PodMonitor is shipped with the stack. The PodMonitor previously lived
+// as an inline `bedag/raw` release in helmfile.yaml; it now lives next
+// to its workload in base/templates/llm.yaml. The chart layout (the
+// `base` Helm release) renders it during `obol stack up`.
 func TestHelmfile_IncludesBuyerPodMonitor(t *testing.T) {
 	projectRoot := findProjectRoot()
 	if projectRoot == "" {
 		t.Fatal("project root not found")
 	}
 
-	data, err := os.ReadFile(filepath.Join(projectRoot, "internal/embed/infrastructure/helmfile.yaml"))
+	data, err := os.ReadFile(filepath.Join(projectRoot, "internal/embed/infrastructure/base/templates/llm.yaml"))
 	if err != nil {
-		t.Fatalf("read helmfile: %v", err)
+		t.Fatalf("read llm template: %v", err)
 	}
 
 	out := string(data)
 
 	if !strings.Contains(out, "kind: PodMonitor") {
-		t.Fatalf("helmfile missing PodMonitor:\n%s", out)
+		t.Fatalf("llm template missing PodMonitor:\n%s", out)
 	}
 
 	if !strings.Contains(out, "name: litellm-x402-buyer") {
-		t.Fatalf("helmfile missing buyer PodMonitor name:\n%s", out)
+		t.Fatalf("llm template missing buyer PodMonitor name:\n%s", out)
 	}
 
 	if !strings.Contains(out, "release: monitoring") {
-		t.Fatalf("helmfile missing monitoring label:\n%s", out)
+		t.Fatalf("llm template missing monitoring label:\n%s", out)
 	}
 
 	if !strings.Contains(out, "port: buyer-http") || !strings.Contains(out, "path: /metrics") {
-		t.Fatalf("helmfile missing buyer metrics endpoint:\n%s", out)
+		t.Fatalf("llm template missing buyer metrics endpoint:\n%s", out)
 	}
 }
 
@@ -486,7 +491,7 @@ func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
 		`name: buyer-http`,
 		`name: x402-buyer-config`,
 		`name: x402-buyer-auths`,
-		`emptyDir: {}`,
+		`emptyDir:`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("llm template missing %q:\n%s", want, out)
@@ -972,6 +977,126 @@ func TestBuildAndImportLocalImages_SkipsK3dImportWhenCacheIsValid(t *testing.T) 
 	}
 }
 
+func TestBuildAndImportLocalImages_PreloadsRuntimeImagesViaCrictl(t *testing.T) {
+	root := t.TempDir()
+	cfgDir := filepath.Join(root, "config")
+	binDir := filepath.Join(root, "bin")
+	logPath := filepath.Join(root, "commands.log")
+	for _, d := range []string{cfgDir, binDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, stackIDFile), []byte("test-stack"), 0o600); err != nil {
+		t.Fatalf("write stack id: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/test\n\ngo 1.25\n"), 0o644); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	dockerScript := "#!/bin/sh\n" +
+		"set -eu\n" +
+		"printf 'docker %s\\n' \"$*\" >> \"" + logPath + "\"\n" +
+		"if [ \"${1:-}\" = \"inspect\" ] && [ \"${2:-}\" = \"--format\" ]; then\n" +
+		"  printf 'k3d-server-cid-fake\\n'\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		"if [ \"${1:-}\" = \"exec\" ]; then exit 0; fi\n" +
+		"if [ \"${1:-}\" = \"image\" ] && [ \"${2:-}\" = \"inspect\" ]; then exit 1; fi\n" +
+		"if [ \"${1:-}\" = \"pull\" ]; then exit 97; fi\n" +
+		"exit 0\n"
+	k3dScript := "#!/bin/sh\n" +
+		"set -eu\n" +
+		"printf 'k3d %s\\n' \"$*\" >> \"" + logPath + "\"\n"
+	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(dockerScript), 0o755); err != nil {
+		t.Fatalf("write docker stub: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "k3d"), []byte(k3dScript), 0o755); err != nil {
+		t.Fatalf("write k3d stub: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath)
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(root); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer os.Chdir(oldWD)
+	t.Setenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES", "")
+
+	buildAndImportLocalImages(&config.Config{ConfigDir: cfgDir, BinDir: binDir}, ui.NewWithOptions(false, true))
+
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	log := string(logData)
+	for _, want := range []string{
+		"docker exec k3d-obol-stack-test-stack-server-0 crictl pull ghcr.io/obolnetwork/openclaw:",
+		"docker exec k3d-obol-stack-test-stack-server-0 crictl pull nousresearch/hermes-agent:",
+	} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("expected runtime preload via node crictl command %q, log:\n%s", want, log)
+		}
+	}
+	for _, unwanted := range []string{
+		"docker pull ghcr.io/obolnetwork/openclaw",
+		"docker pull nousresearch/hermes-agent",
+		"k3d image import ghcr.io/obolnetwork/openclaw",
+		"k3d image import nousresearch/hermes-agent",
+	} {
+		if strings.Contains(log, unwanted) {
+			t.Fatalf("runtime preload should not use host docker pull or k3d image import (%q), log:\n%s", unwanted, log)
+		}
+	}
+}
+
+func TestPreloadRuntimeImage_FallsBackToK3sCrictl(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	logPath := filepath.Join(root, "commands.log")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir binDir: %v", err)
+	}
+	dockerScript := "#!/bin/sh\n" +
+		"set -eu\n" +
+		"printf 'docker %s\\n' \"$*\" >> \"" + logPath + "\"\n" +
+		"if [ \"${1:-}\" = \"exec\" ] && [ \"${2:-}\" = \"k3d-obol-stack-test-stack-server-0\" ] && [ \"${3:-}\" = \"crictl\" ]; then\n" +
+		"  exit 42\n" +
+		"fi\n" +
+		"if [ \"${1:-}\" = \"exec\" ] && [ \"${2:-}\" = \"k3d-obol-stack-test-stack-server-0\" ] && [ \"${3:-}\" = \"k3s\" ]; then\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		"exit 1\n"
+	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(dockerScript), 0o755); err != nil {
+		t.Fatalf("write docker stub: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+oldPath)
+
+	if ok := preloadRuntimeImageIntoCluster("obol-stack-test-stack", "example.com/runtime:tag", ui.NewWithOptions(false, true)); !ok {
+		t.Fatal("expected k3s crictl fallback to succeed")
+	}
+
+	logData, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	log := string(logData)
+	for _, want := range []string{
+		"docker exec k3d-obol-stack-test-stack-server-0 crictl pull example.com/runtime:tag",
+		"docker exec k3d-obol-stack-test-stack-server-0 k3s crictl pull example.com/runtime:tag",
+	} {
+		if !strings.Contains(log, want) {
+			t.Fatalf("expected command %q, log:\n%s", want, log)
+		}
+	}
+}
+
 // newCaptureUI returns a UI that writes stdout and stderr into the returned
 // buffers. Warn → stderr, Dim/Blank/Info → stdout.
 func newCaptureUI() (*ui.UI, *bytes.Buffer, *bytes.Buffer) {
@@ -985,7 +1110,7 @@ func TestWarnIfNoChatModel_EmitsWarnWhenNoModels(t *testing.T) {
 	u, stdout, stderr := newCaptureUI()
 	warnIfNoChatModel(nil, u)
 
-	if !strings.Contains(stderr.String(), "No chat-capable LLM detected") {
+	if !strings.Contains(stderr.String(), "No chat-capable model detected") {
 		t.Fatalf("expected warn on stderr, got: %q", stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "ollama pull") {
@@ -1013,7 +1138,7 @@ func TestWarnIfNoChatModel_SilentWhenConcretePaidModelPresent(t *testing.T) {
 	u, _, stderr := newCaptureUI()
 	warnIfNoChatModel([]string{"paid/aeon"}, u)
 
-	if strings.Contains(stderr.String(), "No chat-capable LLM detected") {
+	if strings.Contains(stderr.String(), "No chat-capable model detected") {
 		t.Fatalf("concrete paid/aeon should suppress warn, got: %q", stderr.String())
 	}
 }
@@ -1030,5 +1155,189 @@ func TestWarnIfNoChatModel_EmitsWarnForWildcardOnly(t *testing.T) {
 
 	if !strings.Contains(stderr.String(), "No chat-capable model detected") {
 		t.Fatalf("wildcard-only list should trigger warn, got: %q", stderr.String())
+	}
+}
+
+// fakeHelmScript returns a sh script body that fakes a `helm` binary with
+// configurable behaviour for repo update. It logs every invocation to
+// invokeLog so callers can assert on what helm was asked to do.
+//
+//   - `helm version --short`:       prints "v3.20.1".
+//   - `helm repo update --help`:    advertises --fail-on-repo-update-fail=false.
+//   - `helm repo add ...`:          exits 0 (idempotent registration).
+//   - `helm repo update ...`:       exits with repoUpdateExit. Stdout is empty,
+//     stderr mimics helm's real "failed to update the following repositories"
+//     message when repoUpdateExit != 0.
+//   - Anything else:                exits 0.
+func fakeHelmScript(invokeLog string, repoUpdateExit int) string {
+	return `#!/bin/sh
+echo "$@" >> "` + invokeLog + `"
+if [ "$1" = "version" ] && [ "$2" = "--short" ]; then
+  echo "v3.20.1"
+  exit 0
+fi
+if [ "$1" = "repo" ] && [ "$2" = "add" ]; then
+  exit 0
+fi
+if [ "$1" = "repo" ] && [ "$2" = "update" ] && [ "$3" = "--help" ]; then
+  echo "      --fail-on-repo-update-fail=false   tolerate individual repo failures"
+  exit 0
+fi
+if [ "$1" = "repo" ] && [ "$2" = "update" ]; then
+  if [ "` + sprintInt(repoUpdateExit) + `" != "0" ]; then
+    echo "Error: failed to update the following repositories: [https://example.invalid/charts]" 1>&2
+    exit ` + sprintInt(repoUpdateExit) + `
+  fi
+  echo "...Successfully got an update from all chart repositories"
+  exit 0
+fi
+exit 0
+`
+}
+
+func sprintInt(n int) string { return strconv.Itoa(n) }
+
+// TestPreflightHelmRepos_SuccessAllowsSkipDeps verifies the happy path:
+// when our managed repos update cleanly, preflightHelmRepos returns true so
+// the caller can pass --skip-deps to helmfile sync.
+func TestPreflightHelmRepos_SuccessAllowsSkipDeps(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fake binary not supported on windows")
+	}
+
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	cfgDir := filepath.Join(dir, "cfg")
+	for _, d := range []string{binDir, cfgDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+
+	invokeLog := filepath.Join(dir, "helm.log")
+	helm := filepath.Join(binDir, "helm")
+	if err := os.WriteFile(helm, []byte(fakeHelmScript(invokeLog, 0)), 0o755); err != nil { //nolint:gosec // test fake
+		t.Fatalf("write fake helm: %v", err)
+	}
+
+	helmfilePath := filepath.Join(cfgDir, "helmfile.yaml")
+	body := `
+repositories:
+  - name: traefik
+    url: https://traefik.github.io/charts
+  - name: obol
+    url: https://obolnetwork.github.io/helm-charts/
+`
+	if err := os.WriteFile(helmfilePath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write helmfile: %v", err)
+	}
+
+	cfg := &config.Config{BinDir: binDir, ConfigDir: cfgDir}
+	u, _, _ := newCaptureUI()
+
+	if !preflightHelmRepos(cfg, u, helm, helmfilePath) {
+		t.Fatal("preflightHelmRepos should return true when helm repo update succeeds")
+	}
+
+	logged, _ := os.ReadFile(invokeLog)
+	got := string(logged)
+	// Sanity: we should have updated only our managed repos by name, and
+	// passed the tolerant flag.
+	if !strings.Contains(got, "--fail-on-repo-update-fail=false") {
+		t.Fatalf("expected tolerant flag in helm invocation, got: %s", got)
+	}
+	if !strings.Contains(got, "traefik") || !strings.Contains(got, "obol") {
+		t.Fatalf("expected managed repo names in helm invocation, got: %s", got)
+	}
+}
+
+// TestPreflightHelmRepos_FailureFallsBackGracefully captures the actual bug
+// scenario: a tertiary repo update fails. The preflight should swallow that
+// (and return false so the caller falls back to letting helmfile manage
+// dependencies itself) rather than propagate a fatal error that would, in
+// the old code path, have stopped the entire cluster.
+func TestPreflightHelmRepos_FailureFallsBackGracefully(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-script fake binary not supported on windows")
+	}
+
+	dir := t.TempDir()
+	binDir := filepath.Join(dir, "bin")
+	cfgDir := filepath.Join(dir, "cfg")
+	for _, d := range []string{binDir, cfgDir} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+
+	invokeLog := filepath.Join(dir, "helm.log")
+	helm := filepath.Join(binDir, "helm")
+	// Fake helm exits 1 on `repo update` — same shape as the real-world
+	// kubernetes-dashboard 404 incident that motivated this fix.
+	if err := os.WriteFile(helm, []byte(fakeHelmScript(invokeLog, 1)), 0o755); err != nil { //nolint:gosec // test fake
+		t.Fatalf("write fake helm: %v", err)
+	}
+
+	helmfilePath := filepath.Join(cfgDir, "helmfile.yaml")
+	body := `
+repositories:
+  - name: traefik
+    url: https://traefik.github.io/charts
+`
+	if err := os.WriteFile(helmfilePath, []byte(body), 0o600); err != nil {
+		t.Fatalf("write helmfile: %v", err)
+	}
+
+	cfg := &config.Config{BinDir: binDir, ConfigDir: cfgDir}
+	u, _, _ := newCaptureUI()
+
+	// Critical assertion: the preflight returns (without panicking, without
+	// returning an error type at all — by design it absorbs failure and
+	// signals "let helmfile try its own resolution").
+	if got := preflightHelmRepos(cfg, u, helm, helmfilePath); got {
+		t.Fatal("preflightHelmRepos should return false when helm repo update fails")
+	}
+}
+
+// TestSyncDefaults_DoesNotCallDownOnHelmfileFailure is a source-level
+// regression guard for the cluster-stop-on-failure bug. The old syncDefaults
+// invoked Down() (which calls `k3d cluster delete`) whenever helmfile sync
+// errored, destroying user state for transient failures like a single dead
+// helm repo. The fix removes that call; this test keeps it gone.
+//
+// We inspect the source rather than mock the entire backend stack because
+// the wrong behaviour to prevent is statically visible (a Down call in the
+// error branch) and the right behaviour is statically defined (no Down
+// call). Behavioural drift is checked by the helmcmd unit tests above.
+func TestSyncDefaults_DoesNotCallDownOnHelmfileFailure(t *testing.T) {
+	projectRoot := findProjectRoot()
+	if projectRoot == "" {
+		t.Skip("project root not found")
+	}
+
+	src, err := os.ReadFile(filepath.Join(projectRoot, "internal/stack/stack.go"))
+	if err != nil {
+		t.Fatalf("read stack.go: %v", err)
+	}
+
+	// Locate the syncDefaults function body. We bound the scan to the
+	// function so we don't accidentally match Down() calls in unrelated
+	// helpers (e.g. the `Down(cfg, u *ui.UI)` definition itself).
+	const fnSig = "func syncDefaults("
+	start := strings.Index(string(src), fnSig)
+	if start < 0 {
+		t.Fatalf("syncDefaults function not found in stack.go")
+	}
+	const fnEndMarker = "\n// claudeTipIfRelevant"
+	end := strings.Index(string(src)[start:], fnEndMarker)
+	if end < 0 {
+		t.Fatalf("could not locate end of syncDefaults body")
+	}
+	body := string(src)[start : start+end]
+
+	if strings.Contains(body, "Down(cfg, u)") {
+		t.Fatalf("syncDefaults must not call Down() on failure — that destroys " +
+			"unrelated user state when helmfile sync fails for transient reasons. " +
+			"See fix/tolerant-helm-repo-update.")
 	}
 }

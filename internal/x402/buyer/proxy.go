@@ -203,17 +203,18 @@ func (p *Proxy) syncMetricsLocked() {
 
 	for name, upstream := range p.upstreams {
 		signer := p.signers[name]
-		labels := prometheusLabels(name, upstream.remoteModel)
+		labels := prometheusLabels(name, upstream.remoteModel, upstream.config.Network)
 		p.metrics.activeModelMappings.With(labels).Set(1)
 		p.metrics.authRemaining.With(labels).Set(float64(signer.Remaining()))
 		p.metrics.authSpent.With(labels).Set(float64(signer.Spent()))
 	}
 }
 
-func prometheusLabels(name, remoteModel string) map[string]string {
+func prometheusLabels(name, remoteModel, chain string) map[string]string {
 	return map[string]string{
 		"upstream":     name,
 		"remote_model": remoteModel,
+		"chain":        chain,
 	}
 }
 
@@ -226,7 +227,7 @@ func (p *Proxy) buildUpstreamHandler(name, remoteModel string, cfg UpstreamConfi
 		return nil, fmt.Errorf("parse upstream URL %q: %w", cfg.URL, err)
 	}
 
-	labels := prometheusLabels(name, remoteModel)
+	labels := prometheusLabels(name, remoteModel, cfg.Network)
 	rp := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
@@ -298,7 +299,7 @@ func (p *Proxy) handleModelRequest(w http.ResponseWriter, r *http.Request) {
 		return io.NopCloser(bytes.NewReader(rewrittenBody)), nil
 	}
 
-	labels := prometheusLabels(entry.name, remoteModel)
+	labels := prometheusLabels(entry.name, remoteModel, entry.config.Network)
 	p.metrics.requestsTotal.With(labels).Inc()
 	entry.handler.ServeHTTP(w, r)
 }

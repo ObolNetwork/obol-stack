@@ -78,7 +78,8 @@
         "payTo",
         "network",
         "description",
-        "isDemo"
+        "isDemo",
+        "available"
       ],
       "properties": {
         "name": {
@@ -149,6 +150,18 @@
         },
         "isDemo": {
           "type": "boolean"
+        },
+        "registrationPending": {
+          "type": "boolean"
+        },
+        "available": {
+          "type": "boolean",
+          "description": "False during a drain window. Catalog consumers should treat unset as true for backwards compatibility."
+        },
+        "drainEndsAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "RFC3339 timestamp at which the offer's HTTPRoute will be torn down. Set only when available=false."
         }
       }
     }

@@ -296,7 +296,7 @@ func (c *Controller) enqueueOfferFromRegistration(obj any) {
 			log.Printf("serviceoffer-controller: decode offer for registration fan-out: %v", err)
 			continue
 		}
-		if offer.DeletionTimestamp != nil || offer.IsPaused() || !offer.Spec.Registration.Enabled {
+		if offer.DeletionTimestamp != nil || !offer.Spec.Registration.Enabled {
 			continue
 		}
 		c.offerQueue.Add(offer.Namespace + "/" + offer.Name)
@@ -439,8 +439,17 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		if !ready {
 			setCondition(&status, "ModelReady", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
 			setCondition(&status, "UpstreamHealthy", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
-			setCondition(&status, "PaymentGateReady", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
-			setCondition(&status, "RoutePublished", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
+			if offer.DrainExpired(time.Now()) {
+				if err := c.deleteRouteChildren(ctx, offer); err != nil {
+					return err
+				}
+				setCondition(&status, "Draining", "False", "Drained", fmt.Sprintf("Drain ended at %s; route torn down", offer.DrainEndsAt().UTC().Format(time.RFC3339)))
+				setCondition(&status, "PaymentGateReady", "False", "Drained", "Offer drained; payment gate removed")
+				setCondition(&status, "RoutePublished", "False", "Drained", "Offer drained; route removed")
+			} else {
+				setCondition(&status, "PaymentGateReady", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
+				setCondition(&status, "RoutePublished", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
+			}
 			setCondition(&status, "Ready", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
 			return c.updateOfferStatus(ctx, raw, status)
 		}
@@ -455,13 +464,49 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		return err
 	}
 
-	if offer.IsPaused() {
-		if err := c.deleteRouteChildren(ctx, offer); err != nil {
-			return err
+	if offer.IsDraining() {
+		now := time.Now()
+		drainEndsAt := offer.DrainEndsAt()
+		if offer.DrainExpired(now) {
+			// Drain grace period elapsed: tear down the HTTPRoute +
+			// payment gate. The CR itself stays (delete is the canonical
+			// removal path) so external observers continue to see the
+			// offer in the catalog with available=false.
+			if err := c.deleteRouteChildren(ctx, offer); err != nil {
+				return err
+			}
+			setCondition(&status, "Draining", "False", "Drained", fmt.Sprintf("Drain ended at %s; route torn down", drainEndsAt.UTC().Format(time.RFC3339)))
+			setCondition(&status, "PaymentGateReady", "False", "Drained", "Offer drained; payment gate removed")
+			setCondition(&status, "RoutePublished", "False", "Drained", "Offer drained; route removed")
+		} else {
+			// Still in the drain window: keep the route + payment gate
+			// up so in-flight buyers can finish, but mark Draining=True
+			// so discovery surfaces can advertise available=false.
+			if upstreamHealthy && isConditionTrue(status, "ModelReady") {
+				if err := c.reconcilePaymentGate(ctx, &status, offer); err != nil {
+					return err
+				}
+				if isConditionTrue(status, "PaymentGateReady") {
+					if err := c.reconcileRoute(ctx, &status, offer); err != nil {
+						return err
+					}
+				}
+			} else {
+				setCondition(&status, "PaymentGateReady", "False", "WaitingForUpstream", "Waiting for upstream health before publishing payment gate")
+				setCondition(&status, "RoutePublished", "False", "WaitingForPaymentGate", "Waiting for payment gate before publishing route")
+			}
+			setCondition(&status, "Draining", "True", "Draining", fmt.Sprintf("Drain ends at %s", drainEndsAt.UTC().Format(time.RFC3339)))
+			// Requeue at the drain expiry so the route is torn down on
+			// time even without any spec change in the interim. Add a
+			// small slack so the comparison in DrainExpired clears.
+			if delay := time.Until(drainEndsAt) + time.Second; delay > 0 {
+				c.offerQueue.AddAfter(offer.Namespace+"/"+offer.Name, delay)
+			} else {
+				c.offerQueue.Add(offer.Namespace + "/" + offer.Name)
+			}
 		}
-		setCondition(&status, "PaymentGateReady", "False", "Paused", "Offer is paused")
-		setCondition(&status, "RoutePublished", "False", "Paused", "Offer is paused")
 	} else if upstreamHealthy && isConditionTrue(status, "ModelReady") {
+		setCondition(&status, "Draining", "False", "Active", "Offer is active")
 		if err := c.reconcilePaymentGate(ctx, &status, offer); err != nil {
 			return err
 		}
@@ -471,6 +516,7 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 			}
 		}
 	} else {
+		setCondition(&status, "Draining", "False", "Active", "Offer is active")
 		setCondition(&status, "PaymentGateReady", "False", "WaitingForUpstream", "Waiting for upstream health before publishing payment gate")
 		setCondition(&status, "RoutePublished", "False", "WaitingForPaymentGate", "Waiting for payment gate before publishing route")
 	}
@@ -1114,7 +1160,7 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	}
 	readyOffers := 0
 	for _, offer := range offers {
-		if offer != nil && offer.DeletionTimestamp == nil && !offer.IsPaused() && isConditionTrue(offer.Status, "Ready") {
+		if offer != nil && offer.DeletionTimestamp == nil && isConditionTrue(offer.Status, "Ready") {
 			readyOffers++
 		}
 	}

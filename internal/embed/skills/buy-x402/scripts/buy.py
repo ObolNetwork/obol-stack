@@ -35,6 +35,7 @@ import secrets
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 # ---------------------------------------------------------------------------
@@ -150,12 +151,40 @@ DEFAULT_REFILL_THRESHOLD_DIVISOR = 5
 # ---------------------------------------------------------------------------
 
 def _normalize_endpoint(url):
-    """Strip trailing slashes and /v1/chat/completions from an endpoint URL."""
+    """Reduce a user-supplied endpoint URL to its canonical offer base.
+
+    The buyer always POSTs to ``<base>/v1/chat/completions``, where ``<base>``
+    is the seller's published HTTPRoute path (``/services/<offer-name>``). The
+    seller's ServiceOffer may declare ``upstream.healthPath`` (e.g. ``/api/tags``
+    for Ollama) — this is used by the controller for upstream health probes and
+    is NOT part of the public route. If a user (or copy-pasted URL) appends a
+    healthPath or another sub-path after ``/services/<name>``, blindly tacking
+    ``/v1/chat/completions`` on the end produces a 404 like
+    ``/services/foo/api/tags/v1/chat/completions``.
+
+    Normalization rules:
+      1. Strip trailing slashes.
+      2. Drop a trailing ``/v1/chat/completions`` or ``/chat/completions`` suffix.
+      3. If the path matches ``/services/<segment>/...`` truncate to
+         ``/services/<segment>`` so any healthPath / sub-path tail is removed.
+    """
     base = url.rstrip("/")
     for suffix in ["/v1/chat/completions", "/chat/completions"]:
         if base.endswith(suffix):
             base = base[:-len(suffix)]
             break
+    try:
+        parsed = urllib.parse.urlsplit(base)
+    except (ValueError, AttributeError):
+        return base
+    if parsed.scheme and parsed.netloc and parsed.path:
+        segments = parsed.path.split("/")
+        # ``/services/<name>/<extra>...`` -> keep only ``/services/<name>``.
+        if len(segments) > 3 and segments[1] == "services" and segments[2]:
+            truncated = "/" + "/".join(segments[1:3])
+            base = urllib.parse.urlunsplit(
+                (parsed.scheme, parsed.netloc, truncated, "", "")
+            )
     return base
 
 

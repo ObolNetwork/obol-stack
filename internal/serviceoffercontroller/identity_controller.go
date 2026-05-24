@@ -386,7 +386,10 @@ func (c *Controller) registrationOffersForIdentity(key agentIdentityKey, exclude
 		if offer.Namespace == excludeNamespace && offer.Name == excludeName {
 			continue
 		}
-		if offer.DeletionTimestamp != nil || offer.IsPaused() || !offer.Spec.Registration.Enabled {
+		// Draining offers stay in the registration candidate list so
+		// the registration document continues to advertise them with
+		// available=false until the drain grace period expires.
+		if offer.DeletionTimestamp != nil || !offer.Spec.Registration.Enabled {
 			continue
 		}
 		if !isConditionTrue(offer.Status, "UpstreamHealthy") {

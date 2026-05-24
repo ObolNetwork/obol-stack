@@ -392,8 +392,25 @@ func GetStackID(cfg *config.Config) string {
 	return getStackID(cfg)
 }
 
-// syncDefaults deploys the default infrastructure using helmfile
-// If deployment fails, the cluster is automatically stopped via Down()
+// syncDefaults deploys the default infrastructure using helmfile.
+//
+// On helmfile failure we deliberately leave the cluster running. Historically
+// this code path called Down() to "clean up", which destroyed all running
+// state (PVCs, agent wallets, registered services) any time helmfile sync
+// failed for a transient reason — most painfully when a third-party helm
+// repo that the user happens to have registered globally (e.g.
+// kubernetes-dashboard, which started returning 404 in mid-2025) failed
+// `helm repo update`. The cascading failure went:
+//
+//	helm repo update -> exit 1
+//	helmfile sync    -> exit 1
+//	obol stack up    -> k3d cluster delete  (oops)
+//
+// A failed helmfile sync should leave the cluster intact so the user can
+// inspect, fix, and rerun without losing unrelated state. The tolerant
+// repo-update preflight below (helmcmd.UpdateRepos with
+// --fail-on-repo-update-fail=false, plus --skip-deps on the sync) also makes
+// the dead-tertiary-repo case stop hurting users in the first place.
 func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir string) error {
 	defaultsHelmfilePath := filepath.Join(cfg.ConfigDir, "defaults")
 	helmfilePath := filepath.Join(defaultsHelmfilePath, "helmfile.yaml")
@@ -407,6 +424,15 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	if err := migrateDefaultsHTTPRouteHostnames(helmfilePath); err != nil {
 		u.Warnf("Failed to migrate defaults helmfile hostnames: %v", err)
 	}
+
+	helmBinary := filepath.Join(cfg.BinDir, "helm")
+
+	// Pre-update only the repos our helmfile depends on, tolerating per-repo
+	// failures so an unrelated dead repo in the user's global helm config
+	// (e.g. kubernetes-dashboard returning 404) can't abort our sync. Then
+	// pass --skip-deps to helmfile so it doesn't run its own strict
+	// `helm repo update` against every globally-registered repo.
+	skipDeps := preflightHelmRepos(cfg, u, helmBinary, helmfilePath)
 
 	helmfileArgs := []string{
 		"--file", helmfilePath,
@@ -424,7 +450,10 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		u.Dim("Active quick tunnel detected — skipping cloudflared chart to preserve the URL")
 	}
 	helmfileArgs = append(helmfileArgs, "sync")
-	helmfileArgs = append(helmfileArgs, helmcmd.SyncFlagsForVersion(filepath.Join(cfg.BinDir, "helm"))...)
+	if skipDeps {
+		helmfileArgs = append(helmfileArgs, "--skip-deps")
+	}
+	helmfileArgs = append(helmfileArgs, helmcmd.SyncFlagsForVersion(helmBinary)...)
 	helmfileCmd := exec.Command(filepath.Join(cfg.BinDir, "helmfile"), helmfileArgs...)
 	helmfileCmd.Env = append(os.Environ(),
 		"KUBECONFIG="+kubeconfigPath,
@@ -442,18 +471,20 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		Name: "Deploying default infrastructure",
 		Cmd:  helmfileCmd,
 	}); err != nil {
-		u.Warn("Helmfile sync failed, stopping cluster")
+		// Do NOT stop the cluster here. A failed helmfile sync is almost
+		// always recoverable in place (transient repo flake, single bad
+		// release, etc.), and tearing down the cluster destroys unrelated
+		// state the user cares about. Surface the error with a clear retry
+		// hint instead.
+		u.Warn("Helmfile sync failed — cluster left running so you can inspect and retry.")
+		u.Dim("  Inspect:  obol kubectl get pods -A")
+		u.Dim("  Retry:    obol stack up")
+		u.Dim("  Tear down only if you really want to: obol stack down")
 
 		if previousLiteLLMConfig != "" {
 			if restoreErr := restoreLiteLLMConfig(cfg, kubeconfigPath, previousLiteLLMConfig); restoreErr != nil {
 				u.Warnf("Failed to restore LiteLLM config after Helmfile error: %v", restoreErr)
 			}
-		}
-
-		// Internal cleanup of a half-deployed stack — skip the safety
-		// prompt; the operator did not invoke `obol stack down` here.
-		if downErr := Down(cfg, u, true); downErr != nil {
-			u.Warnf("Failed to stop cluster during cleanup: %v", downErr)
 		}
 
 		return fmt.Errorf("failed to apply defaults helmfile: %w", err)
@@ -530,6 +561,54 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	claudeTipIfRelevant(u)
 
 	return nil
+}
+
+// preflightHelmRepos ensures the helm repos our embedded helmfile depends on
+// are registered, then runs a tolerant `helm repo update` against just those
+// repos. Returns true when the preflight succeeded (and so the helmfile sync
+// can safely pass --skip-deps), false on any failure (in which case helmfile
+// runs its own — non-tolerant — repo update as a fallback).
+//
+// This is the core of the "tolerate a single dead repo" fix: helm aborts the
+// whole `helm repo update` if any one repo errors, and the user's global helm
+// config may contain unrelated repos (e.g. kubernetes-dashboard, which
+// started serving 404 in 2025) that we have no control over. By updating
+// only our managed repos with --fail-on-repo-update-fail=false, a transient
+// failure in any single one of them no longer blocks stack up.
+//
+// Non-fatal: any failure here degrades to "let helmfile do its thing".
+func preflightHelmRepos(cfg *config.Config, u *ui.UI, helmBinary, helmfilePath string) bool {
+	repos, err := helmcmd.ParseHelmfileRepos(helmfilePath)
+	if err != nil || len(repos) == 0 {
+		return false
+	}
+
+	// `helm repo add --force-update` is idempotent and updates the URL if it
+	// changed. Failures here are surfaced as a warning but don't block the
+	// preflight — the subsequent update step is the one that matters.
+	if err := helmcmd.EnsureRepos(helmBinary, repos); err != nil {
+		u.Dim(fmt.Sprintf("helm repo add (best-effort): %v", err))
+	}
+
+	names := make([]string, 0, len(repos))
+	for _, r := range repos {
+		names = append(names, r.Name)
+	}
+
+	if out, err := helmcmd.UpdateRepos(helmBinary, names); err != nil {
+		// helm aborted despite --fail-on-repo-update-fail=false (or the flag
+		// wasn't supported). Surface the output for debuggability but DON'T
+		// fail the whole sync — let helmfile try its own dependency
+		// resolution. If the failure is real, helmfile will report it; if
+		// it's a transient flake, the chart cache may already be warm.
+		u.Dim(fmt.Sprintf("helm repo update for managed repos failed: %v", err))
+		if len(out) > 0 {
+			u.Dim(strings.TrimSpace(string(out)))
+		}
+		return false
+	}
+
+	return true
 }
 
 // claudeTipIfRelevant prints a hint when the user has Claude Code installed
@@ -1021,8 +1100,9 @@ func importImageWithCache(k3dBinary, clusterName, tag, serverCID string, cache *
 // built and already loaded into the running cluster (the common case after
 // our reuse/cache fixes), we emit a single "  ✓ Local dev images ready"
 // summary line so the surrounding spinner-flanked output stays clean. Only
-// real work — actual `docker build`, `docker pull`, and tarball imports —
-// gets per-image lines, and those go through the UI for consistent styling.
+// real work — actual `docker build`, runtime image preloads, and tarball
+// imports — gets per-image lines, and those go through the UI for consistent
+// styling.
 func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 	start := time.Now()
 
@@ -1096,24 +1176,8 @@ func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 	for _, ref := range devPreloadImages() {
 		total++
 
-		if shouldForceRebuild(ref) || !dockerImageAvailableLocally(ref) {
-			if u != nil {
-				u.Infof("Pulling %s", ref)
-			}
-			pullCmd := exec.Command("docker", "pull", ref)
-			pullCmd.Stdout = os.Stdout
-			pullCmd.Stderr = os.Stderr
-			if err := pullCmd.Run(); err != nil {
-				if u != nil {
-					u.Warnf("Failed to pull %s: %v", ref, err)
-				}
-				continue
-			}
+		if preloadRuntimeImageIntoCluster(clusterName, ref, u) {
 			pulled++
-		}
-
-		if importImageWithCache(k3dBinary, clusterName, ref, serverCID, &cache, u) {
-			imported++
 		}
 	}
 
@@ -1146,6 +1210,42 @@ func importImageToCluster(k3dBinary, clusterName, tag string) error {
 	importCmd.Stderr = os.Stderr
 
 	return importCmd.Run()
+}
+
+// preloadRuntimeImageIntoCluster pulls a public upstream runtime image into the
+// k3s node's CRI store. These images are multi-arch OCI indexes; importing them
+// through `k3d image import` can make Docker Desktop save an index whose sibling
+// platform manifests are absent from the local content store, which then shows
+// up as noisy `content digest ... not found` errors during node import.
+func preloadRuntimeImageIntoCluster(clusterName, ref string, u *ui.UI) bool {
+	if u != nil {
+		u.Infof("Preloading %s into cluster %s", ref, clusterName)
+	}
+	if err := pullRuntimeImageWithCrictl(clusterName, ref, false); err == nil {
+		return true
+	} else {
+		primaryErr := err
+		if err := pullRuntimeImageWithCrictl(clusterName, ref, true); err == nil {
+			return true
+		} else if u != nil {
+			u.Warnf("Failed to preload %s into k3d via crictl: %v; fallback failed: %v", ref, primaryErr, err)
+		}
+	}
+	return false
+}
+
+func pullRuntimeImageWithCrictl(clusterName, ref string, useK3sCrictl bool) error {
+	args := []string{"exec", "k3d-" + clusterName + "-server-0"}
+	if useK3sCrictl {
+		args = append(args, "k3s", "crictl", "pull", ref)
+	} else {
+		args = append(args, "crictl", "pull", ref)
+	}
+	pullCmd := exec.Command("docker", args...)
+	pullCmd.Stdout = os.Stdout
+	pullCmd.Stderr = os.Stderr
+
+	return pullCmd.Run()
 }
 
 // findProjectRoot walks up from the current directory to find go.mod.

@@ -2331,14 +2331,41 @@ Examples:
 func sellStopCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "stop",
-		Usage:     "Pause a ServiceOffer without deleting it",
+		Usage:     "Drain a ServiceOffer gracefully (advertises wind-down via discovery, then tears down the route)",
 		ArgsUsage: "<name>",
+		Description: `Marks a ServiceOffer as draining. While draining:
+  - The offer stays in /skill.md and /.well-known/agent-registration.json
+    with available=false and a drainEndsAt timestamp, so external
+    discovery (and ERC-8004 reputation scorers) can see the wind-down.
+  - The HTTPRoute and x402 payment gate STAY UP for the grace period
+    so buyers can complete in-flight payments.
+  - When the grace period elapses, the controller tears down the route
+    and marks PaymentGateReady/RoutePublished False with reason=Drained.
+
+The ServiceOffer CR itself is preserved — use 'obol sell delete' to
+remove it entirely (which also tombstones the ERC-8004 record).
+
+Flags:
+  --grace 30m   Override the grace period (default 1h).
+  --force       Skip the drain window (equivalent to --grace 0). Use
+                this when the abrupt-teardown behavior of the old
+                pause annotation is required for behavior parity.`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "namespace",
 				Aliases:  []string{"n"},
 				Usage:    "Namespace of the ServiceOffer",
 				Required: true,
+			},
+			&cli.DurationFlag{
+				Name:  "grace",
+				Usage: "Drain grace period (e.g. 30m, 2h). Defaults to 1h.",
+				Value: monetizeapi.DefaultDrainGracePeriod,
+			},
+			&cli.BoolFlag{
+				Name:    "force",
+				Aliases: []string{"now"},
+				Usage:   "Skip the drain window and tear the route down on the next reconcile (alias: --now)",
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -2352,19 +2379,37 @@ func sellStopCommand(cfg *config.Config) *cli.Command {
 				return err
 			}
 			ns := cmd.String("namespace")
-
-			u.Infof("Stopping the service offering %s/%s...", ns, name)
-
-			removePricingRoute(cfg, u, name)
-
-			patchJSON := `{"status":{"conditions":[{"type":"Ready","status":"False","reason":"Stopped","message":"Offer stopped by user"}]}}`
-			err := kubectlRun(cfg, "patch", "serviceoffers.obol.org", name, "-n", ns,
-				"--type=merge", "-p", patchJSON)
-			if err != nil {
-				return fmt.Errorf("failed to pause serviceoffer: %w", err)
+			grace := cmd.Duration("grace")
+			if cmd.Bool("force") {
+				grace = 0
+			}
+			if grace < 0 {
+				return errors.New("--grace must be >= 0")
 			}
 
-			u.Successf("Service offering %s/%s stopped.", ns, name)
+			now := time.Now().UTC()
+			drainEndsAt := now.Add(grace)
+
+			// metav1.Duration JSON-marshals as the string form (e.g.
+			// "1h0m0s"), and metav1.Time marshals as RFC3339. We can
+			// emit a tiny strategic-merge patch directly without
+			// importing the meta types into the CLI.
+			patchJSON := fmt.Sprintf(
+				`{"spec":{"drainAt":%q,"drainGracePeriod":%q}}`,
+				now.Format(time.RFC3339),
+				grace.String(),
+			)
+			if err := kubectlRun(cfg, "patch", "serviceoffers.obol.org", name, "-n", ns,
+				"--type=merge", "-p", patchJSON); err != nil {
+				return fmt.Errorf("failed to drain serviceoffer: %w", err)
+			}
+
+			if grace == 0 {
+				u.Successf("ServiceOffer %s/%s draining; route will be removed on the next reconcile (--force).", ns, name)
+			} else {
+				u.Successf("ServiceOffer %s/%s draining; route will be removed at %s.", ns, name, drainEndsAt.Format(time.RFC3339))
+			}
+			u.Infof("In-flight buyers can complete payments until then. Run `obol sell delete %s -n %s` to fully remove.", name, ns)
 			return nil
 		},
 	}
@@ -2517,8 +2562,6 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 					return nil
 				}
 			}
-
-			removePricingRoute(cfg, u, name)
 
 			// Identity-level registration ownership lives in the AgentIdentity
 			// CR and is managed by the controller. The CLI no longer patches
@@ -4126,7 +4169,3 @@ func manifestNSName(manifest map[string]any) (string, string) {
 	return ns, name
 }
 
-// removePricingRoute is a no-op retained for compatibility.
-// The serviceoffer-controller now manages pricing routes via the ServiceOffer
-// informer; static ConfigMap routes are no longer used.
-func removePricingRoute(_ *config.Config, _ *ui.UI, _ string) {}

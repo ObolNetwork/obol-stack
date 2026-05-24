@@ -11,8 +11,6 @@ repositories:
     url: https://obolnetwork.github.io/helm-charts/
   - name: ethereum
     url: https://ethpandaops.github.io/ethereum-helm-charts
-  - name: bedag
-    url: https://bedag.github.io/helm-charts/
   - name: stakater
     url: https://stakater.github.io/stakater-charts
 
@@ -27,15 +25,9 @@ values:
       enabled: true
 
 releases:
-  # Local storage provisioner (raw manifests wrapped as chart)
-  - name: base
-    namespace: kube-system
-    chart: ./base
-    values:
-      - dataDir: /data
-      - network: "{{ .Values.network }}"
-
-  # Monitoring stack (Prometheus operator + Prometheus)
+  # Monitoring stack (Prometheus operator + Prometheus). Must run before
+  # `base` so the PodMonitor CRD exists when base/templates/llm.yaml
+  # applies the litellm-x402-buyer PodMonitor.
   - name: monitoring
     namespace: monitoring
     createNamespace: true
@@ -44,34 +36,20 @@ releases:
     values:
       - ./values/monitoring.yaml.gotmpl
 
-  - name: llm-buyer-podmonitor
-    namespace: llm
-    createNamespace: true
-    chart: bedag/raw
-    version: 2.0.2
-    needs:
-      - monitoring/monitoring
-      - kube-system/base
-    values:
-      - resources:
-          - apiVersion: monitoring.coreos.com/v1
-            kind: PodMonitor
-            metadata:
-              name: litellm-x402-buyer
-              namespace: llm
-              labels:
-                release: monitoring
-            spec:
-              selector:
-                matchLabels:
-                  app: litellm
-              podMetricsEndpoints:
-                - port: buyer-http
-                  path: /metrics
-                  interval: 30s
+  # NOTE: PodMonitor for litellm-x402-buyer and ServiceMonitor for
+  # x402-verifier moved into base/templates/llm.yaml and
+  # base/templates/x402.yaml respectively. They live alongside the
+  # workloads they observe so a port/selector edit is one-file. Kills
+  # two `bedag/raw` releases. kube-prometheus-stack picks them up via
+  # the `release: monitoring` label.
+
 
   # Traefik ingress controller with Gateway API support
-  # Traefik v38+ bundles Gateway API CRDs in its crds/ directory
+  # Traefik v38+ bundles Gateway API CRDs in its crds/ directory.
+  # Declared before `base` so the Traefik CRDs (Middleware,
+  # IngressRoute, …) and Gateway API CRDs are available when base
+  # templates that depend on them (erpc.yaml, obol-frontend.yaml)
+  # apply.
   - name: traefik
     namespace: traefik
     createNamespace: true
@@ -135,6 +113,24 @@ releases:
           dashboard:
             enabled: false
 
+  # Local storage provisioner + co-located cluster-wide manifests:
+  # CRDs, agent RBAC, x402 controller + verifier, LiteLLM + buyer
+  # PodMonitor, eRPC HTTPRoute + Middleware + metadata ConfigMap, and
+  # the obol-frontend HTTPRoute + discovery RBAC. The `needs` on
+  # traefik + monitoring guarantee the Traefik / Gateway API and
+  # monitoring CRDs are present before the relocated routing /
+  # PodMonitor templates (previously shipped as separate bedag/raw
+  # helmfile releases) apply.
+  - name: base
+    namespace: kube-system
+    chart: ./base
+    needs:
+      - traefik/traefik
+      - monitoring/monitoring
+    values:
+      - dataDir: /data
+      - network: "{{ .Values.network }}"
+
   # Cloudflare Tunnel (dormant until configured via obol tunnel login/provision).
   # `condition: cloudflared.enabled` lets `obol stack up` flip this off when an
   # active quick tunnel is already serving — re-syncing the chart kills the
@@ -168,75 +164,16 @@ releases:
       - ./values/erpc.yaml.gotmpl
     # The chart exposes port 4000 (container) via Service port 4000.
     # In-cluster callers use erpc.erpc.svc.cluster.local:4000.
+    #
+    # The eRPC HTTPRoute, x402-payment Middleware, and erpc-metadata
+    # ConfigMap previously shipped as separate bedag/raw helmfile
+    # releases now live in base/templates/erpc.yaml.
 
-  # eRPC HTTPRoute
-  - name: erpc-httproute
-    namespace: erpc
-    chart: bedag/raw
-    version: 2.0.2
-    needs:
-      - traefik/traefik
-      - erpc/erpc
-    values:
-      - resources:
-          - apiVersion: gateway.networking.k8s.io/v1
-            kind: HTTPRoute
-            metadata:
-              name: erpc
-              namespace: erpc
-            spec:
-              hostnames:
-                - "obol.stack"
-              parentRefs:
-                - name: traefik-gateway
-                  namespace: traefik
-                  sectionName: web
-              rules:
-                - matches:
-                    - path:
-                        type: PathPrefix
-                        value: /rpc
-                  filters:
-                    - type: ExtensionRef
-                      extensionRef:
-                        group: traefik.io
-                        kind: Middleware
-                        name: x402-payment
-                  backendRefs:
-                    - name: erpc
-                      port: 80
-
-  # x402 Middleware for eRPC namespace (ForwardAuth -> central verifier).
-  # Always deployed; the verifier returns 200 for routes with no pricing rules.
-  - name: erpc-x402-middleware
-    namespace: erpc
-    chart: bedag/raw
-    version: 2.0.2
-    needs:
-      - traefik/traefik
-    values:
-      - resources:
-          - apiVersion: traefik.io/v1alpha1
-            kind: Middleware
-            metadata:
-              name: x402-payment
-              namespace: erpc
-            spec:
-              forwardAuth:
-                address: http://x402-verifier.x402.svc.cluster.local:8080/verify
-                authResponseHeaders:
-                  - X-Payment-Response
-
-  # eRPC metadata ConfigMap for frontend discovery
-  - name: erpc-metadata
-    namespace: erpc
-    chart: bedag/raw
-    needs:
-      - erpc/erpc
-    values:
-      - ./values/erpc-metadata.yaml.gotmpl
-
-  # Obol Stack frontend
+  # Obol Stack frontend.
+  #
+  # The frontend HTTPRoute and discovery RBAC (ClusterRole +
+  # ClusterRoleBinding) previously shipped as separate bedag/raw
+  # helmfile releases now live in base/templates/obol-frontend.yaml.
   - name: obol-frontend
     namespace: obol-frontend
     createNamespace: true
@@ -248,74 +185,12 @@ releases:
     values:
       - ./values/obol-frontend.yaml.gotmpl
 
-  # Obol Frontend HTTPRoute
-  - name: obol-frontend-httproute
-    namespace: obol-frontend
-    chart: bedag/raw
-    version: 2.0.2
-    needs:
-      - traefik/traefik
-      - obol-frontend/obol-frontend
-    values:
-      - resources:
-          - apiVersion: gateway.networking.k8s.io/v1
-            kind: HTTPRoute
-            metadata:
-              name: obol-frontend
-              namespace: obol-frontend
-            spec:
-              hostnames:
-                - "obol.stack"
-              parentRefs:
-                - name: traefik-gateway
-                  namespace: traefik
-                  sectionName: web
-              rules:
-                - matches:
-                    - path:
-                        type: PathPrefix
-                        value: /
-                  backendRefs:
-                    - name: obol-frontend-obol-app
-                      port: 3000
-
-  # Obol Frontend RBAC (OpenClaw instance discovery via Kubernetes API)
-  - name: obol-frontend-rbac
-    namespace: obol-frontend
-    chart: bedag/raw
-    version: 2.0.2
-    needs:
-      - obol-frontend/obol-frontend
-    values:
-      - resources:
-          - apiVersion: rbac.authorization.k8s.io/v1
-            kind: ClusterRole
-            metadata:
-              name: obol-frontend-openclaw-discovery
-              labels:
-                app.kubernetes.io/name: obol-frontend
-            rules:
-              - apiGroups: [""]
-                resources: ["namespaces"]
-                verbs: ["get", "list"]
-              - apiGroups: [""]
-                resources: ["pods", "configmaps", "secrets"]
-                verbs: ["get", "list"]
-              # ServiceOffer CRD — frontend sell modal creates offers
-              - apiGroups: ["obol.org"]
-                resources: ["serviceoffers", "serviceoffers/status"]
-                verbs: ["get", "list", "create", "update", "patch", "delete"]
-          - apiVersion: rbac.authorization.k8s.io/v1
-            kind: ClusterRoleBinding
-            metadata:
-              name: obol-frontend-openclaw-discovery
-              labels:
-                app.kubernetes.io/name: obol-frontend
-            roleRef:
-              apiGroup: rbac.authorization.k8s.io
-              kind: ClusterRole
-              name: obol-frontend-openclaw-discovery
-            subjects:
-              - kind: ServiceAccount
-                name: obol-frontend
-                namespace: obol-frontend
+  # NOTE: Obol frontend HTTPRoute and obol-frontend-rbac ClusterRole +
+  # ClusterRoleBinding moved into base/templates/obol-frontend.yaml.
+  # Co-located with the workload they configure; kills two `bedag/raw`
+  # releases. Frontend-egress NetworkPolicy was attempted and reverted —
+  # on k3s + Flannel (k3d's default CNI) the kubernetes apiserver Service
+  # Endpoints point at the host process, outside the cluster pod/service
+  # CIDRs. A clean allowlist can't target the apiserver portably without
+  # an install-specific ipBlock for the k3s host IP. Tracking as a
+  # deferred hardening item.
