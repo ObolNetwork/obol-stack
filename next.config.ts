@@ -28,6 +28,20 @@ const buildTime =
   process.env.NEXT_PUBLIC_BUILDTIME ||
   new Date().toISOString();
 
+const securityHeaders = [
+  { key: "X-Frame-Options", value: "DENY" },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+];
+
+const noStoreHeaders = [
+  {
+    key: "Cache-Control",
+    value: "no-store, no-cache, max-age=0, must-revalidate",
+  },
+  { key: "Pragma", value: "no-cache" },
+  { key: "Expires", value: "0" },
+];
+
 const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_COMMIT_SHA: commitSha,
@@ -61,10 +75,19 @@ const nextConfig: NextConfig = {
     return [
       {
         source: "/(.*)",
-        headers: [
-          { key: "X-Frame-Options", value: "DENY" },
-          { key: "X-Content-Type-Options", value: "nosniff" },
-        ],
+        headers: securityHeaders,
+      },
+      {
+        source: "/",
+        headers: noStoreHeaders,
+      },
+      {
+        source: "/marketplace",
+        headers: noStoreHeaders,
+      },
+      {
+        source: "/marketplace/:path*",
+        headers: noStoreHeaders,
       },
     ];
   },
