@@ -96,13 +96,19 @@ repositories or docs.]
 ## Breaking changes / Migration notes
 
 - [Delete this section if there are no breaking changes.]
-- **Upgrading from a pre-PR #523 cluster**: PR #523 relocated six `bedag/raw`
-  helmfile releases into the `base` chart. Existing clusters must run
-  `bash hack/migrate-bedag-raw-to-base.sh` once before `obol stack up` to
-  transfer Helm ownership annotations; otherwise `helm upgrade base` fails
-  with `invalid ownership metadata`. See
-  [`docs/upgrade-from-pre-pr-523.md`](../docs/upgrade-from-pre-pr-523.md).
-  Fresh installs are unaffected.
+- **Pre-release tester warning**: If you ran an unreleased marketplace or
+  chart-consolidation branch before this release, `obol stack up` may fail
+  with Helm `invalid ownership metadata` errors for resources or namespaces
+  that moved into the `base` chart. This is not a supported production
+  migration path. Back up anything you need from the local test stack, then
+  recreate it:
+
+  ```bash
+  obol stack down
+  obol stack purge --force
+  obol stack init
+  obol stack up
+  ```
 
 ## Known issues
 

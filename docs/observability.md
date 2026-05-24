@@ -59,7 +59,7 @@ PR #530 swapped it to `increase()` over an explicit window.
                 +------------------------------+
                 | x402-verifier (stateless)    |
                 |   - in-memory counters       |
-                |   - labels: route,           |
+                |   - labels:                  |
                 |     offer_namespace,         |
                 |     offer_name, chain,       |
                 |     asset_symbol             |
@@ -77,8 +77,8 @@ PR #530 swapped it to `increase()` over an explicit window.
                                 v
                 +------------------------------+
                 | Pre-aggregated series        |
-                |   offer:x402_revenue:7d_by_offer
-                |   offer:x402_paid_requests:7d_by_offer
+                |   x402:revenue:7d_by_offer
+                |   x402:revenue:7d_by_offer_chain
                 +---------------+--------------+
                                 |
                                 | PromQL queries
@@ -191,10 +191,11 @@ Naming follows the standard Prometheus pattern:
 
 Examples we ship:
 
-- `offer:x402_revenue:7d_by_offer` — revenue aggregated to the `offer` level,
-  base metric is `x402_revenue`, operation is `increase` over `7d` grouped
-  `by_offer`.
-- `offer:x402_paid_requests:7d_by_offer` — same shape for paid request count.
+- `x402:revenue:7d_by_offer` — paid request count aggregated to the offer
+  level over the last 7d. The frontend multiplies this by the ServiceOffer
+  price table to display revenue.
+- `x402:revenue:7d_by_offer_chain_asset_symbol` — same window, retaining
+  chain and settlement-token facets for per-token and per-chain views.
 
 Rules:
 
@@ -202,9 +203,9 @@ Rules:
    is a lie (Prometheus has no "lifetime"). The window in the name must match
    the window in the expression.
 2. **Use `increase()` over an explicit range, not `sum()` of the raw counter.**
-   See PR #530 — the original rule did `sum(by offer) (x402_revenue_total)` and
-   silently zeroed every time the verifier pod restarted. The fixed rule is
-   `sum by (offer_namespace, offer_name) (increase(x402_revenue_total[7d]))`.
+   See PR #530 — the original rule did `sum(by offer) (charged_requests_total)`
+   and silently zeroed every time the verifier pod restarted. The fixed rule is
+   `sum by (offer_namespace, offer_name) (increase(obol_x402_verifier_charged_requests_total[7d]))`.
 3. **Keep the window aligned with retention.** Recording a `30d` rule with 8d
    retention is a footgun: the rule sees nulls and silently produces nothing.
 
@@ -226,7 +227,6 @@ Concrete examples:
 
 | Label             | Source           | Why include it                            |
 |-------------------|------------------|-------------------------------------------|
-| `route`           | offer CR pattern | Direct query facet, bounded by # offers   |
 | `offer_namespace` | offer CR meta    | Tenancy facet                             |
 | `offer_name`      | offer CR meta    | Per-offer breakdown                       |
 | `chain`           | offer CR payment | "Revenue by chain" is a real question     |

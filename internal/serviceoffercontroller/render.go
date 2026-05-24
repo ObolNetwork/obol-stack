@@ -726,10 +726,10 @@ func buildRegistrationServices(owner *monetizeapi.ServiceOffer, offers []*moneti
 
 	services := make([]erc8004.ServiceDef, 0, len(ordered)*2)
 	for _, offer := range ordered {
-		services = append(services, erc8004.ServiceDef{
+		services = append(services, serviceDefWithDrain(offer, erc8004.ServiceDef{
 			Name:     "web",
 			Endpoint: baseURL + offer.EffectivePath(),
-		})
+		}))
 		if len(offer.Spec.Registration.Skills) > 0 || len(offer.Spec.Registration.Domains) > 0 {
 			services = append(services, erc8004.ServiceDef{
 				Name:    "OASF",
@@ -739,14 +739,24 @@ func buildRegistrationServices(owner *monetizeapi.ServiceOffer, offers []*moneti
 			})
 		}
 		for _, service := range offer.Spec.Registration.Services {
-			services = append(services, erc8004.ServiceDef{
+			services = append(services, serviceDefWithDrain(offer, erc8004.ServiceDef{
 				Name:     service.Name,
 				Endpoint: service.Endpoint,
 				Version:  service.Version,
-			})
+			}))
 		}
 	}
 	return services
+}
+
+func serviceDefWithDrain(offer *monetizeapi.ServiceOffer, svc erc8004.ServiceDef) erc8004.ServiceDef {
+	if offer == nil || !offer.IsDraining() || offer.DrainExpired(time.Now()) {
+		return svc
+	}
+	available := false
+	svc.Available = &available
+	svc.DrainEndsAt = offer.DrainEndsAt().UTC().Format(time.RFC3339)
+	return svc
 }
 
 // offerPublishedForRegistration reports whether an offer should appear
