@@ -150,10 +150,10 @@ func buildIdentityRegistrationServices(offers []*monetizeapi.ServiceOffer, baseU
 	baseURL = strings.TrimRight(baseURL, "/")
 	services := make([]erc8004.ServiceDef, 0, len(offers)*2)
 	for _, offer := range offers {
-		services = append(services, erc8004.ServiceDef{
+		services = append(services, serviceDefWithDrain(offer, erc8004.ServiceDef{
 			Name:     "web",
 			Endpoint: baseURL + offer.EffectivePath(),
-		})
+		}))
 		if len(offer.Spec.Registration.Skills) > 0 || len(offer.Spec.Registration.Domains) > 0 {
 			services = append(services, erc8004.ServiceDef{
 				Name:    "OASF",
@@ -163,11 +163,11 @@ func buildIdentityRegistrationServices(offers []*monetizeapi.ServiceOffer, baseU
 			})
 		}
 		for _, svc := range offer.Spec.Registration.Services {
-			services = append(services, erc8004.ServiceDef{
+			services = append(services, serviceDefWithDrain(offer, erc8004.ServiceDef{
 				Name:     svc.Name,
 				Endpoint: svc.Endpoint,
 				Version:  svc.Version,
-			})
+			}))
 		}
 	}
 	return services

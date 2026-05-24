@@ -409,6 +409,80 @@ func TestBuildRegistrationServices_IncludesOwnerWhenOwnerNotYetPublished(t *test
 	}
 }
 
+func TestBuildRegistrationServices_IncludesDrainMetadata(t *testing.T) {
+	drainAt := metav1.NewTime(time.Now())
+	grace := metav1.Duration{Duration: time.Hour}
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "draining", Namespace: "demo"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Path:             "/services/draining",
+			DrainAt:          &drainAt,
+			DrainGracePeriod: &grace,
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Enabled: true,
+				Services: []monetizeapi.ServiceOfferService{
+					{Name: "A2A", Endpoint: "https://example.com/a2a", Version: "0.2.1"},
+				},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{
+				{Type: "ModelReady", Status: "True"},
+				{Type: "UpstreamHealthy", Status: "True"},
+				{Type: "PaymentGateReady", Status: "True"},
+				{Type: "RoutePublished", Status: "True"},
+			},
+		},
+	}
+
+	services := buildRegistrationServices(offer, []*monetizeapi.ServiceOffer{offer}, "https://example.com")
+	if len(services) != 2 {
+		t.Fatalf("services = %+v, want web + A2A", services)
+	}
+	for _, svc := range services {
+		if svc.Available == nil {
+			t.Fatalf("%s missing available=false drain marker: %+v", svc.Name, svc)
+		}
+		if *svc.Available {
+			t.Fatalf("%s available = true, want false during drain: %+v", svc.Name, svc)
+		}
+		if _, err := time.Parse(time.RFC3339, svc.DrainEndsAt); err != nil {
+			t.Fatalf("%s drainEndsAt = %q is not RFC3339: %v", svc.Name, svc.DrainEndsAt, err)
+		}
+	}
+}
+
+func TestBuildIdentityRegistrationServices_IncludesDrainMetadata(t *testing.T) {
+	drainAt := metav1.NewTime(time.Now())
+	grace := metav1.Duration{Duration: 30 * time.Minute}
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "identity-drain", Namespace: "demo"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Path:             "/services/identity-drain",
+			DrainAt:          &drainAt,
+			DrainGracePeriod: &grace,
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Services: []monetizeapi.ServiceOfferService{
+					{Name: "MCP", Endpoint: "https://example.com/mcp", Version: "2025-06-18"},
+				},
+			},
+		},
+	}
+
+	services := buildIdentityRegistrationServices([]*monetizeapi.ServiceOffer{offer}, "https://example.com")
+	if len(services) != 2 {
+		t.Fatalf("services = %+v, want web + MCP", services)
+	}
+	for _, svc := range services {
+		if svc.Available == nil || *svc.Available {
+			t.Fatalf("%s missing available=false drain marker: %+v", svc.Name, svc)
+		}
+		if _, err := time.Parse(time.RFC3339, svc.DrainEndsAt); err != nil {
+			t.Fatalf("%s drainEndsAt = %q is not RFC3339: %v", svc.Name, svc.DrainEndsAt, err)
+		}
+	}
+}
+
 func TestBuildRegistrationConfigMap_PublishesAggregatedAgentRegistration(t *testing.T) {
 	readyConditions := []monetizeapi.Condition{
 		{Type: "ModelReady", Status: "True"},

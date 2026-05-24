@@ -33,11 +33,13 @@ const RegistrationType = "https://eips.ethereum.org/EIPS/eip-8004#registration-v
 // For OASF entries (name="OASF"), Skills and Domains provide machine-readable
 // taxonomy for agent discovery. See https://schema.oasf.outshift.com/
 type ServiceDef struct {
-	Name     string   `json:"name"`               // e.g., "web", "A2A", "MCP", "OASF"
-	Endpoint string   `json:"endpoint,omitempty"` // full URL (omitempty for OASF entries)
-	Version  string   `json:"version,omitempty"`  // protocol version (SHOULD per spec)
-	Skills   []string `json:"skills,omitempty"`   // OASF skill taxonomy paths
-	Domains  []string `json:"domains,omitempty"`  // OASF domain taxonomy paths
+	Name        string   `json:"name"`                  // e.g., "web", "A2A", "MCP", "OASF"
+	Endpoint    string   `json:"endpoint,omitempty"`    // full URL (omitempty for OASF entries)
+	Version     string   `json:"version,omitempty"`     // protocol version (SHOULD per spec)
+	Skills      []string `json:"skills,omitempty"`      // OASF skill taxonomy paths
+	Domains     []string `json:"domains,omitempty"`     // OASF domain taxonomy paths
+	Available   *bool    `json:"available,omitempty"`   // false only while the service is draining
+	DrainEndsAt string   `json:"drainEndsAt,omitempty"` // RFC3339 timestamp for draining services
 }
 
 // OnChainReg links the registration to its on-chain record.

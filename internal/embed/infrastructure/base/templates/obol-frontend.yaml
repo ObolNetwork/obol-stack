@@ -54,12 +54,16 @@ spec:
           port: 3000
 
 ---
-# obol-frontend RBAC for OpenClaw instance discovery and ServiceOffer
-# CRUD from the frontend sell modal. The ClusterRoleBinding subject
-# references the `obol-frontend` ServiceAccount that the upstream
-# `obol/obol-app` chart creates — the binding applies fine even if
-# the SA does not exist yet, and starts granting permissions the
-# moment the SA appears.
+# obol-frontend RBAC for the pod ServiceAccount.
+#
+# Keep this as the single frontend RBAC template. A prior bundle carried a
+# second obol-frontend-rbac.yaml template with the same ClusterRole and
+# ClusterRoleBinding names, which made the rendered chart order-dependent.
+#
+# The frontend is local-only behind the obol.stack hostname restriction
+# (the operator owns the cluster), so this is a single trust boundary.
+# Defense-in-depth note: the `secrets` rule is intentionally omitted — no
+# frontend code path reads them and the SA token should not have that reach.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -71,12 +75,22 @@ rules:
     resources: ["namespaces"]
     verbs: ["get", "list"]
   - apiGroups: [""]
-    resources: ["pods", "configmaps", "secrets"]
+    resources: ["pods", "configmaps"]
     verbs: ["get", "list"]
   # ServiceOffer CRD — frontend sell modal creates offers
   - apiGroups: ["obol.org"]
     resources: ["serviceoffers", "serviceoffers/status"]
     verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # PurchaseRequest CRD — My Purchases lists agent buys. Read-only: the
+  # agent and controller own writes.
+  - apiGroups: ["obol.org"]
+    resources: ["purchaserequests", "purchaserequests/status"]
+    verbs: ["get", "list", "watch"]
+  # RegistrationRequest CRD — listing rows surface ERC-8004 registration
+  # state. Read-only: the controller owns writes.
+  - apiGroups: ["obol.org"]
+    resources: ["registrationrequests", "registrationrequests/status"]
+    verbs: ["get", "list", "watch"]
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1

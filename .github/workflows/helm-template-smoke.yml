@@ -53,7 +53,37 @@ jobs:
           helm template base "$workdir/base" \
             --set dataDir=/data \
             --set network=mainnet \
-            > /dev/null
+            > "$workdir/base-rendered.yaml"
+
+          # Kubernetes object identity must be unique within one rendered
+          # chart. Helm will happily render duplicate apiVersion/kind/name
+          # tuples and leave the actual outcome to manifest ordering; this
+          # caught the duplicated obol-frontend ClusterRole/Binding review bug.
+          awk '
+          function flush() {
+            if (api && kind && name) {
+              key = api "/" kind "/" ns "/" name
+              count[key]++
+            }
+            api = kind = name = ns = ""; inmeta = 0
+          }
+          /^---/ { flush(); next }
+          /^apiVersion:/ { api = $2; next }
+          /^kind:/ { kind = $2; next }
+          /^metadata:/ { inmeta = 1; next }
+          inmeta && /^  name:/ { name = $2; next }
+          inmeta && /^  namespace:/ { ns = $2; next }
+          /^[^ ]/ && $0 !~ /^(apiVersion|kind|metadata):/ { inmeta = 0 }
+          END {
+            flush()
+            for (k in count) {
+              if (count[k] > 1) {
+                print count[k] " " k
+                dup = 1
+              }
+            }
+            exit dup
+          }' "$workdir/base-rendered.yaml"
 
       - name: helm template ./cloudflared
         run: |

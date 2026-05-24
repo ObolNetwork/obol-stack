@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -58,6 +59,15 @@ func TestLeaderElectionDefaults(t *testing.T) {
 	}
 	if defaultLockNamespace != "x402" {
 		t.Fatalf("defaultLockNamespace drifted from infrastructure manifest: %q", defaultLockNamespace)
+	}
+}
+
+func TestControllerRunExitCode(t *testing.T) {
+	if got := controllerRunExitCode(nil); got != 0 {
+		t.Fatalf("controllerRunExitCode(nil) = %d, want 0", got)
+	}
+	if got := controllerRunExitCode(errors.New("informer died")); got != 1 {
+		t.Fatalf("controllerRunExitCode(error) = %d, want 1", got)
 	}
 }
 

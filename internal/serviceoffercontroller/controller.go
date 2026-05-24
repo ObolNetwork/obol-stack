@@ -439,8 +439,17 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		if !ready {
 			setCondition(&status, "ModelReady", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
 			setCondition(&status, "UpstreamHealthy", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
-			setCondition(&status, "PaymentGateReady", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
-			setCondition(&status, "RoutePublished", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
+			if offer.DrainExpired(time.Now()) {
+				if err := c.deleteRouteChildren(ctx, offer); err != nil {
+					return err
+				}
+				setCondition(&status, "Draining", "False", "Drained", fmt.Sprintf("Drain ended at %s; route torn down", offer.DrainEndsAt().UTC().Format(time.RFC3339)))
+				setCondition(&status, "PaymentGateReady", "False", "Drained", "Offer drained; payment gate removed")
+				setCondition(&status, "RoutePublished", "False", "Drained", "Offer drained; route removed")
+			} else {
+				setCondition(&status, "PaymentGateReady", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
+				setCondition(&status, "RoutePublished", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
+			}
 			setCondition(&status, "Ready", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
 			return c.updateOfferStatus(ctx, raw, status)
 		}

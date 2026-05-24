@@ -92,8 +92,17 @@ func EnsureVerifier(cfg *config.Config) error {
 		return fmt.Errorf("refresh infrastructure defaults: %w", err)
 	}
 
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	snapshots, err := preserveMutableRuntimeConfigMaps(cfg, kubeconfigPath)
+	if err != nil {
+		return fmt.Errorf("snapshot mutable runtime configmaps: %w", err)
+	}
+
 	if err := helmfileSyncBaseRelease(cfg); err != nil {
 		return fmt.Errorf("helmfile sync %s: %w", baseReleaseName, err)
+	}
+	if err := restoreMutableRuntimeConfigMaps(cfg, kubeconfigPath, snapshots); err != nil {
+		return fmt.Errorf("restore mutable runtime configmaps: %w", err)
 	}
 
 	// Populate the CA bundle after deploying the verifier so TLS verification
@@ -101,6 +110,252 @@ func EnsureVerifier(cfg *config.Config) error {
 	bin, kc := kubectl.Paths(cfg)
 	populateCABundle(bin, kc)
 	return nil
+}
+
+type mutableConfigMapSnapshot struct {
+	Name      string
+	Namespace string
+	Data      map[string]string
+}
+
+var mutableRuntimeConfigMaps = []mutableConfigMapSnapshot{
+	{Name: "litellm-config", Namespace: "llm"},
+	{Name: "x402-buyer-config", Namespace: "llm"},
+	{Name: "x402-buyer-auths", Namespace: "llm"},
+}
+
+// preserveMutableRuntimeConfigMaps snapshots ConfigMaps whose data is mutated
+// at runtime by `obol model setup`, PurchaseRequest reconciliation, or the
+// buyer auth-pool flow. `EnsureVerifier` must sync the base release so the
+// verifier uses canonical Helm ownership, but the base chart contains only
+// bootstrap defaults for these objects. Without this snapshot/restore pass,
+// `obol x402 setup` can erase configured models and buyer auth state.
+func preserveMutableRuntimeConfigMaps(cfg *config.Config, kubeconfigPath string) ([]mutableConfigMapSnapshot, error) {
+	out := make([]mutableConfigMapSnapshot, 0, len(mutableRuntimeConfigMaps))
+	for _, item := range mutableRuntimeConfigMaps {
+		data, found, err := readConfigMapData(cfg, kubeconfigPath, item.Namespace, item.Name)
+		if err != nil {
+			return nil, err
+		}
+		if !found || len(data) == 0 {
+			continue
+		}
+		out = append(out, mutableConfigMapSnapshot{Name: item.Name, Namespace: item.Namespace, Data: data})
+	}
+	return out, nil
+}
+
+func restoreMutableRuntimeConfigMaps(cfg *config.Config, kubeconfigPath string, snapshots []mutableConfigMapSnapshot) error {
+	for _, snap := range snapshots {
+		current, _, err := readConfigMapData(cfg, kubeconfigPath, snap.Namespace, snap.Name)
+		if err != nil {
+			return err
+		}
+		data, err := mergeRuntimeConfigMapData(snap.Name, current, snap.Data)
+		if err != nil {
+			return err
+		}
+		if len(data) == 0 {
+			continue
+		}
+		manifest, err := configMapDataManifest(snap.Namespace, snap.Name, data)
+		if err != nil {
+			return err
+		}
+		if err := kubectl.ApplyServerSideForceConflicts(filepath.Join(cfg.BinDir, "kubectl"), kubeconfigPath, manifest, "helm"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func readConfigMapData(cfg *config.Config, kubeconfigPath, namespace, name string) (map[string]string, bool, error) {
+	raw, err := kubectl.Output(filepath.Join(cfg.BinDir, "kubectl"), kubeconfigPath,
+		"get", "configmap", name, "-n", namespace, "-o", "json")
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "NotFound") {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("get configmap %s/%s: %w", namespace, name, err)
+	}
+	var obj struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(raw), &obj); err != nil {
+		return nil, false, fmt.Errorf("parse configmap %s/%s: %w", namespace, name, err)
+	}
+	return obj.Data, true, nil
+}
+
+func mergeRuntimeConfigMapData(name string, current, previous map[string]string) (map[string]string, error) {
+	if name == "litellm-config" {
+		currentRaw := current["config.yaml"]
+		previousRaw := previous["config.yaml"]
+		if strings.TrimSpace(previousRaw) == "" {
+			return current, nil
+		}
+		if strings.TrimSpace(currentRaw) == "" {
+			return previous, nil
+		}
+		merged, err := mergeLiteLLMConfig(currentRaw, previousRaw)
+		if err != nil {
+			return nil, err
+		}
+		out := copyStringMap(current)
+		out["config.yaml"] = merged
+		return out, nil
+	}
+
+	out := copyStringMap(previous)
+	for k, v := range current {
+		out[k] = v
+	}
+	return out, nil
+}
+
+func mergeLiteLLMConfig(currentRaw, previousRaw string) (string, error) {
+	var current map[string]any
+	if err := yaml.Unmarshal([]byte(currentRaw), &current); err != nil {
+		return "", fmt.Errorf("parse current LiteLLM config: %w", err)
+	}
+	if current == nil {
+		current = map[string]any{}
+	}
+
+	var previous map[string]any
+	if err := yaml.Unmarshal([]byte(previousRaw), &previous); err != nil {
+		return "", fmt.Errorf("parse previous LiteLLM config: %w", err)
+	}
+	if previous == nil {
+		previous = map[string]any{}
+	}
+
+	merged := copyAnyMap(previous)
+	for key, value := range current {
+		merged[key] = value
+	}
+
+	models, err := mergeLiteLLMModelLists(current["model_list"], previous["model_list"])
+	if err != nil {
+		return "", err
+	}
+	if len(models) > 0 {
+		merged["model_list"] = models
+	}
+
+	for _, key := range []string{"general_settings", "litellm_settings"} {
+		if liteLLMValueEmpty(current[key]) && !liteLLMValueEmpty(previous[key]) {
+			merged[key] = previous[key]
+		}
+	}
+
+	mergedRaw, err := yaml.Marshal(merged)
+	if err != nil {
+		return "", fmt.Errorf("serialize merged LiteLLM config: %w", err)
+	}
+	return string(mergedRaw), nil
+}
+
+func mergeLiteLLMModelLists(currentRaw, previousRaw any) ([]any, error) {
+	current, err := liteLLMModelList(currentRaw)
+	if err != nil {
+		return nil, fmt.Errorf("parse current LiteLLM model_list: %w", err)
+	}
+	previous, err := liteLLMModelList(previousRaw)
+	if err != nil {
+		return nil, fmt.Errorf("parse previous LiteLLM model_list: %w", err)
+	}
+
+	merged := append([]any{}, current...)
+	byName := make(map[string]bool, len(current))
+	for _, entry := range current {
+		if name := liteLLMModelName(entry); name != "" {
+			byName[name] = true
+		}
+	}
+	for _, entry := range previous {
+		name := liteLLMModelName(entry)
+		if name == "" {
+			continue
+		}
+		if byName[name] {
+			continue
+		}
+		byName[name] = true
+		merged = append(merged, entry)
+	}
+	return merged, nil
+}
+
+func liteLLMModelList(value any) ([]any, error) {
+	if value == nil {
+		return nil, nil
+	}
+	list, ok := value.([]any)
+	if !ok {
+		return nil, fmt.Errorf("expected sequence, got %T", value)
+	}
+	return list, nil
+}
+
+func liteLLMModelName(entry any) string {
+	switch typed := entry.(type) {
+	case map[string]any:
+		if name, ok := typed["model_name"].(string); ok {
+			return strings.TrimSpace(name)
+		}
+	case map[any]any:
+		if name, ok := typed["model_name"].(string); ok {
+			return strings.TrimSpace(name)
+		}
+	}
+	return ""
+}
+
+func liteLLMValueEmpty(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(typed) == ""
+	case []any:
+		return len(typed) == 0
+	case map[string]any:
+		return len(typed) == 0
+	case map[any]any:
+		return len(typed) == 0
+	default:
+		return false
+	}
+}
+
+func configMapDataManifest(namespace, name string, data map[string]string) ([]byte, error) {
+	obj := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]string{
+			"name":      name,
+			"namespace": namespace,
+		},
+		"data": data,
+	}
+	return yaml.Marshal(obj)
+}
+
+func copyStringMap(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func copyAnyMap(in map[string]any) map[string]any {
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // helmfileSyncBaseRelease runs `helmfile --selector name=base sync`

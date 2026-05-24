@@ -92,6 +92,7 @@ func runWithLeaderElection(ctx context.Context, cfg *rest.Config, controller *se
 				log.Printf("serviceoffer-controller: became leader %s", podName)
 				if err := controller.Run(ctx, workers); err != nil {
 					log.Printf("controller run: %v", err)
+					os.Exit(controllerRunExitCode(err))
 				}
 			},
 			OnStoppedLeading: func() {
@@ -108,6 +109,13 @@ func runWithLeaderElection(ctx context.Context, cfg *rest.Config, controller *se
 			},
 		},
 	})
+}
+
+func controllerRunExitCode(err error) int {
+	if err != nil {
+		return 1
+	}
+	return 0
 }
 
 func loadConfig(kubeconfig string) (*rest.Config, error) {

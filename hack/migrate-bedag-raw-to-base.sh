@@ -26,9 +26,20 @@ ORPHAN_RELEASES=(
 )
 
 migrate_one() {
-  local target="$1"
+  local kind="$1"
+  local name="$2"
+  local namespace="${3:-}"
   local current
-  current=$(kubectl get "$target" -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null || true)
+
+  local resource="${kind}/${name}"
+  local target="$resource"
+  local -a ns_args=()
+  if [[ -n "$namespace" ]]; then
+    ns_args=(-n "$namespace")
+    target="$resource -n $namespace"
+  fi
+
+  current=$(kubectl get "$resource" "${ns_args[@]}" -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null || true)
   if [[ "$current" == "base" ]]; then
     echo "  $target: already on base, skipping"
     return 0
@@ -38,10 +49,10 @@ migrate_one() {
   else
     echo "  $target: was on '$current', migrating to base"
   fi
-  kubectl annotate "$target" \
+  kubectl annotate "$resource" "${ns_args[@]}" \
     meta.helm.sh/release-name=base \
     meta.helm.sh/release-namespace=kube-system --overwrite >/dev/null
-  kubectl label "$target" app.kubernetes.io/managed-by=Helm --overwrite >/dev/null
+  kubectl label "$resource" "${ns_args[@]}" app.kubernetes.io/managed-by=Helm --overwrite >/dev/null
 }
 
 echo "==> Scanning for resources owned by legacy bedag/raw releases..."
@@ -51,10 +62,10 @@ for release in "${ORPHAN_RELEASES[@]}"; do
     -A -o json 2>/dev/null \
     | jq -r --arg rel "$release" '.items[]
         | select(.metadata.annotations["meta.helm.sh/release-name"] == $rel)
-        | "\(.kind)/\(.metadata.name)\(if .metadata.namespace then " -n " + .metadata.namespace else "" end)"' \
-    | while read -r target; do
-      [[ -z "$target" ]] && continue
-      migrate_one "$target"
+        | [.kind, .metadata.name, (.metadata.namespace // "")] | @tsv' \
+    | while IFS=$'\t' read -r kind name namespace; do
+      [[ -z "$kind" || -z "$name" ]] && continue
+      migrate_one "$kind" "$name" "$namespace"
     done
 done
 
@@ -63,17 +74,25 @@ done
 # in the namespaces base now owns.
 echo "==> Adopting unowned resources base will now claim..."
 declare -a UNOWNED_TARGETS=(
-  "namespace/erpc"
-  "namespace/obol-frontend"
-  "prometheusrule/x402-verifier -n x402"
+  "namespace	erpc	"
+  "namespace	obol-frontend	"
+  "prometheusrule	x402-verifier	x402"
 )
 for target in "${UNOWNED_TARGETS[@]}"; do
-  if kubectl get $target >/dev/null 2>&1; then
-    owner=$(kubectl get $target -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null || true)
+  IFS=$'\t' read -r kind name namespace <<< "$target"
+  resource="${kind}/${name}"
+  ns_args=()
+  display="$resource"
+  if [[ -n "$namespace" ]]; then
+    ns_args=(-n "$namespace")
+    display="$resource -n $namespace"
+  fi
+  if kubectl get "$resource" "${ns_args[@]}" >/dev/null 2>&1; then
+    owner=$(kubectl get "$resource" "${ns_args[@]}" -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null || true)
     if [[ -z "$owner" || "$owner" == "base" ]]; then
-      echo "  $target: $([ -z "$owner" ] && echo "adopting" || echo "already base")"
-      kubectl annotate $target meta.helm.sh/release-name=base meta.helm.sh/release-namespace=kube-system --overwrite >/dev/null
-      kubectl label $target app.kubernetes.io/managed-by=Helm --overwrite >/dev/null
+      echo "  $display: $([ -z "$owner" ] && echo "adopting" || echo "already base")"
+      kubectl annotate "$resource" "${ns_args[@]}" meta.helm.sh/release-name=base meta.helm.sh/release-namespace=kube-system --overwrite >/dev/null
+      kubectl label "$resource" "${ns_args[@]}" app.kubernetes.io/managed-by=Helm --overwrite >/dev/null
     fi
   fi
 done
