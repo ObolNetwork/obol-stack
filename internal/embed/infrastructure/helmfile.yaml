@@ -17,7 +17,7 @@ repositories:
 # Single source of truth: change this to switch networks
 values:
   - network: mainnet
-  - gatewayApiVersion: v1.4.1
+  - gatewayApiVersion: v1.5.1
   # Default the cloudflared release to enabled. `obol stack up` overrides via
   # `--state-values-set cloudflared.enabled=false` when it detects a running
   # quick tunnel that should be preserved across the sync.
