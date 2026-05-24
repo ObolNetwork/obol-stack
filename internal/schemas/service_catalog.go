@@ -40,19 +40,13 @@ type ServiceCatalogEntry struct {
 	// ERC-8004 discovery via the chain still resolves to the prior state.
 	RegistrationPending bool `json:"registrationPending,omitempty"`
 
-	// Available is false when the offer is in its drain window. Buyers
-	// can still complete in-flight payments until DrainEndsAt, but
-	// discovery surfaces should advertise the wind-down so external
-	// observers can react. When false, DrainEndsAt is set to the RFC3339
-	// timestamp at which the HTTPRoute will be torn down. Catalog
-	// consumers should treat unset Available (the default-true field) as
-	// "available" for backwards compatibility — the field is only written
-	// false during drain.
-	Available bool `json:"available"`
-
 	// DrainEndsAt is the RFC3339 timestamp at which the offer's
-	// HTTPRoute will be removed. Set only when Available=false. Buyers
-	// SHOULD migrate to alternative providers before this time.
+	// HTTPRoute will be removed. Set ONLY while the offer is draining;
+	// absent (empty) on active offers. Presence of this field IS the
+	// draining signal — catalog consumers detect drain with
+	// `if (entry.drainEndsAt) { /* draining, migrate before this time */ }`.
+	// Drain is purely additive: active offers serialize identically to
+	// pre-drain releases (no `available` field).
 	DrainEndsAt string `json:"drainEndsAt,omitempty"`
 }
 

@@ -780,16 +780,19 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 	}
 
 	lines = append(lines, "## Services", "")
-	lines = append(lines, "| Service | Type | Model | Price | Available | Endpoint |")
-	lines = append(lines, "|---------|------|-------|-------|-----------|----------|")
+	lines = append(lines, "| Service | Type | Model | Price | Status | Endpoint |")
+	lines = append(lines, "|---------|------|-------|-------|--------|----------|")
 	for _, offer := range ready {
 		modelName := offer.Spec.Model.Name
 		if modelName == "" {
 			modelName = "—"
 		}
-		availability := "yes"
+		// Status column: empty (rendered as "—") for active offers so
+		// the catalog visually matches the pre-drain layout, "draining"
+		// only for offers in their grace window.
+		status := "—"
 		if offer.IsDraining() {
-			availability = fmt.Sprintf("draining (ends %s)", offer.DrainEndsAt().UTC().Format(time.RFC3339))
+			status = fmt.Sprintf("draining · ends %s", offer.DrainEndsAt().UTC().Format(time.RFC3339))
 		}
 		lines = append(lines, fmt.Sprintf(
 			"| [%s](#%s) | %s | %s | %s | %s | `%s%s` |",
@@ -798,7 +801,7 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 			fallbackOfferType(offer),
 			modelName,
 			describeOfferPrice(offer),
-			availability,
+			status,
 			baseURL,
 			offer.EffectivePath(),
 		))
@@ -815,11 +818,12 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 		lines = append(lines, fmt.Sprintf("- **Price**: %s", describeOfferPrice(offer)))
 		lines = append(lines, fmt.Sprintf("- **Pay To**: `%s`", firstNonEmpty(offer.Spec.Payment.PayTo, "—")))
 		lines = append(lines, fmt.Sprintf("- **Network**: %s", firstNonEmpty(offer.Spec.Payment.Network, "—")))
+		// Drain is purely additive: emit nothing on active offers so
+		// the detail block matches the pre-drain layout. Only draining
+		// offers get a Drain ends at bullet — its presence IS the
+		// signal.
 		if offer.IsDraining() {
-			lines = append(lines, "- **Available**: false (draining)")
 			lines = append(lines, fmt.Sprintf("- **Drain ends at**: %s", offer.DrainEndsAt().UTC().Format(time.RFC3339)))
-		} else {
-			lines = append(lines, "- **Available**: true")
 		}
 		description := offer.Spec.Registration.Description
 		if description == "" {
@@ -905,8 +909,9 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 		}
 		// Drained offers (post-grace-period) have no live route — drop
 		// them from the catalog entirely. Draining offers (pre-expiry)
-		// stay in the catalog with available=false + drainEndsAt set so
-		// buyers can react before the route disappears.
+		// stay in the catalog with drainEndsAt set so buyers can react
+		// before the route disappears. Presence of drainEndsAt IS the
+		// drain signal; no separate "available" boolean.
 		if offer.DrainExpired(now) {
 			continue
 		}
@@ -932,7 +937,9 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 			modelName = offer.Status.AgentResolution.Model
 		}
 
-		available := !offer.IsDraining()
+		// Drain is purely additive: only set drainEndsAt on draining
+		// offers. Active offers serialize identically to pre-drain
+		// releases. Consumers detect drain with `if (entry.drainEndsAt)`.
 		drainEndsAt := ""
 		if offer.IsDraining() {
 			drainEndsAt = offer.DrainEndsAt().UTC().Format(time.RFC3339)
@@ -950,7 +957,6 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 			Description:         desc,
 			IsDemo:              offer.Namespace == "demo",
 			RegistrationPending: offerAwaitingRegistration(offer),
-			Available:           available,
 			DrainEndsAt:         drainEndsAt,
 		}
 

@@ -782,16 +782,30 @@ func TestBuildServiceCatalogJSON_ExcludesNonReady(t *testing.T) {
 	if services[0].Name != "ready-svc" {
 		t.Errorf("got %q, want ready-svc — filter pipeline leaked another offer", services[0].Name)
 	}
-	if !services[0].Available {
-		t.Errorf("ready-svc.available = false, want true (offer is not draining)")
+	if services[0].DrainEndsAt != "" {
+		t.Errorf("ready-svc.drainEndsAt = %q, want empty (active offers must not carry drain metadata)", services[0].DrainEndsAt)
+	}
+	// Drain is purely additive: the active-offer JSON must not contain
+	// `available` or `drainEndsAt` keys at all. Walk the raw map so the
+	// assertion catches a stray field even if it's the zero value.
+	rawBytes, _ := json.Marshal(services[0])
+	var rawMap map[string]any
+	if err := json.Unmarshal(rawBytes, &rawMap); err != nil {
+		t.Fatalf("re-marshal ready-svc: %v", err)
+	}
+	if _, ok := rawMap["available"]; ok {
+		t.Errorf("ready-svc JSON contains unexpected `available` key (drain must be purely additive): %s", rawBytes)
+	}
+	if _, ok := rawMap["drainEndsAt"]; ok {
+		t.Errorf("ready-svc JSON contains `drainEndsAt` key on active offer: %s", rawBytes)
 	}
 }
 
 // TestBuildServiceCatalogJSON_DrainLifecycle covers the three drain
-// states explicitly: pre-drain (available=true, no drainEndsAt), mid-drain
-// (in catalog, available=false, drainEndsAt populated), and drain-expired
-// (filtered out of the catalog because the controller has torn down the
-// underlying route).
+// states explicitly: pre-drain (no drainEndsAt key in JSON), mid-drain
+// (in catalog with drainEndsAt populated), and drain-expired (filtered
+// out of the catalog because the controller has torn down the route).
+// Drain is purely additive: there is no `available` field.
 func TestBuildServiceCatalogJSON_DrainLifecycle(t *testing.T) {
 	readyCond := []monetizeapi.Condition{{Type: "Ready", Status: "True"}}
 	mkOffer := func(name string) monetizeapi.ServiceOffer {
@@ -841,20 +855,12 @@ func TestBuildServiceCatalogJSON_DrainLifecycle(t *testing.T) {
 	}
 	if pre, ok := byName["pre"]; !ok {
 		t.Fatal("pre-drain offer missing from catalog")
-	} else {
-		if !pre.Available {
-			t.Errorf("pre.available = false, want true")
-		}
-		if pre.DrainEndsAt != "" {
-			t.Errorf("pre.drainEndsAt = %q, want empty", pre.DrainEndsAt)
-		}
+	} else if pre.DrainEndsAt != "" {
+		t.Errorf("pre.drainEndsAt = %q, want empty (active offers carry no drain metadata)", pre.DrainEndsAt)
 	}
 	if mid, ok := byName["mid"]; !ok {
 		t.Fatal("mid-drain offer missing from catalog")
 	} else {
-		if mid.Available {
-			t.Errorf("mid.available = true, want false (offer is draining)")
-		}
 		if mid.DrainEndsAt == "" {
 			t.Errorf("mid.drainEndsAt is empty, want RFC3339 timestamp")
 		}
@@ -864,6 +870,82 @@ func TestBuildServiceCatalogJSON_DrainLifecycle(t *testing.T) {
 	}
 	if _, ok := byName["expired"]; ok {
 		t.Error("drain-expired offer leaked into catalog; should be filtered")
+	}
+
+	// Pure-additivity invariant on the raw JSON: no entry has an
+	// `available` field, and only mid has a `drainEndsAt` field.
+	var rawEntries []map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &rawEntries); err != nil {
+		t.Fatalf("re-unmarshal catalog JSON as raw maps: %v\n%s", err, jsonStr)
+	}
+	for _, entry := range rawEntries {
+		if _, ok := entry["available"]; ok {
+			t.Errorf("entry %q has unexpected `available` field; drain must be purely additive: %+v", entry["name"], entry)
+		}
+		switch entry["name"] {
+		case "pre":
+			if _, ok := entry["drainEndsAt"]; ok {
+				t.Errorf("pre-drain entry has `drainEndsAt` key: %+v", entry)
+			}
+		case "mid":
+			if _, ok := entry["drainEndsAt"]; !ok {
+				t.Errorf("mid-drain entry missing `drainEndsAt` key: %+v", entry)
+			}
+		}
+	}
+}
+
+// TestBuildSkillCatalogMarkdown_DrainAdditiveDetail asserts the per-service
+// detail block in /skill.md is purely additive: active offers contain no
+// "Available" or "Drain ends at" bullets, draining offers contain ONLY a
+// "Drain ends at" bullet (no separate Available marker).
+func TestBuildSkillCatalogMarkdown_DrainAdditiveDetail(t *testing.T) {
+	readyCond := []monetizeapi.Condition{{Type: "Ready", Status: "True"}}
+	mkOffer := func(name string) monetizeapi.ServiceOffer {
+		return monetizeapi.ServiceOffer{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "llm"},
+			Spec: monetizeapi.ServiceOfferSpec{
+				Type: "http",
+				Payment: monetizeapi.ServiceOfferPayment{
+					Network: "base",
+					PayTo:   "0x1111111111111111111111111111111111111111",
+					Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+				},
+			},
+			Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
+		}
+	}
+
+	active := mkOffer("alpha-active")
+	midDrainAt := metav1.NewTime(time.Now())
+	midGrace := metav1.Duration{Duration: time.Hour}
+	mid := mkOffer("beta-draining")
+	mid.Spec.DrainAt = &midDrainAt
+	mid.Spec.DrainGracePeriod = &midGrace
+
+	md := buildSkillCatalogMarkdown([]*monetizeapi.ServiceOffer{&active, &mid}, "https://example.com")
+
+	// The whole-doc level must never contain an "Available" bullet —
+	// neither for active nor for draining offers (draining surfaces only
+	// the drain-ends-at line).
+	if strings.Contains(md, "- **Available**:") {
+		t.Errorf("skill catalog markdown contains `- **Available**:` bullet; drain must be purely additive\n%s", md)
+	}
+
+	// Split by service detail section so we can assert per-offer.
+	activeIdx := strings.Index(md, "### alpha-active")
+	midIdx := strings.Index(md, "### beta-draining")
+	if activeIdx < 0 || midIdx < 0 {
+		t.Fatalf("expected detail sections for both offers, got md=\n%s", md)
+	}
+	activeBlock := md[activeIdx:midIdx]
+	midBlock := md[midIdx:]
+
+	if strings.Contains(activeBlock, "Drain ends at") {
+		t.Errorf("active detail block contains drain bullet: %s", activeBlock)
+	}
+	if !strings.Contains(midBlock, "- **Drain ends at**:") {
+		t.Errorf("draining detail block missing `- **Drain ends at**:` bullet: %s", midBlock)
 	}
 }
 
