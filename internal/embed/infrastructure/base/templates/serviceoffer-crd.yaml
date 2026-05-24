@@ -79,6 +79,24 @@ spec:
                     - namespace
                     type: object
                 type: object
+              drainAt:
+                description: |-
+                  DrainAt marks the offer as draining when non-nil. While the offer
+                  is in the drain window, discovery surfaces (/skill.md and
+                  /.well-known/agent-registration.json) advertise the offer with
+                  available=false and drainEndsAt set, so buyers can migrate before
+                  the route is torn down. The route + payment gate stay up until
+                  DrainEndsAt() so in-flight payments can complete. Replaces the
+                  legacy obol.org/paused annotation.
+                format: date-time
+                type: string
+              drainGracePeriod:
+                description: |-
+                  DrainGracePeriod is how long after DrainAt the HTTPRoute remains
+                  up. Defaults to DefaultDrainGracePeriod when nil. A zero duration
+                  is honored as "tear down immediately on the next reconcile" (the
+                  equivalent of `obol sell stop --force`).
+                type: string
               model:
                 description: LLM model metadata. Required when the upstream serves
                   an LLM.

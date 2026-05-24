@@ -7,6 +7,7 @@ import (
 	"log"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
@@ -85,7 +86,12 @@ func routesFromStore(offerItems, secretItems []any) ([]RouteRule, error) {
 		if offer.Spec.Upstream.Namespace == "" {
 			offer.Spec.Upstream.Namespace = offer.Namespace
 		}
-		if offer.IsPaused() || !offerConditionTrue(offer.Status, "RoutePublished") {
+		// Draining offers keep their route up until the grace period
+		// expires so in-flight payments can settle. Only skip after the
+		// drain window has elapsed — at that point the controller has
+		// also torn down the HTTPRoute, so the verifier rule would
+		// gate traffic against a non-existent backend.
+		if offer.DrainExpired(time.Now()) || !offerConditionTrue(offer.Status, "RoutePublished") {
 			continue
 		}
 

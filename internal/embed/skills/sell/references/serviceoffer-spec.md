@@ -180,7 +180,13 @@ Each condition contains:
 
 ## Lifecycle Notes
 
-- Pausing is represented via the `obol.org/paused: "true"` annotation.
+- Graceful stop is represented via `spec.drainAt` (RFC3339 timestamp) and
+  the optional `spec.drainGracePeriod` (Go duration, e.g. `"30m"`, defaults
+  to `1h`). While draining, discovery surfaces advertise the offer with
+  `available: false` + `drainEndsAt`, and the HTTPRoute/payment gate stay
+  up until the grace period expires so in-flight buyers can settle.
+  `obol sell stop --force` is the equivalent of `drainGracePeriod: 0s` —
+  abrupt teardown with no advertised wind-down.
 - Deleting a `ServiceOffer` cascades owned `Middleware` and `HTTPRoute`
   resources via `ownerReferences`.
 - Registration side effects are isolated in a child `RegistrationRequest`

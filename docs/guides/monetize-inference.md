@@ -572,15 +572,34 @@ obol sell status my-qwen --namespace llm
 obol sell status
 ```
 
-### Pausing
+### Draining
 
-Pause an offer without deleting it:
+Stop an offer gracefully so buyers can wind down before the route disappears:
 
 ```bash
-obol sell stop my-qwen --namespace llm
+obol sell stop my-qwen --namespace llm                  # default: 1h grace
+obol sell stop my-qwen --namespace llm --grace 30m      # custom grace
+obol sell stop my-qwen --namespace llm --force          # tear down immediately
 ```
 
-The CR and any ERC-8004 registration remain intact. Re-create the offer with the same name to restart.
+`obol sell stop` sets `spec.drainAt` on the ServiceOffer. While the offer is
+draining:
+
+- `/skill.md` and `/.well-known/agent-registration.json` advertise the offer
+  with `available: false` and `drainEndsAt: <RFC3339>`, so external discovery
+  (and ERC-8004 reputation scorers) can react before traffic disappears.
+- The HTTPRoute and x402 payment gate stay up so in-flight buyers can complete
+  payments.
+- When the grace period elapses, the controller tears down the route and marks
+  `Draining=False` reason=Drained.
+
+The ServiceOffer CR and any ERC-8004 registration remain intact. Use
+`obol sell delete` to remove the offer entirely.
+
+`--force` (alias: `--now`) skips the drain window — useful when you want the
+abrupt-teardown behavior of the legacy `obol.org/paused` annotation, for
+example to reclaim the path immediately. Note that abrupt teardown is a worse
+reputation signal for on-chain buyers than a graceful drain.
 
 ### Cleanup
 
@@ -815,7 +834,7 @@ manifest. Do not paper over smoke-test failures with an ad hoc patch.
 | `obol sell http <name> --wallet ... --chain ... --per-request ... --upstream ... --port ...` | Create a ServiceOffer and register by default |
 | `obol sell list` | List all ServiceOffers |
 | `obol sell status <name> -n <ns>` | Show conditions for an offer |
-| `obol sell stop <name> -n <ns>` | Pause an offer without deleting it |
+| `obol sell stop <name> -n <ns> [--grace 1h] [--force]` | Drain an offer (advertise wind-down via discovery, then tear down the route after the grace period). `--force`/`--now` skips the grace window. |
 | `obol sell delete <name> -n <ns>` | Delete an offer and cleanup |
 | `obol sell status` | Show cluster pricing and registration |
 | `obol sell register --private-key-file ...` | Advanced/manual registration or repair path |
