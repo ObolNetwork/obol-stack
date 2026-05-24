@@ -77,6 +77,18 @@ rules:
   - apiGroups: ["obol.org"]
     resources: ["serviceoffers", "serviceoffers/status"]
     verbs: ["get", "list", "create", "update", "patch", "delete"]
+  # PurchaseRequest CRD — /api/marketplace/purchases lists agent buys
+  # cluster-wide so the My Purchases page can show every signed auth
+  # paying to the connected wallet. Read-only: the agent owns writes.
+  - apiGroups: ["obol.org"]
+    resources: ["purchaserequests", "purchaserequests/status"]
+    verbs: ["get", "list", "watch"]
+  # RegistrationRequest CRD — surfaces ERC-8004 registration state on
+  # listing rows ("Registered" vs "Pending"). Read-only: the controller
+  # owns writes.
+  - apiGroups: ["obol.org"]
+    resources: ["registrationrequests", "registrationrequests/status"]
+    verbs: ["get", "list", "watch"]
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1
