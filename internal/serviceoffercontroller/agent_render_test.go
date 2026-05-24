@@ -137,6 +137,43 @@ func TestAgentManifests_DeploymentEnvCarriesContext(t *testing.T) {
 	}
 }
 
+func TestAgentManifests_DeploymentUsesFSGroup(t *testing.T) {
+	agent := &monetizeapi.Agent{}
+	agent.Name = "quant"
+	agent.Namespace = "agent-quant"
+	agent.Spec = monetizeapi.AgentSpec{Model: "qwen3.5:9b"}
+
+	out, err := agentManifests(agent, "litellm", "api")
+	if err != nil {
+		t.Fatalf("agentManifests: %v", err)
+	}
+	var dep map[string]any
+	for _, m := range out {
+		if m.GetKind() == "Deployment" {
+			dep = m.UnstructuredContent()
+			break
+		}
+	}
+	if dep == nil {
+		t.Fatal("Deployment manifest missing")
+	}
+
+	podSpec := dep["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	securityContext := podSpec["securityContext"].(map[string]any)
+	if securityContext["runAsUser"] != int64(hermesContainerUID) {
+		t.Fatalf("runAsUser = %v, want %d", securityContext["runAsUser"], hermesContainerUID)
+	}
+	if securityContext["runAsGroup"] != int64(hermesContainerGID) {
+		t.Fatalf("runAsGroup = %v, want %d", securityContext["runAsGroup"], hermesContainerGID)
+	}
+	if securityContext["fsGroup"] != int64(hermesContainerGID) {
+		t.Fatalf("fsGroup = %v, want %d", securityContext["fsGroup"], hermesContainerGID)
+	}
+	if securityContext["fsGroupChangePolicy"] != "OnRootMismatch" {
+		t.Fatalf("fsGroupChangePolicy = %v, want OnRootMismatch", securityContext["fsGroupChangePolicy"])
+	}
+}
+
 func TestAgentManifests_ProfileSeedInitContainer(t *testing.T) {
 	agent := &monetizeapi.Agent{}
 	agent.Name = "quant"

@@ -348,7 +348,6 @@ func runAgentBackedDemo(
 		}
 		u.Successf("Agent %s/%s created (skills: %s)", agentcrd.Namespace(agentName), agentName,
 			strings.Join(spec.Agent.Skills, ", "))
-		hermes.EnsureCRDAgentHermesPVCOwnership(cfg, agentName, u)
 	}
 
 	// 2. Build and apply the agent-typed ServiceOffer.

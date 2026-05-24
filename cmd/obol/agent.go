@@ -201,33 +201,6 @@ Hermes/OpenClaw onboard flow used by the master agent.`,
 				},
 			},
 			{
-				Name:      "repair-perms",
-				Usage:     "Fix Hermes data PVC ownership for a CRD child agent (Linux k3d)",
-				ArgsUsage: "<name>",
-				Description: `Host-side chown for agent-<name>/hermes-data so the child Hermes pod can write under /data.
-
-Use when a factory-spawned or CLI-created child agent crash-loops with
-Permission denied under /data/.hermes on Linux k3d (KubeletInUserNamespace).
-
-This is a no-op on backends where in-pod init chown already works.`,
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					if cmd.NArg() != 1 {
-						return fmt.Errorf("agent name required: obol agent repair-perms <name>")
-					}
-					name := strings.TrimSpace(cmd.Args().First())
-					if err := agentcrd.ValidateName(name); err != nil {
-						return err
-					}
-					if err := kubectl.EnsureCluster(cfg); err != nil {
-						return fmt.Errorf("Obol Stack is not running. Start it with `obol stack up` first")
-					}
-					u := getUI(cmd)
-					hermes.EnsureCRDAgentHermesPVCOwnership(cfg, name, u)
-					u.Successf("Repaired Hermes data volume ownership for agent %s", name)
-					return nil
-				},
-			},
-			{
 				Name:      "delete",
 				Usage:     "Remove an agent instance and its cluster resources",
 				ArgsUsage: "[instance-name]",
