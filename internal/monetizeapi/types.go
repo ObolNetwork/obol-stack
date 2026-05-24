@@ -321,15 +321,31 @@ type Agent struct {
 }
 
 type AgentSpec struct {
-	Runtime   string      `json:"runtime,omitempty"`
-	Model     string      `json:"model,omitempty"`
-	Skills    []string    `json:"skills,omitempty"`
-	Objective string      `json:"objective,omitempty"`
-	Wallet    AgentWallet `json:"wallet,omitempty"`
+	Runtime   string       `json:"runtime,omitempty"`
+	Model     string       `json:"model,omitempty"`
+	Skills    []string     `json:"skills,omitempty"`
+	Objective string       `json:"objective,omitempty"`
+	Wallet    AgentWallet  `json:"wallet,omitempty"`
+	Secrets   AgentSecrets `json:"secrets,omitempty"`
 }
 
 type AgentWallet struct {
 	Create bool `json:"create,omitempty"`
+}
+
+type AgentSecrets struct {
+	Bitwarden AgentBitwardenSecrets `json:"bitwarden,omitempty"`
+}
+
+type AgentBitwardenSecrets struct {
+	Enabled               bool   `json:"enabled,omitempty"`
+	ProjectID             string `json:"projectID,omitempty"`
+	ServerURL             string `json:"serverURL,omitempty"`
+	AccessTokenSecretName string `json:"accessTokenSecretName,omitempty"`
+	AccessTokenKey        string `json:"accessTokenKey,omitempty"`
+	OverrideExisting      *bool  `json:"overrideExisting,omitempty"`
+	CacheTTLSeconds       *int   `json:"cacheTTLSeconds,omitempty"`
+	AutoInstall           *bool  `json:"autoInstall,omitempty"`
 }
 
 type AgentStatus struct {

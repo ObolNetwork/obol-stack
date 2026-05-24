@@ -180,6 +180,33 @@ obol openclaw dashboard
 
 Use `obol agent` for Obol-managed lifecycle and auth flows. Use `obol hermes` for native Hermes CLI commands against the default instance, or pass `--agent <id>` for a non-default Hermes instance.
 
+### Bitwarden Secrets
+
+Hermes agents can sync runtime environment variables from Bitwarden Secrets
+Manager. Obol stores only the Bitwarden bootstrap token in the agent namespace's
+`hermes-env` Secret; non-secret metadata is kept in the agent deployment config.
+The setup command validates project access with the Bitwarden `bws` CLI on the
+host.
+
+```bash
+obol agent secrets bitwarden setup obol-agent \
+  --project-id <project-uuid> \
+  --access-token "$BWS_ACCESS_TOKEN"
+
+obol agent secrets bitwarden status obol-agent
+```
+
+Provider setup can then fetch the provider key from the configured Bitwarden
+project, validate it, and write the active key to LiteLLM:
+
+```bash
+obol model setup --provider openai --api-key-source bitwarden
+```
+
+Bitwarden secret names should match environment variable names such as
+`OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. This integration is Hermes-only;
+OpenClaw runtimes are not supported.
+
 ### Skills
 
 The stack ships with embedded Obol skills that are installed automatically for the default Hermes agent and for OpenClaw instances. Skills give the agent domain-specific capabilities — from querying blockchains to understanding Ethereum development patterns.

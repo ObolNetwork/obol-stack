@@ -79,6 +79,46 @@ spec:
                       type: boolean
                       default: false
                       description: "Provision a per-namespace remote-signer keystore. Address is published in status.walletAddress."
+                secrets:
+                  type: object
+                  properties:
+                    bitwarden:
+                      type: object
+                      description: "Optional Hermes Bitwarden Secrets Manager startup sync."
+                      properties:
+                        enabled:
+                          type: boolean
+                          default: false
+                        projectID:
+                          type: string
+                          maxLength: 128
+                          description: "Bitwarden Secrets Manager project UUID."
+                        serverURL:
+                          type: string
+                          maxLength: 512
+                          description: "Optional Bitwarden server URL, e.g. https://vault.bitwarden.com."
+                        accessTokenSecretName:
+                          type: string
+                          default: hermes-env
+                          enum:
+                            - hermes-env
+                          pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+                          maxLength: 253
+                        accessTokenKey:
+                          type: string
+                          default: BWS_ACCESS_TOKEN
+                          pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+                          maxLength: 128
+                        overrideExisting:
+                          type: boolean
+                          default: true
+                        cacheTTLSeconds:
+                          type: integer
+                          minimum: 0
+                          default: 300
+                        autoInstall:
+                          type: boolean
+                          default: true
             status:
               type: object
               properties:

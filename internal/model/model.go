@@ -243,10 +243,15 @@ func PatchLiteLLMProvider(cfg *config.Config, u *ui.UI, provider, apiKey string,
 	if envVar != "" && apiKey != "" {
 		u.Infof("Setting %s API key", provider)
 
-		patchJSON := fmt.Sprintf(`{"stringData":{"%s":"%s"}}`, envVar, apiKey)
+		patchJSON, err := json.Marshal(map[string]any{
+			"stringData": map[string]string{envVar: apiKey},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to encode secret patch: %w", err)
+		}
 		if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 			"patch", "secret", secretName, "-n", namespace,
-			"-p", patchJSON, "--type=merge"); err != nil {
+			"-p", string(patchJSON), "--type=merge"); err != nil {
 			return fmt.Errorf("failed to patch secret: %w", err)
 		}
 	}

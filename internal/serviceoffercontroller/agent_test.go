@@ -65,6 +65,34 @@ func TestValidateAgentSpec_RejectsBlankSkillEntry(t *testing.T) {
 	}
 }
 
+func TestValidateAgentSpec_RejectsInvalidBitwardenConfig(t *testing.T) {
+	a := &monetizeapi.Agent{
+		Spec: monetizeapi.AgentSpec{
+			Runtime: "hermes",
+			Secrets: monetizeapi.AgentSecrets{
+				Bitwarden: monetizeapi.AgentBitwardenSecrets{Enabled: true},
+			},
+		},
+	}
+	reason, _, ok := validateAgentSpec(a)
+	if ok {
+		t.Fatal("expected validator to reject missing Bitwarden project")
+	}
+	if reason != "InvalidBitwardenConfig" {
+		t.Errorf("reason = %q, want InvalidBitwardenConfig", reason)
+	}
+
+	a.Spec.Secrets.Bitwarden.ProjectID = "project-123"
+	a.Spec.Secrets.Bitwarden.AccessTokenSecretName = "other-secret"
+	reason, _, ok = validateAgentSpec(a)
+	if ok {
+		t.Fatal("expected validator to reject custom Bitwarden token Secret")
+	}
+	if reason != "InvalidBitwardenConfig" {
+		t.Errorf("reason = %q, want InvalidBitwardenConfig", reason)
+	}
+}
+
 func TestSetAgentCondition_AddAndUpdate(t *testing.T) {
 	var status monetizeapi.AgentStatus
 

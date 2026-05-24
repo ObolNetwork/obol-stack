@@ -14,14 +14,15 @@ func TestAgentCommand_Structure(t *testing.T) {
 	cmd := agentCommand(cfg)
 
 	expected := map[string]bool{
-		"init":   false,
-		"new":    false,
-		"sync":   false,
-		"setup":  false,
-		"auth":   false,
-		"list":   false,
-		"delete": false,
-		"wallet": false,
+		"init":    false,
+		"new":     false,
+		"sync":    false,
+		"setup":   false,
+		"auth":    false,
+		"list":    false,
+		"delete":  false,
+		"secrets": false,
+		"wallet":  false,
 	}
 
 	for _, sub := range cmd.Commands {
@@ -34,6 +35,32 @@ func TestAgentCommand_Structure(t *testing.T) {
 		if !found {
 			t.Errorf("missing agent subcommand %q", name)
 		}
+	}
+}
+
+func TestAgentSecretsCommand_ExposesBitwarden(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := agentCommand(cfg)
+	secretsCmd := findSubcommand(t, cmd, "secrets")
+	bwCmd := findSubcommand(t, secretsCmd, "bitwarden")
+
+	for _, name := range []string{"setup", "status", "disable"} {
+		findSubcommand(t, bwCmd, name)
+	}
+
+	setup := findSubcommand(t, bwCmd, "setup")
+	flags := flagMap(setup)
+	requireFlags(t, flags, "runtime", "project-id", "server-url", "access-token", "access-token-env", "cache-ttl")
+	assertStringDefault(t, flags, "runtime", "hermes")
+	assertStringDefault(t, flags, "server-url", "https://vault.bitwarden.com")
+	assertStringDefault(t, flags, "access-token-env", "BWS_ACCESS_TOKEN")
+}
+
+func TestResolveHermesBitwardenTargetRejectsOpenClaw(t *testing.T) {
+	cfg := newTestConfig(t)
+	_, err := resolveHermesBitwardenTarget(cfg, "openclaw", nil)
+	if err == nil || !strings.Contains(err.Error(), "OpenClaw is not supported") {
+		t.Fatalf("err = %v, want OpenClaw unsupported error", err)
 	}
 }
 

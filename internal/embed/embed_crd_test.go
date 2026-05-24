@@ -419,10 +419,16 @@ func TestAgentCRD_Fields(t *testing.T) {
 	if !ok {
 		t.Fatal("spec.properties not a map")
 	}
-	for _, field := range []string{"runtime", "model", "skills", "objective", "wallet"} {
+	for _, field := range []string{"runtime", "model", "skills", "objective", "wallet", "secrets"} {
 		if _, exists := specProps[field]; !exists {
 			t.Errorf("spec.properties missing %q", field)
 		}
+	}
+	if nested(specProps, "secrets", "properties", "bitwarden", "properties", "projectID") == nil {
+		t.Error("spec.secrets.bitwarden.projectID missing")
+	}
+	if nested(specProps, "secrets", "properties", "bitwarden", "properties", "accessTokenKey") == nil {
+		t.Error("spec.secrets.bitwarden.accessTokenKey missing")
 	}
 
 	statusProps, ok := nested(v0, "schema", "openAPIV3Schema", "properties", "status", "properties").(map[string]any)

@@ -36,3 +36,13 @@ func TestModelCommand_Structure(t *testing.T) {
 		}
 	}
 }
+
+func TestModelSetupCommand_ExposesBitwardenKeySource(t *testing.T) {
+	cfg := &config.Config{}
+	cmd := modelCommand(cfg)
+	setup := findSubcommand(t, cmd, "setup")
+	flags := flagMap(setup)
+
+	requireFlags(t, flags, "api-key-source", "agent")
+	assertStringDefault(t, flags, "agent", "obol-agent")
+}
