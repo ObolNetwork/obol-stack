@@ -98,9 +98,10 @@ repositories or docs.]
 - [Delete this section if there are no breaking changes.]
 - **Pre-release tester warning**: If you ran an unreleased marketplace or
   chart-consolidation branch before this release, `obol stack up` may fail
-  with Helm `invalid ownership metadata` errors for resources that moved into
-  the `base` chart. This is not a supported production migration path. Back up
-  anything you need from the local test stack, then recreate it:
+  with Helm `invalid ownership metadata` errors for resources or namespaces
+  that moved into the `base` chart. This is not a supported production
+  migration path. Back up anything you need from the local test stack, then
+  recreate it:
 
   ```bash
   obol stack down
