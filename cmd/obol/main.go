@@ -202,9 +202,20 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 								Name:  "wildcard-dns",
 								Usage: "Configure wildcard *.obol.stack DNS via NetworkManager/dnsmasq (Linux) or /etc/resolver (macOS)",
 							},
+							&cli.BoolFlag{
+								Name:    "no-registry-cache",
+								Usage:   "Disable pull-through registry cache containers (docker.io, ghcr.io, quay.io). Use on hosts behind a corporate proxy with their own caching, or where disk space is constrained.",
+								Sources: cli.EnvVars("OBOL_DISABLE_REGISTRY_CACHE"),
+							},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							u := getUI(cmd)
+							// Propagate the flag into the env var that backend_k3d
+							// reads, so the registry-cache skip is honoured even when
+							// the flag is set rather than the env var directly.
+							if cmd.Bool("no-registry-cache") {
+								os.Setenv("OBOL_DISABLE_REGISTRY_CACHE", "true") //nolint:errcheck // best-effort in-process set
+							}
 							if err := stack.Up(cfg, u, cmd.Bool("wildcard-dns")); err != nil {
 								return err
 							}
