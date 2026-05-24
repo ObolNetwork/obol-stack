@@ -123,6 +123,30 @@ stringData:
   LITELLM_MASTER_KEY: "sk-obol-{{CLUSTER_ID}}"
 
 ---
+# x402-buyer maintains consumed-nonce state in /state/consumed.json.
+# Previously this was emptyDir, which lost state on every pod restart
+# — the buyer would then attempt to re-spend already-consumed auths
+# from the ConfigMap-loaded pool, cascading into 400s from the
+# facilitator's nonce protection until a manual buy.py process --all.
+# PVC backed by local-path (single-node k3d default storage class)
+# gives crash-safety without conversion to StatefulSet.
+#
+# Deployment strategy: Recreate — RWO PVC can't be mounted by two
+# pods, so RollingUpdate's surge would block. Recreate accepts a
+# brief gap during rollout (litellm is replicas:1 anyway).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: x402-buyer-state
+  namespace: llm
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 50Mi
+
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -135,11 +159,12 @@ spec:
   # is local to the sidecar pod. Scale this back out only after consumed auth
   # state is shared or auth pools are sharded per replica.
   replicas: 1
+  # Recreate (not RollingUpdate) because the x402-buyer-state PVC is RWO and
+  # cannot be co-mounted by an overlapping new pod during surge. Litellm is
+  # replicas: 1 so this just trades the (currently maxSurge:1) overlap for a
+  # short gap during rollout — acceptable, and unavoidable with RWO storage.
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxUnavailable: 0
-      maxSurge: 1
+    type: Recreate
   selector:
     matchLabels:
       app: litellm
@@ -324,7 +349,8 @@ spec:
             name: x402-buyer-auths
             optional: true
         - name: x402-buyer-state
-          emptyDir: {}
+          persistentVolumeClaim:
+            claimName: x402-buyer-state
 
 ---
 apiVersion: policy/v1
