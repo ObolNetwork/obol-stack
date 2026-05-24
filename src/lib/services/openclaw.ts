@@ -4,7 +4,7 @@
  * Health: HTTP fetch to OpenAI-compatible API (similar to PrometheusClient pattern)
  */
 
-import { CoreV1Api, KubeConfig } from '@kubernetes/client-node';
+import { CoreV1Api } from '@kubernetes/client-node';
 import { ObjectCoreV1Api } from '@kubernetes/client-node/dist/gen/types/ObjectParamAPI';
 import type {
   OpenClawInstance,
@@ -12,6 +12,7 @@ import type {
   WalletMetadata,
 } from '@/types/openclaw';
 import { config } from '@/lib/config/environment';
+import { sharedKubeConfig } from '@/lib/services/kube';
 
 const OPENCLAW_PORT = 18789;
 
@@ -20,25 +21,9 @@ export class OpenClawClient {
   private isInCluster: boolean;
 
   constructor() {
-    const kc = this.getKubeConfig();
+    const kc = sharedKubeConfig();
     this.coreV1Api = kc.makeApiClient(CoreV1Api);
     this.isInCluster = !!process.env.KUBERNETES_SERVICE_HOST;
-  }
-
-  private getKubeConfig(): KubeConfig {
-    const kc = new KubeConfig();
-    if (process.env.KUBERNETES_SERVICE_HOST) {
-      kc.loadFromCluster();
-    } else {
-      if (!process.env.NEXT_PUBLIC_KUBECONFIG) {
-        throw new Error(
-          'NEXT_PUBLIC_KUBECONFIG environment variable is required for local development. ' +
-            'Set it to the path of your kubeconfig file.'
-        );
-      }
-      kc.loadFromFile(process.env.NEXT_PUBLIC_KUBECONFIG);
-    }
-    return kc;
   }
 
   /**

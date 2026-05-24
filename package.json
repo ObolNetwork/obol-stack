@@ -1,6 +1,6 @@
 {
   "name": "obol-stack-front-end",
-  "version": "0.1.23",
+  "version": "0.1.25-rc2",
   "private": true,
   "license": "Apache-2.0",
   "packageManager": "pnpm@10.30.1",
@@ -12,7 +12,7 @@
     "start:local": "next start",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test src/lib/services/*.test.mjs src/lib/marketplace/*.test.mjs src/hooks/*.test.mjs",
+    "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test src/lib/services/*.test.mjs src/lib/marketplace/*.test.mjs src/lib/middleware/*.test.mjs src/hooks/*.test.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "prepare": "husky",

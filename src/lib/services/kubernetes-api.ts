@@ -5,8 +5,8 @@
 
 import { ObjectCoreV1Api } from '@kubernetes/client-node/dist/gen/types/ObjectParamAPI';
 import { NodeModeType } from '../../types/dashboard';
-import { CoreV1Api, KubeConfig } from '@kubernetes/client-node';
-import * as fs from 'fs';
+import { CoreV1Api } from '@kubernetes/client-node';
+import { sharedKubeConfig } from '@/lib/services/kube';
 import {
   AnyApplicationInstance,
   BaseApplicationInstance,
@@ -30,45 +30,10 @@ export class KubernetesAPIClient {
     // The API server is always available at this address from within the cluster
     this.baseUrl = 'https://kubernetes.default.svc';
 
-    const kc = this.getKubeConfig();
+    const kc = sharedKubeConfig();
     this.coreV1Api = kc.makeApiClient(CoreV1Api);
     // In production, read the service account token
     // For now, we'll use a simpler approach with direct service URLs
-  }
-
-  private getKubeConfig(): KubeConfig {
-    const kc = new KubeConfig();
-    if (process.env.KUBERNETES_SERVICE_HOST) {
-      // In-cluster mode: Use service account token
-      console.log('[K8s] Using in-cluster configuration');
-      kc.loadFromCluster();
-    } else {
-      // Local development: Require NEXT_PUBLIC_KUBECONFIG env var
-      if (!process.env.NEXT_PUBLIC_KUBECONFIG) {
-        throw new Error(
-          'NEXT_PUBLIC_KUBECONFIG environment variable is required for local development. ' +
-            'Set it to the path of your kubeconfig file.'
-        );
-      }
-
-      // Check if file exists
-      if (!fs.existsSync(process.env.NEXT_PUBLIC_KUBECONFIG)) {
-        throw new Error(
-          `Kubeconfig file not found at: ${process.env.NEXT_PUBLIC_KUBECONFIG}`
-        );
-      }
-
-      try {
-        kc.loadFromFile(process.env.NEXT_PUBLIC_KUBECONFIG);
-        console.log(`[K8s] Context: ${kc.getCurrentContext()}`);
-      } catch (error) {
-        throw new Error(
-          `Failed to load kubeconfig from ${process.env.NEXT_PUBLIC_KUBECONFIG}: ${error instanceof Error ? error.message : 'Unknown error'}`
-        );
-      }
-    }
-
-    return kc;
   }
 
   async getApplicationInstances(): Promise<AnyApplicationInstance[]> {

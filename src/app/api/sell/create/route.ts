@@ -1,8 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { SellClient } from '@/lib/services/sell';
+import { rejectCrossOrigin } from '@/lib/middleware/origin-check';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+// Defense-in-depth namespace allowlist. The frontend is local-only behind
+// the obol.stack hostname restriction so this is not the primary trust
+// boundary, but a typo or stale UI state shouldn't be able to drop a CR
+// into kube-system / monitoring / x402 / traefik etc. RBAC also limits
+// the SA, this is just the earlier failure point.
+const ALLOWED_NAMESPACES = new Set<string>(['demo', 'llm']);
+const ALLOWED_NAMESPACE_PATTERNS = [
+  /^hermes-[a-z0-9-]+$/,
+  /^openclaw-[a-z0-9-]+$/,
+];
+
+function isAllowedNamespace(ns: string): boolean {
+  if (ALLOWED_NAMESPACES.has(ns)) return true;
+  return ALLOWED_NAMESPACE_PATTERNS.some(re => re.test(ns));
+}
 
 /**
  * POST /api/sell/create
@@ -10,6 +27,9 @@ export const dynamic = 'force-dynamic';
  */
 export async function POST(request: NextRequest) {
   try {
+    const csrfReject = rejectCrossOrigin(request);
+    if (csrfReject) return csrfReject;
+
     const body = await request.json();
     const {
       name,
@@ -32,10 +52,20 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const targetNamespace = namespace || 'llm';
+    if (!isAllowedNamespace(targetNamespace)) {
+      return NextResponse.json(
+        {
+          error: `Namespace "${targetNamespace}" is not allowed (allowed: demo, llm, hermes-*, openclaw-*).`,
+        },
+        { status: 400 }
+      );
+    }
+
     const client = new SellClient();
     await client.createServiceOffer({
       name,
-      namespace: namespace || 'llm',
+      namespace: targetNamespace,
       wallet,
       chain,
       pricePerRequest,
@@ -47,7 +77,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       name,
-      namespace: namespace || 'llm',
+      namespace: targetNamespace,
     });
   } catch (error: any) {
     console.error('[Sell Create] Error:', error);

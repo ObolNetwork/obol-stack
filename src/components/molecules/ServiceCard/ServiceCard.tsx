@@ -1,9 +1,18 @@
 'use client';
 
-import type { MouseEvent } from 'react';
-import { Box, Flex, Text, Link, styled, OpenInNew } from '@obolnetwork/obol-ui';
+import { useEffect, useState, type MouseEvent } from 'react';
+import {
+  Box,
+  Button,
+  Flex,
+  Text,
+  Link,
+  styled,
+  OpenInNew,
+} from '@obolnetwork/obol-ui';
 import { StatusPill } from '../../atoms/StatusIndicator';
 import { CopyButton } from '../../atoms/CopyButton/CopyButton';
+import { StopDrainModal } from '../StopDrainModal';
 import type {
   ServiceOffer,
   ServiceOfferAgentLink,
@@ -143,6 +152,19 @@ const Dot = styled(Box, {
   backgroundColor: 'currentColor',
 });
 
+const DrainingBadge = styled(Text, {
+  fontSize: '10px',
+  fontWeight: '$semibold',
+  color: '#f5c542',
+  backgroundColor: 'rgba(245, 197, 66, 0.1)',
+  border: '1px solid rgba(245, 197, 66, 0.35)',
+  borderRadius: '4px',
+  padding: '1px 5px',
+  lineHeight: 1.4,
+  whiteSpace: 'nowrap',
+  fontVariantNumeric: 'tabular-nums',
+});
+
 const UsageBadge = styled(Text, {
   fontSize: '10px',
   fontWeight: '$semibold',
@@ -244,6 +266,49 @@ function scrollToAgent(link: ServiceOfferAgentLink) {
  * value like "/services/demo-quant" (current ServiceOffer status). We
  * resolve the latter against the tunnel URL as a base so both work.
  */
+/**
+ * Pulls the drain end time out of the Draining condition. Backend writes
+ * the RFC3339 timestamp into condition.message; if that's ever missing we
+ * fall back to deriving it from spec.drainAt + spec.drainGracePeriod (not
+ * exposed on the typed ServiceOffer today, so we just return null and the
+ * UI shows "Draining" with no countdown).
+ */
+function drainEndsAt(
+  conditions: ServiceOfferCondition[] | undefined
+): Date | null {
+  const c = conditions?.find(x => x.type === 'Draining' && x.status === 'True');
+  if (!c) return null;
+  // Match the first ISO-8601-like substring in the message.
+  const m = c.message?.match(
+    /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})/
+  );
+  if (!m) return null;
+  const date = new Date(m[0]);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function formatCountdown(target: Date, now: Date): string {
+  const deltaMs = target.getTime() - now.getTime();
+  if (deltaMs <= 0) return 'expiring';
+  const totalSeconds = Math.floor(deltaMs / 1000);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  if (h > 0) return `${h}h ${m.toString().padStart(2, '0')}m`;
+  if (m > 0) return `${m}m ${s.toString().padStart(2, '0')}s`;
+  return `${s}s`;
+}
+
+function useNow(intervalMs = 1000, enabled = true): Date {
+  const [now, setNow] = useState<Date>(() => new Date());
+  useEffect(() => {
+    if (!enabled) return;
+    const id = setInterval(() => setNow(new Date()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs, enabled]);
+  return now;
+}
+
 function publicEndpoint(
   endpoint: string | undefined,
   tunnelURL: string | null
@@ -264,7 +329,6 @@ function publicEndpoint(
 
 export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
   const displayName = offer.registration?.name || offer.name;
-  const isReady = offer.status === 'Ready';
   const price = formatPrice(offer);
   const symbol = offer.payment?.asset?.symbol || 'USDC';
   const network = offer.payment?.network;
@@ -279,6 +343,12 @@ export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
   const overflowSkills = Math.max(0, skills.length - visibleSkills.length);
   const charged = offer.usage?.chargedRequests;
   const endpoint = publicEndpoint(offer.endpoint, tunnelURL);
+
+  const drainEnd = drainEndsAt(offer.conditions);
+  const isDraining = drainEnd !== null;
+  const now = useNow(1000, isDraining);
+  const countdown = drainEnd ? formatCountdown(drainEnd, now) : null;
+  const isReady = !isDraining && offer.status === 'Ready';
 
   return (
     <CardContainer>
@@ -312,10 +382,17 @@ export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
             </Link>
           )}
         </Flex>
-        <StatusPill
-          status={isReady ? 'synced' : 'syncing'}
-          label={isReady ? 'Ready' : 'Pending'}
-        />
+        <Flex css={{ alignItems: 'center', gap: '$xs' }}>
+          {isDraining && (
+            <DrainingBadge title={`Drain ends at ${drainEnd?.toISOString()}`}>
+              Draining{countdown ? ` · ends in ${countdown}` : ''}
+            </DrainingBadge>
+          )}
+          <StatusPill
+            status={isDraining ? 'syncing' : isReady ? 'synced' : 'syncing'}
+            label={isDraining ? 'Draining' : isReady ? 'Ready' : 'Pending'}
+          />
+        </Flex>
       </TopRow>
 
       {offer.registration?.description && (
@@ -402,6 +479,28 @@ export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
           {offer.namespace}/{offer.name}
         </Text>
       </ConditionsRow>
+
+      {!isDraining && (
+        <Flex
+          css={{
+            marginTop: '$xs',
+            justifyContent: 'flex-end',
+          }}
+        >
+          <StopDrainModal
+            name={offer.name}
+            namespace={offer.namespace}
+            trigger={
+              <Button
+                color="secondary"
+                title="Drain in-flight buyers, then tear down the route"
+              >
+                Stop &amp; drain
+              </Button>
+            }
+          />
+        </Flex>
+      )}
     </CardContainer>
   );
 }

@@ -1,4 +1,4 @@
-import { CoreV1Api, KubeConfig } from '@kubernetes/client-node';
+import { CoreV1Api } from '@kubernetes/client-node';
 import { ObjectCoreV1Api } from '@kubernetes/client-node/dist/gen/types/ObjectParamAPI';
 import type {
   AgentInstance,
@@ -11,6 +11,7 @@ import {
   DEFAULT_AGENT_ID,
   getAgentDashboardHostname,
 } from '@/lib/services/agent-runtime';
+import { sharedKubeConfig } from '@/lib/services/kube';
 
 const RUNTIME_CONFIG = {
   hermes: {
@@ -44,27 +45,9 @@ export class AgentClient {
   private isInCluster: boolean;
 
   constructor() {
-    const kc = this.getKubeConfig();
+    const kc = sharedKubeConfig();
     this.coreV1Api = kc.makeApiClient(CoreV1Api);
     this.isInCluster = !!process.env.KUBERNETES_SERVICE_HOST;
-  }
-
-  private getKubeConfig(): KubeConfig {
-    const kc = new KubeConfig();
-    if (process.env.KUBERNETES_SERVICE_HOST) {
-      kc.loadFromCluster();
-      return kc;
-    }
-
-    if (!process.env.NEXT_PUBLIC_KUBECONFIG) {
-      throw new Error(
-        'NEXT_PUBLIC_KUBECONFIG environment variable is required for local development. ' +
-          'Set it to the path of your kubeconfig file.'
-      );
-    }
-
-    kc.loadFromFile(process.env.NEXT_PUBLIC_KUBECONFIG);
-    return kc;
   }
 
   private descriptor(runtime: AgentRuntime): RuntimeDescriptor {
@@ -234,6 +217,45 @@ export class AgentClient {
       return this.getOpenClawGatewayToken(instance.namespace);
     }
     return this.getHermesAPIServerKey(instance.namespace);
+  }
+
+  /**
+   * Single apiserver call that returns wallet metadata for every namespace
+   * that hosts a `wallet-metadata` ConfigMap. Used by /api/agents/wallets
+   * to avoid N+1 reads when the operator runs many agents.
+   *
+   * Returns Map<namespace, WalletMetadata>; namespaces with no parseable
+   * payload are still entries (empty addresses).
+   */
+  public async listAllWalletMetadata(): Promise<Map<string, WalletMetadata>> {
+    const out = new Map<string, WalletMetadata>();
+    try {
+      const response = await this.coreV1Api.listConfigMapForAllNamespaces({
+        fieldSelector: 'metadata.name=wallet-metadata',
+      });
+      for (const cm of response.items ?? []) {
+        const ns = cm.metadata?.namespace ?? '';
+        if (!ns) continue;
+        const raw = cm.data?.['addresses.json'];
+        if (!raw) {
+          out.set(ns, { instanceId: '', addresses: [], count: 0 });
+          continue;
+        }
+        try {
+          const parsed = JSON.parse(raw);
+          out.set(ns, {
+            instanceId: parsed.instanceId ?? '',
+            addresses: parsed.addresses ?? [],
+            count: parsed.count ?? parsed.addresses?.length ?? 0,
+          });
+        } catch {
+          out.set(ns, { instanceId: '', addresses: [], count: 0 });
+        }
+      }
+    } catch (error) {
+      console.warn('[AgentClient.listAllWalletMetadata] failed:', error);
+    }
+    return out;
   }
 
   public async getWalletMetadata(

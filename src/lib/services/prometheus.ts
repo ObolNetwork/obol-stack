@@ -44,17 +44,24 @@ export class PrometheusClient {
   }
 
   /**
-   * Map of "<namespace>/<offer-name>" -> charged-request count, summed across
-   * x402-verifier replicas. Returns an empty Map if Prometheus is unavailable
-   * or the metric hasn't been scraped yet — callers render a "—" rather than
-   * surface an error to the user.
+   * Map of "<namespace>/<offer-name>" -> charged-request count over the
+   * last 7d window, summed across x402-verifier replicas. Reads from the
+   * `x402:revenue:7d_by_offer` recording rule maintained by the
+   * PrometheusRule in internal/embed/infrastructure/base/templates/
+   * x402-prometheus-rules.yaml.
+   *
+   * The rule uses `sum(increase(counter[7d]))` so the value is reset-safe
+   * across verifier restarts — DO NOT add an `or sum(counter)` fallback;
+   * the raw counter would re-introduce the per-process reset bug the
+   * recording rule fixes.
+   *
+   * Returns an empty Map if Prometheus is unavailable or the metric hasn't
+   * been scraped yet — callers render a "—" rather than surface an error.
    */
-  async chargedSalesByOffer(): Promise<Map<string, number>> {
+  async chargedSales7dByOffer(): Promise<Map<string, number>> {
     const result = new Map<string, number>();
     try {
-      const response = await this.query(
-        'sum by (offer_namespace, offer_name) (obol_x402_verifier_charged_requests_total)'
-      );
+      const response = await this.query('x402:revenue:7d_by_offer');
       for (const row of response.data.result) {
         const ns = row.metric.offer_namespace;
         const name = row.metric.offer_name;
@@ -64,7 +71,106 @@ export class PrometheusClient {
         result.set(`${ns}/${name}`, value);
       }
     } catch (error) {
-      console.warn('[Prometheus] chargedSalesByOffer failed:', error);
+      console.warn('[Prometheus] chargedSales7dByOffer failed:', error);
+    }
+    return result;
+  }
+
+  /**
+   * Charged-request counts per (offer, chain) over a sliding window. Used by
+   * the My Listings EarningsStrip to multiply by per-offer price for an
+   * earnings rollup even before we have a settlement-amount metric.
+   *
+   * Returns Map<"<ns>/<name>", Array<{chain, requests}>>.
+   */
+  async chargedSalesByOfferAndChain(
+    window: '1h' | '24h' | '7d' | '30d' = '7d'
+  ): Promise<Map<string, Array<{ chain: string; requests: number }>>> {
+    const result = new Map<
+      string,
+      Array<{ chain: string; requests: number }>
+    >();
+    // Recording rules shipped in base/templates/x402-prometheus-rules.yaml
+    // pre-aggregate the 7d + 24h windows. Falling back to the raw
+    // `increase()` query keeps the page working if the rule hasn't
+    // propagated yet OR the operator is on a 1h/30d window we don't
+    // pre-record.
+    const recordingRule =
+      window === '24h'
+        ? 'x402:revenue:24h_by_offer_chain'
+        : window === '7d'
+          ? 'x402:revenue:7d_by_offer_chain'
+          : null;
+    const expr = recordingRule
+      ? `${recordingRule} or sum by (offer_namespace, offer_name, chain) (increase(obol_x402_verifier_charged_requests_total[${window}]))`
+      : `sum by (offer_namespace, offer_name, chain) (increase(obol_x402_verifier_charged_requests_total[${window}]))`;
+    try {
+      const response = await this.query(expr);
+      for (const row of response.data.result) {
+        const ns = row.metric.offer_namespace;
+        const name = row.metric.offer_name;
+        const chain = row.metric.chain ?? '';
+        if (!ns || !name) continue;
+        const v = parseFloat(row.value?.[1] ?? '0');
+        if (!Number.isFinite(v)) continue;
+        const key = `${ns}/${name}`;
+        const existing = result.get(key) ?? [];
+        existing.push({ chain, requests: v });
+        result.set(key, existing);
+      }
+    } catch (error) {
+      console.warn('[Prometheus] chargedSalesByOfferAndChain failed:', error);
+    }
+    return result;
+  }
+
+  /**
+   * 24h request counts per offer — used by ListingRow's "Traffic · 24h" cell.
+   * Falls back to a raw `increase()` over the 7d window if the recording
+   * rule hasn't propagated yet.
+   */
+  async chargedRequests24hByOffer(): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    try {
+      // Reads the same 24h recording rule grouped by offer (sum across chains).
+      const response = await this.query(
+        'sum by (offer_namespace, offer_name) (x402:revenue:24h_by_offer_chain) or sum by (offer_namespace, offer_name) (increase(obol_x402_verifier_charged_requests_total[24h]))'
+      );
+      for (const row of response.data.result) {
+        const ns = row.metric.offer_namespace;
+        const name = row.metric.offer_name;
+        if (!ns || !name) continue;
+        const v = parseFloat(row.value?.[1] ?? '0');
+        if (!Number.isFinite(v)) continue;
+        result.set(`${ns}/${name}`, v);
+      }
+    } catch (error) {
+      console.warn('[Prometheus] chargedRequests24hByOffer failed:', error);
+    }
+    return result;
+  }
+
+  /**
+   * Most-recent successful settlement per offer, as a UNIX seconds gauge.
+   * Backed by obol_x402_verifier_last_payment_success_seconds in
+   * internal/x402/metrics.go.
+   */
+  async lastSettlementByOffer(): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    try {
+      const response = await this.query(
+        'max by (offer_namespace, offer_name) (obol_x402_verifier_last_payment_success_seconds)'
+      );
+      for (const row of response.data.result) {
+        const ns = row.metric.offer_namespace;
+        const name = row.metric.offer_name;
+        if (!ns || !name) continue;
+        const v = parseFloat(row.value?.[1] ?? '0');
+        if (!Number.isFinite(v)) continue;
+        result.set(`${ns}/${name}`, v);
+      }
+    } catch (error) {
+      console.warn('[Prometheus] lastSettlementByOffer failed:', error);
     }
     return result;
   }
