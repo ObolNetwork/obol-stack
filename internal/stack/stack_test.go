@@ -1037,13 +1037,13 @@ func TestWarnIfNoChatModel_EmitsWarnForWildcardOnly(t *testing.T) {
 // configurable behaviour for repo update. It logs every invocation to
 // invokeLog so callers can assert on what helm was asked to do.
 //
-//   - `helm version --short`: prints "v3.20.1" (a version that supports
-//     --fail-on-repo-update-fail=false).
-//   - `helm repo add ...`:    exits 0 (idempotent registration).
-//   - `helm repo update ...`: exits with repoUpdateExit. Stdout is empty,
+//   - `helm version --short`:       prints "v3.20.1".
+//   - `helm repo update --help`:    advertises --fail-on-repo-update-fail=false.
+//   - `helm repo add ...`:          exits 0 (idempotent registration).
+//   - `helm repo update ...`:       exits with repoUpdateExit. Stdout is empty,
 //     stderr mimics helm's real "failed to update the following repositories"
 //     message when repoUpdateExit != 0.
-//   - Anything else:          exits 0.
+//   - Anything else:                exits 0.
 func fakeHelmScript(invokeLog string, repoUpdateExit int) string {
 	return `#!/bin/sh
 echo "$@" >> "` + invokeLog + `"
@@ -1052,6 +1052,10 @@ if [ "$1" = "version" ] && [ "$2" = "--short" ]; then
   exit 0
 fi
 if [ "$1" = "repo" ] && [ "$2" = "add" ]; then
+  exit 0
+fi
+if [ "$1" = "repo" ] && [ "$2" = "update" ] && [ "$3" = "--help" ]; then
+  echo "      --fail-on-repo-update-fail=false   tolerate individual repo failures"
   exit 0
 fi
 if [ "$1" = "repo" ] && [ "$2" = "update" ]; then

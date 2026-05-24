@@ -154,11 +154,11 @@ func TestUpdateRepos_TolerantArgsConstructed(t *testing.T) {
 	argLog := filepath.Join(dir, "args.log")
 
 	// Fake helm:
-	//   - `version --short`  → "v3.20.1\n"
-	//   - any other args     → append to args.log and exit 0
+	//   - `repo update --help` → advertises the tolerant flag
+	//   - any other args       → append to args.log and exit 0
 	script := `#!/bin/sh
-if [ "$1" = "version" ] && [ "$2" = "--short" ]; then
-  echo "v3.20.1"
+if [ "$1" = "repo" ] && [ "$2" = "update" ] && [ "$3" = "--help" ]; then
+  echo "      --fail-on-repo-update-fail=false   tolerate individual repo failures"
   exit 0
 fi
 echo "$@" >> "` + argLog + `"
@@ -178,6 +178,50 @@ exit 0
 	}
 	got := string(logged)
 	for _, want := range []string{"repo", "update", "--fail-on-repo-update-fail=false", "traefik", "obol"} {
+		if !contains(got, want) {
+			t.Fatalf("expected %q in fake helm argv, got: %s", want, got)
+		}
+	}
+}
+
+// TestUpdateRepos_OmitsUnsupportedTolerantFlag covers Helm builds whose
+// `repo update` command no longer accepts --fail-on-repo-update-fail. The
+// preflight must still run a targeted repo update instead of failing before
+// any repo is refreshed.
+func TestUpdateRepos_OmitsUnsupportedTolerantFlag(t *testing.T) {
+	if os.Getenv("GOOS") == "windows" {
+		t.Skip("shell-script fake binary not supported on windows")
+	}
+
+	dir := t.TempDir()
+	helm := filepath.Join(dir, "helm")
+	argLog := filepath.Join(dir, "args.log")
+
+	script := `#!/bin/sh
+if [ "$1" = "repo" ] && [ "$2" = "update" ] && [ "$3" = "--help" ]; then
+  echo "Usage: helm repo update [REPO1 [REPO2 ...]] [flags]"
+  exit 0
+fi
+echo "$@" >> "` + argLog + `"
+exit 0
+`
+	if err := os.WriteFile(helm, []byte(script), 0o755); err != nil { //nolint:gosec // test binary
+		t.Fatalf("write fake helm: %v", err)
+	}
+
+	if _, err := UpdateRepos(helm, []string{"traefik", "obol"}); err != nil {
+		t.Fatalf("UpdateRepos: %v", err)
+	}
+
+	logged, err := os.ReadFile(argLog)
+	if err != nil {
+		t.Fatalf("read args log: %v", err)
+	}
+	got := string(logged)
+	if contains(got, "--fail-on-repo-update-fail=false") {
+		t.Fatalf("unsupported tolerant flag was passed: %s", got)
+	}
+	for _, want := range []string{"repo", "update", "traefik", "obol"} {
 		if !contains(got, want) {
 			t.Fatalf("expected %q in fake helm argv, got: %s", want, got)
 		}

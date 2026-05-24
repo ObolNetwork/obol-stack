@@ -142,15 +142,30 @@ func EnsureRepos(helmBinary string, repos []helmfileRepo) error {
 	return firstErr
 }
 
-// UpdateRepos runs `helm repo update <names...>` and, when the helm version
-// supports it, passes --fail-on-repo-update-fail=false so that a single dead
-// repo (e.g. a tertiary repository that started serving 404) doesn't abort the
-// whole update.
+// RepoUpdateSupportsFailOnRepoUpdateFail reports whether the current helm
+// binary accepts `helm repo update --fail-on-repo-update-fail=false`.
+//
+// Do not infer this from the major version. Some Helm 4 builds dropped the flag
+// even though Helm 3.14+ had it, and passing an unknown flag prevents the
+// targeted repo update from running at all.
+func RepoUpdateSupportsFailOnRepoUpdateFail(helmBinary string) bool {
+	cmd := exec.Command(helmBinary, "repo", "update", "--help")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(out), "--fail-on-repo-update-fail")
+}
+
+// UpdateRepos runs `helm repo update <names...>` and, when the helm binary
+// advertises support, passes --fail-on-repo-update-fail=false so that a single
+// dead repo doesn't abort the whole update.
 //
 // Behaviour:
-//   - helm 3.14+ (where --fail-on-repo-update-fail exists): the flag is passed
-//     and the returned error is nil even if individual repos in `names` fail.
-//   - older helm: the flag is omitted and the error surfaces normally.
+//   - helm versions that advertise --fail-on-repo-update-fail: the flag is
+//     passed and the returned error is nil even if individual repos in `names`
+//     fail.
+//   - other helm versions: the flag is omitted and the error surfaces normally.
 //
 // The targeted form (`helm repo update <names...>`) is important: it limits the
 // update to repos this stack actually needs, so unrelated dead repos in the
@@ -161,7 +176,7 @@ func UpdateRepos(helmBinary string, names []string) ([]byte, error) {
 		return nil, nil
 	}
 	args := []string{"repo", "update"}
-	if major, err := MajorVersion(helmBinary); err == nil && major >= 3 {
+	if RepoUpdateSupportsFailOnRepoUpdateFail(helmBinary) {
 		args = append(args, "--fail-on-repo-update-fail=false")
 	}
 	args = append(args, names...)
