@@ -225,8 +225,15 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 					{
 						Name:  "down",
 						Usage: "Stop the Obol Stack",
+						Flags: []cli.Flag{
+							&cli.BoolFlag{
+								Name:    "yes",
+								Aliases: []string{"y"},
+								Usage:   "Skip the live-services confirmation prompt (required in non-interactive shells when offers are running)",
+							},
+						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return stack.Down(cfg, getUI(cmd))
+							return stack.Down(cfg, getUI(cmd), cmd.Bool("yes"))
 						},
 					},
 					{
@@ -238,9 +245,14 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 								Aliases: []string{"f"},
 								Usage:   "Also delete persistent data",
 							},
+							&cli.BoolFlag{
+								Name:    "yes",
+								Aliases: []string{"y"},
+								Usage:   "Skip the live-services confirmation prompt (required in non-interactive shells when offers are running)",
+							},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return stack.Purge(cfg, getUI(cmd), cmd.Bool("force"))
+							return stack.Purge(cfg, getUI(cmd), cmd.Bool("force"), cmd.Bool("yes"))
 						},
 					},
 				},
