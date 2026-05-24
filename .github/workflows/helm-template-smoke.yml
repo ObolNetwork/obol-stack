@@ -1,0 +1,116 @@
+name: Helm Template Smoke
+
+on:
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'internal/embed/infrastructure/**'
+      - '.github/workflows/helm-template-smoke.yml'
+  push:
+    branches: [ main ]
+    paths:
+      - 'internal/embed/infrastructure/**'
+      - '.github/workflows/helm-template-smoke.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  helm-template-smoke:
+    name: helm template embedded chart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.20.1   # match obolup.sh pinned version
+
+      - name: helm template ./base
+        run: |
+          # Render the embedded `base` chart and fail on Go-template parse
+          # errors. Catches bugs like the unescaped `{{ $labels }}` in
+          # PrometheusRule annotations that broke `helm upgrade base` on
+          # every `obol stack up` (see PR #527). `go test ./...` does not
+          # exercise Helm rendering, so this is the only pre-merge gate
+          # for chart parse errors.
+          #
+          # The base chart contains `{{PLACEHOLDER}}` strings (e.g.
+          # `{{OLLAMA_HOST_IP}}`, `{{CLUSTER_ID}}`) that are substituted
+          # by `internal/defaults/defaults.go::InfrastructureReplacements`
+          # before helmfile runs. Helm's Go-template parser would treat
+          # them as actions and fail, so we substitute stub values into
+          # a working copy first — mirroring what `obol stack init` does.
+          set -euo pipefail
+          workdir="$(mktemp -d)"
+          cp -R internal/embed/infrastructure/base "$workdir/base"
+          # Mirror internal/defaults InfrastructureReplacements with CI stubs.
+          find "$workdir/base" -type f -name '*.yaml' -print0 \
+            | xargs -0 sed -i \
+              -e 's/{{OLLAMA_HOST_IP}}/127.0.0.1/g' \
+              -e 's/{{OLLAMA_HOST}}/localhost/g' \
+              -e 's/{{CLUSTER_ID}}/ci-helm-smoke/g'
+          # Match values passed by helmfile.yaml `releases[base]`.
+          helm template base "$workdir/base" \
+            --set dataDir=/data \
+            --set network=mainnet \
+            > "$workdir/base-rendered.yaml"
+
+          # Kubernetes object identity must be unique within one rendered
+          # chart. Helm will happily render duplicate apiVersion/kind/name
+          # tuples and leave the actual outcome to manifest ordering; this
+          # caught the duplicated obol-frontend ClusterRole/Binding review bug.
+          awk '
+          function flush() {
+            if (api && kind && name) {
+              key = api "/" kind "/" ns "/" name
+              count[key]++
+            }
+            api = kind = name = ns = ""; inmeta = 0
+          }
+          /^---/ { flush(); next }
+          /^apiVersion:/ { api = $2; next }
+          /^kind:/ { kind = $2; next }
+          /^metadata:/ { inmeta = 1; next }
+          inmeta && /^  name:/ { name = $2; next }
+          inmeta && /^  namespace:/ { ns = $2; next }
+          /^[^ ]/ && $0 !~ /^(apiVersion|kind|metadata):/ { inmeta = 0 }
+          END {
+            flush()
+            for (k in count) {
+              if (count[k] > 1) {
+                print count[k] " " k
+                dup = 1
+              }
+            }
+            exit dup
+          }' "$workdir/base-rendered.yaml"
+
+      - name: helm template ./cloudflared
+        run: |
+          # The cloudflared chart has no placeholder substitution and uses
+          # default values from values.yaml.
+          set -euo pipefail
+          helm template cloudflared internal/embed/infrastructure/cloudflared \
+            > /dev/null
+
+      - name: helm lint ./base
+        run: |
+          set -euo pipefail
+          workdir="$(mktemp -d)"
+          cp -R internal/embed/infrastructure/base "$workdir/base"
+          find "$workdir/base" -type f -name '*.yaml' -print0 \
+            | xargs -0 sed -i \
+              -e 's/{{OLLAMA_HOST_IP}}/127.0.0.1/g' \
+              -e 's/{{OLLAMA_HOST}}/localhost/g' \
+              -e 's/{{CLUSTER_ID}}/ci-helm-smoke/g'
+          helm lint "$workdir/base" \
+            --set dataDir=/data \
+            --set network=mainnet
+
+      - name: helm lint ./cloudflared
+        run: |
+          set -euo pipefail
+          helm lint internal/embed/infrastructure/cloudflared

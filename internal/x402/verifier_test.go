@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	x402types "github.com/coinbase/x402/go/types"
 	dto "github.com/prometheus/client_model/go"
@@ -99,6 +100,8 @@ func testPaymentHeaderFor(t *testing.T, payTo, amount string) string {
 }
 
 // newTestVerifier creates a Verifier backed by the given facilitator URL.
+// It also marks routes as loaded so /readyz returns 200 immediately, which
+// matches what the production wire-up does once the route source warms up.
 func newTestVerifier(t *testing.T, facilitatorURL string, routes []RouteRule) *Verifier {
 	t.Helper()
 	v, err := NewVerifier(&PricingConfig{
@@ -111,6 +114,7 @@ func newTestVerifier(t *testing.T, facilitatorURL string, routes []RouteRule) *V
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
+	v.MarkRoutesLoaded()
 	return v
 }
 
@@ -487,6 +491,55 @@ func TestVerifier_ReadyzNotReady(t *testing.T) {
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503 when config is nil, got %d", w.Code)
 	}
+	if got := w.Body.String(); !strings.Contains(got, "config not loaded") {
+		t.Errorf("expected body to mention %q, got %q", "config not loaded", got)
+	}
+}
+
+// TestVerifier_Readyz_BlocksUntilRoutesLoaded asserts the fix for
+// CLAUDE.md pitfall #14: /readyz must return 503 between "config loaded"
+// and "first route source apply completed" so kubelet keeps the pod out
+// of the Service Endpoints during informer warm-up.
+func TestVerifier_Readyz_BlocksUntilRoutesLoaded(t *testing.T) {
+	v, err := NewVerifier(&PricingConfig{
+		Wallet:         "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		Chain:          "base-sepolia",
+		FacilitatorURL: "http://example.invalid",
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+
+	// Config is loaded by NewVerifier, but routes have NOT been marked
+	// loaded yet — /readyz must still 503 with a routes-specific message
+	// so kubectl describe pod surfaces the actual cause.
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	w := httptest.NewRecorder()
+	v.HandleReadyz(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 before routes loaded, got %d", w.Code)
+	}
+	if got := w.Body.String(); !strings.Contains(got, "routes not loaded") {
+		t.Errorf("expected body to mention %q, got %q", "routes not loaded", got)
+	}
+
+	// After the route source signals first apply, /readyz flips to 200.
+	v.MarkRoutesLoaded()
+
+	w = httptest.NewRecorder()
+	v.HandleReadyz(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 after MarkRoutesLoaded, got %d (body=%q)", w.Code, w.Body.String())
+	}
+
+	// MarkRoutesLoaded is idempotent — calling it again must not regress.
+	v.MarkRoutesLoaded()
+	w = httptest.NewRecorder()
+	v.HandleReadyz(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 after second MarkRoutesLoaded, got %d", w.Code)
+	}
 }
 
 // ── Per-route PayTo / Network override tests ─────────────────────────────────
@@ -752,9 +805,10 @@ func TestVerifier_MetricsPaymentRequired(t *testing.T) {
 
 	metrics := scrapeVerifierMetrics(t, v)
 	labels := map[string]string{
-		"route":           "/rpc/*",
 		"offer_namespace": "llm",
 		"offer_name":      "paid-rpc",
+		"chain":           "",
+		"asset_symbol":    "unknown",
 	}
 	assertVerifierMetricValue(t, metrics["obol_x402_verifier_requests_total"], labels, 1)
 	assertVerifierMetricValue(t, metrics["obol_x402_verifier_payment_required_total"], labels, 1)
@@ -765,9 +819,10 @@ func TestVerifier_MetricsPaymentRequired(t *testing.T) {
 
 func TestVerifier_MetricsVerifiedAndRejectedPayments(t *testing.T) {
 	labels := map[string]string{
-		"route":           "/rpc/*",
 		"offer_namespace": "llm",
 		"offer_name":      "paid-rpc",
+		"chain":           "",
+		"asset_symbol":    "unknown",
 	}
 
 	okFac := newMockFacilitator(t, mockFacilitatorOpts{})
@@ -819,6 +874,281 @@ func TestVerifier_MetricsVerifiedAndRejectedPayments(t *testing.T) {
 	assertVerifierMetricMissing(t, rejectMetrics["obol_x402_verifier_payment_required_total"], labels)
 	assertVerifierMetricMissing(t, rejectMetrics["obol_x402_verifier_payment_verified_total"], labels)
 	assertVerifierMetricMissing(t, rejectMetrics["obol_x402_verifier_charged_requests_total"], labels)
+}
+
+// TestVerifier_LastPaymentSuccessGauge asserts that the
+// obol_x402_verifier_last_payment_success_seconds gauge is stamped to the
+// current wall-clock time when a paid request succeeds, and is NOT touched
+// when an unpaid request is rejected with 402.
+//
+// The gauge is labeled identically to the verifier counters; for this rule
+// `chain` is the empty string because the test RouteRule has no Network set,
+// and `asset_symbol` is "unknown" because AssetSymbol is unset (the defensive
+// fallback emitted by prometheusLabels).
+func TestVerifier_LastPaymentSuccessGauge(t *testing.T) {
+	labels := map[string]string{
+		"offer_namespace": "llm",
+		"offer_name":      "paid-rpc",
+		"chain":           "",
+		"asset_symbol":    "unknown",
+	}
+
+	tests := []struct {
+		name           string
+		setPayment     bool
+		rejectPayment  bool
+		wantStatus     int
+		wantGaugeFresh bool // assert gauge ~= now()
+	}{
+		{
+			name:           "successful paid request stamps gauge",
+			setPayment:     true,
+			rejectPayment:  false,
+			wantStatus:     http.StatusOK,
+			wantGaugeFresh: true,
+		},
+		{
+			name:           "unpaid 402 leaves gauge untouched",
+			setPayment:     false,
+			rejectPayment:  false,
+			wantStatus:     http.StatusPaymentRequired,
+			wantGaugeFresh: false,
+		},
+		{
+			name:           "rejected payment leaves gauge untouched",
+			setPayment:     true,
+			rejectPayment:  true,
+			wantStatus:     http.StatusPaymentRequired,
+			wantGaugeFresh: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fac := newMockFacilitator(t, mockFacilitatorOpts{rejectPayment: tt.rejectPayment})
+			v := newTestVerifier(t, fac.URL, []RouteRule{{
+				Pattern:        "/rpc/*",
+				Price:          "0.0001",
+				OfferNamespace: "llm",
+				OfferName:      "paid-rpc",
+			}})
+
+			req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+			req.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
+			req.Header.Set("X-Forwarded-Host", "obol.stack")
+			if tt.setPayment {
+				req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+			}
+
+			before := time.Now().Unix()
+			rec := httptest.NewRecorder()
+			v.HandleVerify(rec, req)
+			after := time.Now().Unix()
+
+			if rec.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.wantStatus)
+			}
+
+			families := scrapeVerifierMetrics(t, v)
+			gauge := families["obol_x402_verifier_last_payment_success_seconds"]
+
+			if !tt.wantGaugeFresh {
+				// Either the family is absent (no series emitted) or no
+				// series exists for these labels — both are acceptable for
+				// an untouched gauge.
+				assertVerifierMetricMissing(t, gauge, labels)
+				return
+			}
+
+			if gauge == nil {
+				t.Fatalf("missing metric family obol_x402_verifier_last_payment_success_seconds")
+			}
+			got := findVerifierMetricValue(t, gauge, labels)
+			// Allow ±5s slack for clock skew / slow CI.
+			if got < float64(before-5) || got > float64(after+5) {
+				t.Fatalf("gauge = %v, want within [%d, %d]", got, before-5, after+5)
+			}
+		})
+	}
+}
+
+// TestVerifier_Reload_PrunesDeletedOfferSeries asserts that when an offer is
+// removed from the route set (via Reload, the same path used by both the
+// file-config watcher and the kube ServiceOffer informer), its previously
+// stamped metric series are dropped from the registry. Without this, deleted
+// offers' last_payment_success_seconds gauge would survive forever and keep
+// firing/silencing alerts on dead labels.
+func TestVerifier_Reload_PrunesDeletedOfferSeries(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	keptRoute := RouteRule{
+		Pattern:        "/keep/*",
+		Price:          "0.0001",
+		OfferNamespace: "llm",
+		OfferName:      "keep",
+	}
+	removedRoute := RouteRule{
+		Pattern:        "/gone/*",
+		Price:          "0.0001",
+		OfferNamespace: "llm",
+		OfferName:      "gone",
+	}
+	v := newTestVerifier(t, fac.URL, []RouteRule{keptRoute, removedRoute})
+
+	// Stamp metrics for both offers with a successful paid request each.
+	for _, path := range []string{"/keep/x", "/gone/x"} {
+		req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+		req.Header.Set("X-Forwarded-Uri", path)
+		req.Header.Set("X-Forwarded-Host", "obol.stack")
+		req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+		rec := httptest.NewRecorder()
+		v.HandleVerify(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("setup paid request to %s: status=%d", path, rec.Code)
+		}
+	}
+
+	keptLabels := map[string]string{"offer_namespace": "llm", "offer_name": "keep", "chain": "", "asset_symbol": "unknown"}
+	goneLabels := map[string]string{"offer_namespace": "llm", "offer_name": "gone", "chain": "", "asset_symbol": "unknown"}
+
+	families := scrapeVerifierMetrics(t, v)
+	for _, name := range []string{
+		"obol_x402_verifier_charged_requests_total",
+		"obol_x402_verifier_last_payment_success_seconds",
+	} {
+		family := families[name]
+		if family == nil {
+			t.Fatalf("baseline: missing %s before reload", name)
+		}
+		findVerifierMetricValue(t, family, keptLabels)
+		findVerifierMetricValue(t, family, goneLabels)
+	}
+
+	// Reload with the second offer dropped — the same path ServiceOffer
+	// deletion takes through ConfigAccumulator.SetRoutes.
+	if err := v.Reload(&PricingConfig{
+		Wallet:         "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		Chain:          "base-sepolia",
+		FacilitatorURL: fac.URL,
+		Routes:         []RouteRule{keptRoute},
+	}); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	families = scrapeVerifierMetrics(t, v)
+	for _, name := range []string{
+		"obol_x402_verifier_requests_total",
+		"obol_x402_verifier_payment_required_total",
+		"obol_x402_verifier_payment_verified_total",
+		"obol_x402_verifier_payment_failed_total",
+		"obol_x402_verifier_charged_requests_total",
+		"obol_x402_verifier_last_payment_success_seconds",
+	} {
+		assertVerifierMetricMissing(t, families[name], goneLabels)
+	}
+
+	// Kept offer's series must survive the prune.
+	if charged := families["obol_x402_verifier_charged_requests_total"]; charged != nil {
+		findVerifierMetricValue(t, charged, keptLabels)
+	}
+	if gauge := families["obol_x402_verifier_last_payment_success_seconds"]; gauge != nil {
+		findVerifierMetricValue(t, gauge, keptLabels)
+	}
+}
+
+// TestVerifier_HandleVerify_FailClosed_ManualPrefixInjection sanity checks
+// that an arbitrary prefix in paidPrefixes triggers fail-closed (403) when
+// no rule matches. The manual prefix injection simulates the case where the
+// verifier KNOWS about a paid prefix (because a route was previously loaded)
+// but the matcher rejects the URI — config drift, code bug, etc.
+func TestVerifier_HandleVerify_FailClosed_ManualPrefixInjection(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	v := newTestVerifier(t, fac.URL, []RouteRule{
+		// No rules; matchRoute will return nil for everything.
+	})
+
+	// Manually inject a paid prefix (simulating a stale prefix state).
+	prefixes := []string{"/services/gated/"}
+	v.paidPrefixes.Store(&prefixes)
+
+	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/services/gated/foo")
+	rec := httptest.NewRecorder()
+	v.HandleVerify(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("expected 403 (fail-closed) for URI under tracked paid prefix, got %d", rec.Code)
+	}
+}
+
+// TestVerifier_HandleVerify_FreeRoute_OutsidePrefixes asserts that URIs
+// outside all tracked paid prefixes still return 200 (legitimate free pass).
+// The verifier is mounted on routes that may or may not be paid; only URIs
+// under a known paid prefix should fail closed.
+func TestVerifier_HandleVerify_FreeRoute_OutsidePrefixes(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	v := newTestVerifier(t, fac.URL, []RouteRule{
+		{Pattern: "/services/known/*", Price: "0.0001"},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/health") // Not under any paid prefix.
+	rec := httptest.NewRecorder()
+	v.HandleVerify(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 for free route outside paid prefixes, got %d", rec.Code)
+	}
+}
+
+// TestVerifier_HandleVerify_PrefixBoundary_NoFalseMatch verifies that the
+// trailing slash on paid prefixes prevents false matches between siblings
+// like /services/foo/ and /services/foobar/. Without the trailing slash,
+// a request to /services/foobar/x would falsely match /services/foo/*.
+func TestVerifier_HandleVerify_PrefixBoundary_NoFalseMatch(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	v := newTestVerifier(t, fac.URL, []RouteRule{
+		{Pattern: "/services/foo/*", Price: "0.0001"},
+	})
+
+	// /services/foobar/x is NOT under /services/foo/ — must return 200.
+	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/services/foobar/x")
+	rec := httptest.NewRecorder()
+	v.HandleVerify(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 for sibling path not under prefix, got %d", rec.Code)
+	}
+}
+
+func TestPatternToPrefix(t *testing.T) {
+	cases := []struct{ pattern, want string }{
+		{"/services/foo/*", "/services/foo/"},
+		{"/rpc/*", "/rpc/"},
+		{"/health", ""}, // No glob, returns empty.
+		{"/*", "/"},
+		{"", ""},
+		{"/exact/match", ""}, // Exact pattern, not a prefix.
+	}
+	for _, c := range cases {
+		if got := patternToPrefix(c.pattern); got != c.want {
+			t.Errorf("patternToPrefix(%q) = %q, want %q", c.pattern, got, c.want)
+		}
+	}
+}
+
+// findVerifierMetricValue returns the value of the series in `family` whose
+// labels match `wantLabels` exactly, failing the test if no such series exists.
+func findVerifierMetricValue(t *testing.T, family *dto.MetricFamily, wantLabels map[string]string) float64 {
+	t.Helper()
+
+	for _, metric := range family.GetMetric() {
+		if verifierLabelsMatch(metric, wantLabels) {
+			return verifierMetricValue(metric)
+		}
+	}
+	t.Fatalf("metric %s missing labels %v", family.GetName(), wantLabels)
+	return 0
 }
 
 func scrapeVerifierMetrics(t *testing.T, v *Verifier) map[string]*dto.MetricFamily {
@@ -893,5 +1223,142 @@ func verifierMetricValue(metric *dto.Metric) float64 {
 		return metric.GetGauge().GetValue()
 	default:
 		return 0
+	}
+}
+
+// TestVerifier_PrometheusLabels_IncludesAssetSymbol asserts that the
+// asset_symbol label is emitted with the value from RouteRule.AssetSymbol
+// (which the serviceoffer_source populates from
+// offer.Spec.Payment.Asset.Symbol). This is what makes "what's my OBOL
+// revenue?" a single PromQL aggregation instead of a metric × CR join.
+func TestVerifier_PrometheusLabels_IncludesAssetSymbol(t *testing.T) {
+	rule := &RouteRule{
+		OfferNamespace: "llm",
+		OfferName:      "demo-hello",
+		Network:        "eip155:84532",
+		AssetSymbol:    "USDC",
+	}
+	labels := prometheusLabels(rule)
+	if got := labels["asset_symbol"]; got != "USDC" {
+		t.Errorf("asset_symbol = %q, want %q (full labels: %v)", got, "USDC", labels)
+	}
+	if got := labels["chain"]; got != "eip155:84532" {
+		t.Errorf("chain = %q, want %q", got, "eip155:84532")
+	}
+}
+
+// TestVerifier_PrometheusLabels_DefaultsToUnknownIfEmpty asserts the
+// defensive fallback: when AssetSymbol is empty (legacy offers, parsing
+// hiccup, etc.) the label value is "unknown" rather than "" — empty-string
+// labels are legal in Prometheus but render as bare selectors that are
+// awkward to filter in dashboards.
+func TestVerifier_PrometheusLabels_DefaultsToUnknownIfEmpty(t *testing.T) {
+	rule := &RouteRule{
+		OfferNamespace: "llm",
+		OfferName:      "no-asset",
+		Network:        "eip155:84532",
+		AssetSymbol:    "",
+	}
+	labels := prometheusLabels(rule)
+	if got := labels["asset_symbol"]; got != "unknown" {
+		t.Errorf("asset_symbol = %q, want %q (full labels: %v)", got, "unknown", labels)
+	}
+}
+
+// TestVerifier_PruneSeriesNotIn_DistinguishesAssetSymbol asserts that
+// pruning treats asset_symbol as part of the series key, so an asset-repin
+// scenario (USDC route gets dropped, OBOL route for the same offer is
+// retained) prunes the dead USDC series without taking the live OBOL one
+// with it. Without asset_symbol in the key, both series would map to the
+// same (ns, name, chain) tuple and pruning would either drop both or
+// neither — leaking a stale per-asset series.
+func TestVerifier_PruneSeriesNotIn_DistinguishesAssetSymbol(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	usdcRoute := RouteRule{
+		Pattern:        "/svc/*",
+		Price:          "0.0001",
+		OfferNamespace: "llm",
+		OfferName:      "demo",
+		Network:        "base-sepolia",
+		AssetSymbol:    "USDC",
+	}
+	obolRoute := RouteRule{
+		Pattern:        "/svc-obol/*",
+		Price:          "0.0001",
+		OfferNamespace: "llm",
+		OfferName:      "demo",
+		Network:        "base-sepolia",
+		AssetSymbol:    "OBOL",
+	}
+	v := newTestVerifier(t, fac.URL, []RouteRule{usdcRoute, obolRoute})
+
+	// Stamp a successful paid request through each asset variant so both
+	// series exist in the registry before pruning.
+	for _, path := range []string{"/svc/x", "/svc-obol/x"} {
+		req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+		req.Header.Set("X-Forwarded-Uri", path)
+		req.Header.Set("X-Forwarded-Host", "obol.stack")
+		req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+		rec := httptest.NewRecorder()
+		v.HandleVerify(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("setup paid request to %s: status=%d", path, rec.Code)
+		}
+	}
+
+	usdcLabels := map[string]string{
+		"offer_namespace": "llm",
+		"offer_name":      "demo",
+		"chain":           "base-sepolia",
+		"asset_symbol":    "USDC",
+	}
+	obolLabels := map[string]string{
+		"offer_namespace": "llm",
+		"offer_name":      "demo",
+		"chain":           "base-sepolia",
+		"asset_symbol":    "OBOL",
+	}
+
+	families := scrapeVerifierMetrics(t, v)
+	for _, name := range []string{
+		"obol_x402_verifier_charged_requests_total",
+		"obol_x402_verifier_last_payment_success_seconds",
+	} {
+		family := families[name]
+		if family == nil {
+			t.Fatalf("baseline: missing %s before reload", name)
+		}
+		findVerifierMetricValue(t, family, usdcLabels)
+		findVerifierMetricValue(t, family, obolLabels)
+	}
+
+	// Drop the USDC route, keep OBOL. If pruneSeriesNotIn ignored
+	// asset_symbol, both series would key to (llm, demo, base-sepolia)
+	// and the OBOL series would survive (because the OBOL route is in
+	// the keep set) — masking the bug. Conversely, if the key didn't
+	// distinguish at all, both could be wiped. Including asset_symbol
+	// in the key keeps USDC prunable and OBOL alive.
+	if err := v.Reload(&PricingConfig{
+		Wallet:         "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+		Chain:          "base-sepolia",
+		FacilitatorURL: fac.URL,
+		Routes:         []RouteRule{obolRoute},
+	}); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	families = scrapeVerifierMetrics(t, v)
+	for _, name := range []string{
+		"obol_x402_verifier_requests_total",
+		"obol_x402_verifier_charged_requests_total",
+		"obol_x402_verifier_last_payment_success_seconds",
+	} {
+		assertVerifierMetricMissing(t, families[name], usdcLabels)
+	}
+
+	if charged := families["obol_x402_verifier_charged_requests_total"]; charged != nil {
+		findVerifierMetricValue(t, charged, obolLabels)
+	} else {
+		t.Errorf("OBOL charged series was pruned along with USDC — asset_symbol was ignored in prune key")
 	}
 }

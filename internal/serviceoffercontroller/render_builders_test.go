@@ -5,7 +5,100 @@ import (
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+// assertRestrictedPSS checks that a controller-rendered Deployment satisfies
+// the Restricted Pod Security Standard. PR #521 enforces Restricted PSS on
+// the x402 namespace, so any httpd workload missing these fields gets
+// rejected at admission and never starts (Bug #3 from the 14-PR integration
+// test campaign).
+func assertRestrictedPSS(t *testing.T, deploymentName string, spec map[string]any) {
+	t.Helper()
+	template, _ := spec["template"].(map[string]any)
+	podSpec, _ := template["spec"].(map[string]any)
+
+	psc, ok := podSpec["securityContext"].(map[string]any)
+	if !ok {
+		t.Fatalf("%s: pod spec missing securityContext", deploymentName)
+	}
+	if v, _ := psc["runAsNonRoot"].(bool); !v {
+		t.Errorf("%s: pod securityContext.runAsNonRoot = %v, want true", deploymentName, psc["runAsNonRoot"])
+	}
+	if v, _ := psc["runAsUser"].(int64); v == 0 {
+		t.Errorf("%s: pod securityContext.runAsUser must be set to a non-zero UID", deploymentName)
+	}
+	if v, _ := psc["runAsGroup"].(int64); v == 0 {
+		t.Errorf("%s: pod securityContext.runAsGroup must be set to a non-zero GID", deploymentName)
+	}
+	sp, ok := psc["seccompProfile"].(map[string]any)
+	if !ok {
+		t.Errorf("%s: pod securityContext missing seccompProfile", deploymentName)
+	} else if t2, _ := sp["type"].(string); t2 != "RuntimeDefault" && t2 != "Localhost" {
+		t.Errorf("%s: pod seccompProfile.type = %q, want RuntimeDefault or Localhost", deploymentName, t2)
+	}
+
+	containers, _ := podSpec["containers"].([]any)
+	if len(containers) == 0 {
+		t.Fatalf("%s: no containers in pod spec", deploymentName)
+	}
+	for _, c := range containers {
+		cm, _ := c.(map[string]any)
+		name, _ := cm["name"].(string)
+		csc, ok := cm["securityContext"].(map[string]any)
+		if !ok {
+			t.Errorf("%s/%s: container missing securityContext", deploymentName, name)
+			continue
+		}
+		if v, _ := csc["allowPrivilegeEscalation"].(bool); v {
+			t.Errorf("%s/%s: container allowPrivilegeEscalation = true, want false", deploymentName, name)
+		}
+		if _, present := csc["allowPrivilegeEscalation"]; !present {
+			t.Errorf("%s/%s: container missing allowPrivilegeEscalation (must be false)", deploymentName, name)
+		}
+		caps, ok := csc["capabilities"].(map[string]any)
+		if !ok {
+			t.Errorf("%s/%s: container securityContext missing capabilities", deploymentName, name)
+			continue
+		}
+		drop, _ := caps["drop"].([]any)
+		var droppedAll bool
+		for _, d := range drop {
+			if s, _ := d.(string); s == "ALL" {
+				droppedAll = true
+			}
+		}
+		if !droppedAll {
+			t.Errorf("%s/%s: container capabilities.drop must include \"ALL\", got %v", deploymentName, name, drop)
+		}
+	}
+}
+
+// TestBuildSkillCatalogDeployment_RestrictedPSS verifies the skill-md
+// httpd Deployment ships a Restricted-PSS-compliant securityContext.
+// Regression test for the cross-PR interaction with #521 surfaced by
+// the 14-PR integration test (Bug #3).
+func TestBuildSkillCatalogDeployment_RestrictedPSS(t *testing.T) {
+	d := buildSkillCatalogDeployment("hash-x")
+	spec, _ := d.Object["spec"].(map[string]any)
+	assertRestrictedPSS(t, skillCatalogConfigMapName, spec)
+}
+
+// TestBuildAgentIdentityRegistrationDeployment_RestrictedPSS verifies the
+// agentidentity well-known/agent-registration.json publisher httpd
+// Deployment ships a Restricted-PSS-compliant securityContext.
+func TestBuildAgentIdentityRegistrationDeployment_RestrictedPSS(t *testing.T) {
+	identity := &monetizeapi.AgentIdentity{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      monetizeapi.AgentIdentityDefaultName,
+			Namespace: "x402",
+			UID:       "test-uid",
+		},
+	}
+	d := buildAgentIdentityRegistrationDeployment(identity, "hash-y")
+	spec, _ := d.Object["spec"].(map[string]any)
+	assertRestrictedPSS(t, agentIdentityRegistrationName(identity), spec)
+}
 
 // TestBuildSkillCatalogConfigMap: exposes skill.md + services.json + httpd conf.
 func TestBuildSkillCatalogConfigMap(t *testing.T) {

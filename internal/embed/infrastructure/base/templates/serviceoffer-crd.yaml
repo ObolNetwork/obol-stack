@@ -1,15 +1,9 @@
 ---
-# ServiceOffer CRD
-# Defines a compute service the agent can expose, gate with x402, and register on-chain.
-# Condition lifecycle: ModelReady -> UpstreamHealthy -> PaymentGateReady -> RoutePublished -> Registered -> Ready
-#
-# Field naming conventions:
-#   - payment.* fields align with x402 PaymentRequirements (V2): payTo, network, scheme, maxTimeoutSeconds
-#   - registration.* fields align with ERC-8004 AgentRegistration: name, description, services, supportedTrust
-#   - Human-friendly values (e.g., "base-sepolia") are used; the reconciler translates to wire format
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
   name: serviceoffers.obol.org
 spec:
   group: obol.org
@@ -17,354 +11,373 @@ spec:
     kind: ServiceOffer
     listKind: ServiceOfferList
     plural: serviceoffers
-    singular: serviceoffer
     shortNames:
-      - so
+    - so
+    singular: serviceoffer
   scope: Namespaced
   versions:
-    - name: v1alpha1
-      served: true
-      storage: true
-      subresources:
-        status: {}
-      additionalPrinterColumns:
-        - name: Type
-          type: string
-          jsonPath: .spec.type
-        - name: Model
-          type: string
-          jsonPath: .spec.model.name
-        - name: Price
-          type: string
-          jsonPath: .spec.payment.price.perRequest
-        - name: Network
-          type: string
-          jsonPath: .spec.payment.network
-        - name: Ready
-          type: string
-          jsonPath: .status.conditions[?(@.type=="Ready")].status
-        - name: Age
-          type: date
-          jsonPath: .metadata.creationTimestamp
-      schema:
-        openAPIV3Schema:
-          type: object
-          description: >-
-            ServiceOffer declares a compute service that can be exposed publicly,
-            gated with x402 payments, and optionally registered on an ERC-8004
-            service registry. Field names align with x402 and ERC-8004 standards.
-          properties:
-            spec:
-              type: object
-              required:
-                - payment
-              # upstream is required for type=http|inference|fine-tuning but
-              # synthesized by the controller from Agent.status.endpoint when
-              # type=agent. Validation of "upstream OR agent.ref" lives in
-              # the controller's runtime check.
-              properties:
-                type:
-                  type: string
-                  description: >-
-                    Service type. 'inference' enables model management; 'http' for any HTTP service;
-                    'agent' references an Agent CR via spec.agent.ref and the controller derives
-                    upstream + model + skills from the agent's status.
-                  default: "http"
-                  enum:
-                    - inference
-                    - fine-tuning
-                    - http
-                    - agent
-                agent:
-                  type: object
-                  description: >-
-                    Required when type='agent'. The controller resolves spec.agent.ref to the
-                    referenced Agent CR, derives upstream from Agent.status.endpoint, and surfaces
-                    the agent's pinned model + skills in the 402 response's extra block.
-                  properties:
-                    ref:
-                      type: object
-                      required:
-                        - name
-                        - namespace
-                      properties:
-                        name:
-                          type: string
-                        namespace:
-                          type: string
-                model:
-                  type: object
-                  description: "LLM model metadata. Required when the upstream serves an LLM."
-                  required:
-                    - name
-                    - runtime
-                  properties:
-                    name:
-                      type: string
-                      description: "Model identifier (e.g. qwen3.5:35b)."
-                    runtime:
-                      type: string
-                      description: "Runtime serving the model."
-                      enum:
-                        - ollama
-                        - vllm
-                        - tgi
-                upstream:
-                  type: object
-                  description: "In-cluster service that handles the actual workload."
-                  required:
-                    - service
-                    - namespace
-                    - port
-                  properties:
-                    service:
-                      type: string
-                      description: "Kubernetes Service name."
-                    namespace:
-                      type: string
-                      description: "Namespace of the upstream Service."
-                    port:
-                      type: integer
-                      description: "Port on the upstream Service."
-                      default: 11434
-                      minimum: 1
-                      maximum: 65535
-                    healthPath:
-                      type: string
-                      description: "HTTP path used for health probes against the upstream."
-                      default: "/health"
-                payment:
-                  type: object
-                  description: >-
-                    x402 payment terms. Field names align with x402 PaymentRequirements (V2):
-                    payTo, network, scheme, maxTimeoutSeconds.
-                  required:
-                    - network
-                    - payTo
-                    - price
-                  properties:
-                    scheme:
-                      type: string
-                      description: "x402 payment scheme."
-                      default: "exact"
-                      enum:
-                        - exact
-                    network:
-                      type: string
-                      description: >-
-                        Chain identifier for payments (human-friendly).
-                        Reconciler resolves to CAIP-2 format (e.g., "base-sepolia" → "eip155:84532").
-                    payTo:
-                      type: string
-                      description: "USDC recipient wallet address (x402: payTo)."
-                      pattern: "^0x[0-9a-fA-F]{40}$"
-                    maxTimeoutSeconds:
-                      type: integer
-                      description: "Payment validity window in seconds (x402: maxTimeoutSeconds)."
-                      default: 300
-                    asset:
-                      type: object
-                      description: >-
-                        Optional token metadata override for x402 settlement.
-                        When omitted, the verifier uses the chain default asset.
-                      properties:
-                        address:
-                          type: string
-                          description: "ERC-20 contract address."
-                          pattern: "^0x[0-9a-fA-F]{40}$"
-                        symbol:
-                          type: string
-                          description: "Human-friendly token symbol (e.g. USDC, OBOL)."
-                        decimals:
-                          type: integer
-                          description: "Token decimals in atomic units."
-                          minimum: 0
-                          maximum: 255
-                        transferMethod:
-                          type: string
-                          description: "x402 transfer method for the asset."
-                          enum:
-                            - eip3009
-                            - permit2
-                        eip712Name:
-                          type: string
-                          description: "EIP-712 domain name used by the token."
-                        eip712Version:
-                          type: string
-                          description: "EIP-712 domain version used by the token."
-                    price:
-                      type: object
-                      description: >-
-                        Pricing table with per-unit prices in USDC (human-readable decimals).
-                        Which fields are applicable depends on the workload type.
-                      properties:
-                        perRequest:
-                          type: string
-                          description: "Flat per-request price in USDC. Applicable to all types."
-                        perMTok:
-                          type: string
-                          description: "Per-million-tokens price in USDC. Inference only."
-                        perHour:
-                          type: string
-                          description: "Per-compute-hour price in USDC. Fine-tuning only."
-                        perEpoch:
-                          type: string
-                          description: "Per-training-epoch price in USDC. Fine-tuning only."
-                provenance:
-                  type: object
-                  description: >-
-                    Optional provenance metadata for the service. Tracks how the
-                    model or service was produced (e.g. autoresearch experiment data).
-                    Included in the ERC-8004 registration document when present.
-                  properties:
-                    framework:
-                      type: string
-                      description: "Optimization framework (e.g. autoresearch)."
-                    metricName:
-                      type: string
-                      description: "Name of the primary quality metric (e.g. val_bpb)."
-                    metricValue:
-                      type: string
-                      description: "Primary quality metric value (e.g. 0.9973)."
-                    experimentId:
-                      type: string
-                      description: "Experiment or commit identifier."
-                    trainHash:
-                      type: string
-                      description: "SHA-256 hash of the training code that produced this model."
-                    paramCount:
-                      type: string
-                      description: "Model parameter count (e.g. 50M, 1.3B)."
-                path:
-                  type: string
-                  description: "URL path prefix for the HTTPRoute, defaults to /services/<name>."
-                  pattern: "^/[a-zA-Z0-9/_.-]*$"
-                registration:
-                  type: object
-                  description: >-
-                    ERC-8004 registration metadata. Field names align with the
-                    AgentRegistration document schema (ERC-8004 spec).
-                  properties:
-                    enabled:
-                      type: boolean
-                      description: "If true, register on ERC-8004 after routing is live."
-                      default: false
-                    name:
-                      type: string
-                      description: "Agent name (ERC-8004: AgentRegistration.name)."
-                    description:
-                      type: string
-                      description: "Agent description (ERC-8004: AgentRegistration.description)."
-                    image:
-                      type: string
-                      description: "Agent icon URL (ERC-8004: AgentRegistration.image)."
-                    services:
-                      type: array
-                      description: "Service endpoints (ERC-8004: AgentRegistration.services[])."
-                      items:
-                        type: object
-                        required:
-                          - name
-                          - endpoint
-                        properties:
-                          name:
-                            type: string
-                            description: "Service type: web, A2A, MCP, OASF, ENS, DID, email."
-                          endpoint:
-                            type: string
-                            description: "Service URL. Auto-filled from tunnel URL if empty."
-                          version:
-                            type: string
-                            description: "Protocol version (SHOULD per ERC-8004 spec)."
-                    skills:
-                      type: array
-                      description: >-
-                        OASF skills for discovery (e.g. natural_language_processing/text_generation).
-                        Mapped to an OASF service entry in the registration JSON.
-                      items:
-                        type: string
-                    domains:
-                      type: array
-                      description: >-
-                        OASF domains for discovery (e.g. technology/artificial_intelligence).
-                        Mapped to an OASF service entry in the registration JSON.
-                      items:
-                        type: string
-                    supportedTrust:
-                      type: array
-                      description: >-
-                        Trust verification methods (ERC-8004: AgentRegistration.supportedTrust[]).
-                        Valid values: reputation, crypto-economic, tee-attestation.
-                      items:
-                        type: string
-                    metadata:
-                      type: object
-                      description: >-
-                        Additional registration metadata published into the generated
-                        agent-registration.json for discovery and ranking (for example:
-                        gpu, framework, best_val_bpb, total_experiments).
-                      additionalProperties:
-                        type: string
-            status:
-              type: object
-              properties:
-                conditions:
-                  type: array
-                  description: >-
-                    Condition types: ModelReady, UpstreamHealthy, PaymentGateReady,
-                    RoutePublished, Registered, Ready.
-                  items:
-                    type: object
-                    required:
-                      - type
-                      - status
+  - additionalPrinterColumns:
+    - jsonPath: .spec.type
+      name: Type
+      type: string
+    - jsonPath: .spec.model.name
+      name: Model
+      type: string
+    - jsonPath: .spec.payment.price.perRequest
+      name: Price
+      type: string
+    - jsonPath: .spec.payment.network
+      name: Network
+      type: string
+    - jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ServiceOffer declares a compute service that can be exposed publicly,
+          gated with x402 payments, and optionally registered on an ERC-8004
+          service registry. Field names align with x402 and ERC-8004 standards.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              agent:
+                description: |-
+                  Required when type='agent'. The controller resolves spec.agent.ref to
+                  the referenced Agent CR, derives upstream from Agent.status.endpoint,
+                  and surfaces the agent's pinned model + skills in the 402 response.
+                properties:
+                  ref:
                     properties:
-                      type:
+                      name:
                         type: string
-                        description: "Condition type."
-                      status:
+                      namespace:
                         type: string
-                        description: "Status of the condition."
+                    required:
+                    - name
+                    - namespace
+                    type: object
+                type: object
+              drainAt:
+                description: |-
+                  DrainAt marks the offer as draining when non-nil. While the offer
+                  is in the drain window, discovery surfaces (/skill.md and
+                  /.well-known/agent-registration.json) advertise the offer with
+                  available=false and drainEndsAt set, so buyers can migrate before
+                  the route is torn down. The route + payment gate stay up until
+                  DrainEndsAt() so in-flight payments can complete. Replaces the
+                  legacy obol.org/paused annotation.
+                format: date-time
+                type: string
+              drainGracePeriod:
+                description: |-
+                  DrainGracePeriod is how long after DrainAt the HTTPRoute remains
+                  up. Defaults to DefaultDrainGracePeriod when nil. A zero duration
+                  is honored as "tear down immediately on the next reconcile" (the
+                  equivalent of `obol sell stop --force`).
+                type: string
+              model:
+                description: LLM model metadata. Required when the upstream serves
+                  an LLM.
+                properties:
+                  name:
+                    description: Model identifier (e.g. qwen3.5:35b).
+                    type: string
+                  runtime:
+                    description: Runtime serving the model.
+                    enum:
+                    - ollama
+                    - vllm
+                    - tgi
+                    type: string
+                required:
+                - name
+                - runtime
+                type: object
+              path:
+                description: URL path prefix for the HTTPRoute, defaults to /services/<name>.
+                pattern: ^/[a-zA-Z0-9/_.-]*$
+                type: string
+              payment:
+                properties:
+                  asset:
+                    description: |-
+                      Optional token metadata override for x402 settlement. When omitted,
+                      the verifier uses the chain default asset.
+                    properties:
+                      address:
+                        description: ERC-20 contract address.
+                        pattern: ^0x[0-9a-fA-F]{40}$
+                        type: string
+                      decimals:
+                        description: Token decimals in atomic units.
+                        format: int64
+                        maximum: 255
+                        minimum: 0
+                        type: integer
+                      eip712Name:
+                        description: EIP-712 domain name used by the token.
+                        type: string
+                      eip712Version:
+                        description: EIP-712 domain version used by the token.
+                        type: string
+                      symbol:
+                        description: Human-friendly token symbol (e.g. USDC, OBOL).
+                        type: string
+                      transferMethod:
+                        description: x402 transfer method for the asset.
                         enum:
-                          - "True"
-                          - "False"
-                          - "Unknown"
-                      reason:
+                        - eip3009
+                        - permit2
                         type: string
-                        description: "Machine-readable reason for the condition."
-                      message:
+                    type: object
+                  maxTimeoutSeconds:
+                    default: 300
+                    description: 'Payment validity window in seconds (x402: maxTimeoutSeconds).'
+                    format: int64
+                    type: integer
+                  network:
+                    description: |-
+                      Chain identifier for payments (human-friendly). Reconciler resolves
+                      to CAIP-2 format (e.g., "base-sepolia" → "eip155:84532").
+                    type: string
+                  payTo:
+                    description: 'USDC recipient wallet address (x402: payTo).'
+                    pattern: ^0x[0-9a-fA-F]{40}$
+                    type: string
+                  price:
+                    description: |-
+                      Pricing table with per-unit prices in USDC (human-readable decimals).
+                      Which fields are applicable depends on the workload type.
+                    properties:
+                      perEpoch:
+                        description: Per-training-epoch price in USDC. Fine-tuning
+                          only.
                         type: string
-                        description: "Human-readable message with details."
-                      lastTransitionTime:
+                      perHour:
+                        description: Per-compute-hour price in USDC. Fine-tuning only.
                         type: string
-                        format: date-time
-                        description: "Last time the condition transitioned."
-                endpoint:
+                      perMTok:
+                        description: Per-million-tokens price in USDC. Inference only.
+                        type: string
+                      perRequest:
+                        description: Flat per-request price in USDC. Applicable to
+                          all types.
+                        type: string
+                    type: object
+                  scheme:
+                    default: exact
+                    description: x402 payment scheme.
+                    enum:
+                    - exact
+                    type: string
+                required:
+                - network
+                - payTo
+                - price
+                type: object
+              provenance:
+                additionalProperties:
                   type: string
-                  description: "The public endpoint URL once the route is published."
-                agentId:
-                  type: string
-                  description: "ERC-8004 agent NFT token ID after on-chain registration."
-                registrationTxHash:
-                  type: string
-                  description: "Transaction hash of the ERC-8004 registration."
-                observedGeneration:
-                  type: integer
-                  format: int64
-                  description: "The generation observed by the controller."
-                agentResolution:
-                  type: object
-                  description: >-
-                    Controller's resolved view of an agent-type offer's referenced
-                    Agent. Populated only when type=agent and the Agent is Ready.
+                description: |-
+                  Optional provenance metadata for the service. Tracks how the model or
+                  service was produced (e.g. autoresearch experiment data). Included in
+                  the ERC-8004 registration document when present.
+                type: object
+              registration:
+                description: |-
+                  ERC-8004 registration metadata. Field names align with the
+                  AgentRegistration document schema (ERC-8004 spec).
+                properties:
+                  description:
+                    description: 'Agent description (ERC-8004: AgentRegistration.description).'
+                    type: string
+                  domains:
+                    description: |-
+                      OASF domains for discovery (e.g. technology/artificial_intelligence).
+                      Mapped to an OASF service entry in the registration JSON.
+                    items:
+                      type: string
+                    type: array
+                  enabled:
+                    default: false
+                    description: If true, register on ERC-8004 after routing is live.
+                    type: boolean
+                  image:
+                    description: 'Agent icon URL (ERC-8004: AgentRegistration.image).'
+                    type: string
+                  metadata:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Additional registration metadata published into the generated
+                      agent-registration.json for discovery and ranking.
+                    type: object
+                  name:
+                    description: 'Agent name (ERC-8004: AgentRegistration.name).'
+                    type: string
+                  services:
+                    description: 'Service endpoints (ERC-8004: AgentRegistration.services[]).'
+                    items:
+                      properties:
+                        endpoint:
+                          description: Service URL. Auto-filled from tunnel URL if
+                            empty.
+                          type: string
+                        name:
+                          description: 'Service type: web, A2A, MCP, OASF, ENS, DID,
+                            email.'
+                          type: string
+                        version:
+                          description: Protocol version (SHOULD per ERC-8004 spec).
+                          type: string
+                      required:
+                      - endpoint
+                      - name
+                      type: object
+                    type: array
+                  skills:
+                    description: |-
+                      OASF skills for discovery (e.g.
+                      natural_language_processing/text_generation). Mapped to an OASF
+                      service entry in the registration JSON.
+                    items:
+                      type: string
+                    type: array
+                  supportedTrust:
+                    description: |-
+                      Trust verification methods (ERC-8004: AgentRegistration.supportedTrust[]).
+                      Valid values: reputation, crypto-economic, tee-attestation.
+                    items:
+                      type: string
+                    type: array
+                type: object
+              type:
+                default: http
+                description: |-
+                  Service type. 'inference' enables model management; 'http' for any HTTP
+                  service; 'agent' references an Agent CR via spec.agent.ref and the
+                  controller derives upstream + model + skills from the agent's status.
+                enum:
+                - inference
+                - fine-tuning
+                - http
+                - agent
+                type: string
+              upstream:
+                description: In-cluster service that handles the actual workload.
+                properties:
+                  healthPath:
+                    default: /health
+                    description: HTTP path used for health probes against the upstream.
+                    type: string
+                  namespace:
+                    description: Namespace of the upstream Service.
+                    type: string
+                  port:
+                    default: 11434
+                    description: Port on the upstream Service.
+                    format: int64
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                  service:
+                    description: Kubernetes Service name.
+                    type: string
+                required:
+                - namespace
+                - port
+                - service
+                type: object
+            required:
+            - payment
+            type: object
+          status:
+            properties:
+              agentId:
+                description: ERC-8004 agent NFT token ID after on-chain registration.
+                type: string
+              agentResolution:
+                description: |-
+                  Controller's resolved view of an agent-type offer's referenced Agent.
+                  Populated only when type=agent and the Agent is Ready.
+                properties:
+                  endpoint:
+                    type: string
+                  model:
+                    type: string
+                  runtime:
+                    type: string
+                  skills:
+                    items:
+                      type: string
+                    type: array
+                type: object
+              conditions:
+                description: |-
+                  Condition types: ModelReady, UpstreamHealthy, PaymentGateReady,
+                  RoutePublished, Registered, Ready.
+                items:
                   properties:
-                    model:
+                    lastTransitionTime:
+                      description: Last time the condition transitioned.
+                      format: date-time
                       type: string
-                    skills:
-                      type: array
-                      items:
-                        type: string
-                    runtime:
+                    message:
+                      description: Human-readable message with details.
                       type: string
-                    endpoint:
+                    reason:
+                      description: Machine-readable reason for the condition.
                       type: string
+                    status:
+                      description: Status of the condition.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: Condition type.
+                      type: string
+                  required:
+                  - status
+                  - type
+                  type: object
+                type: array
+              endpoint:
+                description: The public endpoint URL once the route is published.
+                type: string
+              observedGeneration:
+                description: The generation observed by the controller.
+                format: int64
+                type: integer
+              registrationTxHash:
+                description: Transaction hash of the ERC-8004 registration.
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

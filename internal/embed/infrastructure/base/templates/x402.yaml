@@ -6,6 +6,16 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: x402
+  labels:
+    # Pod Security Standards: Restricted profile enforced at admission.
+    # Future Deployment edits that omit the per-pod securityContext will be
+    # rejected by the apiserver. Both x402-verifier and serviceoffer-controller
+    # run as non-root with all caps dropped, seccomp=RuntimeDefault, and
+    # readOnlyRootFilesystem.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
 
 ---
 # Static gateway settings plus optional manual routes. In cluster mode the
@@ -200,7 +210,11 @@ metadata:
   labels:
     app: x402-verifier
 spec:
-  replicas: 2
+  # Single replica — verifier holds per-pod metric registries and per-pod
+  # informer caches; multiple replicas produce metric series drift across
+  # ServiceMonitor scrape rotations and the pruneSeriesNotIn GC (metrics.go)
+  # becomes inconsistent. Single-node k3d gains no HA from 2 replicas.
+  replicas: 1
   selector:
     matchLabels:
       app: x402-verifier
@@ -210,10 +224,25 @@ spec:
         app: x402-verifier
     spec:
       serviceAccountName: x402-verifier
+      # PSS Restricted: pod-level identity.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: verifier
-          image: ghcr.io/obolnetwork/x402-verifier:b13254e
+          image: ghcr.io/obolnetwork/x402-verifier:b13254e@sha256:a8a7aa0ca4c35b0ddf6983fa6e3e5f8a3f64e44d8e506ebfd55e39de2bc0342d
           imagePullPolicy: IfNotPresent
+          # PSS Restricted: per-container hardening. Verifier is a Go binary
+          # reading two RO ConfigMaps; no writeable rootfs paths required.
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: http
               containerPort: 8080
@@ -271,7 +300,10 @@ metadata:
   labels:
     app: serviceoffer-controller
 spec:
-  replicas: 1  # Do not scale — multiple replicas race on ERC-8004 on-chain registration
+  # Single replica by default; bumping to 2+ is now safe — leader election
+  # (client-go Lease in this namespace) prevents split-brain on the reconcile
+  # loop and the resulting double on-chain ERC-8004 registration.
+  replicas: 1
   selector:
     matchLabels:
       app: serviceoffer-controller
@@ -281,11 +313,32 @@ spec:
         app: serviceoffer-controller
     spec:
       serviceAccountName: serviceoffer-controller
+      # PSS Restricted: pod-level identity. Paired with Dockerfile
+      # FROM gcr.io/distroless/static-debian12:nonroot which default-runs
+      # as UID/GID 65532. Container escape via a Go-runtime CVE on a
+      # UID-0 / no-seccomp / no-cap-drop / RW-rootfs container was the
+      # easiest path to host pivot on k3s single-node; this closes it.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: controller
-          image: ghcr.io/obolnetwork/serviceoffer-controller:b13254e
+          image: ghcr.io/obolnetwork/serviceoffer-controller:b13254e@sha256:f83bd7e55bdc5d87edb49c04e7fd9257097364e2d43e769c19dfd7c8b47d07af
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:
@@ -322,13 +375,27 @@ spec:
       protocol: TCP
 
 ---
-apiVersion: policy/v1
-kind: PodDisruptionBudget
+# ServiceMonitor for x402-verifier — scrapes the stable Service endpoint
+# rather than per-pod IPs (which is what a PodMonitor would do). Lives
+# alongside the Service it observes so adding/changing the port or
+# selector here is a single-file change.
+#
+# Picked up by kube-prometheus-stack via the `release: monitoring` label
+# (configured in values/monitoring.yaml.gotmpl as the serviceMonitorSelector).
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
 metadata:
   name: x402-verifier
   namespace: x402
+  labels:
+    release: monitoring
+    app: x402-verifier
 spec:
-  minAvailable: 1
   selector:
     matchLabels:
       app: x402-verifier
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s

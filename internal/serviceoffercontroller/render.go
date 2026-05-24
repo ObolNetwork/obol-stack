@@ -26,6 +26,39 @@ const (
 	servicesJSONRouteName     = "obol-services-json-route"
 )
 
+// restrictedPodSecurityContext returns a Pod-level securityContext that
+// satisfies the Restricted Pod Security Standard (PSS). PR #521 enforces
+// Restricted PSS on the x402 namespace, so the controller-rendered httpd
+// workloads (obol-skill-md and agentidentity-*-registration) must ship a
+// compliant securityContext or they fail admission and never start.
+//
+// UID/GID 1000 is the canonical non-root user available in the busybox
+// image used by both Deployments. fsGroup keeps the projected ConfigMap
+// volumes readable by the httpd process.
+func restrictedPodSecurityContext() map[string]any {
+	return map[string]any{
+		"runAsNonRoot": true,
+		"runAsUser":    int64(1000),
+		"runAsGroup":   int64(1000),
+		"fsGroup":      int64(1000),
+		"seccompProfile": map[string]any{
+			"type": "RuntimeDefault",
+		},
+	}
+}
+
+// restrictedContainerSecurityContext returns a container-level
+// securityContext compliant with the Restricted PSS profile: privilege
+// escalation disabled and all Linux capabilities dropped.
+func restrictedContainerSecurityContext() map[string]any {
+	return map[string]any{
+		"allowPrivilegeEscalation": false,
+		"capabilities": map[string]any{
+			"drop": []any{"ALL"},
+		},
+	}
+}
+
 func buildRegistrationRequest(offer *monetizeapi.ServiceOffer, desiredState string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
@@ -92,11 +125,13 @@ func buildAgentIdentityRegistrationDeployment(identity *monetizeapi.AgentIdentit
 						},
 					},
 					"spec": map[string]any{
+						"securityContext": restrictedPodSecurityContext(),
 						"containers": []any{
 							map[string]any{
-								"name":    "httpd",
-								"image":   "busybox:1.36",
-								"command": []any{"httpd", "-f", "-p", "8080", "-h", "/www"},
+								"name":            "httpd",
+								"image":           "busybox:1.36",
+								"command":         []any{"httpd", "-f", "-p", "8080", "-h", "/www"},
+								"securityContext": restrictedContainerSecurityContext(),
 								"ports": []any{
 									map[string]any{"containerPort": int64(8080), "protocol": "TCP"},
 								},
@@ -259,11 +294,13 @@ func buildSkillCatalogDeployment(contentHash string) *unstructured.Unstructured 
 						},
 					},
 					"spec": map[string]any{
+						"securityContext": restrictedPodSecurityContext(),
 						"containers": []any{
 							map[string]any{
-								"name":    "httpd",
-								"image":   "busybox:1.36",
-								"command": []any{"httpd", "-f", "-p", "8080", "-h", "/www"},
+								"name":            "httpd",
+								"image":           "busybox:1.36",
+								"command":         []any{"httpd", "-f", "-p", "8080", "-h", "/www"},
+								"securityContext": restrictedContainerSecurityContext(),
 								"ports": []any{
 									map[string]any{"containerPort": int64(8080), "protocol": "TCP"},
 								},
@@ -689,10 +726,10 @@ func buildRegistrationServices(owner *monetizeapi.ServiceOffer, offers []*moneti
 
 	services := make([]erc8004.ServiceDef, 0, len(ordered)*2)
 	for _, offer := range ordered {
-		services = append(services, erc8004.ServiceDef{
+		services = append(services, serviceDefWithDrain(offer, erc8004.ServiceDef{
 			Name:     "web",
 			Endpoint: baseURL + offer.EffectivePath(),
-		})
+		}))
 		if len(offer.Spec.Registration.Skills) > 0 || len(offer.Spec.Registration.Domains) > 0 {
 			services = append(services, erc8004.ServiceDef{
 				Name:    "OASF",
@@ -702,18 +739,37 @@ func buildRegistrationServices(owner *monetizeapi.ServiceOffer, offers []*moneti
 			})
 		}
 		for _, service := range offer.Spec.Registration.Services {
-			services = append(services, erc8004.ServiceDef{
+			services = append(services, serviceDefWithDrain(offer, erc8004.ServiceDef{
 				Name:     service.Name,
 				Endpoint: service.Endpoint,
 				Version:  service.Version,
-			})
+			}))
 		}
 	}
 	return services
 }
 
+func serviceDefWithDrain(offer *monetizeapi.ServiceOffer, svc erc8004.ServiceDef) erc8004.ServiceDef {
+	if offer == nil || !offer.IsDraining() || offer.DrainExpired(time.Now()) {
+		return svc
+	}
+	available := false
+	svc.Available = &available
+	svc.DrainEndsAt = offer.DrainEndsAt().UTC().Format(time.RFC3339)
+	return svc
+}
+
+// offerPublishedForRegistration reports whether an offer should appear
+// in the operator's ERC-8004 registration document as a live, gated
+// service. Draining offers stay in the document with available=false
+// so external observers can see the wind-down — this function filters
+// them out only after the drain window has fully expired (i.e. the
+// HTTPRoute is gone and there is no payment surface to advertise).
 func offerPublishedForRegistration(offer *monetizeapi.ServiceOffer) bool {
-	if offer == nil || offer.DeletionTimestamp != nil || offer.IsPaused() || !offer.Spec.Registration.Enabled {
+	if offer == nil || offer.DeletionTimestamp != nil || !offer.Spec.Registration.Enabled {
+		return false
+	}
+	if offer.DrainExpired(time.Now()) {
 		return false
 	}
 	return isConditionTrue(offer.Status, "ModelReady") &&
@@ -731,9 +787,18 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 	// both /skill.md and /api/services.json, with the on-chain ERC-8004
 	// registration treated as informational metadata rather than a gating
 	// signal. See offerOperationallyReady's doc comment for the rationale.
+	now := time.Now()
 	var ready []*monetizeapi.ServiceOffer
 	for _, offer := range offers {
-		if offer == nil || offer.DeletionTimestamp != nil || offer.IsPaused() {
+		if offer == nil || offer.DeletionTimestamp != nil {
+			continue
+		}
+		// Drained offers (post-grace-period) have no live route — drop
+		// them from the catalog entirely. Draining offers (pre-expiry)
+		// stay in the catalog with available=false + drainEndsAt set so
+		// buyers can see the wind-down via discovery before the route
+		// disappears.
+		if offer.DrainExpired(now) {
 			continue
 		}
 		if offerOperationallyReady(offer) {
@@ -762,20 +827,25 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 	}
 
 	lines = append(lines, "## Services", "")
-	lines = append(lines, "| Service | Type | Model | Price | Endpoint |")
-	lines = append(lines, "|---------|------|-------|-------|----------|")
+	lines = append(lines, "| Service | Type | Model | Price | Available | Endpoint |")
+	lines = append(lines, "|---------|------|-------|-------|-----------|----------|")
 	for _, offer := range ready {
 		modelName := offer.Spec.Model.Name
 		if modelName == "" {
 			modelName = "—"
 		}
+		availability := "yes"
+		if offer.IsDraining() {
+			availability = fmt.Sprintf("draining (ends %s)", offer.DrainEndsAt().UTC().Format(time.RFC3339))
+		}
 		lines = append(lines, fmt.Sprintf(
-			"| [%s](#%s) | %s | %s | %s | `%s%s` |",
+			"| [%s](#%s) | %s | %s | %s | %s | `%s%s` |",
 			offer.Name,
 			offer.Name,
 			fallbackOfferType(offer),
 			modelName,
 			describeOfferPrice(offer),
+			availability,
 			baseURL,
 			offer.EffectivePath(),
 		))
@@ -792,6 +862,12 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 		lines = append(lines, fmt.Sprintf("- **Price**: %s", describeOfferPrice(offer)))
 		lines = append(lines, fmt.Sprintf("- **Pay To**: `%s`", firstNonEmpty(offer.Spec.Payment.PayTo, "—")))
 		lines = append(lines, fmt.Sprintf("- **Network**: %s", firstNonEmpty(offer.Spec.Payment.Network, "—")))
+		if offer.IsDraining() {
+			lines = append(lines, "- **Available**: false (draining)")
+			lines = append(lines, fmt.Sprintf("- **Drain ends at**: %s", offer.DrainEndsAt().UTC().Format(time.RFC3339)))
+		} else {
+			lines = append(lines, "- **Available**: true")
+		}
 		description := offer.Spec.Registration.Description
 		if description == "" {
 			description = fmt.Sprintf("x402 payment-gated %s service", fallbackOfferType(offer))
@@ -868,9 +944,17 @@ func offerAwaitingRegistration(offer *monetizeapi.ServiceOffer) bool {
 func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string) string {
 	baseURL = strings.TrimRight(baseURL, "/")
 
+	now := time.Now()
 	var ready []*monetizeapi.ServiceOffer
 	for _, offer := range offers {
-		if offer == nil || offer.DeletionTimestamp != nil || offer.IsPaused() {
+		if offer == nil || offer.DeletionTimestamp != nil {
+			continue
+		}
+		// Drained offers (post-grace-period) have no live route — drop
+		// them from the catalog entirely. Draining offers (pre-expiry)
+		// stay in the catalog with available=false + drainEndsAt set so
+		// buyers can react before the route disappears.
+		if offer.DrainExpired(now) {
 			continue
 		}
 		if offerOperationallyReady(offer) {
@@ -895,6 +979,12 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 			modelName = offer.Status.AgentResolution.Model
 		}
 
+		available := !offer.IsDraining()
+		drainEndsAt := ""
+		if offer.IsDraining() {
+			drainEndsAt = offer.DrainEndsAt().UTC().Format(time.RFC3339)
+		}
+
 		svc := schemas.ServiceCatalogEntry{
 			Name:                offer.Name,
 			Namespace:           offer.Namespace,
@@ -907,6 +997,8 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 			Description:         desc,
 			IsDemo:              offer.Namespace == "demo",
 			RegistrationPending: offerAwaitingRegistration(offer),
+			Available:           available,
+			DrainEndsAt:         drainEndsAt,
 		}
 
 		raw, unit := offerPriceRawAndUnit(offer)

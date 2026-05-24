@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"sort"
 	"strings"
 	"sync/atomic"
 
@@ -21,7 +22,28 @@ type Verifier struct {
 	chain   atomic.Pointer[ChainInfo]
 	chains  atomic.Pointer[map[string]ChainInfo] // pre-resolved: chain name → config
 	metrics *verifierMetrics
+
+	// routesLoaded is set true after the first route source apply completes.
+	// Until then HandleReadyz returns 503 so kubelet keeps the pod out of
+	// the Service Endpoints, preventing the "no rule -> 200 free pass"
+	// window during informer warmup (CLAUDE.md pitfall #14).
+	routesLoaded atomic.Bool
+
+	// paidPrefixes is the list of URI prefixes the verifier KNOWS are
+	// paid routes (derived from cfg.Routes patterns on each load). Used
+	// by HandleVerify to fail-closed when a URI is under a paid prefix
+	// but no rule matches — the alternative (200 → ForwardAuth allow)
+	// would silently make the route free.
+	//
+	// Sorted by length descending so longer-prefix matches win first
+	// (defensive — fixes nothing today but cheap insurance).
+	paidPrefixes atomic.Pointer[[]string]
 }
+
+// MarkRoutesLoaded signals that the route source has produced its first
+// non-error apply. Idempotent. After this, HandleReadyz returns 200
+// once config is also loaded.
+func (v *Verifier) MarkRoutesLoaded() { v.routesLoaded.Store(true) }
 
 // NewVerifier creates a Verifier with the given initial configuration.
 func NewVerifier(cfg *PricingConfig) (*Verifier, error) {
@@ -64,6 +86,33 @@ func (v *Verifier) load(cfg *PricingConfig) error {
 	v.chains.Store(&chains)
 	v.config.Store(cfg)
 
+	// Derive paid-prefix tracker from the route patterns. HandleVerify
+	// uses this to fail-closed when a URI is under a tracked prefix but
+	// no rule matches (see isUnderPaidPrefix for the rationale).
+	prefixes := make([]string, 0, len(cfg.Routes))
+	for _, r := range cfg.Routes {
+		prefix := patternToPrefix(r.Pattern)
+		if prefix != "" {
+			prefixes = append(prefixes, prefix)
+		}
+	}
+	sort.Slice(prefixes, func(i, j int) bool { return len(prefixes[i]) > len(prefixes[j]) })
+	v.paidPrefixes.Store(&prefixes)
+
+	// Drop metric series for offers that are no longer in the route set.
+	// Without this, deleting an offer leaves its counters + last-success
+	// gauge in the registry forever, polluting dashboards and silently
+	// keeping alerts (e.g. "no settlements after challenge") tied to dead
+	// labels.
+	live := make(map[string]struct{}, len(cfg.Routes))
+	for _, r := range cfg.Routes {
+		if r.OfferNamespace == "" && r.OfferName == "" {
+			continue
+		}
+		live[r.OfferNamespace+"\x00"+r.OfferName+"\x00"+r.Network+"\x00"+r.AssetSymbol] = struct{}{}
+	}
+	v.metrics.pruneSeriesNotIn(live)
+
 	return nil
 }
 
@@ -90,7 +139,17 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 
 	rule, requirement, extensions, _, chain, asset, ok := v.matchPaidRouteFull(cfg, uri)
 	if !ok {
-		// No pricing rule matches — route is free.
+		// Check if this URI is under a tracked paid prefix. If yes,
+		// the route was supposed to match but didn't — fail closed
+		// rather than silently make it free (Traefik ForwardAuth 200
+		// means "allow").
+		if v.isUnderPaidPrefix(uri) {
+			log.Printf("x402-verifier: URI %q is under a paid prefix but no rule matches — fail closed", uri)
+			http.Error(w, "no rule matches; route appears to be a paid prefix with stale or missing rule", http.StatusForbidden)
+
+			return
+		}
+		// Not under any paid prefix — legitimately free route.
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -144,6 +203,7 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 	case tracker.status == http.StatusOK && r.Header.Get("X-Payment") != "":
 		v.metrics.paymentVerified.With(labels).Inc()
 		v.metrics.chargedRequests.With(labels).Inc()
+		v.metrics.lastPaymentSuccess.With(labels).SetToCurrentTime()
 	case tracker.status == http.StatusPaymentRequired && r.Header.Get("X-Payment") != "":
 		v.metrics.paymentFailed.With(labels).Inc()
 	case tracker.status == http.StatusPaymentRequired:
@@ -198,6 +258,7 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		v.metrics.paymentVerified.With(labels).Inc()
 		if tracker.Header().Get("X-PAYMENT-RESPONSE") != "" {
 			v.metrics.chargedRequests.With(labels).Inc()
+			v.metrics.lastPaymentSuccess.With(labels).SetToCurrentTime()
 		}
 	}
 }
@@ -208,10 +269,18 @@ func (v *Verifier) HandleHealthz(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintln(w, `{"status":"ok"}`)
 }
 
-// HandleReadyz returns 200 OK if pricing config is loaded, 503 otherwise.
+// HandleReadyz returns 200 OK once BOTH pricing config and the first route
+// source apply have completed. Until then it returns 503 with a cause-specific
+// body so kubelet keeps the pod out of Service Endpoints, preventing the
+// "no rule -> 200 free pass" window during informer warmup
+// (CLAUDE.md pitfall #14).
 func (v *Verifier) HandleReadyz(w http.ResponseWriter, r *http.Request) {
 	if v.config.Load() == nil {
-		http.Error(w, "not ready", http.StatusServiceUnavailable)
+		http.Error(w, "not ready: config not loaded", http.StatusServiceUnavailable)
+		return
+	}
+	if !v.routesLoaded.Load() {
+		http.Error(w, "not ready: routes not loaded", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -259,6 +328,38 @@ func (v *Verifier) matchPaidRouteFull(cfg *PricingConfig, uri string) (*RouteRul
 	mergeAgentExtras(&requirement, rule)
 	extensions := BuildExtensionsForAsset(asset)
 	return rule, requirement, extensions, prometheusLabels(rule), chain, asset, true
+}
+
+// isUnderPaidPrefix reports whether uri starts with any of the URI
+// prefixes the verifier knows are paid routes. Used by HandleVerify
+// to fail-closed when matchRoute returns nil but the URI is still
+// under a tracked prefix — i.e. the route was supposed to match but
+// didn't (stale route table, code bug, etc.).
+func (v *Verifier) isUnderPaidPrefix(uri string) bool {
+	prefixes := v.paidPrefixes.Load()
+	if prefixes == nil {
+		return false
+	}
+	for _, p := range *prefixes {
+		if strings.HasPrefix(uri, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// patternToPrefix converts a route Pattern like "/services/foo/*"
+// into a directory-style prefix "/services/foo/" suitable for
+// strings.HasPrefix matching. Returns "" for patterns without a
+// trailing glob — exact-match patterns aren't paid prefixes, so
+// fail-closed only applies to the broader "any URI under this path"
+// semantic. The trailing slash is preserved so HasPrefix
+// distinguishes /services/foo/ from /services/foobar/.
+func patternToPrefix(pattern string) string {
+	if !strings.HasSuffix(pattern, "/*") {
+		return ""
+	}
+	return strings.TrimSuffix(pattern, "*")
 }
 
 // mergeAgentExtras adds the agent fields from a RouteRule to the
@@ -446,9 +547,29 @@ func (r *statusRecorder) WriteHeader(status int) {
 }
 
 func prometheusLabels(rule *RouteRule) prometheus.Labels {
+	// `route` (= rule.Pattern) was dropped in favor of (offer_namespace,
+	// offer_name) which already uniquely identifies a paid route — the
+	// pattern was redundant and unbounded by path fragments, which would
+	// have ballooned series count for sellers running many granular routes.
+	//
+	// asset_symbol is included for direct per-token aggregation in PromQL
+	// (e.g. "what's my OBOL revenue?") without having to join the metric
+	// against the ServiceOffer CR at query time. Cardinality cost is zero
+	// because each offer pins exactly one asset — the new dimension is
+	// functionally constant within the existing (ns, name) group.
+	asset := rule.AssetSymbol
+	if asset == "" {
+		// Defensive: a missing symbol is operationally ugly in PromQL.
+		// Empty-string labels are legal in Prometheus but render as a
+		// bare "asset_symbol=" in selectors, which makes dashboard
+		// filters harder to write. "unknown" is unambiguous and matches
+		// the convention we use elsewhere for under-populated metadata.
+		asset = "unknown"
+	}
 	return prometheus.Labels{
-		"route":           rule.Pattern,
 		"offer_namespace": rule.OfferNamespace,
 		"offer_name":      rule.OfferName,
+		"chain":           rule.Network,
+		"asset_symbol":    asset,
 	}
 }

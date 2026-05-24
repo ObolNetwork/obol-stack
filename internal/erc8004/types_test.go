@@ -179,6 +179,32 @@ func TestServiceDef_VersionOptional(t *testing.T) {
 	}
 }
 
+func TestServiceDef_DrainMetadataSerializesFalseAvailability(t *testing.T) {
+	available := false
+	svc := ServiceDef{
+		Name:        "web",
+		Endpoint:    "https://example.com/services/demo",
+		Available:   &available,
+		DrainEndsAt: "2026-05-24T12:00:00Z",
+	}
+
+	data, err := json.Marshal(svc)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	if string(m["available"]) != "false" {
+		t.Fatalf("available = %s, want false in %s", m["available"], data)
+	}
+	if string(m["drainEndsAt"]) != `"2026-05-24T12:00:00Z"` {
+		t.Fatalf("drainEndsAt = %s, want timestamp in %s", m["drainEndsAt"], data)
+	}
+}
+
 func TestOnChainReg_AgentIDNumeric(t *testing.T) {
 	reg := OnChainReg{
 		AgentID:       42,
