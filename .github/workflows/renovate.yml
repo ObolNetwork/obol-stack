@@ -2,7 +2,7 @@ name: Renovate
 
 on:
   schedule:
-    - cron: "0 0 * * *" # every day
+    - cron: "0 * * * *" # hourly
   workflow_dispatch:
     inputs:
       dry_run:
@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Run Renovate
-        uses: renovatebot/github-action@a4df0f50ee02c2fc7b4b8f8aa4a3ff6929fa4fc1 # v46.1.13
+        uses: renovatebot/github-action@79dc0ba74dc3de28db0a7aeb1d0b95d5bf5fde2a # v46.1.13
         env:
           LOG_LEVEL: debug
           RENOVATE_DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && 'full' || '' }}
