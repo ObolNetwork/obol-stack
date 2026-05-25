@@ -192,7 +192,7 @@ spec:
           type: RuntimeDefault
       initContainers:
         - name: prepare-litellm-config
-          image: ghcr.io/obolnetwork/litellm:sha-c16b156@sha256:9f112b51ac5a57d73cdd54103fb98d24eabaddd8689a9a285884dca6456dc86e
+          image: ghcr.io/obolnetwork/litellm:sha-9b3e569@sha256:ac453f9cdfa3752efa38998aa5bbf4f9a67e642a68b27a647aaf667c083ddc51
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -218,7 +218,7 @@ spec:
           # No Postgres required — /model/new and /model/delete work via
           # in-memory router + config.yaml persistence.
           # Source: https://github.com/ObolNetwork/litellm
-          image: ghcr.io/obolnetwork/litellm:sha-c16b156@sha256:9f112b51ac5a57d73cdd54103fb98d24eabaddd8689a9a285884dca6456dc86e
+          image: ghcr.io/obolnetwork/litellm:sha-9b3e569@sha256:ac453f9cdfa3752efa38998aa5bbf4f9a67e642a68b27a647aaf667c083ddc51
           imagePullPolicy: IfNotPresent
           # PSS Restricted: drop all caps, no privilege escalation, RO rootfs.
           # Python writes are funneled to the emptyDir mounts below.
