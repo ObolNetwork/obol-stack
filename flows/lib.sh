@@ -564,6 +564,158 @@ bootstrap_flow_workspace() {
     done
 }
 
+# Validate that OBOL_LLM_ENDPOINT is OpenAI-compatible and returns final
+# assistant content for the configured OBOL_LLM_MODEL.
+#
+# Activated when OBOL_LLM_ENDPOINT is set (for example,
+# http://127.0.0.1:8000/v1 on a QA machine). The endpoint must be
+# OpenAI-compatible, such as vLLM or llama.cpp.
+# OBOL_LLM_MODEL is the upstream model id (default qwen36-deep, 27B-class).
+# qwen36-fast (4B) is faster but flakes on long single-shot agent prompts; see
+# the flow-13/14 step 46 retry-wrapper rationale in lib-dual-stack.sh.
+preflight_openai_llm_endpoint() {
+    local out rc
+
+    rc=0
+    out=$(OBOL_LLM_ENDPOINT="${OBOL_LLM_ENDPOINT:-}" \
+    OBOL_LLM_MODEL="${OBOL_LLM_MODEL:-qwen36-deep}" \
+    OBOL_LLM_API_KEY="${OBOL_LLM_API_KEY:-}" \
+    python3 - <<'PY' 2>&1
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+endpoint = os.environ["OBOL_LLM_ENDPOINT"].rstrip("/")
+model = os.environ["OBOL_LLM_MODEL"]
+api_key = os.environ.get("OBOL_LLM_API_KEY", "")
+marker = "OBOL_LLM_PREFLIGHT_OK"
+
+if not endpoint:
+    print("OBOL_LLM_ENDPOINT is empty", file=sys.stderr)
+    sys.exit(2)
+
+
+def request_json(path, payload=None, timeout=30):
+    data = None
+    headers = {}
+    method = "GET"
+    if payload is not None:
+        data = json.dumps(payload).encode()
+        headers["Content-Type"] = "application/json"
+        method = "POST"
+    if api_key:
+        headers["Authorization"] = "Bearer " + api_key
+    req = urllib.request.Request(endpoint + path, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read()
+            return json.loads(body.decode() or "{}")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode(errors="replace")[:300]
+        raise RuntimeError(f"HTTP {exc.code}: {body}") from None
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"network error: {exc.reason}") from None
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"invalid JSON response: {exc}") from None
+
+
+def model_ids(models_body):
+    ids = []
+    data = models_body.get("data")
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict) and isinstance(item.get("id"), str):
+                ids.append(item["id"])
+    return ids
+
+
+def content_from_message(message):
+    content = message.get("content") or ""
+    if isinstance(content, list):
+        parts = []
+        for part in content:
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                parts.append(part["text"])
+            elif isinstance(part, str):
+                parts.append(part)
+        content = " ".join(parts) if parts else json.dumps(content, separators=(",", ":"))
+    return " ".join(str(content).split())
+
+
+def chat(disable_thinking):
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "user", "content": f"Reply exactly: {marker}"}
+        ],
+        "temperature": 0,
+        "max_tokens": 64,
+        "stream": False,
+    }
+    if disable_thinking:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
+    body = request_json("/chat/completions", payload=payload, timeout=75)
+    choices = body.get("choices")
+    if not choices:
+        raise RuntimeError("chat response has no choices")
+    message = choices[0].get("message") or {}
+    content = content_from_message(message)
+    reasoning = message.get("reasoning_content") or message.get("reasoning") or ""
+    return content, bool(reasoning)
+
+
+errors = []
+try:
+    ids = model_ids(request_json("/models", timeout=20))
+except Exception as exc:
+    print(f"LLM preflight failed: /models unavailable ({exc})", file=sys.stderr)
+    sys.exit(1)
+
+if ids and model not in ids:
+    sample = ", ".join(ids[:12])
+    more = "" if len(ids) <= 12 else f", ... ({len(ids)} total)"
+    print(f"LLM preflight failed: model {model!r} not listed by /models (saw: {sample}{more})", file=sys.stderr)
+    sys.exit(1)
+
+for disable_thinking in (False, True):
+    try:
+        content, reasoning = chat(disable_thinking)
+    except Exception as exc:
+        errors.append(f"disable_thinking={disable_thinking}: {exc}")
+        continue
+    if content and marker in content:
+        suffix = " with enable_thinking=false" if disable_thinking else ""
+        print(f"LLM_PREFLIGHT_OK model={model} content_chars={len(content)}{suffix}")
+        sys.exit(0)
+    if content:
+        errors.append(f"disable_thinking={disable_thinking}: final content missed marker: {content[:120]!r}")
+    elif reasoning:
+        errors.append(f"disable_thinking={disable_thinking}: reasoning was present but final content was empty")
+    else:
+        errors.append(f"disable_thinking={disable_thinking}: final content was empty")
+
+print("LLM preflight failed: /chat/completions did not return usable final content", file=sys.stderr)
+for err in errors:
+    print("  - " + err, file=sys.stderr)
+sys.exit(1)
+PY
+) || rc=$?
+
+    printf '%s\n' "$out"
+    if [ "$rc" -eq 0 ] && echo "$out" | grep -q "enable_thinking=false"; then
+        export OBOL_LLM_DISABLE_THINKING=true
+    fi
+    return "$rc"
+}
+
+llm_disable_thinking_payload_suffix() {
+    if [ "${OBOL_LLM_DISABLE_THINKING:-false}" = "true" ]; then
+        printf ',"chat_template_kwargs":{"enable_thinking":false}'
+    fi
+}
+
 # Repoint a stack at a QA LLM via the canonical `obol model` CLI.
 #
 # Activated when OBOL_LLM_ENDPOINT is set (for example,
@@ -577,6 +729,10 @@ bootstrap_flow_workspace() {
 # helmfile rollout at the end):
 #   1. obol model setup custom --endpoint … --model … --no-sync
 #      (validates the endpoint, patches LiteLLM, hot-adds the model.)
+#      If the LLM preflight proved the endpoint needs enable_thinking=false,
+#      the route stores that provider-specific body at LiteLLM so agent calls
+#      inherit it too; callers like Hermes do not preserve arbitrary request
+#      extension fields.
 #   2. obol model prefer <model> --no-sync
 #      (configured LiteLLM order is the primary-model contract.)
 #   3. obol model sync
@@ -593,6 +749,9 @@ route_llm_via_obol_cli() {
         local args=(model setup custom --no-sync --endpoint "$OBOL_LLM_ENDPOINT" --model "$model")
         if [ -n "${OBOL_LLM_API_KEY:-}" ]; then
             args+=(--api-key "$OBOL_LLM_API_KEY")
+        fi
+        if [ "${OBOL_LLM_DISABLE_THINKING:-false}" = "true" ]; then
+            args+=(--disable-thinking)
         fi
         $runner "${args[@]}" || return 1
         $runner model prefer "$model" --no-sync || return 1
@@ -886,6 +1045,14 @@ agent_response_refused() {
 
 paid_inference_content_invalid() {
     grep -qiE "thinking process|analy[sz]e the (user )?(input|request)|chain[- ]of[- ]thought|step[- ]by[- ]step|\\*\\*(Services|Tools|Skills|Functionality)\\*\\*|^[[:space:]]*[1-9]\\..*\\*\\*(Hermes|Skills|Terminal|Todo|Vision)"
+}
+
+paid_inference_pending_error() {
+    grep -qiE "Payment verification failed|ERROR=503|ServiceUnavailableError"
+}
+
+paid_inference_transient_error() {
+    grep -qiE "ERROR=524|524: A timeout occurred|TimeoutError|timed out|context canceled|deadline exceeded|upstream request timeout"
 }
 
 assert_obol_kubeconfig() {

@@ -268,3 +268,28 @@ func TestEmbeddedImages_CloudflaredHelmTagIsDigestPinned(t *testing.T) {
 			strings.TrimSpace(tagLine))
 	}
 }
+
+func TestEmbeddedLiteLLMConfigUsesWritableRuntimeCopy(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/llm.yaml")
+	if err != nil {
+		t.Fatalf("read llm.yaml: %v", err)
+	}
+	text := string(data)
+
+	if strings.Contains(text, "mountPath: /etc/litellm/config.yaml") {
+		t.Fatalf("LiteLLM still mounts the ConfigMap directly at /etc/litellm/config.yaml; /model/new must write to a writable runtime copy")
+	}
+
+	for _, want := range []string{
+		"initContainers:",
+		"name: prepare-litellm-config",
+		"name: litellm-config-source",
+		"name: litellm-config-work",
+		"mountPath: /etc/litellm",
+		"emptyDir:",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("LiteLLM writable config pattern missing %q", want)
+		}
+	}
+}

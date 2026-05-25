@@ -924,29 +924,14 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════
-# 29. AGENT DISCOVERS ALICE (via ERC-8004 / skill.md)
+# 29. BOB AGENT POD DISCOVERS ALICE VIA SKILL CATALOG
 # ═════════════════════════════════════════════════════════════════
 
-step "Bob's agent: discover Alice's OBOL service"
-discover_response=$(curl -sf --max-time 300 \
-    -X POST "http://localhost:${BOB_AGENT_PORT}/v1/chat/completions" \
-    -H "Authorization: Bearer $BOB_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"model\": \"$BOB_AGENT_RUNTIME-agent\",
-        \"messages\": [{
-            \"role\": \"user\",
-            \"content\": \"Search the ERC-8004 registry on Base Sepolia for the agent named 'Live OBOL Base Sepolia Test Inference'. Use the discovery skill or fetch $TUNNEL_URL/skill.md. Report the agent's ID, name, endpoint, and the asset symbol it requires for x402 payments.\"
-        }],
-        \"max_tokens\": 4000,
-        \"stream\": false
-    }" 2>&1 || true)
-discover_content=$(extract_assistant_content "$discover_response" 2>/dev/null || true)
-echo "${discover_content:0:500}"
-# Discovery is informational only on this flow. The structural proof that the
-# agent can reach Alice is the next "buy" step + the PurchaseRequest CR going
-# Ready=True.
-pass "Agent discovery prompt issued (success will be confirmed by buy + PurchaseRequest CR)"
+step "Bob's agent pod: discover Alice's OBOL service in /api/services.json"
+# This check proves Bob's agent pod can reach Alice's public catalog without
+# burning a long LLM turn. The structural agent proof remains the next step:
+# Hermes must invoke buy.py and create the PurchaseRequest.
+assert_bob_service_catalog_contains "alice-obol-inference" "OBOL"
 
 # ═════════════════════════════════════════════════════════════════
 # 30. BUY 5 AUTHS VIA buy.py (Permit2-aware on integration branch)

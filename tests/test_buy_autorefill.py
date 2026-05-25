@@ -173,6 +173,46 @@ class BuyAutorefillHelpersTest(unittest.TestCase):
             )
         self.assertIn("transient error", buf.getvalue())
 
+    def test_permit2_auths_are_immediately_valid_on_chain(self):
+        mod = load_buy_module()
+        signer = "0x57b0ef875deb5a37301f1640e469a2129da9490e"
+        pay_to = "0xc0de030f6c37f490594f93fb99e2756703c4297e"
+        asset = "0x210bbd033630e5e611b7922d70b0caabe64636d9"
+        payment = {
+            "scheme": "exact",
+            "network": "eip155:84532",
+            "amount": "1000000000000000",
+            "asset": asset,
+            "payTo": pay_to,
+            "maxTimeoutSeconds": 60,
+            "extra": {
+                "assetTransferMethod": "permit2",
+                "name": "Obol Network",
+                "version": "1",
+            },
+        }
+
+        with mock.patch.object(mod, "_supports_erc20_permit", return_value=False), \
+             mock.patch.object(mod, "_signer_post", return_value={"signature": "0x" + ("11" * 65)}) as signer_post, \
+             mock.patch.object(mod.time, "time", return_value=1779730000):
+            auths = mod._presign_auths(
+                signer,
+                pay_to,
+                "1000000000000000",
+                "base-sepolia",
+                asset,
+                1,
+                payment=payment,
+                extensions={},
+            )
+
+        typed_data = signer_post.call_args.args[1]
+        self.assertEqual(typed_data["message"]["witness"]["validAfter"], "0")
+        self.assertEqual(
+            auths[0]["payment"]["payload"]["permit2Authorization"]["witness"]["validAfter"],
+            "0",
+        )
+
     def test_build_active_auth_pool_appends_new_auths(self):
         mod = load_buy_module()
         existing = [{"nonce": "a"}, {"nonce": "b"}, {"nonce": "c"}]

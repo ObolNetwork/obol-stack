@@ -753,8 +753,6 @@ func serviceDefWithDrain(offer *monetizeapi.ServiceOffer, svc erc8004.ServiceDef
 	if offer == nil || !offer.IsDraining() || offer.DrainExpired(time.Now()) {
 		return svc
 	}
-	available := false
-	svc.Available = &available
 	svc.DrainEndsAt = offer.DrainEndsAt().UTC().Format(time.RFC3339)
 	return svc
 }
@@ -795,9 +793,8 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 		}
 		// Drained offers (post-grace-period) have no live route — drop
 		// them from the catalog entirely. Draining offers (pre-expiry)
-		// stay in the catalog with available=false + drainEndsAt set so
-		// buyers can see the wind-down via discovery before the route
-		// disappears.
+		// stay in the catalog with draining status + drainEndsAt so buyers
+		// can see the wind-down via discovery before the route disappears.
 		if offer.DrainExpired(now) {
 			continue
 		}
@@ -827,16 +824,16 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 	}
 
 	lines = append(lines, "## Services", "")
-	lines = append(lines, "| Service | Type | Model | Price | Available | Endpoint |")
-	lines = append(lines, "|---------|------|-------|-------|-----------|----------|")
+	lines = append(lines, "| Service | Type | Model | Price | Status | Endpoint |")
+	lines = append(lines, "|---------|------|-------|-------|--------|----------|")
 	for _, offer := range ready {
 		modelName := offer.Spec.Model.Name
 		if modelName == "" {
 			modelName = "—"
 		}
-		availability := "yes"
+		status := "available"
 		if offer.IsDraining() {
-			availability = fmt.Sprintf("draining (ends %s)", offer.DrainEndsAt().UTC().Format(time.RFC3339))
+			status = fmt.Sprintf("draining · ends `%s`", offer.DrainEndsAt().UTC().Format(time.RFC3339))
 		}
 		lines = append(lines, fmt.Sprintf(
 			"| [%s](#%s) | %s | %s | %s | %s | `%s%s` |",
@@ -845,7 +842,7 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 			fallbackOfferType(offer),
 			modelName,
 			describeOfferPrice(offer),
-			availability,
+			status,
 			baseURL,
 			offer.EffectivePath(),
 		))
@@ -863,10 +860,7 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 		lines = append(lines, fmt.Sprintf("- **Pay To**: `%s`", firstNonEmpty(offer.Spec.Payment.PayTo, "—")))
 		lines = append(lines, fmt.Sprintf("- **Network**: %s", firstNonEmpty(offer.Spec.Payment.Network, "—")))
 		if offer.IsDraining() {
-			lines = append(lines, "- **Available**: false (draining)")
 			lines = append(lines, fmt.Sprintf("- **Drain ends at**: %s", offer.DrainEndsAt().UTC().Format(time.RFC3339)))
-		} else {
-			lines = append(lines, "- **Available**: true")
 		}
 		description := offer.Spec.Registration.Description
 		if description == "" {
@@ -979,7 +973,6 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 			modelName = offer.Status.AgentResolution.Model
 		}
 
-		available := !offer.IsDraining()
 		drainEndsAt := ""
 		if offer.IsDraining() {
 			drainEndsAt = offer.DrainEndsAt().UTC().Format(time.RFC3339)
@@ -997,7 +990,6 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 			Description:         desc,
 			IsDemo:              offer.Namespace == "demo",
 			RegistrationPending: offerAwaitingRegistration(offer),
-			Available:           available,
 			DrainEndsAt:         drainEndsAt,
 		}
 

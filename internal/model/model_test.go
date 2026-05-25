@@ -155,6 +155,9 @@ func TestBuildCustomEndpointEntry(t *testing.T) {
 		if entry.LiteLLMParams.APIKey != "secret-key" {
 			t.Errorf("api_key = %q, want secret-key", entry.LiteLLMParams.APIKey)
 		}
+		if entry.LiteLLMParams.ExtraBody != nil {
+			t.Errorf("extra_body = %+v, want nil by default", entry.LiteLLMParams.ExtraBody)
+		}
 	})
 
 	t.Run("empty api_key falls back to none", func(t *testing.T) {
@@ -174,6 +177,17 @@ func TestBuildCustomEndpointEntry(t *testing.T) {
 		entry := buildCustomEndpointEntry("qwen3:9b-mlx", "http://host:8000/v1", "")
 		if entry.ModelName != "qwen3:9b-mlx" {
 			t.Errorf("ModelName = %q, want qwen3:9b-mlx unchanged", entry.ModelName)
+		}
+	})
+
+	t.Run("disable thinking stores LiteLLM extra_body", func(t *testing.T) {
+		entry := buildCustomEndpointEntryWithOptions("qwen36", "http://host:8000/v1", "", CustomEndpointOptions{DisableThinking: true})
+		kwargs, ok := entry.LiteLLMParams.ExtraBody["chat_template_kwargs"].(map[string]any)
+		if !ok {
+			t.Fatalf("extra_body missing chat_template_kwargs: %+v", entry.LiteLLMParams.ExtraBody)
+		}
+		if got, ok := kwargs["enable_thinking"].(bool); !ok || got {
+			t.Fatalf("enable_thinking = %#v, want false", kwargs["enable_thinking"])
 		}
 	})
 }
@@ -496,6 +510,39 @@ func TestValidateCustomEndpoint(t *testing.T) {
 		err := ValidateCustomEndpoint(srv.URL+"/v1", "test-model", "")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("disable thinking is sent in inference probe", func(t *testing.T) {
+		var probe map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+
+			switch r.URL.Path {
+			case "/v1/models":
+				fmt.Fprint(w, `{"data":[{"id":"test-model"}]}`)
+			case "/v1/chat/completions":
+				if err := json.NewDecoder(r.Body).Decode(&probe); err != nil {
+					t.Fatalf("decode probe: %v", err)
+				}
+				fmt.Fprint(w, `{"choices":[{"message":{"content":"pong"}}]}`)
+			default:
+				http.NotFound(w, r)
+			}
+		}))
+		defer srv.Close()
+
+		err := ValidateCustomEndpointWithOptions(srv.URL+"/v1", "test-model", "", CustomEndpointOptions{DisableThinking: true})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		kwargs, ok := probe["chat_template_kwargs"].(map[string]any)
+		if !ok {
+			t.Fatalf("probe missing chat_template_kwargs: %+v", probe)
+		}
+		if got, ok := kwargs["enable_thinking"].(bool); !ok || got {
+			t.Fatalf("enable_thinking = %#v, want false", kwargs["enable_thinking"])
 		}
 	})
 

@@ -131,6 +131,35 @@ spec:
               1e-9
             )
 
+        # Age of the last successful payment per (offer, chain). Used by
+        # the frontend My Purchases drawer to render "last settlement:
+        # 12s ago" labels without joining against the buyer sidecar or
+        # chasing on-chain receipts.
+        #
+        # The underlying gauge
+        # `obol_x402_verifier_last_payment_success_seconds` stamps
+        # `time.Now().Unix()` (seconds since epoch, UTC) into the same
+        # `(offer_namespace, offer_name, chain, asset_symbol)` label set
+        # used by `obol_x402_verifier_charged_requests_total`, right
+        # next to the counter `.Inc()` in the verifier's success branch.
+        # Until an offer settles at least once, no series exists for it
+        # and the rule's `max(...)` returns no samples — the frontend
+        # then renders "no settlements yet" rather than a misleading
+        # "X seconds ago since 1970". A pod restart clears the gauge
+        # (in-process state) but Prometheus retention keeps the last
+        # sample, so the rule keeps producing a sensible age across
+        # rollouts.
+        #
+        # `max by (...)` collapses the asset_symbol dimension on the
+        # input gauge: a single (offer, chain) almost always pins one
+        # asset, but `max` is safe even if a route re-pins from USDC
+        # to OBOL — the most recent settlement still wins.
+        - record: x402:last_payment_age_seconds:by_offer_chain
+          expr: |
+            time() - max by (offer_namespace, offer_name, chain) (
+              obol_x402_verifier_last_payment_success_seconds
+            )
+
     - name: x402.alerting
       rules:
         # Payment-failure ratio crossed 10% over the last hour for a paid

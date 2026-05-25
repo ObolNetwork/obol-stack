@@ -78,11 +78,33 @@ type LiteLLMParams struct {
 	Model   string `yaml:"model"`
 	APIBase string `yaml:"api_base,omitempty"`
 	APIKey  string `yaml:"api_key,omitempty"`
+	// ExtraBody is merged by LiteLLM into every upstream request for this
+	// model. It is intentionally opt-in because many OpenAI-compatible servers
+	// reject unknown provider-specific fields.
+	ExtraBody map[string]any `yaml:"extra_body,omitempty"`
 	// CacheControlInjectionPoints is a LiteLLM directive that tells the proxy
 	// to attach Anthropic-style `cache_control: {type: ephemeral}` markers to
 	// specific messages on every request to this model. We pin the system
 	// message for Anthropic entries so prompt caching is on by default.
 	CacheControlInjectionPoints []CacheControlInjection `yaml:"cache_control_injection_points,omitempty"`
+}
+
+// CustomEndpointOptions controls optional per-request behavior for custom
+// OpenAI-compatible endpoints.
+type CustomEndpointOptions struct {
+	DisableThinking bool
+}
+
+func (o CustomEndpointOptions) extraBody() map[string]any {
+	if !o.DisableThinking {
+		return nil
+	}
+
+	return map[string]any{
+		"chat_template_kwargs": map[string]any{
+			"enable_thinking": false,
+		},
+	}
 }
 
 // CacheControlInjection is one entry in LiteLLM's
@@ -522,13 +544,18 @@ func hotAddModels(cfg *config.Config, u *ui.UI, entries []ModelEntry) error {
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	for _, entry := range entries {
+		params := map[string]any{
+			"model":    entry.LiteLLMParams.Model,
+			"api_base": entry.LiteLLMParams.APIBase,
+			"api_key":  entry.LiteLLMParams.APIKey,
+		}
+		if len(entry.LiteLLMParams.ExtraBody) > 0 {
+			params["extra_body"] = entry.LiteLLMParams.ExtraBody
+		}
+
 		body := map[string]any{
-			"model_name": entry.ModelName,
-			"litellm_params": map[string]any{
-				"model":    entry.LiteLLMParams.Model,
-				"api_base": entry.LiteLLMParams.APIBase,
-				"api_key":  entry.LiteLLMParams.APIKey,
-			},
+			"model_name":     entry.ModelName,
+			"litellm_params": params,
 		}
 		bodyJSON, err := json.Marshal(body)
 		if err != nil {
@@ -809,6 +836,10 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 // model" behavior an operator running `obol model setup custom` wants when
 // they re-run the command.
 func AddCustomEndpoint(cfg *config.Config, u *ui.UI, endpoint, modelName, apiKey string) error {
+	return AddCustomEndpointWithOptions(cfg, u, endpoint, modelName, apiKey, CustomEndpointOptions{})
+}
+
+func AddCustomEndpointWithOptions(cfg *config.Config, u *ui.UI, endpoint, modelName, apiKey string, options CustomEndpointOptions) error {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
@@ -824,7 +855,7 @@ func AddCustomEndpoint(cfg *config.Config, u *ui.UI, endpoint, modelName, apiKey
 	validationEndpoint = strings.Replace(validationEndpoint, "host.k3d.internal", "localhost", 1)
 
 	validationEndpoint = strings.Replace(validationEndpoint, "host.docker.internal", "localhost", 1)
-	if err := ValidateCustomEndpoint(validationEndpoint, modelName, apiKey); err != nil {
+	if err := ValidateCustomEndpointWithOptions(validationEndpoint, modelName, apiKey, options); err != nil {
 		return fmt.Errorf("endpoint validation failed: %w", err)
 	}
 
@@ -836,7 +867,7 @@ func AddCustomEndpoint(cfg *config.Config, u *ui.UI, endpoint, modelName, apiKey
 		u.Infof("Cluster endpoint: %s (translated from %s)", clusterEndpoint, endpoint)
 	}
 
-	entry := buildCustomEndpointEntry(modelName, clusterEndpoint, apiKey)
+	entry := buildCustomEndpointEntryWithOptions(modelName, clusterEndpoint, apiKey, options)
 
 	u.Infof("Adding custom endpoint (model: %s) to LiteLLM config", modelName)
 
@@ -864,6 +895,15 @@ var probeBackoffSleep = time.Sleep
 // The inference probe is the definitive test — some servers (e.g., mlx-lm) don't
 // list the loaded model in /models but accept it for inference.
 func ValidateCustomEndpoint(endpoint, modelName, apiKey string) error {
+	return ValidateCustomEndpointWithOptions(endpoint, modelName, apiKey, CustomEndpointOptions{})
+}
+
+// ValidateCustomEndpointWithOptions validates that a custom OpenAI-compatible
+// endpoint works. It runs a 2-step validation: reachability check, then
+// inference probe. The inference probe is the definitive test — some servers
+// (e.g., mlx-lm) don't list the loaded model in /models but accept it for
+// inference.
+func ValidateCustomEndpointWithOptions(endpoint, modelName, apiKey string, options CustomEndpointOptions) error {
 	client := &http.Client{Timeout: 60 * time.Second}
 
 	authHeader := ""
@@ -903,11 +943,15 @@ func ValidateCustomEndpoint(endpoint, modelName, apiKey string) error {
 	}
 
 	// Step 2: Inference probe — the definitive test
-	probePayload, _ := json.Marshal(map[string]any{ //nolint:errchkjson // map[string]any is safe, keys/values are controlled
+	probe := map[string]any{
 		"model":      modelName,
 		"messages":   []map[string]string{{"role": "user", "content": "ping"}},
 		"max_tokens": 1,
-	})
+	}
+	for k, v := range options.extraBody() {
+		probe[k] = v
+	}
+	probePayload, _ := json.Marshal(probe) //nolint:errchkjson // map[string]any is safe, keys/values are controlled
 	completionsURL := strings.TrimRight(endpoint, "/") + "/chat/completions"
 
 	probeReq, err := http.NewRequest(http.MethodPost, completionsURL, bytes.NewReader(probePayload))
@@ -1342,12 +1386,17 @@ func buildModelEntries(provider string, models []string) []ModelEntry {
 // standalone helper so the entry shape is unit-testable without going
 // through the full kubectl-driven AddCustomEndpoint path.
 func buildCustomEndpointEntry(modelName, clusterEndpoint, apiKey string) ModelEntry {
+	return buildCustomEndpointEntryWithOptions(modelName, clusterEndpoint, apiKey, CustomEndpointOptions{})
+}
+
+func buildCustomEndpointEntryWithOptions(modelName, clusterEndpoint, apiKey string, options CustomEndpointOptions) ModelEntry {
 	entry := ModelEntry{
 		ModelName: modelName,
 		LiteLLMParams: LiteLLMParams{
-			Model:   "openai/" + modelName,
-			APIBase: clusterEndpoint,
-			APIKey:  apiKey,
+			Model:     "openai/" + modelName,
+			APIBase:   clusterEndpoint,
+			APIKey:    apiKey,
+			ExtraBody: options.extraBody(),
 		},
 	}
 	if apiKey == "" {

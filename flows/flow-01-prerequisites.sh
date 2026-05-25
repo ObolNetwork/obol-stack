@@ -9,8 +9,12 @@ run_step "Docker daemon running" docker info
 # LLM endpoint must be serving. Full QA uses an OpenAI-compatible
 # vLLM/llama.cpp endpoint; local development can still use Ollama.
 if [ -n "${OBOL_LLM_ENDPOINT:-}" ]; then
-    run_step_grep "OpenAI-compatible LLM endpoint serving models" "data|id" \
-        curl -sf "${OBOL_LLM_ENDPOINT%/}/models"
+    step "OpenAI-compatible LLM endpoint returns final chat content"
+    if preflight_openai_llm_endpoint; then
+        pass "LLM endpoint usable for model ${OBOL_LLM_MODEL:-qwen36-deep}"
+    else
+        fail "LLM endpoint did not pass OpenAI-compatible chat preflight"
+    fi
 else
     run_step_grep "Ollama serving models" "models" curl -sf http://localhost:11434/api/tags
 fi
