@@ -24,6 +24,7 @@ releases:
     namespace: ethereum-{{ .Values.id }}
     createNamespace: true
     chart: ethereum-helm-charts/ethereum-node
+    version: 0.2.14
     needs: [ethereum-pvcs]
     values:
       # Network and checkpoint sync configuration
@@ -42,15 +43,15 @@ releases:
           enabled: true
           image:
             {{- if eq .Values.executionClient "reth" }}
-            tag: v1.11.1
+            tag: v2.2.0
             {{- else if eq .Values.executionClient "geth" }}
-            tag: v1.17.0
+            tag: v1.17.3
             {{- else if eq .Values.executionClient "nethermind" }}
-            tag: "1.36.0"
+            tag: "1.37.2"
             {{- else if eq .Values.executionClient "besu" }}
-            tag: "26.2.0"
+            tag: "26.5.0"
             {{- else if eq .Values.executionClient "erigon" }}
-            tag: v3.3.8
+            tag: v3.4.2
             {{- end }}
           persistence:
             enabled: true
@@ -63,15 +64,15 @@ releases:
           enabled: true
           image:
             {{- if eq .Values.consensusClient "lighthouse" }}
-            tag: v8.1.1
+            tag: v8.1.3
             {{- else if eq .Values.consensusClient "prysm" }}
-            tag: v7.1.2
+            tag: v7.1.4
             {{- else if eq .Values.consensusClient "teku" }}
-            tag: "26.2.0"
+            tag: "26.4.0"
             {{- else if eq .Values.consensusClient "nimbus" }}
-            tag: multiarch-v26.3.0
+            tag: multiarch-v26.5.0
             {{- else if eq .Values.consensusClient "lodestar" }}
-            tag: v1.40.0
+            tag: v1.43.0
             {{- end }}
           persistence:
             enabled: true

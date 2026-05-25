@@ -9,7 +9,7 @@ releases:
     namespace: aztec-{{ .Values.id }}
     createNamespace: true
     chart: obol/aztec-node
-    version: 0.2.0
+    version: 2.3.0
     values:
       - role: sequencer
         sequencer:
@@ -19,7 +19,7 @@ releases:
         networkName: '{{ .Values.id }}'
         image:
           repository: aztecprotocol/aztec
-          tag: 2.1.5
+          tag: 4.3.0
           pullPolicy: Always
         node:
           replicas: 1
