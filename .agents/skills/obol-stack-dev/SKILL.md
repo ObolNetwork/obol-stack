@@ -2,7 +2,7 @@
 name: obol-stack-dev
 description: Obol Stack development and QA runbook. Use when working on obol-stack flows, x402 seller/buyer tests, live Base Sepolia OBOL smoke, Anvil fork regressions, ERC-8004 registration, LiteLLM paid routing, release-smoke, cloudflared, Renovate image bumps, or remote QA worktrees.
 metadata:
-  version: "3.0.0"
+  version: "3.1.0"
   domain: infrastructure
   role: specialist
   scope: development-and-testing
@@ -17,6 +17,7 @@ Operational router. Load only the reference for the task. **Do not delegate unde
 | Need | Read |
 |---|---|
 | Local build, env vars, force-rebuild, CLI surface | `references/dev.md` |
+| PR trains, ordered merge/collapse, release candidate gate | `references/release-train.md` |
 | Release-smoke broken — what to check first | `references/release-smoke-debugging.md` |
 | Live OBOL smoke, flow choice, Bob derivation, success criteria | `references/paid-flows.md` |
 | LiteLLM model setup, paid/* route, port-forward | `references/llm-routing.md` |
