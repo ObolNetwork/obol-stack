@@ -855,6 +855,10 @@ func AddCustomEndpoint(cfg *config.Config, u *ui.UI, endpoint, modelName, apiKey
 	return nil
 }
 
+// probeBackoffSleep is the sleep used between ValidateCustomEndpoint inference-probe
+// retries. Overridable in tests to keep them fast.
+var probeBackoffSleep = time.Sleep
+
 // ValidateCustomEndpoint validates that a custom OpenAI-compatible endpoint works.
 // It runs a 2-step validation: reachability check, then inference probe.
 // The inference probe is the definitive test — some servers (e.g., mlx-lm) don't
@@ -917,9 +921,34 @@ func ValidateCustomEndpoint(endpoint, modelName, apiKey string) error {
 		probeReq.Header.Set("Authorization", authHeader)
 	}
 
-	probeResp, err := client.Do(probeReq)
-	if err != nil {
-		return fmt.Errorf("inference probe failed — cannot reach %s: %w", completionsURL, err)
+	// Retry on transient network errors (DNS flake, TCP reset, route loss).
+	// Only client.Do errors are retried — non-200 HTTP responses are real
+	// upstream signals (4xx = config bug, 5xx = upstream broken) and fail fast.
+	const probeMaxAttempts = 3
+	probeBackoffs := []time.Duration{
+		250 * time.Millisecond,
+		1 * time.Second,
+		4 * time.Second,
+	}
+
+	var probeResp *http.Response
+	var probeErr error
+	for attempt := 0; attempt < probeMaxAttempts; attempt++ {
+		// Bodies are single-use; re-attach the payload for each attempt.
+		attemptReq := probeReq.Clone(probeReq.Context())
+		attemptReq.Body = io.NopCloser(bytes.NewReader(probePayload))
+
+		probeResp, probeErr = client.Do(attemptReq)
+		if probeErr == nil {
+			break
+		}
+		if attempt < probeMaxAttempts-1 {
+			probeBackoffSleep(probeBackoffs[attempt])
+		}
+	}
+	if probeErr != nil {
+		return fmt.Errorf("inference probe failed after %d attempts — cannot reach %s: %w",
+			probeMaxAttempts, completionsURL, probeErr)
 	}
 	defer probeResp.Body.Close()
 
