@@ -57,19 +57,6 @@
     },
     {
       "customType": "regex",
-      "description": "Update LiteLLM image tag",
-      "matchStrings": [
-        "image:\\s*ghcr\\.io/berriai/litellm:(?<currentValue>[\\w.-]+)"
-      ],
-      "fileMatch": [
-        "^internal/embed/infrastructure/base/templates/llm\\.yaml$"
-      ],
-      "datasourceTemplate": "docker",
-      "depNameTemplate": "ghcr.io/berriai/litellm",
-      "versioningTemplate": "loose"
-    },
-    {
-      "customType": "regex",
       "description": "Update cloudflared image tag and digest",
       "matchStrings": [
         "repository:\\s*cloudflare/cloudflared\\s*\\n\\s*tag:\\s*[\"']?(?<currentValue>[\\w.-]+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?[\"']?"
@@ -263,7 +250,7 @@
         "docker"
       ],
       "matchPackageNames": [
-        "ghcr.io/berriai/litellm"
+        "ghcr.io/obolnetwork/litellm"
       ],
       "labels": [
         "renovate/litellm"
@@ -271,7 +258,8 @@
       "schedule": [
         "before 6am on monday"
       ],
-      "groupName": "LiteLLM updates"
+      "groupName": "LiteLLM updates",
+      "pinDigests": true
     },
     {
       "description": "Group cloudflared updates",
