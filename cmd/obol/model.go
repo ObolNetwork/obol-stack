@@ -267,7 +267,7 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 			&cli.StringFlag{Name: "endpoint", Usage: "Full base URL (e.g. http://host:8000/v1)", Required: true},
 			&cli.StringFlag{Name: "model", Usage: "Model identifier at the endpoint — this is also the LiteLLM model_name the agent will call", Required: true},
 			&cli.StringFlag{Name: "api-key", Usage: "API key (optional, some endpoints don't require it)"},
-			&cli.BoolFlag{Name: "disable-thinking", Usage: "Forward chat_template_kwargs.enable_thinking=false to this endpoint on every request"},
+			&cli.BoolFlag{Name: "disable-thinking", Usage: "Tells a model not to use its thinking mode to reason about turns for longer."},
 			&cli.BoolFlag{Name: "no-sync", Usage: "Skip the agent model sync (batch with other model commands, then run `obol model sync` once)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
