@@ -440,11 +440,8 @@ func TestBuildRegistrationServices_IncludesDrainMetadata(t *testing.T) {
 		t.Fatalf("services = %+v, want web + A2A", services)
 	}
 	for _, svc := range services {
-		if svc.Available == nil {
-			t.Fatalf("%s missing available=false drain marker: %+v", svc.Name, svc)
-		}
-		if *svc.Available {
-			t.Fatalf("%s available = true, want false during drain: %+v", svc.Name, svc)
+		if svc.Available != nil {
+			t.Fatalf("%s.Available = %v, want nil (drain is signalled via DrainEndsAt only): %+v", svc.Name, *svc.Available, svc)
 		}
 		if _, err := time.Parse(time.RFC3339, svc.DrainEndsAt); err != nil {
 			t.Fatalf("%s drainEndsAt = %q is not RFC3339: %v", svc.Name, svc.DrainEndsAt, err)
@@ -474,8 +471,8 @@ func TestBuildIdentityRegistrationServices_IncludesDrainMetadata(t *testing.T) {
 		t.Fatalf("services = %+v, want web + MCP", services)
 	}
 	for _, svc := range services {
-		if svc.Available == nil || *svc.Available {
-			t.Fatalf("%s missing available=false drain marker: %+v", svc.Name, svc)
+		if svc.Available != nil {
+			t.Fatalf("%s.Available = %v, want nil (drain is signalled via DrainEndsAt only): %+v", svc.Name, *svc.Available, svc)
 		}
 		if _, err := time.Parse(time.RFC3339, svc.DrainEndsAt); err != nil {
 			t.Fatalf("%s drainEndsAt = %q is not RFC3339: %v", svc.Name, svc.DrainEndsAt, err)
@@ -645,6 +642,64 @@ func TestBuildSkillCatalogMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(content, "https://example.com/services/flow-qwen") {
 		t.Fatalf("catalog missing public endpoint:\n%s", content)
+	}
+}
+
+// TestBuildSkillCatalogMarkdown_DrainAdditiveDetail locks in the
+// pure-additive markdown surface: active offers must NOT emit a
+// `- **Available**:` detail bullet (that wire was removed when drain
+// landed). Draining offers may have a `- **Drain ends at**:` bullet
+// but never a separate Available bullet, because consumers detect
+// drain solely via the timestamp's presence.
+func TestBuildSkillCatalogMarkdown_DrainAdditiveDetail(t *testing.T) {
+	readyCond := []monetizeapi.Condition{{Type: "Ready", Status: "True"}}
+	activeOffer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "http",
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base",
+				PayTo:   "0x1111111111111111111111111111111111111111",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
+	}
+
+	drainAt := metav1.NewTime(time.Now())
+	grace := metav1.Duration{Duration: time.Hour}
+	drainingOffer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "bravo", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type:             "http",
+			DrainAt:          &drainAt,
+			DrainGracePeriod: &grace,
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base",
+				PayTo:   "0x2222222222222222222222222222222222222222",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
+	}
+
+	content := buildSkillCatalogMarkdown(
+		[]*monetizeapi.ServiceOffer{activeOffer, drainingOffer},
+		"https://example.com",
+	)
+
+	if strings.Contains(content, "- **Available**:") {
+		t.Errorf("markdown contains `- **Available**:` bullet; drain wire is additive (drainEndsAt only):\n%s", content)
+	}
+	if !strings.Contains(content, "- **Drain ends at**:") {
+		t.Errorf("draining offer missing `- **Drain ends at**:` bullet:\n%s", content)
+	}
+	// Table header should expose Status, not the legacy Available column.
+	if strings.Contains(content, "| Available |") {
+		t.Errorf("markdown table header still has `Available` column; expected `Status`:\n%s", content)
+	}
+	if !strings.Contains(content, "| Status |") {
+		t.Errorf("markdown table header missing `Status` column:\n%s", content)
 	}
 }
 
@@ -856,16 +911,28 @@ func TestBuildServiceCatalogJSON_ExcludesNonReady(t *testing.T) {
 	if services[0].Name != "ready-svc" {
 		t.Errorf("got %q, want ready-svc — filter pipeline leaked another offer", services[0].Name)
 	}
-	if !services[0].Available {
-		t.Errorf("ready-svc.available = false, want true (offer is not draining)")
+
+	// Pure-additive wire schema: active offers must serialize without
+	// `available` (no field at all). Consumers detect drain via the
+	// presence of `drainEndsAt`, not via a legacy `available` boolean.
+	var raw []map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
+		t.Fatalf("invalid raw JSON: %v\n%s", err, jsonStr)
+	}
+	if _, ok := raw[0]["available"]; ok {
+		t.Errorf("ready-svc JSON contains `available` key; drain wire schema must be additive (drainEndsAt only)")
+	}
+	if _, ok := raw[0]["drainEndsAt"]; ok {
+		t.Errorf("ready-svc JSON contains `drainEndsAt`; should only appear on draining offers")
 	}
 }
 
 // TestBuildServiceCatalogJSON_DrainLifecycle covers the three drain
-// states explicitly: pre-drain (available=true, no drainEndsAt), mid-drain
-// (in catalog, available=false, drainEndsAt populated), and drain-expired
-// (filtered out of the catalog because the controller has torn down the
-// underlying route).
+// states explicitly under the pure-additive wire schema: pre-drain
+// (no `available` key, no `drainEndsAt`), mid-drain (no `available`
+// key, only `drainEndsAt` populated), and drain-expired (filtered out
+// of the catalog because the controller has torn down the underlying
+// route). Consumers detect drain with `if (entry.drainEndsAt)`.
 func TestBuildServiceCatalogJSON_DrainLifecycle(t *testing.T) {
 	readyCond := []monetizeapi.Condition{{Type: "Ready", Status: "True"}}
 	mkOffer := func(name string) monetizeapi.ServiceOffer {
@@ -901,39 +968,41 @@ func TestBuildServiceCatalogJSON_DrainLifecycle(t *testing.T) {
 	exp.Spec.DrainGracePeriod = &expGrace
 
 	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{&pre, &mid, &exp}, "https://example.com")
-	var services []schemas.ServiceCatalogEntry
-	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
+	var raw []map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
 	}
-	if len(services) != 2 {
-		t.Fatalf("expected 2 services (pre + mid; expired filtered out), got %d: %+v", len(services), services)
+	if len(raw) != 2 {
+		t.Fatalf("expected 2 services (pre + mid; expired filtered out), got %d: %+v", len(raw), raw)
 	}
 
-	byName := map[string]schemas.ServiceCatalogEntry{}
-	for _, s := range services {
-		byName[s.Name] = s
+	byName := map[string]map[string]any{}
+	for _, s := range raw {
+		name, _ := s["name"].(string)
+		byName[name] = s
 	}
-	if pre, ok := byName["pre"]; !ok {
+	if entry, ok := byName["pre"]; !ok {
 		t.Fatal("pre-drain offer missing from catalog")
 	} else {
-		if !pre.Available {
-			t.Errorf("pre.available = false, want true")
+		if _, has := entry["available"]; has {
+			t.Errorf("pre entry contains `available` key; drain wire schema must be additive")
 		}
-		if pre.DrainEndsAt != "" {
-			t.Errorf("pre.drainEndsAt = %q, want empty", pre.DrainEndsAt)
+		if _, has := entry["drainEndsAt"]; has {
+			t.Errorf("pre entry contains `drainEndsAt` key; should only appear on draining offers")
 		}
 	}
-	if mid, ok := byName["mid"]; !ok {
+	if entry, ok := byName["mid"]; !ok {
 		t.Fatal("mid-drain offer missing from catalog")
 	} else {
-		if mid.Available {
-			t.Errorf("mid.available = true, want false (offer is draining)")
+		if _, has := entry["available"]; has {
+			t.Errorf("mid entry contains `available` key; drain wire schema must be additive (drainEndsAt only)")
 		}
-		if mid.DrainEndsAt == "" {
-			t.Errorf("mid.drainEndsAt is empty, want RFC3339 timestamp")
+		drainEndsAt, has := entry["drainEndsAt"].(string)
+		if !has || drainEndsAt == "" {
+			t.Errorf("mid entry missing `drainEndsAt`; should be populated for draining offers")
 		}
-		if _, err := time.Parse(time.RFC3339, mid.DrainEndsAt); err != nil {
-			t.Errorf("mid.drainEndsAt = %q is not RFC3339: %v", mid.DrainEndsAt, err)
+		if _, err := time.Parse(time.RFC3339, drainEndsAt); err != nil {
+			t.Errorf("mid.drainEndsAt = %q is not RFC3339: %v", drainEndsAt, err)
 		}
 	}
 	if _, ok := byName["expired"]; ok {
