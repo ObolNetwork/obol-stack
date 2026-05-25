@@ -10,6 +10,10 @@ import { Identicon } from './Identicon';
 import { ServicesSubNav } from './ServicesSubNav';
 import { NewListingDialog } from './NewListingDialog';
 import { toChainName } from '@/lib/marketplace/chain';
+import {
+  formatAge,
+  formatSettlementTimestamp,
+} from '@/lib/marketplace/settlement';
 import { useWalletAssetBalances } from '@/hooks/useWalletAssetBalances';
 import { useOperatorWallets } from '@/hooks/useOperatorWallets';
 import type { PurchaseListResponse, PurchaseRequest } from '@/types/purchase';
@@ -384,6 +388,49 @@ const RouteShell = styled(Flex, {
   borderRadius: '$2',
 });
 
+/**
+ * Renders the most-recent verifier-observed settlement for this purchase.
+ * Sourced server-side from `obol_x402_verifier_last_payment_success_seconds`
+ * — see /api/marketplace/purchases. Empty state ("no settlements yet") is
+ * preserved when the offer has never been charged, when Prometheus is
+ * unavailable, or when the endpoint is an external x402 seller with no
+ * matching ServiceOffer in this cluster.
+ */
+function SettlementRow({
+  lastSettlementUnix,
+}: {
+  lastSettlementUnix: number | null;
+}) {
+  // Re-render the human-readable age every 15s so "12s ago" doesn't go stale
+  // while the drawer stays open. The underlying timestamp comes from the
+  // purchases poll (every 30s) so the data freshness still tracks that.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!lastSettlementUnix) return;
+    const id = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(id);
+  }, [lastSettlementUnix]);
+
+  if (!lastSettlementUnix || lastSettlementUnix <= 0) {
+    return (
+      <Text css={{ fontSize: '$1', color: '$muted', lineHeight: 1.5 }}>
+        No settlements yet.
+      </Text>
+    );
+  }
+
+  const iso = formatSettlementTimestamp(lastSettlementUnix);
+  const ageSec = Math.max(0, Math.floor(now / 1000 - lastSettlementUnix));
+  const age = formatAge(ageSec);
+
+  return (
+    <Text css={{ fontSize: '$1', color: '$muted', lineHeight: 1.5 }}>
+      Last settled: <Mono css={{ color: '$light' }}>{iso}</Mono>{' '}
+      <Text css={{ color: '$body', display: 'inline' }}>({age})</Text>
+    </Text>
+  );
+}
+
 function PurchaseExpansion({ p }: { p: PurchaseRequest }) {
   const route = p.status.publicModel
     ? `paid/${p.status.publicModel.replace(/^paid\//, '')}`
@@ -394,18 +441,9 @@ function PurchaseExpansion({ p }: { p: PurchaseRequest }) {
     <Expansion>
       <InnerPanel>
         <FieldLabel>Settlement log</FieldLabel>
-        <Text css={{ fontSize: '$1', color: '$muted', lineHeight: 1.5 }}>
-          The controller doesn&apos;t persist per-request settlements on the
-          PurchaseRequest. Wire the verifier&apos;s{' '}
-          <Mono css={{ color: '$body' }}>
-            obol_x402_verifier_charged_requests_total
-          </Mono>{' '}
-          or add an{' '}
-          <Mono css={{ color: '$body' }}>
-            obol_x402_verifier_last_payment_success_seconds
-          </Mono>{' '}
-          gauge to render the table the design canvas shows here.
-        </Text>
+        <SettlementRow
+          lastSettlementUnix={p.settlement?.lastSettlementUnix ?? null}
+        />
         <Flex css={{ gap: 16, fontFamily: 'monospace', fontSize: '$2' }}>
           <Box>
             <FieldLabel>Total spent</FieldLabel>

@@ -2,7 +2,7 @@
  * Prometheus API client for fetching metrics
  */
 
-import { config } from '@/lib/config/environment';
+import { config } from '../config/environment.ts';
 
 interface PrometheusResponse {
   status: string;
@@ -146,6 +146,43 @@ export class PrometheusClient {
       }
     } catch (error) {
       console.warn('[Prometheus] chargedRequests24hByOffer failed:', error);
+    }
+    return result;
+  }
+
+  /**
+   * Map of "<namespace>/<offer-name>/<chain>" -> Unix-seconds timestamp of the
+   * last successful charged request observed by the verifier. Reads
+   * obol_x402_verifier_last_payment_success_seconds directly (instant query).
+   * Returns an empty Map if Prometheus is unavailable or the offer has never
+   * been settled — callers render "—" rather than surface an error.
+   *
+   * Use this on the My Purchases drawer to render "last settled X ago".
+   */
+  async lastPaymentSuccessByOfferChain(): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    try {
+      const response = await this.query(
+        'obol_x402_verifier_last_payment_success_seconds'
+      );
+      for (const row of response.data.result) {
+        const ns = row.metric.offer_namespace;
+        const name = row.metric.offer_name;
+        const chain = row.metric.chain;
+        if (!ns || !name || !chain) continue;
+        const v = parseFloat(row.value?.[1] ?? '');
+        if (!Number.isFinite(v)) continue;
+        const key = `${ns}/${name}/${chain}`;
+        // If multiple verifier replicas report the same offer/chain, keep
+        // the most recent timestamp.
+        const prev = result.get(key);
+        if (prev === undefined || v > prev) result.set(key, v);
+      }
+    } catch (error) {
+      console.warn(
+        '[Prometheus] lastPaymentSuccessByOfferChain failed:',
+        error
+      );
     }
     return result;
   }

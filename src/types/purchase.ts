@@ -52,12 +52,27 @@ export interface PurchaseStatus {
   signerAddress?: string;
 }
 
+/**
+ * Settlement metadata sourced from the verifier's
+ * `obol_x402_verifier_last_payment_success_seconds` gauge. Attached by the
+ * /api/marketplace/purchases route when it can resolve this purchase to a
+ * matching ServiceOffer (via `/services/<name>` in the endpoint URL plus the
+ * payment chain). Null when the offer has never been settled, when the
+ * gauge isn't available, or when the endpoint is an external x402 seller
+ * with no matching ServiceOffer in this cluster.
+ */
+export interface PurchaseSettlement {
+  /** Unix seconds (UTC) of the most recent successful charged request. */
+  lastSettlementUnix?: number | null;
+}
+
 export interface PurchaseRequest {
   name: string;
   namespace: string;
   createdAt: string;
   spec: PurchaseSpec;
   status: PurchaseStatus;
+  settlement?: PurchaseSettlement | null;
 }
 
 export interface PurchaseListResponse {
