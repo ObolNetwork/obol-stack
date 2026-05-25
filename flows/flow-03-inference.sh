@@ -60,22 +60,62 @@ else
 fi
 
 # §3d: Tool-call passthrough
+tool_call_name() {
+    python3 -c '
+import json
+import sys
+
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+
+choices = data.get("choices") or []
+if not choices:
+    sys.exit(1)
+
+message = choices[0].get("message") or {}
+for call in message.get("tool_calls") or []:
+    function = call.get("function") or {}
+    if function.get("name") == "get_weather":
+        print("get_weather")
+        sys.exit(0)
+
+sys.exit(1)
+'
+}
+
 step "Tool-call passthrough"
 tool_out=$(curl -sf --max-time 120 -X POST http://localhost:8001/v1/chat/completions \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $LITELLM_KEY" \
     -d '{
         "model":"'"$LITELLM_MODEL"'",
-        "messages":[{"role":"user","content":"What is the weather in London?"}],
+        "messages":[{"role":"user","content":"Call the get_weather tool for London. Do not answer in text."}],
         "tools":[{"type":"function","function":{"name":"get_weather","description":"Get current weather","parameters":{"type":"object","properties":{"location":{"type":"string"}},"required":["location"]}}}],
-        "max_tokens":100,"stream":false
+        "tool_choice":{"type":"function","function":{"name":"get_weather"}},
+        "temperature":0,"max_tokens":100,"stream":false
     }' 2>&1) || true
 
-if echo "$tool_out" | grep -q "tool_calls\|get_weather"; then
+if echo "$tool_out" | tool_call_name >/dev/null 2>&1; then
     pass "Tool-call passthrough works"
 else
-    # Small/local models may not reliably support tool calls — soft fail
-    fail "Tool-call not returned (model may not support it) — ${tool_out:0:200}"
+    # Some OpenAI-compatible endpoints accept tools but reject forced tool_choice.
+    tool_out=$(curl -sf --max-time 120 -X POST http://localhost:8001/v1/chat/completions \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $LITELLM_KEY" \
+        -d '{
+            "model":"'"$LITELLM_MODEL"'",
+            "messages":[{"role":"user","content":"Call the get_weather tool with location London. Do not answer in text."}],
+            "tools":[{"type":"function","function":{"name":"get_weather","description":"Get current weather","parameters":{"type":"object","properties":{"location":{"type":"string"}},"required":["location"]}}}],
+            "temperature":0,"max_tokens":100,"stream":false
+        }' 2>&1) || true
+
+    if echo "$tool_out" | tool_call_name >/dev/null 2>&1; then
+        pass "Tool-call passthrough works"
+    else
+        fail "Tool-call not returned (model may not support it) — ${tool_out:0:200}"
+    fi
 fi
 
 cleanup_pid "$PF_PID"
