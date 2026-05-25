@@ -67,7 +67,10 @@ subsets:
 
 ---
 # LiteLLM configuration: base paid/* route plus provider and purchased models.
-# Models are persisted here so LiteLLM reloads survive pod restarts.
+# This ConfigMap is the Kubernetes source of truth. The pod copies it into a
+# writable emptyDir before LiteLLM starts so /model/new can update the live
+# router and persist to its configured YAML path without trying to write back to
+# a read-only ConfigMap volume.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -187,6 +190,28 @@ spec:
         fsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
+      initContainers:
+        - name: prepare-litellm-config
+          image: ghcr.io/obolnetwork/litellm:sha-c16b156@sha256:9f112b51ac5a57d73cdd54103fb98d24eabaddd8689a9a285884dca6456dc86e
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          command:
+            - python3
+            - -c
+          args:
+            - |
+              with open("/config-src/config.yaml", "rb") as src, open("/config/config.yaml", "wb") as dst:
+                  dst.write(src.read())
+          volumeMounts:
+            - name: litellm-config-source
+              mountPath: /config-src
+              readOnly: true
+            - name: litellm-config-work
+              mountPath: /config
       containers:
         - name: litellm
           # Obol fork of LiteLLM with config-only model management API.
@@ -228,9 +253,8 @@ spec:
             - name: HF_HOME
               value: /home/litellm/.cache/huggingface
           volumeMounts:
-            - name: litellm-config
-              mountPath: /etc/litellm/config.yaml
-              subPath: config.yaml
+            - name: litellm-config-work
+              mountPath: /etc/litellm
             - name: litellm-tmp
               mountPath: /tmp
             - name: litellm-home
@@ -324,12 +348,19 @@ spec:
             - name: x402-buyer-state
               mountPath: /state
       volumes:
-        - name: litellm-config
+        - name: litellm-config-source
           configMap:
             name: litellm-config
             items:
               - key: config.yaml
                 path: config.yaml
+        # Runtime copy of litellm-config. ConfigMap volumes are read-only, but
+        # LiteLLM's config-backed /model/new path persists to config.yaml after
+        # updating the live router. Keep the source ConfigMap immutable and give
+        # LiteLLM a pod-local writable working file instead.
+        - name: litellm-config-work
+          emptyDir:
+            sizeLimit: 1Mi
         # Writable /tmp for Python tempfile / multipart uploads. Sized
         # modestly — LiteLLM streams responses rather than buffering them.
         - name: litellm-tmp

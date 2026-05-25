@@ -691,6 +691,9 @@ func TestBuildSkillCatalogMarkdown_DrainAdditiveDetail(t *testing.T) {
 	if strings.Contains(content, "- **Available**:") {
 		t.Errorf("markdown contains `- **Available**:` bullet; drain wire is additive (drainEndsAt only):\n%s", content)
 	}
+	if !strings.Contains(content, "| [alpha](#alpha) | http | — | 0.001 USDC/request | available |") {
+		t.Errorf("active offer status missing `available` table signal:\n%s", content)
+	}
 	if !strings.Contains(content, "- **Drain ends at**:") {
 		t.Errorf("draining offer missing `- **Drain ends at**:` bullet:\n%s", content)
 	}

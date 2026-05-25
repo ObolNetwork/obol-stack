@@ -158,6 +158,18 @@ release-smoke: OBOL_LLM_ENDPOINT must be set when RELEASE_SMOKE_INCLUDE_OBOL=tru
 EOF
         exit 2
     fi
+
+    if ! preflight_openai_llm_endpoint; then
+        cat >&2 <<EOF
+release-smoke: OBOL_LLM_ENDPOINT is set but did not pass the OpenAI-compatible
+               chat preflight for model ${OBOL_LLM_MODEL:-qwen36-deep}.
+
+  The OBOL flows depend on the endpoint returning final assistant content, not
+  only reasoning metadata or an empty response. Fix OBOL_LLM_ENDPOINT /
+  OBOL_LLM_MODEL before spending time on the cluster flows.
+EOF
+        exit 2
+    fi
 }
 
 # Warn (not block) when the OBOL/_FORK gates are on but no paid Base

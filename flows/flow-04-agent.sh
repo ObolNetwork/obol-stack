@@ -117,10 +117,11 @@ if [ -n "${OBOL_LLM_ENDPOINT:-}" ] && [ "$model_name" != "${OBOL_LLM_MODEL:-qwen
     exit 0
 fi
 
+llm_payload_suffix="$(llm_disable_thinking_payload_suffix)"
 out=$(curl -sf --max-time 120 -X POST "http://localhost:${AGENT_PF_PORT}/v1/chat/completions" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $TOKEN" \
-    -d "{\"model\":\"$model_name\",\"messages\":[{\"role\":\"user\",\"content\":\"What is 2+2?\"}],\"max_tokens\":50,\"stream\":false}" 2>&1) || true
+    -d "{\"model\":\"$model_name\",\"messages\":[{\"role\":\"user\",\"content\":\"What is 2+2?\"}],\"max_tokens\":50,\"stream\":false${llm_payload_suffix}}" 2>&1) || true
 
 if echo "$out" | grep -q "choices"; then
     pass "Agent inference returned response"
@@ -138,7 +139,7 @@ step "Agent answers 'hello' without parroting tool catalogue (model rank regress
 hello_out=$(curl -sf --max-time 120 -X POST "http://localhost:${AGENT_PF_PORT}/v1/chat/completions" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $TOKEN" \
-    -d "{\"model\":\"$model_name\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}],\"max_tokens\":150,\"stream\":false}" 2>&1) || true
+    -d "{\"model\":\"$model_name\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}],\"max_tokens\":150,\"stream\":false${llm_payload_suffix}}" 2>&1) || true
 hello_content=$(echo "$hello_out" | python3 -c "
 import json, sys
 try:
