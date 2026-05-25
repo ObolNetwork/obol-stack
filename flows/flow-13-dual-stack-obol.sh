@@ -870,30 +870,14 @@ else
 fi
 
 # ═════════════════════════════════════════════════════════════════
-# 34. AGENT DISCOVERS ALICE (via skill.md or ERC-8004)
+# 34. BOB AGENT POD DISCOVERS ALICE VIA SKILL CATALOG
 # ═════════════════════════════════════════════════════════════════
 
-step "Bob's agent: discover Alice's OBOL service"
-llm_payload_suffix="$(llm_disable_thinking_payload_suffix)"
-discover_response=$(curl -sf --max-time 300 \
-    -X POST "http://localhost:${BOB_AGENT_PORT}/v1/chat/completions" \
-    -H "Authorization: Bearer $BOB_TOKEN" \
-    -H "Content-Type: application/json" \
-    -d "{
-        \"model\": \"$BOB_AGENT_RUNTIME-agent\",
-        \"messages\": [{
-            \"role\": \"user\",
-            \"content\": \"Search the local ERC-8004 registry on Base Sepolia (chain 84532) for the agent named 'Dual-Stack OBOL Test Inference'. Use the discovery skill or fetch $TUNNEL_URL/skill.md. Report the agent's ID, name, endpoint, and the asset symbol it requires for x402 payments.\"
-        }],
-        \"max_tokens\": 4000,
-        \"stream\": false${llm_payload_suffix}
-    }" 2>&1 || true)
-discover_content=$(extract_assistant_content "$discover_response" 2>/dev/null || true)
-echo "${discover_content:0:500}"
-# Discovery is informational only on this flow. The structural proof that the
-# agent can reach Alice is the next "buy" step + the PurchaseRequest CR going
-# Ready=True. Natural-language assertions on agent responses are brittle.
-pass "Agent discovery prompt issued (success will be confirmed by buy + PurchaseRequest CR)"
+step "Bob's agent pod: discover Alice's OBOL service in /api/services.json"
+# This check proves Bob's agent pod can reach Alice's public catalog without
+# burning a long LLM turn. The structural agent proof remains the next step:
+# Hermes must invoke buy.py and create the PurchaseRequest.
+assert_bob_service_catalog_contains "alice-obol-inference" "OBOL"
 
 # ═════════════════════════════════════════════════════════════════
 # 35. BUY 5 AUTHS VIA buy.py (Permit2-aware on integration branch)
