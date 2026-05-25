@@ -286,10 +286,10 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 256Mi
+              memory: 512Mi
             limits:
               cpu: "1"
-              memory: 1Gi
+              memory: 2Gi
         - name: x402-buyer
           # Pinned by sha256 digest (multi-arch manifest list, amd64+arm64)
           # so the deployed sidecar is byte-for-byte identical across QA
