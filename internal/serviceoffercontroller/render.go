@@ -793,9 +793,8 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 		}
 		// Drained offers (post-grace-period) have no live route — drop
 		// them from the catalog entirely. Draining offers (pre-expiry)
-		// stay in the catalog with available=false + drainEndsAt set so
-		// buyers can see the wind-down via discovery before the route
-		// disappears.
+		// stay in the catalog with draining status + drainEndsAt so buyers
+		// can see the wind-down via discovery before the route disappears.
 		if offer.DrainExpired(now) {
 			continue
 		}
@@ -832,7 +831,7 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 		if modelName == "" {
 			modelName = "—"
 		}
-		status := "—"
+		status := "available"
 		if offer.IsDraining() {
 			status = fmt.Sprintf("draining · ends `%s`", offer.DrainEndsAt().UTC().Format(time.RFC3339))
 		}

@@ -70,9 +70,9 @@
     },
     {
       "customType": "regex",
-      "description": "Update cloudflared image tag",
+      "description": "Update cloudflared image tag and digest",
       "matchStrings": [
-        "repository:\\s*cloudflare/cloudflared\\s*\\n\\s*tag:\\s*[\"']?(?<currentValue>[\\w.-]+)[\"']?"
+        "repository:\\s*cloudflare/cloudflared\\s*\\n\\s*tag:\\s*[\"']?(?<currentValue>[\\w.-]+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?[\"']?"
       ],
       "fileMatch": [
         "^internal/embed/infrastructure/cloudflared/values\\.yaml$"
@@ -287,7 +287,8 @@
       "schedule": [
         "before 6am on monday"
       ],
-      "groupName": "cloudflared updates"
+      "groupName": "cloudflared updates",
+      "pinDigests": true
     },
     {
       "description": "Batch obolup.sh tool version updates into a single PR",

@@ -604,6 +604,56 @@ model_list:
 	t.Fatalf("merged config missing paid route:\n%s", merged)
 }
 
+func TestLiteLLMConfigSemanticEqualIgnoresFormatting(t *testing.T) {
+	a := `model_list:
+  - model_name: "paid/*"
+    litellm_params:
+      model: "openai/*"
+      api_base: "http://127.0.0.1:8402/v1"
+      api_key: "unused"
+litellm_settings:
+  drop_params: true
+`
+	b := `litellm_settings:
+    drop_params: true
+model_list:
+- model_name: paid/*
+  litellm_params:
+    model: openai/*
+    api_base: http://127.0.0.1:8402/v1
+    api_key: unused
+`
+	if !litellmConfigSemanticallyEqual(a, b) {
+		t.Fatal("semantically equivalent LiteLLM configs compared unequal")
+	}
+}
+
+func TestSyncDefaultsRestartsLiteLLMAfterConfigRestore_SourceGuard(t *testing.T) {
+	src, err := os.ReadFile("stack.go")
+	if err != nil {
+		t.Fatalf("read stack.go: %v", err)
+	}
+	body := string(src)
+	start := strings.Index(body, "func syncDefaults(")
+	if start < 0 {
+		t.Fatal("syncDefaults not found")
+	}
+	end := strings.Index(body[start+1:], "\nfunc ")
+	if end < 0 {
+		t.Fatal("could not delimit syncDefaults body")
+	}
+	fn := body[start : start+1+end]
+	restoreIdx := strings.Index(fn, "restoredLiteLLMConfig, err = restoreLiteLLMConfig")
+	restartIdx := strings.Index(fn, "model.RestartLiteLLM(cfg, u, \"restored LiteLLM config\")")
+	autoIdx := strings.Index(fn, "autoConfigureLLM(cfg, u)")
+	if restoreIdx < 0 || restartIdx < 0 || autoIdx < 0 {
+		t.Fatalf("syncDefaults must restore ConfigMap, restart LiteLLM, then auto-configure; restore=%d restart=%d auto=%d", restoreIdx, restartIdx, autoIdx)
+	}
+	if !(restoreIdx < restartIdx && restartIdx < autoIdx) {
+		t.Fatalf("syncDefaults order wrong: restore=%d restart=%d auto=%d", restoreIdx, restartIdx, autoIdx)
+	}
+}
+
 func TestConfigMapFieldOwnershipManifestUsesLiteralBlock(t *testing.T) {
 	manifest := string(configMapFieldOwnershipManifest("litellm-config", "llm", "config.yaml", "model_list:\n  - model_name: paid/*\n"))
 

@@ -20,14 +20,16 @@ else
     fail "CRD API group/version unexpected: group=$crd_group, version=$crd_version"
 fi
 run_step_grep "x402 verifier running" "Running" "$OBOL" kubectl get pods -n x402 --no-headers
-# x402-verifier has 2 replicas for high availability (CLAUDE.md: "2 replicas")
-step "x402-verifier has 2 replicas (high availability)"
+# The embedded x402 manifest intentionally runs one verifier replica in local
+# stacks. Keep the smoke assertion aligned with the shipped manifest; HA belongs
+# to production sizing, not the single-node release-smoke cluster.
+step "x402-verifier has 1 replica (local stack sizing)"
 verifier_replicas=$("$OBOL" kubectl get deployment x402-verifier -n x402 \
     -o jsonpath='{.spec.replicas}' 2>&1) || true
-if [ "$verifier_replicas" = "2" ]; then
-    pass "x402-verifier: 2 replicas (HA payment gate)"
+if [ "$verifier_replicas" = "1" ]; then
+    pass "x402-verifier: 1 replica (local payment gate)"
 else
-    fail "x402-verifier replica count: $verifier_replicas (expected 2)"
+    fail "x402-verifier replica count: $verifier_replicas (expected 1)"
 fi
 # x402-verifier service must be on port 8080 (matches ForwardAuth address :8080/verify)
 step "x402-verifier service on port 8080"

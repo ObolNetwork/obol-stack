@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -482,7 +483,7 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		u.Dim("  Tear down only if you really want to: obol stack down")
 
 		if previousLiteLLMConfig != "" {
-			if restoreErr := restoreLiteLLMConfig(cfg, kubeconfigPath, previousLiteLLMConfig); restoreErr != nil {
+			if _, restoreErr := restoreLiteLLMConfig(cfg, kubeconfigPath, previousLiteLLMConfig); restoreErr != nil {
 				u.Warnf("Failed to restore LiteLLM config after Helmfile error: %v", restoreErr)
 			}
 		}
@@ -492,9 +493,23 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 
 	u.Success("Default infrastructure deployed")
 
+	restoredLiteLLMConfig := false
 	if previousLiteLLMConfig != "" {
-		if err := restoreLiteLLMConfig(cfg, kubeconfigPath, previousLiteLLMConfig); err != nil {
+		var err error
+		restoredLiteLLMConfig, err = restoreLiteLLMConfig(cfg, kubeconfigPath, previousLiteLLMConfig)
+		if err != nil {
 			u.Warnf("Failed to restore LiteLLM config after base migration: %v", err)
+		}
+	}
+	if restoredLiteLLMConfig {
+		// Helmfile may have restarted the pod while the chart-default
+		// ConfigMap was in place. Restart once after restoring user models so
+		// LiteLLM's writable runtime copy is seeded from the restored source of
+		// truth before autoConfigureLLM decides no further model change is
+		// needed.
+		if err := model.RestartLiteLLM(cfg, u, "restored LiteLLM config"); err != nil {
+			u.Warnf("LiteLLM restart after config restore failed: %v", err)
+			u.Dim("  The ConfigMap is restored; run `obol model setup` or `obol stack up` again if model routing looks stale.")
 		}
 	}
 
@@ -1424,24 +1439,29 @@ func preserveLiteLLMConfigForHelm(cfg *config.Config, kubeconfigPath string) (st
 	return raw, nil
 }
 
-func restoreLiteLLMConfig(cfg *config.Config, kubeconfigPath, raw string) error {
+func restoreLiteLLMConfig(cfg *config.Config, kubeconfigPath, raw string) (bool, error) {
 	if strings.TrimSpace(raw) == "" {
-		return nil
+		return false, nil
 	}
 
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
-	if current, err := kubectl.Output(kubectlBinary, kubeconfigPath,
-		"get", "configmap", "litellm-config", "-n", "llm", "-o", "jsonpath={.data.config\\.yaml}"); err == nil && strings.TrimSpace(current) != "" {
+	current := ""
+	if currentRaw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "configmap", "litellm-config", "-n", "llm", "-o", "jsonpath={.data.config\\.yaml}"); err == nil && strings.TrimSpace(currentRaw) != "" {
+		current = currentRaw
 		merged, err := mergeLiteLLMConfig(current, raw)
 		if err != nil {
-			return err
+			return false, err
 		}
 		raw = merged
+	}
+	if litellmConfigSemanticallyEqual(current, raw) {
+		return false, nil
 	}
 
 	manifest := configMapFieldOwnershipManifest("litellm-config", "llm", "config.yaml", raw)
 
-	return kubectl.ApplyServerSideForceConflicts(kubectlBinary, kubeconfigPath, manifest, "helm")
+	return true, kubectl.ApplyServerSideForceConflicts(kubectlBinary, kubeconfigPath, manifest, "helm")
 }
 
 func mergeLiteLLMConfig(currentRaw, previousRaw string) (string, error) {
@@ -1484,6 +1504,17 @@ func mergeLiteLLMConfig(currentRaw, previousRaw string) (string, error) {
 	}
 
 	return string(merged), nil
+}
+
+func litellmConfigSemanticallyEqual(aRaw, bRaw string) bool {
+	var a, b model.LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(aRaw), &a); err != nil {
+		return strings.TrimSpace(aRaw) == strings.TrimSpace(bRaw)
+	}
+	if err := yaml.Unmarshal([]byte(bRaw), &b); err != nil {
+		return strings.TrimSpace(aRaw) == strings.TrimSpace(bRaw)
+	}
+	return reflect.DeepEqual(a, b)
 }
 
 func configMapFieldOwnershipManifest(name, namespace, key, value string) []byte {

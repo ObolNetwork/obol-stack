@@ -874,6 +874,7 @@ fi
 # ═════════════════════════════════════════════════════════════════
 
 step "Bob's agent: discover Alice's OBOL service"
+llm_payload_suffix="$(llm_disable_thinking_payload_suffix)"
 discover_response=$(curl -sf --max-time 300 \
     -X POST "http://localhost:${BOB_AGENT_PORT}/v1/chat/completions" \
     -H "Authorization: Bearer $BOB_TOKEN" \
@@ -885,7 +886,7 @@ discover_response=$(curl -sf --max-time 300 \
             \"content\": \"Search the local ERC-8004 registry on Base Sepolia (chain 84532) for the agent named 'Dual-Stack OBOL Test Inference'. Use the discovery skill or fetch $TUNNEL_URL/skill.md. Report the agent's ID, name, endpoint, and the asset symbol it requires for x402 payments.\"
         }],
         \"max_tokens\": 4000,
-        \"stream\": false
+        \"stream\": false${llm_payload_suffix}
     }" 2>&1 || true)
 discover_content=$(extract_assistant_content "$discover_response" 2>/dev/null || true)
 echo "${discover_content:0:500}"

@@ -351,6 +351,9 @@ except Exception as e:
 # against the caller's environment (BOB_AGENT_PORT, BOB_TOKEN,
 # BOB_AGENT_RUNTIME, BOB_OBOL_SKILLS_DIR, TUNNEL_URL, OBOL_LLM_MODEL).
 _agent_buy_send_prompt() {
+    local llm_payload_suffix
+    llm_payload_suffix="$(llm_disable_thinking_payload_suffix)"
+
     curl -sf --max-time 300 \
         -X POST "http://localhost:${BOB_AGENT_PORT}/v1/chat/completions" \
         -H "Authorization: Bearer $BOB_TOKEN" \
@@ -362,7 +365,7 @@ _agent_buy_send_prompt() {
                 \"content\": \"Use the buy-x402 skill and your terminal tool. Run exactly once: ERPC_URL=http://erpc.erpc.svc.cluster.local/rpc ERPC_NETWORK=base-sepolia python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count 5\"
             }],
             \"max_tokens\": 4000,
-            \"stream\": false
+            \"stream\": false${llm_payload_suffix}
         }" 2>&1 || true
 }
 
@@ -490,6 +493,8 @@ except Exception as e:
 wait_for_paid_inference() {
     local attempts="${1:-24}"
     local delay="${2:-5}"
+    local transient_retries="${PAID_INFERENCE_TRANSIENT_RETRIES:-1}"
+    local transient_seen=0
     local out=""
     local i
 
@@ -499,9 +504,14 @@ wait_for_paid_inference() {
             printf '%s\n' "$out"
             return 0
         fi
-        if echo "$out" | grep -q "Payment verification failed" || \
-           echo "$out" | grep -q "ERROR=503" || \
-           echo "$out" | grep -q "ServiceUnavailableError"; then
+        if echo "$out" | paid_inference_pending_error; then
+            sleep "$delay"
+            continue
+        fi
+        if echo "$out" | paid_inference_transient_error && [ "$transient_seen" -lt "$transient_retries" ]; then
+            transient_seen=$((transient_seen + 1))
+            echo "RETRY_TRANSIENT=${transient_seen}/${transient_retries}: paid inference hit transient timeout/error" >&2
+            printf '%s\n' "$out" >&2
             sleep "$delay"
             continue
         fi
