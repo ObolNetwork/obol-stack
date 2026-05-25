@@ -329,6 +329,72 @@ except Exception as e:
 " 2>/dev/null || true
 }
 
+assert_bob_service_catalog_contains() {
+    local service_name="$1"
+    local token_symbol="$2"
+    local expected_path="${3:-/services/$service_name}"
+    local catalog_url="${TUNNEL_URL%/}/api/services.json"
+    local out i
+
+    out=""
+    for i in $(seq 1 12); do
+        out=$(bob kubectl exec -i -n "$BOB_AGENT_NS" "deploy/$BOB_AGENT_DEPLOY" -c "$BOB_AGENT_CONTAINER" -- \
+            env CATALOG_URL="$catalog_url" SERVICE_NAME="$service_name" TOKEN_SYMBOL="$token_symbol" EXPECTED_PATH="$expected_path" \
+            python3 - <<'PY' 2>&1 || true
+import json
+import os
+import sys
+import urllib.request
+from urllib.parse import urlparse
+
+url = os.environ["CATALOG_URL"]
+service_name = os.environ["SERVICE_NAME"]
+token_symbol = os.environ["TOKEN_SYMBOL"].upper()
+expected_path = os.environ["EXPECTED_PATH"]
+
+with urllib.request.urlopen(
+    urllib.request.Request(url, headers={"Accept": "application/json"}),
+    timeout=20,
+) as resp:
+    status = resp.status
+    services = json.loads(resp.read(200000))
+
+entry = next((svc for svc in services if svc.get("name") == service_name), None)
+if entry is None:
+    raise RuntimeError(f"{service_name} not present")
+
+asset = entry.get("asset") or {}
+endpoint_path = urlparse(entry.get("endpoint", "")).path
+problems = []
+if status != 200:
+    problems.append(f"HTTP {status}")
+if endpoint_path != expected_path:
+    problems.append(f"endpoint.path={endpoint_path!r}")
+if (asset.get("symbol") or "").upper() != token_symbol:
+    problems.append(f"asset.symbol={asset.get('symbol')!r}")
+if asset.get("transferMethod") != "permit2":
+    problems.append(f"asset.transferMethod={asset.get('transferMethod')!r}")
+if entry.get("network") != "base-sepolia" and entry.get("caip2Network") != "eip155:84532":
+    problems.append(f"network={entry.get('network')!r}/{entry.get('caip2Network')!r}")
+if problems:
+    raise RuntimeError("; ".join(problems))
+
+print(f"HTTP {status} {service_name} {entry.get('endpoint')} {asset.get('symbol')} {asset.get('transferMethod')}")
+PY
+        )
+        if printf '%s' "$out" | grep -q '^HTTP 200 '; then
+            echo "$out"
+            pass "Agent pod found $service_name ($token_symbol) in service catalog"
+            return 0
+        fi
+        echo "${out:0:500}"
+        sleep 5
+    done
+
+    fail "Agent pod could not find $service_name ($token_symbol) in $catalog_url"
+    emit_metrics; exit 1
+}
+
 purchase_request_status() {
     bob kubectl get purchaserequests.obol.org -n "$BOB_AGENT_NS" --no-headers 2>&1 || true
 }
@@ -347,26 +413,127 @@ except Exception as e:
 " 2>&1 || true
 }
 
-# Send the long single-shot buy prompt to Bob's agent. The prompt expands
-# against the caller's environment (BOB_AGENT_PORT, BOB_TOKEN,
-# BOB_AGENT_RUNTIME, BOB_OBOL_SKILLS_DIR, TUNNEL_URL, OBOL_LLM_MODEL).
-_agent_buy_send_prompt() {
-    local llm_payload_suffix
-    llm_payload_suffix="$(llm_disable_thinking_payload_suffix)"
+AGENT_CHAT_HTTP_STATUS=""
+AGENT_CHAT_CURL_EXIT=""
+AGENT_CHAT_ERROR=""
+AGENT_CHAT_BODY=""
 
-    curl -sf --max-time 300 \
+_agent_chat_payload() {
+    local prompt="$1"
+    local max_tokens="${2:-4000}"
+
+    DUAL_STACK_AGENT_MODEL="$BOB_AGENT_RUNTIME-agent" \
+    DUAL_STACK_AGENT_PROMPT="$prompt" \
+    DUAL_STACK_AGENT_MAX_TOKENS="$max_tokens" \
+    DUAL_STACK_DISABLE_THINKING="${OBOL_LLM_DISABLE_THINKING:-false}" \
+        python3 - <<'PY'
+import json
+import os
+
+payload = {
+    "model": os.environ["DUAL_STACK_AGENT_MODEL"],
+    "messages": [{"role": "user", "content": os.environ["DUAL_STACK_AGENT_PROMPT"]}],
+    "max_tokens": int(os.environ.get("DUAL_STACK_AGENT_MAX_TOKENS") or "4000"),
+    "stream": False,
+}
+if os.environ.get("DUAL_STACK_DISABLE_THINKING") == "true":
+    payload["chat_template_kwargs"] = {"enable_thinking": False}
+print(json.dumps(payload, separators=(",", ":")))
+PY
+}
+
+_agent_chat_send() {
+    local prompt="$1"
+    local max_tokens="${2:-4000}"
+    local timeout="${3:-300}"
+    local payload body_file err_file http_status rc
+
+    AGENT_CHAT_HTTP_STATUS=""
+    AGENT_CHAT_CURL_EXIT=""
+    AGENT_CHAT_ERROR=""
+    AGENT_CHAT_BODY=""
+
+    payload=$(_agent_chat_payload "$prompt" "$max_tokens") || return 1
+    body_file=$(mktemp)
+    err_file=$(mktemp)
+    rc=0
+    http_status=$(curl -sS --max-time "$timeout" \
+        -o "$body_file" \
+        -w "%{http_code}" \
         -X POST "http://localhost:${BOB_AGENT_PORT}/v1/chat/completions" \
         -H "Authorization: Bearer $BOB_TOKEN" \
         -H "Content-Type: application/json" \
-        -d "{
-            \"model\": \"$BOB_AGENT_RUNTIME-agent\",
-            \"messages\": [{
-                \"role\": \"user\",
-                \"content\": \"Use the buy-x402 skill and your terminal tool. Run exactly once: ERPC_URL=http://erpc.erpc.svc.cluster.local/rpc ERPC_NETWORK=base-sepolia python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count 5\"
-            }],
-            \"max_tokens\": 4000,
-            \"stream\": false${llm_payload_suffix}
-        }" 2>&1 || true
+        --data-binary "$payload" 2>"$err_file") || rc=$?
+
+    AGENT_CHAT_HTTP_STATUS="$http_status"
+    AGENT_CHAT_CURL_EXIT="$rc"
+    AGENT_CHAT_ERROR="$(cat "$err_file" 2>/dev/null || true)"
+    AGENT_CHAT_BODY="$(cat "$body_file" 2>/dev/null || true)"
+    rm -f "$body_file" "$err_file"
+    return 0
+}
+
+_agent_chat_transient_error() {
+    {
+        printf 'HTTP_STATUS=%s\n' "$AGENT_CHAT_HTTP_STATUS"
+        printf 'CURL_EXIT=%s\n' "$AGENT_CHAT_CURL_EXIT"
+        printf '%s\n' "$AGENT_CHAT_ERROR"
+        printf '%s\n' "$AGENT_CHAT_BODY"
+    } | grep -qiE "HTTP_STATUS=503|CURL_EXIT=28|Loading model|ServiceUnavailableError|TimeoutError|timed out|context canceled|deadline exceeded|upstream request timeout"
+}
+
+_agent_chat_status_ok() {
+    [ "$AGENT_CHAT_CURL_EXIT" = "0" ] && [ "$AGENT_CHAT_HTTP_STATUS" = "200" ]
+}
+
+_agent_chat_failure_preview() {
+    printf 'http=%s curl=%s %s %s' \
+        "${AGENT_CHAT_HTTP_STATUS:-unknown}" \
+        "${AGENT_CHAT_CURL_EXIT:-unknown}" \
+        "${AGENT_CHAT_ERROR:0:180}" \
+        "${AGENT_CHAT_BODY:0:300}"
+}
+
+_agent_ready_preflight() {
+    local marker="OBOL_AGENT_READY"
+    local content i
+    local attempts="${AGENT_READY_PREFLIGHT_ATTEMPTS:-3}"
+    local timeout="${AGENT_READY_PREFLIGHT_TIMEOUT:-300}"
+
+    for i in $(seq 1 "$attempts"); do
+        _agent_chat_send "Reply exactly $marker" 64 "$timeout"
+        if _agent_chat_status_ok; then
+            content=$(extract_assistant_content "$AGENT_CHAT_BODY" 2>/dev/null || true)
+            if printf '%s' "$content" | grep -Fq "$marker"; then
+                echo "  Agent readiness preflight OK (attempt $i)"
+                return 0
+            fi
+            if _agent_chat_transient_error; then
+                echo "  Agent readiness transient (attempt $i/$attempts): ${content:0:300}"
+                sleep 10
+                continue
+            fi
+            fail "Agent readiness preflight returned unexpected content: ${content:0:300}"
+            emit_metrics; exit 1
+        fi
+        if _agent_chat_transient_error; then
+            echo "  Agent readiness transient (attempt $i/$attempts): $(_agent_chat_failure_preview)"
+            sleep 10
+            continue
+        fi
+        fail "Agent readiness preflight failed: $(_agent_chat_failure_preview)"
+        emit_metrics; exit 1
+    done
+
+    fail "Agent readiness preflight did not clear transient errors after $attempts attempts: $(_agent_chat_failure_preview)"
+    emit_metrics; exit 1
+}
+
+_agent_buy_send_prompt() {
+    _agent_chat_send \
+        "Use the buy-x402 skill and your terminal tool. Run exactly once: ERPC_URL=http://erpc.erpc.svc.cluster.local/rpc ERPC_NETWORK=base-sepolia python3 $BOB_OBOL_SKILLS_DIR/buy-x402/scripts/buy.py buy alice-obol --endpoint $TUNNEL_URL/services/alice-obol-inference/v1/chat/completions --model $OBOL_LLM_MODEL --count 5" \
+        4000 \
+        300
 }
 
 _agent_buy_pr_exists() {
@@ -374,62 +541,62 @@ _agent_buy_pr_exists() {
         -o name 2>/dev/null | grep -q .
 }
 
-# 1-retry wrapper for the agent buy prompt at flow-13/14 step 46. The QA LLM
-# (qwen36-deep, 27B-class — see OBOL_LLM_MODEL default) occasionally narrates a
-# fabricated failure on the long single-shot buy prompt instead of actually
-# invoking the bash tool. When that happens, no PurchaseRequest is created and
-# step 47 fails with "PurchaseRequest CR not ready" — even though buy.py was
-# never invoked. The smaller qwen36-fast (~4B) flakes much more often; deep is
-# the new default for that reason. See plans/inference-v1337-followup-20260514.md.
-#
-# Strategy: poll for the PR for up to 60s after the first prompt; if absent,
-# print a LOUD warning flagging this as agent unreliability and re-send the
-# prompt once. If still absent after the retry, step 47 fails as before.
+# 1-retry wrapper for the agent buy prompt at flow-13/14 step 46. The smoke
+# proof remains structural: Bob's agent must create the PurchaseRequest, then
+# the flow waits for Ready=True, sidecar auths, paid HTTP 200, settlement, and
+# exact balance deltas. This wrapper only makes the agent/LiteLLM readiness
+# and retry semantics honest around transient model-loading failures.
 agent_buy_with_retry() {
-    local response content retried=0 i
+    local content attempt i max_attempts=2
 
-    response=$(_agent_buy_send_prompt)
-    content=$(extract_assistant_content "$response" 2>/dev/null || true)
-    echo "${content:0:500}"
-    if [ -z "$(printf '%s' "$content" | tr -d '[:space:]')" ]; then
-        echo "  ! Agent returned no final assistant text; confirming purchase via PurchaseRequest CR"
-    fi
-    if printf '%s' "$content" | agent_response_refused; then
-        fail "Agent refused to run buy.py: ${content:0:500}"
-        emit_metrics; exit 1
-    fi
+    _agent_ready_preflight
 
-    # Wait up to 60s for the controller to reconcile the PR. Healthy runs see
-    # it within ~5s; the long ceiling absorbs cluster-cold-start jitter.
-    for i in $(seq 1 12); do
-        _agent_buy_pr_exists && break
-        sleep 5
-    done
+    for attempt in $(seq 1 "$max_attempts"); do
+        _agent_buy_send_prompt
 
-    if ! _agent_buy_pr_exists; then
-        echo ""
-        echo "  ╔════════════════════════════════════════════════════════════════════════╗"
-        echo "  ║  WARN: agent did NOT create a PurchaseRequest after 60s.               ║"
-        echo "  ║  Documented LLM flake on the long single-shot buy prompt — agent       ║"
-        echo "  ║  narrated a fabricated failure instead of invoking buy.py.             ║"
-        echo "  ║  Re-prompting ONCE.                                                    ║"
-        echo "  ║  If this fires regularly: confirm OBOL_LLM_MODEL=qwen36-deep (default) ║"
-        echo "  ║  not qwen36-fast (4B), or escalate to qwen36-35b-heretic, or add a     ║"
-        echo "  ║  non-agent fallback path.                                              ║"
-        echo "  ║  Ref: plans/inference-v1337-followup-20260514.md                       ║"
-        echo "  ╚════════════════════════════════════════════════════════════════════════╝"
-        echo ""
-        retried=1
-        response=$(_agent_buy_send_prompt)
-        content=$(extract_assistant_content "$response" 2>/dev/null || true)
-        echo "  RETRY response: ${content:0:500}"
-        if printf '%s' "$content" | agent_response_refused; then
-            fail "Agent refused to run buy.py on retry: ${content:0:500}"
+        if ! _agent_chat_status_ok; then
+            if _agent_chat_transient_error && [ "$attempt" -lt "$max_attempts" ]; then
+                echo "  Agent buy transient (attempt $attempt/$max_attempts): $(_agent_chat_failure_preview)"
+                sleep 10
+                continue
+            fi
+            fail "Agent buy request failed: $(_agent_chat_failure_preview)"
             emit_metrics; exit 1
         fi
-    fi
 
-    pass "Agent buy prompt issued (retry=$retried; success will be confirmed by PurchaseRequest CR)"
+        content=$(extract_assistant_content "$AGENT_CHAT_BODY" 2>/dev/null || true)
+        echo "${content:0:500}"
+        if [ -z "$(printf '%s' "$content" | tr -d '[:space:]')" ]; then
+            echo "  ! Agent returned no final assistant text; confirming purchase via PurchaseRequest CR"
+        fi
+        if _agent_chat_transient_error && [ "$attempt" -lt "$max_attempts" ]; then
+            echo "  Agent buy transient content (attempt $attempt/$max_attempts): ${content:0:300}"
+            sleep 10
+            continue
+        fi
+        if printf '%s' "$content" | agent_response_refused; then
+            fail "Agent refused to run buy.py: ${content:0:500}"
+            emit_metrics; exit 1
+        fi
+
+        # Wait up to 60s for buy.py to create the PR. Healthy runs see it
+        # within ~5s; the long ceiling absorbs cluster-cold-start jitter.
+        for i in $(seq 1 12); do
+            if _agent_buy_pr_exists; then
+                pass "Agent buy created PurchaseRequest (attempt=$attempt; Ready=True confirmed next)"
+                return 0
+            fi
+            sleep 5
+        done
+
+        if [ "$attempt" -lt "$max_attempts" ]; then
+            echo "  ! Agent did not create PurchaseRequest after 60s; re-prompting once"
+            continue
+        fi
+    done
+
+    fail "Agent did not create PurchaseRequest after $max_attempts attempts"
+    emit_metrics; exit 1
 }
 
 extract_assistant_content() {

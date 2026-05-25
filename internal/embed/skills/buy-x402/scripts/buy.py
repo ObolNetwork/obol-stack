@@ -800,7 +800,11 @@ def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payme
     print(f"Pre-signing {count} payment authorizations ...")
     for i in range(count):
         if transfer_method == "permit2":
-            valid_after = str(max(0, int(time.time()) - 600))
+            # Permit2 validates against chain time, not the buyer host clock.
+            # Forked/local chains only advance block timestamps when a tx is
+            # mined, so wall-clock based "now - slack" can still be in the
+            # future and the facilitator rejects with PaymentTooEarly().
+            valid_after = "0"
             expiry_window = max(int(payment.get("maxTimeoutSeconds", 60)), 300)
             deadline = str(int(time.time()) + expiry_window)
             permit2_nonce = str(int.from_bytes(secrets.token_bytes(32), "big"))
