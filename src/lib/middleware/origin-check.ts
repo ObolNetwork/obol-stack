@@ -2,33 +2,61 @@ import type { NextRequest, NextResponse } from 'next/server';
 
 /**
  * Allowed origins for mutating requests. The frontend is exposed only via
- * the Traefik HTTPRoute hostname-restricted to "obol.stack", so the only
- * legitimate Origin header value comes from an obol.stack URL.
+ * the Traefik HTTPRoute hostname-restricted to "obol.stack", which is NEVER
+ * exposed via the Cloudflared tunnel (see CLAUDE.md "Security: Tunnel
+ * Exposure"). The only legitimate Origin header value comes from an
+ * obol.stack URL resolved via local DNS = trusted same machine.
  *
  * Without this check, a malicious page on the same machine (another browser
  * tab pointed at evil.com) can submit a form POST cross-origin to
  * /api/sell/create — the browser blocks reading the response (SOP) but
  * does NOT block the side effect of creating a ServiceOffer.
  *
- * Includes both the dev ports (8080 / 8443) AND the production-binding
- * default ports (port-omitted = 80/443) because Traefik may bind either
- * depending on the deployment. Real browser requests to `http://obol.stack/`
- * send Origin: `http://obol.stack` (no port — the original allowlist that
- * only listed :8080 / :8443 rejected those requests with 403).
+ * The hostname (obol.stack) is the real security boundary; the port is
+ * transport plumbing. k3d binds to whatever port is free on the Mac host —
+ * when 80/443 are already in use it falls back to a dynamic high port
+ * (e.g. 64452), so any allowlist of fixed ports breaks the very same
+ * UI buttons that are calling these endpoints. We accept any port on
+ * hostname obol.stack (HTTP or HTTPS) and reject every other hostname.
  *
- * Override via OBOL_FRONTEND_ALLOWED_ORIGINS (comma-separated) for dev.
+ * Override via OBOL_FRONTEND_ALLOWED_ORIGINS (comma-separated, exact match)
+ * for operators that need to pin specific origins.
  */
-function allowedOrigins(): Set<string> {
+const ALLOWED_HOSTNAME = 'obol.stack';
+const ALLOWED_PROTOCOLS = new Set(['http:', 'https:']);
+
+function overrideOrigins(): Set<string> | null {
   const env = process.env.OBOL_FRONTEND_ALLOWED_ORIGINS;
-  if (env) return new Set(env.split(',').map(o => o.trim()));
-  return new Set([
-    // Default ports (port omitted) — what browsers send for http://obol.stack
-    'http://obol.stack',
-    'https://obol.stack',
-    // Dev ports
-    'http://obol.stack:8080',
-    'https://obol.stack:8443',
-  ]);
+  if (!env) return null;
+  return new Set(
+    env
+      .split(',')
+      .map(o => o.trim())
+      .filter(Boolean)
+  );
+}
+
+/**
+ * isAllowedOrigin parses the candidate Origin string and returns true if
+ * the hostname is obol.stack and the scheme is http/https. Any port (or
+ * no port) is accepted. Returns false on parse errors so a malformed
+ * Origin can never accidentally allow a request.
+ *
+ * When OBOL_FRONTEND_ALLOWED_ORIGINS is set the explicit exact-match
+ * allowlist takes over — operators get the previous restrictive
+ * behavior if they need to pin specific origins.
+ */
+export function isAllowedOrigin(origin: string): boolean {
+  const override = overrideOrigins();
+  if (override) return override.has(origin);
+  let url: URL;
+  try {
+    url = new URL(origin);
+  } catch {
+    return false;
+  }
+  if (!ALLOWED_PROTOCOLS.has(url.protocol)) return false;
+  return url.hostname === ALLOWED_HOSTNAME;
 }
 
 function jsonResponse(body: unknown, status: number): NextResponse {
@@ -44,8 +72,8 @@ function jsonResponse(body: unknown, status: number): NextResponse {
 }
 
 /**
- * Returns NextResponse(403) if the request's Origin header isn't in the
- * allowlist. Returns null if the request passes — caller continues.
+ * Returns NextResponse(403) if the request's Origin header isn't allowed.
+ * Returns null if the request passes — caller continues.
  *
  * Same-origin GETs/HEADs aren't checked: browsers don't send Origin on
  * navigations and they're safe by definition.
@@ -61,11 +89,15 @@ export function rejectCrossOrigin(
   if (!origin) {
     // Modern browsers always send Origin on mutating requests. Absence is
     // suspicious (curl, fetch with credentials:'omit', or stripped header).
-    // Allow only if Referer matches an allowed origin's prefix as a fallback.
+    // Allow only if Referer parses to an allowed origin as a fallback.
     const referer = request.headers.get('referer');
     if (referer) {
-      for (const allowed of allowedOrigins()) {
-        if (referer.startsWith(allowed)) return null;
+      try {
+        const refUrl = new URL(referer);
+        const refOrigin = `${refUrl.protocol}//${refUrl.host}`;
+        if (isAllowedOrigin(refOrigin)) return null;
+      } catch {
+        // fall through to 403
       }
     }
     return jsonResponse(
@@ -73,7 +105,7 @@ export function rejectCrossOrigin(
       403
     );
   }
-  if (!allowedOrigins().has(origin)) {
+  if (!isAllowedOrigin(origin)) {
     return jsonResponse(
       {
         error: `cross-origin request rejected: Origin ${origin} not allowed`,
