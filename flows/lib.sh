@@ -729,6 +729,10 @@ llm_disable_thinking_payload_suffix() {
 # helmfile rollout at the end):
 #   1. obol model setup custom --endpoint … --model … --no-sync
 #      (validates the endpoint, patches LiteLLM, hot-adds the model.)
+#      If the LLM preflight proved the endpoint needs enable_thinking=false,
+#      the route stores that provider-specific body at LiteLLM so agent calls
+#      inherit it too; callers like Hermes do not preserve arbitrary request
+#      extension fields.
 #   2. obol model prefer <model> --no-sync
 #      (configured LiteLLM order is the primary-model contract.)
 #   3. obol model sync
@@ -745,6 +749,9 @@ route_llm_via_obol_cli() {
         local args=(model setup custom --no-sync --endpoint "$OBOL_LLM_ENDPOINT" --model "$model")
         if [ -n "${OBOL_LLM_API_KEY:-}" ]; then
             args+=(--api-key "$OBOL_LLM_API_KEY")
+        fi
+        if [ "${OBOL_LLM_DISABLE_THINKING:-false}" = "true" ]; then
+            args+=(--disable-thinking)
         fi
         $runner "${args[@]}" || return 1
         $runner model prefer "$model" --no-sync || return 1
