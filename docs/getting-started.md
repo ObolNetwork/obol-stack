@@ -216,6 +216,25 @@ obol network sync ethereum/demo
 
 This creates the `ethereum-demo` namespace with an execution client (reth) and a consensus client (lighthouse).
 
+### Full vs archive mode
+
+`obol network install ethereum` defaults to `--mode=full`, which prunes
+historical state and needs ~500 GB on mainnet (~100 GB on testnets). Pass
+`--mode=archive` if you need to replay state across history (block
+explorers, historical `eth_call`, indexers); archive nodes hold the full
+state trie and grow to ~4 TB+ on mainnet.
+
+```bash
+# Default: pruned full node
+obol network install ethereum --network=mainnet
+
+# Archive node for state replay (requires ~4-5 TB free)
+obol network install ethereum --network=mainnet --mode=archive
+```
+
+The installer warns when the data directory has less free disk than the
+chosen mode is likely to need.
+
 Verify:
 
 ```bash

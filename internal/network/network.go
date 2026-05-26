@@ -125,6 +125,20 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 		templateData[field.Name] = value
 	}
 
+	// Disk-space preflight (currently only meaningful for ethereum). The
+	// check warns and prompts; in non-interactive mode (no TTY / JSON) it
+	// auto-continues so scripted installs don't deadlock.
+	if network == "ethereum" {
+		netValue := templateData["Network"]
+		modeValue := templateData["Mode"]
+		if modeValue == "" {
+			modeValue = "full"
+		}
+		if err := CheckNetworkDiskSpace(u, cfg.DataDir, netValue, modeValue); err != nil {
+			return err
+		}
+	}
+
 	// Read the embedded values template
 	valuesContent, err := embed.ReadEmbeddedNetworkFile(network, "values.yaml.gotmpl")
 	if err != nil {
