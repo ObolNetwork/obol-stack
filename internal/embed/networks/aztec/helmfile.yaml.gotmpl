@@ -9,6 +9,7 @@ releases:
     namespace: aztec-{{ .Values.id }}
     createNamespace: true
     chart: obol/aztec-node
+    # renovate: datasource=helm depName=aztec-node registryUrl=https://obolnetwork.github.io/helm-charts
     version: 2.3.0
     values:
       - role: sequencer
@@ -19,6 +20,7 @@ releases:
         networkName: '{{ .Values.id }}'
         image:
           repository: aztecprotocol/aztec
+          # renovate: datasource=docker depName=aztecprotocol/aztec
           tag: 4.3.0
           pullPolicy: Always
         node:

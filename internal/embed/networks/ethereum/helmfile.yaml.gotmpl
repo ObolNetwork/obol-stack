@@ -24,6 +24,7 @@ releases:
     namespace: ethereum-{{ .Values.id }}
     createNamespace: true
     chart: ethereum-helm-charts/ethereum-node
+    # renovate: datasource=helm depName=ethereum-node registryUrl=https://ethpandaops.github.io/ethereum-helm-charts
     version: 0.2.14
     needs: [ethereum-pvcs]
     values:
@@ -38,19 +39,24 @@ releases:
               sepolia: https://checkpoint-sync.sepolia.ethpandaops.io
               hoodi: https://checkpoint-sync.hoodi.ethpandaops.io
 
-      # Execution client (pinned versions — update periodically)
+      # Execution client (pinned versions — Renovate-tracked)
       - {{ .Values.executionClient }}:
           enabled: true
           image:
             {{- if eq .Values.executionClient "reth" }}
+            # renovate: datasource=github-releases depName=paradigmxyz/reth
             tag: v2.2.0
             {{- else if eq .Values.executionClient "geth" }}
+            # renovate: datasource=github-releases depName=ethereum/go-ethereum
             tag: v1.17.3
             {{- else if eq .Values.executionClient "nethermind" }}
+            # renovate: datasource=github-releases depName=NethermindEth/nethermind
             tag: "1.37.2"
             {{- else if eq .Values.executionClient "besu" }}
+            # renovate: datasource=github-releases depName=hyperledger/besu
             tag: "26.5.0"
             {{- else if eq .Values.executionClient "erigon" }}
+            # renovate: datasource=github-releases depName=erigontech/erigon
             tag: v3.4.2
             {{- end }}
           persistence:
@@ -58,20 +64,25 @@ releases:
             size: 500Gi
             existingClaim: execution-{{ .Values.executionClient }}-{{ .Values.network }}
 
-      # Consensus client (pinned versions — update periodically)
+      # Consensus client (pinned versions — Renovate-tracked)
       # The upstream chart wires --execution-endpoint and --network automatically.
       - {{ .Values.consensusClient }}:
           enabled: true
           image:
             {{- if eq .Values.consensusClient "lighthouse" }}
+            # renovate: datasource=github-releases depName=sigp/lighthouse
             tag: v8.1.3
             {{- else if eq .Values.consensusClient "prysm" }}
+            # renovate: datasource=github-releases depName=OffchainLabs/prysm
             tag: v7.1.4
             {{- else if eq .Values.consensusClient "teku" }}
+            # renovate: datasource=github-releases depName=Consensys/teku
             tag: "26.4.0"
             {{- else if eq .Values.consensusClient "nimbus" }}
+            # renovate: datasource=docker depName=statusim/nimbus-eth2
             tag: multiarch-v26.5.0
             {{- else if eq .Values.consensusClient "lodestar" }}
+            # renovate: datasource=github-releases depName=ChainSafe/lodestar
             tag: v1.43.0
             {{- end }}
           persistence:
