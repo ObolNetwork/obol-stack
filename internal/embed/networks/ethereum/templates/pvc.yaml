@@ -1,4 +1,32 @@
 {{- if eq .Release.Name "ethereum-pvcs" }}
+{{- /*
+  PVC sizing is a function of (network, mode). Sizes are estimates with
+  ~30% headroom for chain growth. local-path storage does not pre-allocate,
+  so these requests primarily document intent and serve as soft caps when
+  a sized storage class is swapped in later.
+*/ -}}
+{{- $mode := default "full" .Values.mode -}}
+{{- $isArchive := eq $mode "archive" -}}
+{{- $execSize := "500Gi" -}}
+{{- $consensusSize := "200Gi" -}}
+{{- if eq .Values.network "mainnet" -}}
+  {{- if $isArchive -}}
+    {{- $execSize = "4500Gi" -}}
+    {{- $consensusSize = "500Gi" -}}
+  {{- else -}}
+    {{- $execSize = "500Gi" -}}
+    {{- $consensusSize = "200Gi" -}}
+  {{- end -}}
+{{- else -}}
+  {{- /* sepolia, hoodi and other testnets */ -}}
+  {{- if $isArchive -}}
+    {{- $execSize = "300Gi" -}}
+    {{- $consensusSize = "100Gi" -}}
+  {{- else -}}
+    {{- $execSize = "100Gi" -}}
+    {{- $consensusSize = "50Gi" -}}
+  {{- end -}}
+{{- end -}}
 ---
 # Ethereum Execution Client PVC
 apiVersion: v1
@@ -12,7 +40,7 @@ spec:
   storageClassName: local-path
   resources:
     requests:
-      storage: 500Gi
+      storage: {{ $execSize }}
 ---
 # Ethereum Consensus Client PVC
 apiVersion: v1
@@ -26,5 +54,5 @@ spec:
   storageClassName: local-path
   resources:
     requests:
-      storage: 200Gi
+      storage: {{ $consensusSize }}
 {{- end }}

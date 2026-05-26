@@ -15,3 +15,8 @@ executionClient: {{.ExecutionClient}}
 # @default lighthouse
 # @description Consensus layer client
 consensusClient: {{.ConsensusClient}}
+
+# @enum full,archive
+# @default full
+# @description Node mode. 'full' prunes historical state (~500GB mainnet); 'archive' keeps all state for history replay (~4TB+ mainnet)
+mode: {{.Mode}}

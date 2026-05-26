@@ -176,6 +176,8 @@ obol sell delete ollama-gated -n llm
 
 Two-stage templating: `values.yaml.gotmpl` with `@enum/@default/@description` annotations → CLI flags → rendered `values.yaml` (Stage 1), then `helmfile sync --state-values-file values.yaml --state-values-set id=<id>` (Stage 2). Unique namespaces: `<network>-<id>` where ID is petname or `--id <name>`. Local Ethereum nodes auto-registered as priority upstream in eRPC via `RegisterERPCUpstream()` (write methods blocked on local → routed to remote).
 
+**Ethereum `--mode full|archive`** (default `full`): controls whether reth runs as a pruned full node (~500 GB mainnet / ~100 GB testnet) or an archive node retaining all historical state (~4 TB+ mainnet / ~300 GB testnet). Archive mode is for state replay (block explorers, historical `eth_call`, indexers); full mode is the right default for everything else. The mode flows through to (a) the reth `--full` arg in `internal/embed/networks/ethereum/helmfile.yaml.gotmpl`, (b) PVC sizing in `templates/pvc.yaml`, and (c) the `helmfile` `persistence.size` request. `obol network install ethereum` runs a disk-space preflight via `internal/network/preflight.go` — it warns when `cfg.DataDir` has less free disk than `(network, mode)` is expected to need, prompts the user, and auto-continues in non-interactive mode (no TTY / JSON output) so scripted installs don't deadlock. Other execution clients (geth, nethermind, besu, erigon) ignore the mode flag for now.
+
 ## Stack Lifecycle
 
 | Command | Action |
