@@ -20,3 +20,7 @@ consensusClient: {{.ConsensusClient}}
 # @default full
 # @description Node mode. 'full' prunes historical state (~500GB mainnet); 'archive' keeps all state for history replay (~4TB+ mainnet)
 mode: {{.Mode}}
+
+# @default
+# @description Archive scope (only used with --mode=archive). Accepts: 'merge', 'shanghai', 'cancun', 'prague', 'osaka' (EL fork name); duration like '365d', '1y', '6mo'; raw block number; or 'genesis' for all history. Prompts interactively on TTY if omitted.
+since: {{.Since}}

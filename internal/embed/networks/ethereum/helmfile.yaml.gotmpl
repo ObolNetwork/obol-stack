@@ -58,6 +58,24 @@ releases:
                     {{- end }}
                     {{- if ne .Values.mode "archive" }}
                     - --full
+                    {{- else if eq (.Values.pruneKind | default "") "before" }}
+                    # Partial archive: prune state history before block N.
+                    # Receipts/bodies are pruned to the same cutoff via the
+                    # pre-merge presets where applicable; otherwise reth
+                    # uses the same `before` value.
+                    - --prune.account-history.before={{ .Values.pruneBlock }}
+                    - --prune.storage-history.before={{ .Values.pruneBlock }}
+                    {{- if le (int .Values.pruneBlock) 15537394 }}
+                    - --prune.receipts.pre-merge
+                    - --prune.bodies.pre-merge
+                    {{- else }}
+                    - --prune.receipts.before={{ .Values.pruneBlock }}
+                    - --prune.bodies.before={{ .Values.pruneBlock }}
+                    {{- end }}
+                    {{- else if eq (.Values.pruneKind | default "") "distance" }}
+                    # Partial archive: keep last N blocks of history.
+                    - --prune.account-history.distance={{ .Values.pruneDistance }}
+                    - --prune.storage-history.distance={{ .Values.pruneDistance }}
                     {{- end }}
           {{- end }}
 
