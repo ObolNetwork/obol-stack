@@ -200,6 +200,96 @@ func TestRouteRuleFromOffer_AgentResolutionAdvertisesRuntimeModelSkills(t *testi
 	}
 }
 
+func TestRoutesFromStore_AgentOfferInjectsHermesAPIKey(t *testing.T) {
+	items := []any{
+		mustOfferObject(t, monetizeapi.ServiceOffer{
+			ObjectMeta: metav1.ObjectMeta{Name: "demo-quant", Namespace: "seller"},
+			Spec: monetizeapi.ServiceOfferSpec{
+				Type: "agent",
+				Agent: monetizeapi.ServiceOfferAgent{
+					Ref: monetizeapi.ServiceOfferAgentRef{Name: "demo-quant", Namespace: "agent-demo-quant"},
+				},
+				Payment: monetizeapi.ServiceOfferPayment{
+					PayTo: "0x1111111111111111111111111111111111111111",
+					Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "10"},
+				},
+			},
+			Status: monetizeapi.ServiceOfferStatus{
+				Conditions: []monetizeapi.Condition{{Type: "RoutePublished", Status: "True"}},
+				AgentResolution: &monetizeapi.ServiceOfferAgentResolution{
+					Model:    "qwen3.5:9b",
+					Runtime:  "hermes",
+					Endpoint: "http://hermes.agent-demo-quant.svc.cluster.local:8642",
+				},
+			},
+		}),
+	}
+	secrets := []any{
+		mustSecretObject(t, "agent-demo-quant", "hermes-api-server", map[string]string{
+			"API_SERVER_KEY": base64.StdEncoding.EncodeToString([]byte("agent-api-key")),
+		}),
+		mustSecretObject(t, "seller", "litellm-secrets", map[string]string{
+			"LITELLM_MASTER_KEY": base64.StdEncoding.EncodeToString([]byte("wrong-secret")),
+		}),
+	}
+
+	routes, err := routesFromStore(items, secrets)
+	if err != nil {
+		t.Fatalf("routesFromStore: %v", err)
+	}
+	if len(routes) != 1 {
+		t.Fatalf("len(routes) = %d, want 1", len(routes))
+	}
+	if routes[0].UpstreamAuth != "Bearer agent-api-key" {
+		t.Fatalf("agent UpstreamAuth = %q, want Bearer agent-api-key", routes[0].UpstreamAuth)
+	}
+}
+
+func TestRoutesFromStore_AgentAuthUsesReferencedAgentNamespace(t *testing.T) {
+	items := []any{
+		mustOfferObject(t, monetizeapi.ServiceOffer{
+			ObjectMeta: metav1.ObjectMeta{Name: "cross-ns-agent", Namespace: "seller-ns"},
+			Spec: monetizeapi.ServiceOfferSpec{
+				Type: "agent",
+				Agent: monetizeapi.ServiceOfferAgent{
+					Ref: monetizeapi.ServiceOfferAgentRef{Name: "quant", Namespace: "agent-quant"},
+				},
+				Payment: monetizeapi.ServiceOfferPayment{
+					PayTo: "0x1111111111111111111111111111111111111111",
+					Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "1"},
+				},
+			},
+			Status: monetizeapi.ServiceOfferStatus{
+				Conditions: []monetizeapi.Condition{{Type: "RoutePublished", Status: "True"}},
+				AgentResolution: &monetizeapi.ServiceOfferAgentResolution{
+					Model:    "qwen3.5:9b",
+					Runtime:  "hermes",
+					Endpoint: "http://hermes.agent-quant.svc.cluster.local:8642",
+				},
+			},
+		}),
+	}
+	secrets := []any{
+		mustSecretObject(t, "seller-ns", "hermes-api-server", map[string]string{
+			"API_SERVER_KEY": base64.StdEncoding.EncodeToString([]byte("seller-ns-key")),
+		}),
+		mustSecretObject(t, "agent-quant", "hermes-api-server", map[string]string{
+			"API_SERVER_KEY": base64.StdEncoding.EncodeToString([]byte("agent-ns-key")),
+		}),
+	}
+
+	routes, err := routesFromStore(items, secrets)
+	if err != nil {
+		t.Fatalf("routesFromStore: %v", err)
+	}
+	if len(routes) != 1 {
+		t.Fatalf("len(routes) = %d, want 1", len(routes))
+	}
+	if routes[0].UpstreamAuth != "Bearer agent-ns-key" {
+		t.Fatalf("agent UpstreamAuth = %q, want referenced agent namespace key", routes[0].UpstreamAuth)
+	}
+}
+
 func mustOfferObject(t *testing.T, offer monetizeapi.ServiceOffer) *unstructured.Unstructured {
 	t.Helper()
 	offer.TypeMeta = metav1.TypeMeta{
