@@ -741,6 +741,56 @@ func bindingHasSubject(doc map[string]any, name, namespace string) bool {
 	return false
 }
 
+func TestX402VerifierRBAC_CanReadAgentAPISecrets(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/x402.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+	docs := multiDoc(data)
+
+	role := findDocByName(docs, "ClusterRole", "x402-verifier")
+	if role == nil {
+		t.Fatal("no ClusterRole 'x402-verifier' found")
+	}
+	rules, ok := role["rules"].([]any)
+	if !ok {
+		t.Fatal("x402-verifier ClusterRole has no rules")
+	}
+
+	for _, r := range rules {
+		rm := r.(map[string]any)
+		if !stringSet(rm["apiGroups"])[""] || !stringSet(rm["resources"])["secrets"] {
+			continue
+		}
+		verbs := stringSet(rm["verbs"])
+		if !verbs["get"] || !verbs["list"] || !verbs["watch"] {
+			continue
+		}
+		names := stringSet(rm["resourceNames"])
+		if !names["litellm-secrets"] {
+			t.Fatal("x402-verifier secret rule lost litellm-secrets")
+		}
+		if !names["hermes-api-server"] {
+			t.Fatal("x402-verifier secret rule must include hermes-api-server for agent upstream auth")
+		}
+		return
+	}
+
+	t.Fatal("x402-verifier ClusterRole missing scoped secret get/list/watch rule")
+}
+
+func TestX402VerifierImage_CarriesAgentAuthFix(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/x402.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+
+	const ref = "ghcr.io/obolnetwork/x402-verifier:46e63fd@sha256:a8cd7946884c9a702b5cfcfad28d1f5eac1037899303eb4e0157e3ffab7a572c"
+	if !strings.Contains(string(data), "image: "+ref) {
+		t.Fatalf("x402-verifier image must carry agent upstream auth fix: %s", ref)
+	}
+}
+
 func TestAgentRBAC_NoOverlyBroadPermissions(t *testing.T) {
 	data, err := ReadInfrastructureFile("base/templates/obol-agent-monetize-rbac.yaml")
 	if err != nil {

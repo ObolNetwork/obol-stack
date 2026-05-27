@@ -83,7 +83,7 @@ rules:
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["secrets"]
-    resourceNames: ["litellm-secrets"]
+    resourceNames: ["litellm-secrets", "hermes-api-server"]
     verbs: ["get", "list", "watch"]
 
 ---
@@ -234,7 +234,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: verifier
-          image: ghcr.io/obolnetwork/x402-verifier:b13254e@sha256:a8a7aa0ca4c35b0ddf6983fa6e3e5f8a3f64e44d8e506ebfd55e39de2bc0342d
+          image: ghcr.io/obolnetwork/x402-verifier:46e63fd@sha256:a8cd7946884c9a702b5cfcfad28d1f5eac1037899303eb4e0157e3ffab7a572c
           imagePullPolicy: IfNotPresent
           # PSS Restricted: per-container hardening. Verifier is a Go binary
           # reading two RO ConfigMaps; no writeable rootfs paths required.
