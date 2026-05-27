@@ -7,27 +7,6 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
-// diskSpaceRequirementGB returns the recommended free-disk minimum for
-// (network, mode) in gigabytes. Numbers include ~30% headroom for chain
-// growth between releases. Sizes are reth-anchored; other clients are in
-// the same ballpark.
-func diskSpaceRequirementGB(network, mode string) uint64 {
-	archive := mode == "archive"
-	switch network {
-	case "mainnet":
-		if archive {
-			return 5000
-		}
-		return 700
-	default:
-		// sepolia, hoodi, and other testnets
-		if archive {
-			return 400
-		}
-		return 150
-	}
-}
-
 // freeDiskBytes returns the free disk bytes available at path. Used to
 // check whether a network install has room to grow before we let helmfile
 // schedule a 4TB PVC that will silently fill the host overnight.
@@ -46,8 +25,9 @@ func freeDiskBytes(path string) (uint64, error) {
 // in non-interactive contexts (no TTY, JSON mode) the prompt auto-accepts
 // so scripted installs don't deadlock. The user only blocks the install by
 // explicitly declining at an interactive prompt.
-func CheckNetworkDiskSpace(u *ui.UI, dataDir, network, mode string) error {
-	requiredGB := diskSpaceRequirementGB(network, mode)
+func CheckNetworkDiskSpace(u *ui.UI, dataDir, network, mode, executionClient string, scope ArchiveScope) error {
+	profile := resolveEthereumStorageProfile(network, mode, executionClient, scope)
+	requiredGB := profile.DiskRequirementGB
 
 	freeBytes, err := freeDiskBytes(dataDir)
 	if err != nil {
@@ -58,7 +38,7 @@ func CheckNetworkDiskSpace(u *ui.UI, dataDir, network, mode string) error {
 
 	freeGB := freeBytes / (1024 * 1024 * 1024)
 
-	u.Detail("Disk space", fmt.Sprintf("%d GB free at %s (this network needs ~%d GB)", freeGB, dataDir, requiredGB))
+	u.Detail("Disk space", fmt.Sprintf("%d GB free at %s (this network needs ~%d GB for %s)", freeGB, dataDir, requiredGB, profile.Label))
 
 	if freeGB >= requiredGB {
 		return nil
