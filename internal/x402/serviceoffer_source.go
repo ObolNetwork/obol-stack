@@ -21,7 +21,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-// WatchServiceOffers runs the ServiceOffer + litellm-secrets informers and
+// WatchServiceOffers runs the ServiceOffer + upstream-auth Secret informers and
 // pushes rendered RouteRules to apply on every change. The optional
 // onFirstApply callback is invoked exactly once after the post-cache-sync
 // refresh succeeds; it is the signal that the route source has produced its
@@ -33,14 +33,20 @@ func WatchServiceOffers(ctx context.Context, cfg *rest.Config, apply func([]Rout
 	}
 
 	offerFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 0, metav1.NamespaceAll, nil)
-	secretFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 0, metav1.NamespaceAll, func(options *metav1.ListOptions) {
+	litellmSecretFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 0, metav1.NamespaceAll, func(options *metav1.ListOptions) {
 		options.FieldSelector = fields.OneTermEqualSelector("metadata.name", "litellm-secrets").String()
 	})
+	hermesSecretFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 0, metav1.NamespaceAll, func(options *metav1.ListOptions) {
+		options.FieldSelector = fields.OneTermEqualSelector("metadata.name", "hermes-api-server").String()
+	})
 	offers := offerFactory.ForResource(monetizeapi.ServiceOfferGVR).Informer()
-	secrets := secretFactory.ForResource(monetizeapi.SecretGVR).Informer()
+	litellmSecrets := litellmSecretFactory.ForResource(monetizeapi.SecretGVR).Informer()
+	hermesSecrets := hermesSecretFactory.ForResource(monetizeapi.SecretGVR).Informer()
 
 	refresh := func() (ok bool) {
-		routes, err := routesFromStore(offers.GetStore().List(), secrets.GetStore().List())
+		secretItems := append([]any{}, litellmSecrets.GetStore().List()...)
+		secretItems = append(secretItems, hermesSecrets.GetStore().List()...)
+		routes, err := routesFromStore(offers.GetStore().List(), secretItems)
 		if err != nil {
 			log.Printf("x402-serviceoffer-source: render routes: %v", err)
 			return false
@@ -59,11 +65,13 @@ func WatchServiceOffers(ctx context.Context, cfg *rest.Config, apply func([]Rout
 		DeleteFunc: func(any) { refresh() },
 	}
 	offers.AddEventHandler(handler)
-	secrets.AddEventHandler(handler)
+	litellmSecrets.AddEventHandler(handler)
+	hermesSecrets.AddEventHandler(handler)
 
 	go offers.Run(ctx.Done())
-	go secrets.Run(ctx.Done())
-	if !cache.WaitForCacheSync(ctx.Done(), offers.HasSynced, secrets.HasSynced) {
+	go litellmSecrets.Run(ctx.Done())
+	go hermesSecrets.Run(ctx.Done())
+	if !cache.WaitForCacheSync(ctx.Done(), offers.HasSynced, litellmSecrets.HasSynced, hermesSecrets.HasSynced) {
 		return fmt.Errorf("wait for serviceoffer informer sync")
 	}
 
@@ -75,7 +83,7 @@ func WatchServiceOffers(ctx context.Context, cfg *rest.Config, apply func([]Rout
 }
 
 func routesFromStore(offerItems, secretItems []any) ([]RouteRule, error) {
-	upstreamAuthByNamespace, err := upstreamAuthByNamespace(secretItems)
+	litellmAuthByNamespace, hermesAuthByNamespace, err := upstreamAuthByNamespace(secretItems)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +111,11 @@ func routesFromStore(offerItems, secretItems []any) ([]RouteRule, error) {
 			continue
 		}
 
-		rule, err := routeRuleFromOffer(&offer, upstreamAuthByNamespace[offer.EffectiveNamespace()])
+		upstreamAuth := litellmAuthByNamespace[offer.EffectiveNamespace()]
+		if offer.IsAgent() {
+			upstreamAuth = hermesAuthByNamespace[offer.Spec.Agent.Ref.Namespace]
+		}
+		rule, err := routeRuleFromOffer(&offer, upstreamAuth)
 		if err != nil {
 			return nil, err
 		}
@@ -194,17 +206,27 @@ func effectivePrice(offer *monetizeapi.ServiceOffer) (price, priceModel, perMTok
 	}
 }
 
-func upstreamAuthByNamespace(items []any) (map[string]string, error) {
-	result := make(map[string]string)
+func upstreamAuthByNamespace(items []any) (map[string]string, map[string]string, error) {
+	litellmAuth := make(map[string]string)
+	hermesAuth := make(map[string]string)
 	for _, item := range items {
 		obj, ok := item.(*unstructured.Unstructured)
-		if !ok || obj.GetName() != "litellm-secrets" {
+		if !ok {
+			continue
+		}
+		dataKey := ""
+		switch obj.GetName() {
+		case "litellm-secrets":
+			dataKey = "LITELLM_MASTER_KEY"
+		case "hermes-api-server":
+			dataKey = "API_SERVER_KEY"
+		default:
 			continue
 		}
 
-		value, found, err := unstructured.NestedString(obj.Object, "data", "LITELLM_MASTER_KEY")
+		value, found, err := unstructured.NestedString(obj.Object, "data", dataKey)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if !found || value == "" {
 			continue
@@ -212,18 +234,26 @@ func upstreamAuthByNamespace(items []any) (map[string]string, error) {
 
 		decoded, err := base64.StdEncoding.DecodeString(value)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		token := strings.TrimSpace(string(decoded))
 		if token == "" {
 			continue
 		}
-		result[obj.GetNamespace()] = "Bearer " + token
+		switch obj.GetName() {
+		case "litellm-secrets":
+			litellmAuth[obj.GetNamespace()] = "Bearer " + token
+		case "hermes-api-server":
+			hermesAuth[obj.GetNamespace()] = "Bearer " + token
+		}
 	}
-	return result, nil
+	return litellmAuth, hermesAuth, nil
 }
 
 func effectiveUpstreamAuth(offer *monetizeapi.ServiceOffer, upstreamAuth string) string {
+	if offer.IsAgent() {
+		return upstreamAuth
+	}
 	if !strings.EqualFold(offer.Spec.Upstream.Service, "litellm") {
 		return ""
 	}

@@ -125,6 +125,34 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 		templateData[field.Name] = value
 	}
 
+	// Ethereum: resolve archive scope from --mode/--since, prompting on
+	// TTY when the user under-specifies. Updates templateData["Mode"] to
+	// reflect any picker choice so downstream code (preflight, YAML
+	// render) sees the final value.
+	var archiveScope ArchiveScope
+	if network == "ethereum" {
+		scope, resolvedMode, err := resolveEthereumArchiveScope(u, templateData, overrides)
+		if err != nil {
+			return err
+		}
+		archiveScope = scope
+		templateData["Mode"] = resolvedMode
+	}
+
+	// Disk-space preflight (currently only meaningful for ethereum). The
+	// check warns and prompts; in non-interactive mode (no TTY / JSON) it
+	// auto-continues so scripted installs don't deadlock.
+	if network == "ethereum" {
+		netValue := templateData["Network"]
+		modeValue := templateData["Mode"]
+		if modeValue == "" {
+			modeValue = "full"
+		}
+		if err := CheckNetworkDiskSpace(u, cfg.DataDir, netValue, modeValue); err != nil {
+			return err
+		}
+	}
+
 	// Read the embedded values template
 	valuesContent, err := embed.ReadEmbeddedNetworkFile(network, "values.yaml.gotmpl")
 	if err != nil {
@@ -140,6 +168,17 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, templateData); err != nil {
 		return fmt.Errorf("failed to execute values template: %w", err)
+	}
+
+	// Append the resolved archive scope as additional YAML so helmfile can
+	// translate it into per-client prune args. Kept separate from the
+	// template because it's computed by the CLI, not passed by the user.
+	if network == "ethereum" {
+		var sb strings.Builder
+		sb.Write(buf.Bytes())
+		appendArchiveScopeYAML(&sb, archiveScope)
+		buf.Reset()
+		buf.WriteString(sb.String())
 	}
 
 	// Validate that the generated content is valid YAML

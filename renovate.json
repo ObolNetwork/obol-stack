@@ -118,6 +118,28 @@
       ],
       "datasourceTemplate": "docker",
       "versioningTemplate": "loose"
+    },
+    {
+      "customType": "regex",
+      "description": "Track Ethereum/Aztec client image tags pinned in network helmfiles. Uses the `# renovate: datasource=X depName=Y` annotation immediately above each `tag:` line so the same regex handles every form we use (`v1.2.3`, `\"1.2.3\"`, `multiarch-v1.2.3`, plain `4.3.0`).",
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*tag:\\s*[\"']?(?<currentValue>[A-Za-z0-9._+-]+)[\"']?"
+      ],
+      "fileMatch": [
+        "^internal/embed/networks/.+/helmfile\\.yaml\\.gotmpl$"
+      ],
+      "versioningTemplate": "loose"
+    },
+    {
+      "customType": "regex",
+      "description": "Track Helm chart versions pinned in network helmfiles. Uses the `# renovate: datasource=helm depName=X registryUrl=Y` annotation immediately above each `version:` line in a release block.",
+      "matchStrings": [
+        "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s+registryUrl=(?<registryUrl>\\S+)\\s*\\n\\s*version:\\s*[\"']?(?<currentValue>[0-9][^\\s\"']*)[\"']?"
+      ],
+      "fileMatch": [
+        "^internal/embed/networks/.+/helmfile\\.yaml\\.gotmpl$"
+      ],
+      "versioningTemplate": "semver"
     }
   ],
   "packageRules": [
@@ -336,6 +358,34 @@
       ],
       "groupName": "Obol Network image updates",
       "pinDigests": true
+    },
+    {
+      "description": "Batch every Ethereum execution/consensus client tag and the ethereum-node chart pin into a single standing PR. The helmfile pins every supported EL+CL client (only one is selected per install via --execution-client / --consensus-client), but they all live in the same template, so it's simplest to bump them together. One PR, not ten.",
+      "matchFileNames": [
+        "internal/embed/networks/ethereum/**"
+      ],
+      "labels": [
+        "renovate/ethereum-clients"
+      ],
+      "schedule": [
+        "before 6am on monday"
+      ],
+      "groupName": "Ethereum EL/CL client updates",
+      "groupSlug": "ethereum-clients"
+    },
+    {
+      "description": "Batch the obol/aztec-node chart pin and the aztecprotocol/aztec image tag into a single standing PR. Aztec testnet upgrades require the image and chart appVersion to stay aligned, so they should land together.",
+      "matchFileNames": [
+        "internal/embed/networks/aztec/**"
+      ],
+      "labels": [
+        "renovate/aztec"
+      ],
+      "schedule": [
+        "before 6am on monday"
+      ],
+      "groupName": "Aztec node updates",
+      "groupSlug": "aztec-node"
     }
   ]
 }

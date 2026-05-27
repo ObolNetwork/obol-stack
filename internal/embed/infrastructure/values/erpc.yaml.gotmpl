@@ -29,7 +29,10 @@ config: |-
         - id: memory-cache
           driver: memory
           memory:
-            maxItems: 10000
+            # LRU cap on cached RPC responses. The connector is memory-only
+            # (no disk), so the upper bound is enforced by the pod memory
+            # limit below; this cap keeps cache RAM well under that limit.
+            maxItems: 5000
       policies:
         - network: "*"
           method: "*"

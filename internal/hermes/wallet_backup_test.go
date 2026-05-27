@@ -1,7 +1,9 @@
 package hermes
 
 import (
+	"encoding/hex"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -127,6 +129,63 @@ func TestBackupRestoreWalletCmd_HermesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestBackupWalletCmd_K3dPermissionFallbackReadsFromNode(t *testing.T) {
+	cfg, id, original := setupHermesBackupInstance(t, "k3d-fallback")
+	if err := os.WriteFile(filepath.Join(cfg.ConfigDir, ".stack-backend"), []byte("k3d"), 0o600); err != nil {
+		t.Fatalf("write stack backend: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfg.ConfigDir, ".stack-id"), []byte("test-stack"), 0o600); err != nil {
+		t.Fatalf("write stack id: %v", err)
+	}
+
+	origRead := readHostKeystoreFileFn
+	origNode := k3dNodeExecOutputFn
+	t.Cleanup(func() {
+		readHostKeystoreFileFn = origRead
+		k3dNodeExecOutputFn = origNode
+	})
+
+	readHostKeystoreFileFn = func(path string) ([]byte, error) {
+		if path == original.KeystorePath {
+			return nil, &os.PathError{Op: "open", Path: path, Err: fs.ErrPermission}
+		}
+		return os.ReadFile(path)
+	}
+	k3dNodeExecOutputFn = func(_ *config.Config, hostPath, shellCmd string) ([]byte, error) {
+		if hostPath != original.KeystorePath {
+			t.Fatalf("k3d fallback hostPath = %q, want %q", hostPath, original.KeystorePath)
+		}
+		if shellCmd != "cat {}" {
+			t.Fatalf("k3d fallback shellCmd = %q, want cat {}", shellCmd)
+		}
+		return []byte(`{"version":3,"from":"k3d-node"}`), nil
+	}
+
+	backupPath := filepath.Join(t.TempDir(), "backup.json")
+	if err := BackupWalletCmd(cfg, id, BackupWalletOptions{
+		Output:      backupPath,
+		HasPassFlag: true,
+	}, newTestUI()); err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+
+	payload, err := os.ReadFile(backupPath)
+	if err != nil {
+		t.Fatalf("read backup: %v", err)
+	}
+	decoded, err := walletbackup.Decode(payload, "")
+	if err != nil {
+		t.Fatalf("decode backup: %v", err)
+	}
+	var keystore map[string]any
+	if err := json.Unmarshal(decoded.Wallets[0].Keystore, &keystore); err != nil {
+		t.Fatalf("unmarshal backup keystore: %v", err)
+	}
+	if got := keystore["from"]; got != "k3d-node" {
+		t.Fatalf("backup keystore from = %v, want k3d-node", got)
+	}
+}
+
 func TestRestoreWalletCmd_HermesRequiresForceForExistingWallet(t *testing.T) {
 	cfg, id, _ := setupHermesBackupInstance(t, "existing")
 
@@ -152,6 +211,65 @@ func TestRestoreWalletCmd_HermesRequiresForceForExistingWallet(t *testing.T) {
 		Force:       true,
 	}, newTestUI()); err != nil {
 		t.Fatalf("forced restore: %v", err)
+	}
+}
+
+func TestRestoreWalletCmd_HermesAcceptsRawEthereumV3Keystore(t *testing.T) {
+	const id = "raw-v3"
+
+	cfg, deployDir := walletImportTestConfig(t, id)
+	stubVolumeOwnership(t)
+
+	privKey, pubKey, err := generateKeypair()
+	if err != nil {
+		t.Fatalf("generate keypair: %v", err)
+	}
+	password := "raw-v3-password"
+	keystoreJSON, keystoreID, err := encryptToV3Keystore(privKey, pubKey, password)
+	if err != nil {
+		t.Fatalf("encrypt keystore: %v", err)
+	}
+	input := filepath.Join(t.TempDir(), "raw-v3.json")
+	if err := os.WriteFile(input, keystoreJSON, 0o600); err != nil {
+		t.Fatalf("write raw v3: %v", err)
+	}
+
+	if err := RestoreWalletCmd(cfg, id, RestoreWalletOptions{
+		Input:       input,
+		Passphrase:  password,
+		HasPassFlag: true,
+	}, newTestUI()); err != nil {
+		t.Fatalf("restore raw v3: %v", err)
+	}
+
+	restored, err := ReadWalletMetadata(deployDir)
+	if err != nil {
+		t.Fatalf("read restored metadata: %v", err)
+	}
+	if restored.Address != addressFromPublicKey(pubKey) {
+		t.Fatalf("restored address = %q, want %q", restored.Address, addressFromPublicKey(pubKey))
+	}
+	if restored.PublicKey != "0x04"+hex.EncodeToString(pubKey) {
+		t.Fatalf("restored public key = %q", restored.PublicKey)
+	}
+	if restored.KeystoreUUID != keystoreID {
+		t.Fatalf("restored keystore UUID = %q, want %q", restored.KeystoreUUID, keystoreID)
+	}
+
+	passwordFromValues, err := walletbackup.ReadKeystorePassword(deployDir)
+	if err != nil {
+		t.Fatalf("read restored password: %v", err)
+	}
+	if passwordFromValues != password {
+		t.Fatalf("restored password = %q, want raw V3 password", passwordFromValues)
+	}
+
+	restoredKeystore, err := os.ReadFile(filepath.Join(agentruntime.KeystoreVolumePath(cfg, agentruntime.Hermes, id), keystoreID+".json"))
+	if err != nil {
+		t.Fatalf("read restored keystore: %v", err)
+	}
+	if string(restoredKeystore) != string(keystoreJSON) {
+		t.Fatal("restored raw V3 keystore changed")
 	}
 }
 
