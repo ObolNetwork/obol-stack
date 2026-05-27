@@ -140,6 +140,7 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		`value: "hermes-obol-agent"`,
 		"OBOL_SKILLS_DIR",
 		"/data/.hermes/obol-skills",
+		"/data/.hermes/logs",
 		"containerPort: 8642",
 		"containerPort: 9119",
 		"fsGroupChangePolicy: OnRootMismatch",

@@ -224,6 +224,34 @@ func TestEmbeddedImages_NamedImagesAreDigestPinned(t *testing.T) {
 	}
 }
 
+func TestEmbeddedImages_X402ControllerAndBuyerUseFixPins(t *testing.T) {
+	cases := []struct {
+		file string
+		ref  string
+	}{
+		{
+			file: "base/templates/x402.yaml",
+			ref:  "ghcr.io/obolnetwork/serviceoffer-controller:f5d94fc@sha256:c6aa6259e3a6bc61a5f4f7203d8c68cfdd861a8d365f9629d234d13b949bf48e",
+		},
+		{
+			file: "base/templates/llm.yaml",
+			ref:  "ghcr.io/obolnetwork/x402-buyer:f5d94fc@sha256:0c431eda44e9e2fe5dd50c82cf4885f9be5037e592478781c51e9c510171265c",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.ref, func(t *testing.T) {
+			data, err := ReadInfrastructureFile(tc.file)
+			if err != nil {
+				t.Fatalf("read %s: %v", tc.file, err)
+			}
+			if !strings.Contains(string(data), "image: "+tc.ref) {
+				t.Fatalf("%s must pin current x402 bundle image %q", tc.file, tc.ref)
+			}
+		})
+	}
+}
+
 // TestEmbeddedImages_CloudflaredHelmTagIsDigestPinned covers the cloudflared
 // chart, which uses the Helm idiom `image.repository` + `image.tag` rather
 // than a literal `image:` line. The chart template renders
