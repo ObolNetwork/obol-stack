@@ -214,7 +214,9 @@ func promptCustomBlock(u *ui.UI) (ArchiveScope, error) {
 // appendArchiveScopeYAML serializes the resolved scope into a YAML
 // fragment for values.yaml, in a form that helmfile reads at deploy time
 // to emit per-client prune args.
-func appendArchiveScopeYAML(b *strings.Builder, scope ArchiveScope) {
+func appendArchiveScopeYAML(b *strings.Builder, network, mode, executionClient string, scope ArchiveScope) {
+	profile := resolveEthereumStorageProfile(network, mode, executionClient, scope)
+
 	b.WriteString("\n# Pruning scope, resolved by `obol network install` from --mode/--since.\n")
 	b.WriteString("# Edit via the CLI flags rather than this file; helmfile reads these\n")
 	b.WriteString("# verbatim and emits client-specific prune args at deploy time.\n")
@@ -233,4 +235,9 @@ func appendArchiveScopeYAML(b *strings.Builder, scope ArchiveScope) {
 	case "distance":
 		fmt.Fprintf(b, "pruneKind: \"distance\"\npruneBlock: 0\npruneDistance: %d\n", scope.Distance)
 	}
+
+	b.WriteString("\n# Storage profile derived from the resolved archive scope.\n")
+	fmt.Fprintf(b, "executionStorageSize: %s\n", profile.ExecutionSize)
+	fmt.Fprintf(b, "consensusStorageSize: %s\n", profile.ConsensusSize)
+	fmt.Fprintf(b, "diskRequirementGB: %d\n", profile.DiskRequirementGB)
 }

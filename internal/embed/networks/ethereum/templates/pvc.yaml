@@ -1,30 +1,30 @@
 {{- if eq .Release.Name "ethereum-pvcs" }}
 {{- /*
-  PVC sizing is a function of (network, mode). Sizes are estimates with
-  ~30% headroom for chain growth. local-path storage does not pre-allocate,
-  so these requests primarily document intent and serve as soft caps when
-  a sized storage class is swapped in later.
+  PVC sizing is resolved by the CLI and written into values.yaml so partial
+  archive scopes get smaller requests than full genesis archives. The fallback
+  keeps older generated values usable.
 */ -}}
 {{- $mode := default "full" .Values.mode -}}
 {{- $isArchive := eq $mode "archive" -}}
-{{- $execSize := "500Gi" -}}
-{{- $consensusSize := "200Gi" -}}
-{{- if eq .Values.network "mainnet" -}}
-  {{- if $isArchive -}}
-    {{- $execSize = "4500Gi" -}}
-    {{- $consensusSize = "500Gi" -}}
+{{- $execSize := index .Values "executionStorageSize" | default "" -}}
+{{- $consensusSize := index .Values "consensusStorageSize" | default "" -}}
+{{- if or (eq $execSize "") (eq $consensusSize "") -}}
+  {{- $execSize = "500Gi" -}}
+  {{- $consensusSize = "200Gi" -}}
+  {{- if eq .Values.network "mainnet" -}}
+    {{- if $isArchive -}}
+      {{- $execSize = "4500Gi" -}}
+      {{- $consensusSize = "500Gi" -}}
+    {{- end -}}
   {{- else -}}
-    {{- $execSize = "500Gi" -}}
-    {{- $consensusSize = "200Gi" -}}
-  {{- end -}}
-{{- else -}}
-  {{- /* sepolia, hoodi and other testnets */ -}}
-  {{- if $isArchive -}}
-    {{- $execSize = "300Gi" -}}
-    {{- $consensusSize = "100Gi" -}}
-  {{- else -}}
-    {{- $execSize = "100Gi" -}}
-    {{- $consensusSize = "50Gi" -}}
+    {{- /* sepolia, hoodi and other testnets */ -}}
+    {{- if $isArchive -}}
+      {{- $execSize = "300Gi" -}}
+      {{- $consensusSize = "100Gi" -}}
+    {{- else -}}
+      {{- $execSize = "100Gi" -}}
+      {{- $consensusSize = "50Gi" -}}
+    {{- end -}}
   {{- end -}}
 {{- end -}}
 ---

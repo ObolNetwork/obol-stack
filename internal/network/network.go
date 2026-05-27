@@ -148,7 +148,8 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 		if modeValue == "" {
 			modeValue = "full"
 		}
-		if err := CheckNetworkDiskSpace(u, cfg.DataDir, netValue, modeValue); err != nil {
+		executionClient := templateData["ExecutionClient"]
+		if err := CheckNetworkDiskSpace(u, cfg.DataDir, netValue, modeValue, executionClient, archiveScope); err != nil {
 			return err
 		}
 	}
@@ -176,7 +177,7 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 	if network == "ethereum" {
 		var sb strings.Builder
 		sb.Write(buf.Bytes())
-		appendArchiveScopeYAML(&sb, archiveScope)
+		appendArchiveScopeYAML(&sb, templateData["Network"], templateData["Mode"], templateData["ExecutionClient"], archiveScope)
 		buf.Reset()
 		buf.WriteString(sb.String())
 	}

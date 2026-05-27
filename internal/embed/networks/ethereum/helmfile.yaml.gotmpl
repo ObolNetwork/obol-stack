@@ -16,6 +16,9 @@ releases:
         executionClient: '{{ .Values.executionClient }}'
         consensusClient: '{{ .Values.consensusClient }}'
         network: '{{ .Values.network }}'
+        mode: '{{ .Values.mode }}'
+        executionStorageSize: '{{ index .Values "executionStorageSize" | default "" }}'
+        consensusStorageSize: '{{ index .Values "consensusStorageSize" | default "" }}'
 
   # Ethereum node (execution and consensus clients)
   # Uses the external ethereum-helm-charts/ethereum-node umbrella chart
@@ -58,24 +61,23 @@ releases:
                     {{- end }}
                     {{- if ne .Values.mode "archive" }}
                     - --full
-                    {{- else if eq (.Values.pruneKind | default "") "before" }}
-                    # Partial archive: prune state history before block N.
-                    # Receipts/bodies are pruned to the same cutoff via the
-                    # pre-merge presets where applicable; otherwise reth
-                    # uses the same `before` value.
+                    {{- else if eq (index .Values "pruneKind" | default "") "before" }}
+                    # Partial archive: keep state, receipts and bodies from
+                    # the requested block forward. Reth v2.2.0 and current
+                    # main both support exact .before cutoffs for these
+                    # segments, so avoid the coarser pre-merge preset.
                     - --prune.account-history.before={{ .Values.pruneBlock }}
                     - --prune.storage-history.before={{ .Values.pruneBlock }}
-                    {{- if le (int .Values.pruneBlock) 15537394 }}
-                    - --prune.receipts.pre-merge
-                    - --prune.bodies.pre-merge
-                    {{- else }}
                     - --prune.receipts.before={{ .Values.pruneBlock }}
                     - --prune.bodies.before={{ .Values.pruneBlock }}
-                    {{- end }}
-                    {{- else if eq (.Values.pruneKind | default "") "distance" }}
-                    # Partial archive: keep last N blocks of history.
+                    {{- else if eq (index .Values "pruneKind" | default "") "distance" }}
+                    # Partial archive: keep last N blocks of state, receipts
+                    # and bodies. Reth interprets .distance as anchored to
+                    # the chain tip at run time.
                     - --prune.account-history.distance={{ .Values.pruneDistance }}
                     - --prune.storage-history.distance={{ .Values.pruneDistance }}
+                    - --prune.receipts.distance={{ .Values.pruneDistance }}
+                    - --prune.bodies.distance={{ .Values.pruneDistance }}
                     {{- end }}
           {{- end }}
 
@@ -105,7 +107,7 @@ releases:
             {{- end }}
           persistence:
             enabled: true
-            size: {{ if eq .Values.network "mainnet" }}{{ if eq .Values.mode "archive" }}4500Gi{{ else }}500Gi{{ end }}{{ else }}{{ if eq .Values.mode "archive" }}300Gi{{ else }}100Gi{{ end }}{{ end }}
+            size: {{ if (index .Values "executionStorageSize" | default "") }}{{ index .Values "executionStorageSize" }}{{ else }}{{ if eq .Values.network "mainnet" }}{{ if eq .Values.mode "archive" }}4500Gi{{ else }}500Gi{{ end }}{{ else }}{{ if eq .Values.mode "archive" }}300Gi{{ else }}100Gi{{ end }}{{ end }}{{ end }}
             existingClaim: execution-{{ .Values.executionClient }}-{{ .Values.network }}
 
       # Consensus client (pinned versions — Renovate-tracked)
@@ -131,7 +133,7 @@ releases:
             {{- end }}
           persistence:
             enabled: true
-            size: {{ if eq .Values.network "mainnet" }}{{ if eq .Values.mode "archive" }}500Gi{{ else }}200Gi{{ end }}{{ else }}{{ if eq .Values.mode "archive" }}100Gi{{ else }}50Gi{{ end }}{{ end }}
+            size: {{ if (index .Values "consensusStorageSize" | default "") }}{{ index .Values "consensusStorageSize" }}{{ else }}{{ if eq .Values.network "mainnet" }}{{ if eq .Values.mode "archive" }}500Gi{{ else }}200Gi{{ end }}{{ else }}{{ if eq .Values.mode "archive" }}100Gi{{ else }}50Gi{{ end }}{{ end }}{{ end }}
             existingClaim: consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
 
   # Metadata ConfigMap for frontend discovery
