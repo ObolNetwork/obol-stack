@@ -11,7 +11,12 @@ prometheus:
       matchLabels:
         release: monitoring
     podMonitorNamespaceSelector: {}
-    retention: 8d
+    # Time-based retention is still honored, but retentionSize is the hard
+    # cap that prevents the TSDB from filling the k3d node's writable layer
+    # overnight and triggering DiskPressure → cascading pod evictions.
+    # 2GB on emptyDir is plenty for a local single-node stack.
+    retention: 2d
+    retentionSize: 2GB
     resources:
       requests:
         cpu: 100m

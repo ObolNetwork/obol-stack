@@ -24,9 +24,20 @@ releases:
     namespace: ethereum-{{ .Values.id }}
     createNamespace: true
     chart: ethereum-helm-charts/ethereum-node
+    # renovate: datasource=helm depName=ethereum-node registryUrl=https://ethpandaops.github.io/ethereum-helm-charts
+    version: 0.2.14
     needs: [ethereum-pvcs]
     values:
       # Network and checkpoint sync configuration
+      #
+      # global.clientArgs.networks.<network>.execution.reth is the upstream
+      # umbrella chart's per-network reth args list. We APPEND to it rather
+      # than overriding reth.extraArgs directly, because reth.extraArgs in
+      # the umbrella chart is a templated string that looks up this very
+      # list — overriding it would silently drop the --chain=<testnet> arg
+      # that testnets depend on. Mainnet's upstream list is empty; testnets
+      # are ["--chain=<network>"]. We carry those over verbatim and add
+      # --full only when mode != archive.
       - global:
           main:
             network: '{{ .Values.network }}'
@@ -36,46 +47,91 @@ releases:
               mainnet: https://mainnet-checkpoint-sync.attestant.io
               sepolia: https://checkpoint-sync.sepolia.ethpandaops.io
               hoodi: https://checkpoint-sync.hoodi.ethpandaops.io
+          {{- if eq .Values.executionClient "reth" }}
+          clientArgs:
+            networks:
+              {{ .Values.network }}:
+                execution:
+                  reth:
+                    {{- if ne .Values.network "mainnet" }}
+                    - --chain={{ .Values.network }}
+                    {{- end }}
+                    {{- if ne .Values.mode "archive" }}
+                    - --full
+                    {{- else if eq (.Values.pruneKind | default "") "before" }}
+                    # Partial archive: prune state history before block N.
+                    # Receipts/bodies are pruned to the same cutoff via the
+                    # pre-merge presets where applicable; otherwise reth
+                    # uses the same `before` value.
+                    - --prune.account-history.before={{ .Values.pruneBlock }}
+                    - --prune.storage-history.before={{ .Values.pruneBlock }}
+                    {{- if le (int .Values.pruneBlock) 15537394 }}
+                    - --prune.receipts.pre-merge
+                    - --prune.bodies.pre-merge
+                    {{- else }}
+                    - --prune.receipts.before={{ .Values.pruneBlock }}
+                    - --prune.bodies.before={{ .Values.pruneBlock }}
+                    {{- end }}
+                    {{- else if eq (.Values.pruneKind | default "") "distance" }}
+                    # Partial archive: keep last N blocks of history.
+                    - --prune.account-history.distance={{ .Values.pruneDistance }}
+                    - --prune.storage-history.distance={{ .Values.pruneDistance }}
+                    {{- end }}
+          {{- end }}
 
-      # Execution client (pinned versions — update periodically)
+      # Execution client (pinned versions — Renovate-tracked)
+      # Reth defaults to archive (~4TB+ mainnet). The --mode flag controls
+      # whether we pass --full to prune historical state down to ~500GB,
+      # wired through global.clientArgs above (NOT reth.extraArgs — see
+      # comment above).
       - {{ .Values.executionClient }}:
           enabled: true
           image:
             {{- if eq .Values.executionClient "reth" }}
-            tag: v1.11.1
+            # renovate: datasource=github-releases depName=paradigmxyz/reth
+            tag: v2.2.0
             {{- else if eq .Values.executionClient "geth" }}
-            tag: v1.17.0
+            # renovate: datasource=github-releases depName=ethereum/go-ethereum
+            tag: v1.17.3
             {{- else if eq .Values.executionClient "nethermind" }}
-            tag: "1.36.0"
+            # renovate: datasource=github-releases depName=NethermindEth/nethermind
+            tag: "1.37.2"
             {{- else if eq .Values.executionClient "besu" }}
-            tag: "26.2.0"
+            # renovate: datasource=github-releases depName=hyperledger/besu
+            tag: "26.5.0"
             {{- else if eq .Values.executionClient "erigon" }}
-            tag: v3.3.8
+            # renovate: datasource=github-releases depName=erigontech/erigon
+            tag: v3.4.2
             {{- end }}
           persistence:
             enabled: true
-            size: 500Gi
+            size: {{ if eq .Values.network "mainnet" }}{{ if eq .Values.mode "archive" }}4500Gi{{ else }}500Gi{{ end }}{{ else }}{{ if eq .Values.mode "archive" }}300Gi{{ else }}100Gi{{ end }}{{ end }}
             existingClaim: execution-{{ .Values.executionClient }}-{{ .Values.network }}
 
-      # Consensus client (pinned versions — update periodically)
+      # Consensus client (pinned versions — Renovate-tracked)
       # The upstream chart wires --execution-endpoint and --network automatically.
       - {{ .Values.consensusClient }}:
           enabled: true
           image:
             {{- if eq .Values.consensusClient "lighthouse" }}
-            tag: v8.1.1
+            # renovate: datasource=github-releases depName=sigp/lighthouse
+            tag: v8.1.3
             {{- else if eq .Values.consensusClient "prysm" }}
-            tag: v7.1.2
+            # renovate: datasource=github-releases depName=OffchainLabs/prysm
+            tag: v7.1.4
             {{- else if eq .Values.consensusClient "teku" }}
-            tag: "26.2.0"
+            # renovate: datasource=github-releases depName=Consensys/teku
+            tag: "26.4.0"
             {{- else if eq .Values.consensusClient "nimbus" }}
-            tag: multiarch-v26.3.0
+            # renovate: datasource=docker depName=statusim/nimbus-eth2
+            tag: multiarch-v26.5.0
             {{- else if eq .Values.consensusClient "lodestar" }}
-            tag: v1.40.0
+            # renovate: datasource=github-releases depName=ChainSafe/lodestar
+            tag: v1.43.0
             {{- end }}
           persistence:
             enabled: true
-            size: 200Gi
+            size: {{ if eq .Values.network "mainnet" }}{{ if eq .Values.mode "archive" }}500Gi{{ else }}200Gi{{ end }}{{ else }}{{ if eq .Values.mode "archive" }}100Gi{{ else }}50Gi{{ end }}{{ end }}
             existingClaim: consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
 
   # Metadata ConfigMap for frontend discovery
