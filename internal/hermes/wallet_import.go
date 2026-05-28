@@ -33,6 +33,7 @@ var (
 	ensureVolumeWritableFn         = ensureVolumeWritable
 	fixRuntimeVolumeOwnershipFn    = fixRuntimeVolumeOwnership
 	applyWalletMetadataConfigMapFn = applyWalletMetadataConfigMap
+	k3dNodeExecOutputFn            = k3dNodeExecOutput
 )
 
 // ImportPrivateKeyWalletCmd imports an existing private key as the
