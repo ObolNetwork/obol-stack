@@ -781,7 +781,7 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                 - sh
                 - -ec
                 - |
-                  mkdir -p /data/.hermes/home /data/.hermes/workspace
+                  mkdir -p /data/.hermes/home /data/.hermes/workspace /data/.hermes/logs
                   if [ ! -x /opt/hermes/.venv/bin/hermes ]; then
                     echo "Hermes binary missing from image: /opt/hermes/.venv/bin/hermes" >&2
                     exit 1

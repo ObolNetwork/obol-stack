@@ -222,7 +222,7 @@ func buildAgentProfileInitContainer() map[string]any {
 		"image":           hermesImage(),
 		"imagePullPolicy": "IfNotPresent",
 		"command":         []any{"/bin/sh", "-ceu"},
-		"args": []any{`mkdir -p /data/.hermes/home /data/.hermes/workspace /data/.hermes/obol-skills
+		"args": []any{`mkdir -p /data/.hermes/home /data/.hermes/workspace /data/.hermes/logs /data/.hermes/obol-skills
 
 seed=/profile-seed/profile.tar.gz
 marker=/data/.hermes/.obol-profile-seed-imported

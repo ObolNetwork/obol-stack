@@ -213,6 +213,7 @@ func TestAgentManifests_ProfileSeedInitContainer(t *testing.T) {
 		"/profile-seed/profile.tar.gz",
 		".obol-profile-seed-imported",
 		"/data/.hermes/SOUL.md",
+		"/data/.hermes/logs",
 		"cp -R",
 	} {
 		if !strings.Contains(script, must) {
