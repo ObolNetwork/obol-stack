@@ -327,7 +327,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: controller
-          image: ghcr.io/obolnetwork/serviceoffer-controller:b13254e@sha256:f83bd7e55bdc5d87edb49c04e7fd9257097364e2d43e769c19dfd7c8b47d07af
+          image: ghcr.io/obolnetwork/serviceoffer-controller:f5d94fc@sha256:c6aa6259e3a6bc61a5f4f7203d8c68cfdd861a8d365f9629d234d13b949bf48e
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

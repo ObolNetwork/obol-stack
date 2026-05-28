@@ -781,7 +781,7 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                 - sh
                 - -ec
                 - |
-                  mkdir -p /data/.hermes/home /data/.hermes/workspace
+                  mkdir -p /data/.hermes/home /data/.hermes/workspace /data/.hermes/logs
                   if [ ! -x /opt/hermes/.venv/bin/hermes ]; then
                     echo "Hermes binary missing from image: /opt/hermes/.venv/bin/hermes" >&2
                     exit 1
@@ -1236,21 +1236,26 @@ func rankModels(models []string) (primary string, fallbacks []string) {
 }
 
 func k3dNodeExec(cfg *config.Config, hostPath, shellCmd string) error {
+	_, err := k3dNodeExecOutput(cfg, hostPath, shellCmd)
+	return err
+}
+
+func k3dNodeExecOutput(cfg *config.Config, hostPath, shellCmd string) ([]byte, error) {
 	stackID := ""
 	if data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, ".stack-id")); err == nil {
 		stackID = strings.TrimSpace(string(data))
 	}
 	if stackID == "" {
-		return fmt.Errorf("stack ID not found")
+		return nil, fmt.Errorf("stack ID not found")
 	}
 
 	container := fmt.Sprintf("k3d-obol-stack-%s-server-0", stackID)
 	relPath, err := filepath.Rel(cfg.DataDir, hostPath)
 	if err != nil {
-		return fmt.Errorf("cannot compute relative path from %s to %s: %w", cfg.DataDir, hostPath, err)
+		return nil, fmt.Errorf("cannot compute relative path from %s to %s: %w", cfg.DataDir, hostPath, err)
 	}
 	if strings.HasPrefix(relPath, "..") {
-		return fmt.Errorf("path %s is not under DataDir %s", hostPath, cfg.DataDir)
+		return nil, fmt.Errorf("path %s is not under DataDir %s", hostPath, cfg.DataDir)
 	}
 
 	nodePath := filepath.Join("/data", relPath)
@@ -1258,7 +1263,11 @@ func k3dNodeExec(cfg *config.Config, hostPath, shellCmd string) error {
 	expanded := strings.ReplaceAll(shellCmd, "{}", quoted)
 
 	cmd := exec.Command("docker", "exec", container, "sh", "-c", expanded)
-	return cmd.Run()
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("docker exec %s: %w: %s", container, err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
 }
 
 func ensureVolumeWritable(cfg *config.Config, hostPath string, u *ui.UI) {

@@ -216,6 +216,64 @@ obol network sync ethereum/demo
 
 This creates the `ethereum-demo` namespace with an execution client (reth) and a consensus client (lighthouse).
 
+### Full vs archive mode
+
+`obol network install ethereum` defaults to `--mode=full`, which prunes
+historical state and needs ~500 GB on mainnet (~100 GB on testnets). Pass
+`--mode=archive` if you need to replay state across history (block
+explorers, historical `eth_call`, indexers); archive nodes hold the full
+state trie and grow to ~4 TB+ on mainnet.
+
+```bash
+# Default: pruned full node
+obol network install ethereum --network=mainnet
+
+# Archive node for state replay (requires ~4-5 TB free)
+obol network install ethereum --network=mainnet --mode=archive
+```
+
+When `--mode` is omitted on a TTY, the installer prompts. The disk-space
+preflight warns when the data directory has less free disk than the
+chosen mode is likely to need.
+
+### Partial archive (`--since`)
+
+A full mainnet archive from genesis is ~4 TB+, but most archive use cases
+(indexers, recent-state replay) only need history back to a known point.
+`--since` keeps an archive bounded — reth gets the right `--prune.*`
+flags wired through the chart:
+
+```bash
+# Archive back to the merge (Sep 2022, ~1.5 TB)
+obol network install ethereum --network=mainnet --mode=archive --since=merge
+
+# Archive back to Cancun (Mar 2024, ~800 GB)
+obol network install ethereum --network=mainnet --mode=archive --since=cancun
+
+# Archive of the last 365 days (~600 GB)
+obol network install ethereum --network=mainnet --mode=archive --since=365d
+
+# Archive from a specific block forward
+obol network install ethereum --network=mainnet --mode=archive --since=22500000
+```
+
+Accepted `--since` values:
+
+| Form | Example | Meaning |
+|---|---|---|
+| EL fork name | `merge`, `shanghai`, `cancun`, `prague`, `osaka` | Prune state before that mainnet hardfork |
+| Duration | `365d`, `1y`, `6mo` | Keep last N blocks (~12s slot rate) |
+| Block number | `22500000` | Prune state before that block |
+| `genesis` / `all` | `genesis` | Full archive from genesis |
+
+When `--mode=archive` is set without `--since` on a TTY, the installer
+shows an interactive picker. On non-TTY (scripts, CI), the default is
+`all history`. `--since` is currently fine-tuned for **reth**; other
+execution clients fall back to their chart-default behavior with a warning.
+
+Fork-name presets reference mainnet block numbers — use a raw block
+number or a duration on testnets.
+
 Verify:
 
 ```bash
