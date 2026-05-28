@@ -35,6 +35,16 @@ func (c *Controller) resolveAgentOffer(ctx context.Context, offer *monetizeapi.S
 	if ref.Name == "" || ref.Namespace == "" {
 		return false, fmt.Errorf("type=agent offer %s/%s missing spec.agent.ref", offer.Namespace, offer.Name)
 	}
+	if ref.Namespace != offer.Namespace {
+		// Confused-deputy guard: the verifier route source injects the
+		// hermes-api-server API_SERVER_KEY from ref.Namespace into the
+		// outbound Authorization header. Allowing a cross-namespace ref
+		// would let any principal with serviceoffers write in namespace A
+		// expose Hermes /api in namespace B as an x402-gated route under
+		// attacker-controlled path and payTo, granting paying buyers
+		// authenticated proxy access to the victim agent.
+		return false, fmt.Errorf("type=agent offer %s/%s: spec.agent.ref.namespace %q must equal offer namespace", offer.Namespace, offer.Name, ref.Namespace)
+	}
 
 	raw, err := c.agents.Namespace(ref.Namespace).Get(ctx, ref.Name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {

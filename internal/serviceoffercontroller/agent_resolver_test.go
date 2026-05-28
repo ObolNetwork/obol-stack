@@ -30,6 +30,7 @@ func TestResolveAgentOffer_PopulatesFromReadyAgent(t *testing.T) {
 	c := newResolverTestController(t, agent)
 
 	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "agent-quant"},
 		Spec: monetizeapi.ServiceOfferSpec{
 			Type: "agent",
 			Agent: monetizeapi.ServiceOfferAgent{
@@ -83,6 +84,7 @@ func TestResolveAgentOffer_NotReadyAgentClearsResolution(t *testing.T) {
 	c := newResolverTestController(t, agent)
 
 	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "agent-quant"},
 		Spec: monetizeapi.ServiceOfferSpec{
 			Type: "agent",
 			Agent: monetizeapi.ServiceOfferAgent{
@@ -113,6 +115,7 @@ func TestResolveAgentOffer_MissingAgentReturnsNotReady(t *testing.T) {
 	c := newResolverTestController(t)
 
 	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "agent-missing"},
 		Spec: monetizeapi.ServiceOfferSpec{
 			Type: "agent",
 			Agent: monetizeapi.ServiceOfferAgent{
@@ -144,6 +147,52 @@ func TestResolveAgentOffer_RejectsMissingRef(t *testing.T) {
 
 	if _, err := c.resolveAgentOffer(context.Background(), offer, &status); err == nil {
 		t.Fatal("expected error for missing spec.agent.ref")
+	}
+}
+
+// TestResolveAgentOffer_RejectsCrossNamespaceRef guards the confused-deputy
+// invariant: an offer in namespace A must not be allowed to reference an agent
+// in namespace B, because the verifier route source injects ref.Namespace's
+// hermes-api-server API_SERVER_KEY as the upstream Authorization. Allowing a
+// cross-namespace ref would let any principal with serviceoffers write expose
+// another tenant's Hermes /api as an x402-gated route under attacker-controlled
+// path + payTo.
+func TestResolveAgentOffer_RejectsCrossNamespaceRef(t *testing.T) {
+	agent := &monetizeapi.Agent{
+		TypeMeta:   metav1.TypeMeta{APIVersion: "obol.org/v1alpha1", Kind: "Agent"},
+		ObjectMeta: metav1.ObjectMeta{Name: "victim", Namespace: "agent-victim"},
+		Status: monetizeapi.AgentStatus{
+			Phase:    monetizeapi.AgentPhaseReady,
+			Endpoint: "http://hermes.agent-victim.svc.cluster.local:8642",
+		},
+	}
+	c := newResolverTestController(t, agent)
+
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "spoof", Namespace: "attacker-ns"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "agent",
+			Agent: monetizeapi.ServiceOfferAgent{
+				Ref: monetizeapi.ServiceOfferAgentRef{Name: "victim", Namespace: "agent-victim"},
+			},
+		},
+	}
+	status := monetizeapi.ServiceOfferStatus{
+		AgentResolution: &monetizeapi.ServiceOfferAgentResolution{Model: "stale"},
+	}
+
+	ok, err := c.resolveAgentOffer(context.Background(), offer, &status)
+	if err == nil {
+		t.Fatal("expected error for cross-namespace spec.agent.ref")
+	}
+	if ok {
+		t.Fatal("expected ok=false for cross-namespace ref")
+	}
+	if status.AgentResolution == nil || status.AgentResolution.Model != "stale" {
+		// Guard fires before touching status: the caller is responsible for
+		// the failure-mode condition update, and we should not silently wipe
+		// a prior AgentResolution.
+		t.Errorf("guard must reject without mutating status.AgentResolution; got %+v", status.AgentResolution)
 	}
 }
 
