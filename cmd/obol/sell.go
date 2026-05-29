@@ -1588,7 +1588,11 @@ func waitForOfferReady(cfg *config.Config, u *ui.UI, name, ns string, timeout ti
 	}
 
 	var ready bool
-	_ = u.RunWithSpinner("Waiting for service to be Ready (up to 60s)", func() error {
+	timeoutLabel := fmt.Sprintf("%ds", int(timeout.Round(time.Second).Seconds()))
+	if timeout >= time.Minute && timeout%time.Minute == 0 {
+		timeoutLabel = fmt.Sprintf("%dm", int(timeout.Minutes()))
+	}
+	_ = u.RunWithSpinner("Waiting for service to be Ready (up to "+timeoutLabel+")", func() error {
 		for time.Now().Before(deadline) {
 			if check() {
 				ready = true
@@ -4168,4 +4172,3 @@ func manifestNSName(manifest map[string]any) (string, string) {
 	name, _ := md["name"].(string)
 	return ns, name
 }
-

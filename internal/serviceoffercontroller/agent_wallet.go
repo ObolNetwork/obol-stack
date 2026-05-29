@@ -49,7 +49,7 @@ func (c *Controller) ensureAgentWallet(ctx context.Context, agent *monetizeapi.A
 		return "", nil
 	}
 
-	address, err := c.ensureSignerKeystore(ctx, agent.Namespace)
+	address, err := c.ensureSignerKeystore(ctx, agent)
 	if err != nil {
 		return "", fmt.Errorf("ensure keystore: %w", err)
 	}
@@ -74,12 +74,13 @@ const signerKeystoreAddressAnnotation = "obol.org/wallet-address"
 // ensureSignerKeystore is the keystore-side half of ensureAgentWallet.
 // Either reads an existing keystore Secret's address annotation, or
 // mints a new keypair, encrypts to V3, and writes the Secret.
-func (c *Controller) ensureSignerKeystore(ctx context.Context, namespace string) (string, error) {
+func (c *Controller) ensureSignerKeystore(ctx context.Context, agent *monetizeapi.Agent) (string, error) {
+	namespace := agent.Namespace
 	existing, err := c.client.Resource(monetizeapi.SecretGVR).Namespace(namespace).Get(ctx, remoteSignerSecretName, metav1.GetOptions{})
 	if err == nil {
 		annotations := existing.GetAnnotations()
 		if addr := annotations[signerKeystoreAddressAnnotation]; addr != "" {
-			if err := c.ensureCanonicalKeystoreKey(ctx, namespace, existing); err != nil {
+			if err := c.ensureCanonicalKeystoreKeyAndLabels(ctx, agent, existing); err != nil {
 				return "", err
 			}
 			return addr, nil
@@ -100,47 +101,73 @@ func (c *Controller) ensureSignerKeystore(ctx context.Context, namespace string)
 	}
 
 	secret := buildSignerKeystoreSecret(namespace, mat)
+	ensureRemoteSignerSecretLabels(secret, agent.Name)
 	if err := c.applyAgentObject(ctx, c.client.Resource(monetizeapi.SecretGVR).Namespace(namespace), secret); err != nil {
 		return "", err
 	}
 	return mat.Address, nil
 }
 
-func (c *Controller) ensureCanonicalKeystoreKey(ctx context.Context, namespace string, secret *unstructured.Unstructured) error {
+func (c *Controller) ensureCanonicalKeystoreKeyAndLabels(ctx context.Context, agent *monetizeapi.Agent, secret *unstructured.Unstructured) error {
+	changed := ensureRemoteSignerSecretLabels(secret, agent.Name)
 	data, _, err := unstructured.NestedStringMap(secret.Object, "data")
 	if err != nil {
 		return fmt.Errorf("read %s data: %w", remoteSignerSecretName, err)
 	}
-	if data[remoteSignerKeystoreKey] != "" {
+	if data[remoteSignerKeystoreKey] == "" {
+		var candidateKey, candidateValue string
+		for key, value := range data {
+			if key == "password" || !strings.HasSuffix(key, ".json") || value == "" {
+				continue
+			}
+			if candidateKey != "" {
+				return fmt.Errorf("secret %s/%s has multiple legacy keystore JSON data keys (%q and %q); refusing to choose one", agent.Namespace, remoteSignerSecretName, candidateKey, key)
+			}
+			candidateKey = key
+			candidateValue = value
+		}
+		if candidateKey == "" {
+			return fmt.Errorf("secret %s/%s has wallet annotation but no keystore JSON data", agent.Namespace, remoteSignerSecretName)
+		}
+		data[remoteSignerKeystoreKey] = candidateValue
+		if err := unstructured.SetNestedStringMap(secret.Object, data, "data"); err != nil {
+			return fmt.Errorf("set canonical keystore key: %w", err)
+		}
+		changed = true
+	}
+	if !changed {
 		return nil
 	}
-
-	var candidateKey, candidateValue string
-	for key, value := range data {
-		if key == "password" || !strings.HasSuffix(key, ".json") || value == "" {
-			continue
-		}
-		if candidateKey != "" {
-			return fmt.Errorf("secret %s/%s has multiple legacy keystore JSON data keys (%q and %q); refusing to choose one", namespace, remoteSignerSecretName, candidateKey, key)
-		}
-		candidateKey = key
-		candidateValue = value
-	}
-	if candidateKey == "" {
-		return fmt.Errorf("secret %s/%s has wallet annotation but no keystore JSON data", namespace, remoteSignerSecretName)
-	}
-
-	data[remoteSignerKeystoreKey] = candidateValue
-	if err := unstructured.SetNestedStringMap(secret.Object, data, "data"); err != nil {
-		return fmt.Errorf("set canonical keystore key: %w", err)
-	}
-	_, err = c.client.Resource(monetizeapi.SecretGVR).Namespace(namespace).Update(ctx, secret, metav1.UpdateOptions{
+	_, err = c.client.Resource(monetizeapi.SecretGVR).Namespace(agent.Namespace).Update(ctx, secret, metav1.UpdateOptions{
 		FieldManager: controllerFieldManager,
 	})
 	if err != nil {
-		return fmt.Errorf("update %s/%s with canonical keystore key: %w", namespace, remoteSignerSecretName, err)
+		return fmt.Errorf("update %s/%s with canonical keystore metadata: %w", agent.Namespace, remoteSignerSecretName, err)
 	}
 	return nil
+}
+
+func ensureRemoteSignerSecretLabels(secret *unstructured.Unstructured, agentName string) bool {
+	labels := secret.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	changed := false
+	for key, value := range map[string]string{
+		"app.kubernetes.io/name":       remoteSignerName,
+		"app.kubernetes.io/managed-by": "serviceoffer-controller",
+		"app.kubernetes.io/instance":   agentName,
+		"obol.org/agent":               agentName,
+	} {
+		if labels[key] != value {
+			labels[key] = value
+			changed = true
+		}
+	}
+	if changed {
+		secret.SetLabels(labels)
+	}
+	return changed
 }
 
 func buildSignerKeystoreSecret(namespace string, mat *openclaw.KeystoreMaterial) *unstructured.Unstructured {

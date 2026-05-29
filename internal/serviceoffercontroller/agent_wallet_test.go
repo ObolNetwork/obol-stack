@@ -35,6 +35,10 @@ func TestEnsureAgentWallet_FreshKeystore(t *testing.T) {
 	if annotations[signerKeystoreAddressAnnotation] != address {
 		t.Errorf("address annotation = %q, want %q", annotations[signerKeystoreAddressAnnotation], address)
 	}
+	labels := secret.GetLabels()
+	if labels["app.kubernetes.io/instance"] != agent.Name || labels["obol.org/agent"] != agent.Name {
+		t.Errorf("agent ownership labels missing from remote-signer Secret: %+v", labels)
+	}
 	dataMap, _, _ := unstructured.NestedStringMap(secret.Object, "data")
 	pwd, ok := dataMap["password"]
 	if !ok || pwd == "" {
@@ -94,6 +98,10 @@ func TestEnsureAgentWallet_ReusesExistingKeystore(t *testing.T) {
 		t.Errorf("address = %q, want pre-seeded value", address)
 	}
 	secret := getRemoteSignerSecret(t, c, "agent-quant")
+	labels := secret.GetLabels()
+	if labels["app.kubernetes.io/instance"] != agent.Name || labels["obol.org/agent"] != agent.Name {
+		t.Errorf("existing remote-signer Secret was not labeled for safe teardown: %+v", labels)
+	}
 	dataMap := remoteSignerSecretData(t, secret)
 	wantData := remoteSignerSecretData(t, preSeeded)
 	if dataMap[remoteSignerKeystoreKey] != wantData[remoteSignerKeystoreKey] {

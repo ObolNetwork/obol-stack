@@ -140,21 +140,30 @@ rules:
     resources: ["namespaces"]
     verbs: ["get", "list", "watch", "create"]
   # Per-agent runtime resources written by the Agent reconciler.
-  # ServiceAccount + PVC are namespace-scoped child resources; secrets
-  # are limited to creating the agent's API-server token (random) and
-  # reading litellm-secrets for the master key. Reading all secrets
-  # cluster-wide is intentionally not granted; the agent reconciler only
-  # needs read access on litellm-secrets, but the dynamic client makes
-  # narrowing harder than it's worth for v1.
+  # `create` cannot be safely resourceName-scoped in Kubernetes RBAC,
+  # but follow-up reads/updates/deletes are limited to the fixed child
+  # object names the controller owns.
   - apiGroups: [""]
     resources: ["serviceaccounts"]
-    verbs: ["get", "create", "update", "patch"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    resourceNames: ["hermes"]
+    verbs: ["get", "update", "delete"]
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "create", "update", "patch"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    resourceNames: ["hermes-data"]
+    verbs: ["get", "delete"]
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "create", "update", "patch"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["hermes-api-server", "remote-signer-keystore"]
+    verbs: ["get", "update", "delete"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list"]

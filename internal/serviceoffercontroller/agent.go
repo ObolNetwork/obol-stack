@@ -41,6 +41,8 @@ const (
 	agentFinalizer = "agents.obol.org/finalizer"
 )
 
+var agentReadinessRequeueDelay = 5 * time.Second
+
 func (c *Controller) enqueueAgent(obj any) {
 	key, err := cache.DeletionHandlingMetaNamespaceKeyFunc(obj)
 	if err != nil {
@@ -227,9 +229,21 @@ func (c *Controller) reconcileAgent(ctx context.Context, key string) error {
 		setAgentCondition(&status, agentConditionProvisioned, "False", "WaitingForDeployment", "Hermes deployment has no ready replicas yet")
 		setAgentCondition(&status, agentConditionReady, "False", "WaitingForDeployment", "Hermes deployment has no ready replicas yet")
 		status.Phase = monetizeapi.AgentPhaseProvisioning
+		if err := c.updateAgentStatus(ctx, raw, status); err != nil {
+			return err
+		}
+		c.requeueAgentAfter(key, agentReadinessRequeueDelay)
+		return nil
 	}
 
 	return c.updateAgentStatus(ctx, raw, status)
+}
+
+func (c *Controller) requeueAgentAfter(key string, delay time.Duration) {
+	if c.agentQueue == nil {
+		return
+	}
+	c.agentQueue.AddAfter(key, delay)
 }
 
 // validateAgentSpec returns ok=false with a short reason+message when the
@@ -387,8 +401,8 @@ func (c *Controller) tearDownAgent(ctx context.Context, agent *monetizeapi.Agent
 		{"ServiceAccount/hermes", dynNs(c.client.Resource(monetizeapi.ServiceAccountGVR)), hermesServiceName},
 	}
 	for _, s := range steps {
-		if err := s.resource.Delete(ctx, s.name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("delete %s: %w", s.label, err)
+		if err := c.deleteAgentChild(ctx, agent, s.label, s.resource, s.name); err != nil {
+			return err
 		}
 	}
 
@@ -398,6 +412,32 @@ func (c *Controller) tearDownAgent(ctx context.Context, agent *monetizeapi.Agent
 	// it — unlikely under our current naming, but cheap to be careful.
 	_ = victim{} // keep the local type referenced; future kinds slot in here
 	return nil
+}
+
+func (c *Controller) deleteAgentChild(ctx context.Context, agent *monetizeapi.Agent, label string, resource dynamic.ResourceInterface, name string) error {
+	child, err := resource.Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("get %s before delete: %w", label, err)
+	}
+	if !agentOwnsChild(agent, child) {
+		log.Printf("serviceoffer-controller: skip deleting %s for Agent %s/%s: child lacks matching controller ownership labels", label, agent.Namespace, agent.Name)
+		return nil
+	}
+	if err := resource.Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete %s: %w", label, err)
+	}
+	return nil
+}
+
+func agentOwnsChild(agent *monetizeapi.Agent, child *unstructured.Unstructured) bool {
+	labels := child.GetLabels()
+	if labels["app.kubernetes.io/managed-by"] != "serviceoffer-controller" {
+		return false
+	}
+	return labels["obol.org/agent"] == agent.Name || labels["app.kubernetes.io/instance"] == agent.Name
 }
 
 // applyAgentObject is a get-or-create-or-update wrapper used for agent
