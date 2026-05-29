@@ -151,6 +151,10 @@ export interface AgentRegistrationService {
   name: string;
   endpoint?: string;
   version?: string;
+  skills?: string[];
+  domains?: string[];
+  available?: boolean;
+  drainEndsAt?: string;
 }
 
 export interface AgentRegistrationDoc {

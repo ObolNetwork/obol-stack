@@ -16,6 +16,10 @@ import {
   agentRegistrationExplorerUrl,
   agentRegistrationLabel,
 } from '@/lib/services/agent-registration';
+import {
+  hasCapabilityTaxonomy,
+  serviceAvailabilityLabel,
+} from '@/lib/services/agent-registration-capabilities';
 
 const Body = styled(Box, {
   display: 'flex',
@@ -142,6 +146,12 @@ export function AgentRegistrationCard() {
   const registrationEntries = registration?.registrations ?? [];
   const topLevelMetadata = metadataEntries(registration?.metadata);
   const provenanceEntries = metadataEntries(registration?.provenance);
+  const capabilityServices =
+    registration?.services?.filter(hasCapabilityTaxonomy) ?? [];
+  const endpointServices =
+    registration?.services?.filter(
+      (s: AgentRegistrationService) => s.endpoint
+    ) ?? [];
 
   const headerContent = <SectionTitle>Agent Registration</SectionTitle>;
 
@@ -241,24 +251,70 @@ export function AgentRegistrationCard() {
                 </DetailBlock>
               )}
 
-              {registration.services?.length > 0 && (
+              {capabilityServices.length > 0 && (
+                <DetailBlock>
+                  <Flex
+                    css={{ alignItems: 'center', gap: '$xs', flexWrap: 'wrap' }}
+                  >
+                    <DetailTitle>Capabilities</DetailTitle>
+                    {capabilityServices.map((service, index) => {
+                      const label = serviceAvailabilityLabel(service);
+                      return label ? (
+                        <Badge
+                          key={`${service.name}-${service.version ?? index}`}
+                          variant="yellow"
+                        >
+                          {label}
+                        </Badge>
+                      ) : null;
+                    })}
+                  </Flex>
+                  {capabilityServices.map((service, index) => (
+                    <Box key={`${service.name}-${service.version ?? index}`}>
+                      {service.version && (
+                        <Text css={{ fontSize: '$1', color: '$muted' }}>
+                          OASF v{service.version}
+                        </Text>
+                      )}
+                      {(service.skills?.length ?? 0) > 0 && (
+                        <ChipRow css={{ marginTop: '$xxs' }}>
+                          {service.skills!.map(skill => (
+                            <MetaChip key={`skill-${skill}`}>
+                              skill:{skill}
+                            </MetaChip>
+                          ))}
+                        </ChipRow>
+                      )}
+                      {(service.domains?.length ?? 0) > 0 && (
+                        <ChipRow css={{ marginTop: '$xxs' }}>
+                          {service.domains!.map(domain => (
+                            <MetaChip key={`domain-${domain}`}>
+                              domain:{domain}
+                            </MetaChip>
+                          ))}
+                        </ChipRow>
+                      )}
+                    </Box>
+                  ))}
+                </DetailBlock>
+              )}
+
+              {endpointServices.length > 0 && (
                 <Box>
-                  {registration.services
-                    .filter((s: AgentRegistrationService) => s.endpoint)
-                    .map((s: AgentRegistrationService) => (
-                      <ServiceRow key={s.name} css={{ marginTop: '$xxs' }}>
-                        <ServiceLabel>{s.name}</ServiceLabel>
-                        <EndpointLink href={s.endpoint!} target="_blank">
-                          {s.endpoint}
-                          <OpenInNew size="sm" />
-                        </EndpointLink>
-                        {s.version && (
-                          <Text css={{ fontSize: '$1', color: '$muted' }}>
-                            v{s.version}
-                          </Text>
-                        )}
-                      </ServiceRow>
-                    ))}
+                  {endpointServices.map((s: AgentRegistrationService) => (
+                    <ServiceRow key={s.name} css={{ marginTop: '$xxs' }}>
+                      <ServiceLabel>{s.name}</ServiceLabel>
+                      <EndpointLink href={s.endpoint!} target="_blank">
+                        {s.endpoint}
+                        <OpenInNew size="sm" />
+                      </EndpointLink>
+                      {s.version && (
+                        <Text css={{ fontSize: '$1', color: '$muted' }}>
+                          v{s.version}
+                        </Text>
+                      )}
+                    </ServiceRow>
+                  ))}
                 </Box>
               )}
 
