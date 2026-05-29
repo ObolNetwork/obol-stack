@@ -14,6 +14,11 @@ import { StatusPill } from '../../atoms/StatusIndicator';
 import { CopyButton } from '../../atoms/CopyButton/CopyButton';
 import { StopDrainModal } from '../StopDrainModal';
 import { serviceOfferResourcePath } from '@/lib/services/sell-actions';
+import {
+  serviceOfferAssetSymbol,
+  serviceOfferUsdcEquivalent,
+} from '@/lib/services/service-offer-display';
+import { useTokenPrices } from '@/hooks/useTokenPrices';
 import type {
   ServiceOffer,
   ServiceOfferAgentLink,
@@ -347,7 +352,11 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
   const [actionError, setActionError] = useState<string | null>(null);
   const displayName = offer.registration?.name || offer.name;
   const price = formatPrice(offer);
-  const symbol = offer.payment?.asset?.symbol || 'token';
+  const symbol = serviceOfferAssetSymbol(offer.payment);
+  const { obolPrice } = useTokenPrices();
+  const usdcEquivalent = price
+    ? serviceOfferUsdcEquivalent(price.count, symbol, obolPrice)
+    : null;
   const network = offer.caip2Network || offer.payment?.network;
   const transferMethod = offer.payment?.asset?.transferMethod;
   // type=agent leaves spec.model and registration.skills empty by design;
@@ -471,6 +480,11 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
           <InfoLabel>Price:</InfoLabel>
           <PriceValue>
             {price.count} {symbol} / {price.unit}
+            {usdcEquivalent && (
+              <span style={{ marginLeft: '4px', color: 'inherit' }}>
+                (~ {usdcEquivalent} USDC / {price.unit})
+              </span>
+            )}
             {network && (
               <span style={{ marginLeft: '4px', color: 'inherit' }}>
                 on {network}
