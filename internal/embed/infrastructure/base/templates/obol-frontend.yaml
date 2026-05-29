@@ -62,8 +62,9 @@ spec:
 #
 # The frontend is local-only behind the obol.stack hostname restriction
 # (the operator owns the cluster), so this is a single trust boundary.
-# Defense-in-depth note: the `secrets` rule is intentionally omitted — no
-# frontend code path reads them and the SA token should not have that reach.
+# Defense-in-depth note: the discovery ClusterRole intentionally omits
+# `secrets`. The default Hermes chat token read is isolated to the namespaced
+# Role below so the frontend cannot enumerate or mutate Secrets.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -103,6 +104,41 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: obol-frontend-openclaw-discovery
+subjects:
+  - kind: ServiceAccount
+    name: obol-frontend
+    namespace: obol-frontend
+
+---
+# Server-side chat in the local frontend reads the default Hermes API server
+# token from Kubernetes, then calls the private in-cluster Hermes service.
+# Keep this namespaced and resourceName-scoped; do not grant Secret access via
+# the frontend discovery ClusterRole.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: obol-frontend-hermes-token-reader
+  namespace: hermes-obol-agent
+  labels:
+    app.kubernetes.io/name: obol-frontend
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["hermes-api-server"]
+    verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: obol-frontend-hermes-token-reader
+  namespace: hermes-obol-agent
+  labels:
+    app.kubernetes.io/name: obol-frontend
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: obol-frontend-hermes-token-reader
 subjects:
   - kind: ServiceAccount
     name: obol-frontend
