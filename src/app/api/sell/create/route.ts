@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { SellClient } from '@/lib/services/sell';
 import { rejectCrossOrigin } from '@/lib/middleware/origin-check';
+import {
+  normalizeSellToken,
+  resolveSellAsset,
+} from '@/lib/services/sell-assets';
+import type { ServiceOfferType } from '@/types/sell';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,8 +39,10 @@ export async function POST(request: NextRequest) {
     const {
       name,
       namespace,
+      type,
       wallet,
       chain,
+      token,
       pricePerRequest,
       upstream,
       port,
@@ -63,11 +70,21 @@ export async function POST(request: NextRequest) {
     }
 
     const client = new SellClient();
+    const serviceType = normalizeServiceOfferType(type);
+    const paymentToken = normalizeSellToken(token);
+    const { asset, error } = resolveSellAsset(chain, paymentToken);
+    if (error) {
+      return NextResponse.json({ error }, { status: 400 });
+    }
+
     await client.createServiceOffer({
       name,
       namespace: targetNamespace,
+      type: serviceType,
       wallet,
       chain,
+      token: paymentToken,
+      asset,
       pricePerRequest,
       upstream: upstream || 'litellm',
       port: port || 4000,
@@ -97,4 +114,10 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+function normalizeServiceOfferType(value: unknown): ServiceOfferType {
+  return value === 'inference' || value === 'agent' || value === 'fine-tuning'
+    ? value
+    : 'http';
 }

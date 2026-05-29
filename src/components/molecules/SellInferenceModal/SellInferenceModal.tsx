@@ -12,6 +12,7 @@ import {
 import { SectionTitle } from '../../atoms/SectionTitle';
 import { ChainSelector } from '../../atoms/ChainSelector';
 import { useSellInferenceModal } from './useSellInferenceModal';
+import type { SellPaymentToken } from '@/lib/services/sell-assets';
 
 interface SellInferenceModalProps {
   trigger: React.ReactNode;
@@ -43,6 +44,26 @@ const FieldLabel = styled(Text, {
 const InlineFields = styled(Flex, {
   gap: '$sm',
   '& > *': { flex: 1 },
+});
+
+const TokenToggle = styled('button', {
+  borderRadius: '$pill',
+  border: '1px solid $stroke',
+  background: '$bg03',
+  color: '$body',
+  fontSize: '$1',
+  fontWeight: '$medium',
+  padding: '$xxxs $sm',
+  cursor: 'pointer',
+  variants: {
+    active: {
+      true: {
+        background: 'rgba(47, 228, 171, 0.1)',
+        borderColor: 'rgba(47, 228, 171, 0.35)',
+        color: '$obolGreen',
+      },
+    },
+  },
 });
 
 const ModalFooter = styled(Flex, {
@@ -92,6 +113,7 @@ export function SellInferenceModal({
     errorMsg,
     nameValue,
     chainValue,
+    tokenValue,
     isValid,
     register,
     setValue,
@@ -171,7 +193,7 @@ export function SellInferenceModal({
           <ModalBody>
             <Text css={{ fontSize: '$2', color: '$body', lineHeight: 1.5 }}>
               Expose a service behind an x402 payment gate. Buyers pay
-              per-request in USDC.
+              per-request in the selected token.
             </Text>
 
             <FieldGroup>
@@ -184,7 +206,7 @@ export function SellInferenceModal({
             </FieldGroup>
 
             <FieldGroup>
-              <FieldLabel>USDC Wallet Address</FieldLabel>
+              <FieldLabel>Payment Wallet Address</FieldLabel>
               <TextField
                 placeholder="0x..."
                 {...register('wallet', {
@@ -196,14 +218,34 @@ export function SellInferenceModal({
 
             <InlineFields>
               <FieldGroup>
+                <FieldLabel>Token</FieldLabel>
+                <Flex css={{ gap: '$xs' }}>
+                  {(['USDC', 'OBOL'] as SellPaymentToken[]).map(token => (
+                    <TokenToggle
+                      key={token}
+                      type="button"
+                      active={tokenValue === token}
+                      onClick={() =>
+                        setValue('token', token, { shouldValidate: true })
+                      }
+                    >
+                      {token}
+                    </TokenToggle>
+                  ))}
+                </Flex>
+              </FieldGroup>
+              <FieldGroup>
                 <FieldLabel>Chain</FieldLabel>
                 <ChainSelector
                   value={chainValue}
                   onChange={v => v && setValue('chain', v)}
                 />
               </FieldGroup>
+            </InlineFields>
+
+            <InlineFields>
               <FieldGroup>
-                <FieldLabel>Price / Request (USDC)</FieldLabel>
+                <FieldLabel>Price / Request ({tokenValue})</FieldLabel>
                 <TextField
                   type="number"
                   step="0.0001"

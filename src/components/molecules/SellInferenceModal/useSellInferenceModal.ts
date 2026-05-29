@@ -1,11 +1,13 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { ChainName } from '@/types/dashboard';
+import type { SellPaymentToken } from '@/lib/services/sell-assets';
 
 export type FormState = {
   name: string;
   wallet: string;
   chain: ChainName;
+  token: SellPaymentToken;
   price: string;
   upstream: string;
   port: string;
@@ -17,6 +19,7 @@ const INITIAL_FORM: FormState = {
   name: '',
   wallet: '',
   chain: 'base',
+  token: 'USDC',
   price: '0.001',
   upstream: 'litellm',
   port: '4000',
@@ -41,6 +44,13 @@ export function useSellInferenceModal(defaultWallet?: string) {
 
   const nameValue = watch('name');
   const chainValue = watch('chain');
+  const tokenValue = watch('token');
+
+  useEffect(() => {
+    if (tokenValue === 'OBOL' && chainValue !== 'mainnet') {
+      setValue('chain', 'mainnet', { shouldValidate: true });
+    }
+  }, [chainValue, setValue, tokenValue]);
 
   const onSubmit = useCallback(async (data: FormState) => {
     setSubmitState('submitting');
@@ -53,8 +63,10 @@ export function useSellInferenceModal(defaultWallet?: string) {
         body: JSON.stringify({
           name: data.name,
           namespace: 'llm',
+          type: 'inference',
           wallet: data.wallet,
           chain: data.chain,
+          token: data.token,
           pricePerRequest: data.price,
           upstream: data.upstream,
           port: parseInt(data.port, 10) || 4000,
@@ -90,6 +102,7 @@ export function useSellInferenceModal(defaultWallet?: string) {
     errorMsg,
     nameValue,
     chainValue,
+    tokenValue,
     isValid,
     register,
     setValue,

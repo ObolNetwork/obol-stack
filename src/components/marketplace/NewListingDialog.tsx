@@ -628,8 +628,10 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
         body: JSON.stringify({
           name,
           namespace: 'llm',
+          type: type === 'inference' ? 'inference' : 'http',
           wallet: address,
           chain,
+          token: priceToken,
           pricePerRequest: priceAmount,
           upstream: type === 'inference' ? 'litellm' : upstream.split(':')[0],
           port:

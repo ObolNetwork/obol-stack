@@ -13,6 +13,7 @@ export interface ChainSelectorProps {
 const CHAINS: { value: ChainName; label: string }[] = [
   { value: 'base-sepolia', label: 'Base Sepolia' },
   { value: 'base', label: 'Base Mainnet' },
+  { value: 'mainnet', label: 'Ethereum' },
 ];
 
 const Container = styled('div', {

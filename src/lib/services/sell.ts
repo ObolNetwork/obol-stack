@@ -19,6 +19,7 @@ import type {
   ServiceOfferType,
 } from '@/types/sell';
 import { sharedKubeConfig } from '@/lib/services/kube';
+import { buildServiceOfferBody } from './sell-create';
 
 const CRD_GROUP = 'obol.org';
 const CRD_VERSION = 'v1alpha1';
@@ -38,32 +39,7 @@ export class SellClient {
    * Create a ServiceOffer CR in the target namespace.
    */
   async createServiceOffer(req: CreateServiceOfferRequest): Promise<void> {
-    const body = {
-      apiVersion: `${CRD_GROUP}/${CRD_VERSION}`,
-      kind: 'ServiceOffer',
-      metadata: {
-        name: req.name,
-        namespace: req.namespace,
-      },
-      spec: {
-        type: 'http',
-        upstream: {
-          service: req.upstream,
-          namespace: req.namespace,
-          port: req.port,
-          healthPath: req.healthPath || '/health',
-        },
-        payment: {
-          scheme: 'exact',
-          network: req.chain,
-          payTo: req.wallet,
-          maxTimeoutSeconds: 300,
-          price: {
-            perRequest: req.pricePerRequest,
-          },
-        },
-      },
-    };
+    const body = buildServiceOfferBody(req);
 
     await this.customApi.createNamespacedCustomObject({
       group: CRD_GROUP,
@@ -310,6 +286,18 @@ function normalizePayment(value: unknown) {
               typeof asset.decimals === 'number' ? asset.decimals : undefined,
             address:
               typeof asset.address === 'string' ? asset.address : undefined,
+            transferMethod:
+              typeof asset.transferMethod === 'string'
+                ? asset.transferMethod
+                : undefined,
+            eip712Name:
+              typeof asset.eip712Name === 'string'
+                ? asset.eip712Name
+                : undefined,
+            eip712Version:
+              typeof asset.eip712Version === 'string'
+                ? asset.eip712Version
+                : undefined,
           }
         : undefined,
     price: {

@@ -10,6 +10,8 @@ export interface ServiceOfferAsset {
   decimals?: number;
   address?: string;
   transferMethod?: string;
+  eip712Name?: string;
+  eip712Version?: string;
   eip712Domain?: {
     name?: string;
     version?: string;
@@ -119,8 +121,11 @@ export interface ServiceOfferCondition {
 export interface CreateServiceOfferRequest {
   name: string;
   namespace: string;
+  type?: ServiceOfferType;
   wallet: string;
   chain: string;
+  token?: string;
+  asset?: ServiceOfferAsset;
   pricePerRequest: string;
   upstream: string;
   port: number;
