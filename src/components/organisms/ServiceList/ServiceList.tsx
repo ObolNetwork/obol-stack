@@ -61,7 +61,7 @@ function partitionOffers(offers: ServiceOffer[]) {
 }
 
 export function ServiceList() {
-  const { offers, loading, error } = useServiceOffers();
+  const { offers, loading, error, refetch } = useServiceOffers();
   const { tunnelURL } = useTunnelURL();
   const { agentOffers, httpOffers } = partitionOffers(offers);
 
@@ -107,6 +107,7 @@ export function ServiceList() {
                       key={`${offer.namespace}/${offer.name}`}
                       offer={offer}
                       tunnelURL={tunnelURL}
+                      onChanged={refetch}
                     />
                   ))
                 )}
@@ -128,6 +129,7 @@ export function ServiceList() {
                       key={`${offer.namespace}/${offer.name}`}
                       offer={offer}
                       tunnelURL={tunnelURL}
+                      onChanged={refetch}
                     />
                   ))
                 )}
