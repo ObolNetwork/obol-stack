@@ -81,8 +81,30 @@ function jsonResponse(body: unknown, status: number): NextResponse {
 export function rejectCrossOrigin(
   request: NextRequest | Request
 ): NextResponse | null {
+  return rejectCrossOriginWithMode(request, false);
+}
+
+/**
+ * Like rejectCrossOrigin, but for GET/HEAD routes that return credentials or
+ * other sensitive bearer material. Those routes are reads, but not public
+ * reads, so they must prove they came from the local obol.stack frontend
+ * before any secret is loaded from Kubernetes.
+ */
+export function rejectCrossOriginCredentialRead(
+  request: NextRequest | Request
+): NextResponse | null {
+  return rejectCrossOriginWithMode(request, true);
+}
+
+function rejectCrossOriginWithMode(
+  request: NextRequest | Request,
+  protectReadMethods: boolean
+): NextResponse | null {
   const method = request.method.toUpperCase();
-  if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') {
+  if (
+    method === 'OPTIONS' ||
+    (!protectReadMethods && (method === 'GET' || method === 'HEAD'))
+  ) {
     return null;
   }
   const origin = request.headers.get('origin');

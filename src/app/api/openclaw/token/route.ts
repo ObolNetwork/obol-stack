@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { rejectCrossOriginCredentialRead } from '@/lib/middleware/origin-check';
 import { OpenClawClient } from '@/lib/services/openclaw';
 
 /**
@@ -7,6 +8,9 @@ import { OpenClawClient } from '@/lib/services/openclaw';
  * This must never be embedded in dashboard URLs.
  */
 export async function GET(request: NextRequest) {
+  const csrfReject = rejectCrossOriginCredentialRead(request);
+  if (csrfReject) return csrfReject;
+
   const id = request.nextUrl.searchParams.get('id');
 
   if (!id) {
