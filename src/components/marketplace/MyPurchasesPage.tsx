@@ -6,6 +6,7 @@ import { useAccount } from 'wagmi';
 
 import { ChainIcon } from '@/components/atoms/ChainIcon';
 import { CopyButton } from '@/components/atoms/CopyButton';
+import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
 import { Identicon } from './Identicon';
 import { ServicesSubNav } from './ServicesSubNav';
 import { NewListingDialog } from './NewListingDialog';
@@ -193,9 +194,8 @@ function WalletStrip({
                 <Mono
                   css={{ fontSize: '$3', color: empty ? '$muted' : '$body' }}
                 >
-                  {obol}
+                  <ObolAmountSwitch amount={obol} symbol="OBOL" />
                 </Mono>
-                <Text css={{ fontSize: '$1', color: '$muted' }}>OBOL</Text>
               </Flex>
             </StripCell>
           );
@@ -569,6 +569,8 @@ function PurchaseRow({
   const fillPct = total > 0 ? Math.min(100, (remaining / total) * 100) : 0;
   const threshold = p.spec.autoRefill?.threshold ?? 0;
   const low = total > 0 && remaining > 0 && remaining <= threshold;
+  const assetSymbol =
+    p.spec.payment.assetSymbol ?? p.spec.payment.asset.slice(0, 6);
 
   return (
     <RowCard stuck={stuck}>
@@ -622,11 +624,12 @@ function PurchaseRow({
           <Mono
             css={{ color: '$light', fontSize: '$2', fontWeight: '$semibold' }}
           >
-            {p.spec.payment.price}
-          </Mono>{' '}
-          <Text css={{ color: '$body', fontSize: '$1', display: 'inline' }}>
-            {p.spec.payment.assetSymbol ?? p.spec.payment.asset.slice(0, 6)}
-          </Text>
+            <ObolAmountSwitch
+              amount={p.spec.payment.price}
+              symbol={assetSymbol}
+              align="right"
+            />
+          </Mono>
         </Box>
 
         <Box>

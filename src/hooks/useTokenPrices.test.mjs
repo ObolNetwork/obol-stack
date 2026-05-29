@@ -4,7 +4,10 @@ import { afterEach, describe, it } from 'node:test';
 import { COINGECKO_IDS } from '../lib/constants/tokens.ts';
 import {
   fetchTokenPrices,
+  formatUsdcAmount,
+  isObolSymbol,
   normalizeTokenPrices,
+  obolAmountToUsdc,
   TOKEN_PRICE_REFRESH_MS,
 } from './useTokenPrices.ts';
 
@@ -17,6 +20,50 @@ afterEach(() => {
 describe('TOKEN_PRICE_REFRESH_MS', () => {
   it('refreshes token prices every five minutes', () => {
     assert.equal(TOKEN_PRICE_REFRESH_MS, 5 * 60 * 1000);
+  });
+});
+
+describe('isObolSymbol', () => {
+  it('matches OBOL case-insensitively', () => {
+    assert.equal(isObolSymbol('OBOL'), true);
+    assert.equal(isObolSymbol(' obol '), true);
+  });
+
+  it('rejects non-OBOL symbols', () => {
+    assert.equal(isObolSymbol('USDC'), false);
+    assert.equal(isObolSymbol(undefined), false);
+  });
+});
+
+describe('formatUsdcAmount', () => {
+  it('uses two decimals for ordinary USDC amounts', () => {
+    assert.equal(formatUsdcAmount(2.5), '2.50');
+    assert.equal(formatUsdcAmount(1234.5), '1,234.50');
+  });
+
+  it('keeps useful precision for small USDC amounts', () => {
+    assert.equal(formatUsdcAmount(0.00025), '0.00025');
+  });
+});
+
+describe('obolAmountToUsdc', () => {
+  it('multiplies an OBOL amount by the live OBOL/USD price', () => {
+    assert.equal(obolAmountToUsdc('10', 0.25), '2.50');
+  });
+
+  it('accepts comma-formatted display amounts', () => {
+    assert.equal(obolAmountToUsdc('1,000', 0.25), '250.00');
+  });
+
+  it('does not compute an equivalent without a valid live price', () => {
+    assert.equal(obolAmountToUsdc('10', undefined), null);
+    assert.equal(obolAmountToUsdc('10', 0), null);
+    assert.equal(obolAmountToUsdc('10', -1), null);
+    assert.equal(obolAmountToUsdc('10', Number.NaN), null);
+  });
+
+  it('does not compute an equivalent from a malformed amount', () => {
+    assert.equal(obolAmountToUsdc('free', 0.25), null);
   });
 });
 

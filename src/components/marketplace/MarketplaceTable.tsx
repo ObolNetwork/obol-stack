@@ -2,6 +2,7 @@
 
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 
+import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
 import type { MarketplaceSort, ServiceListItem } from '@/lib/marketplace/types';
 
 export interface MarketplaceTableProps {
@@ -190,10 +191,12 @@ export function MarketplaceTable({
                 <Mono>{networkLabel(item)}</Mono>
               </Td>
               <Td>
-                {item.price || '—'}
-                <Mono css={{ display: 'inline', marginLeft: 4 }}>
-                  / {item.priceUnit}
-                </Mono>
+                <ObolAmountSwitch
+                  amount={item.price || '—'}
+                  symbol={item.asset.symbol}
+                  unit={`/ ${item.priceUnit}`}
+                  showSymbol={false}
+                />
               </Td>
               <Td>
                 <Mono>{item.asset.symbol}</Mono>

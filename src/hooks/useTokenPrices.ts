@@ -26,6 +26,44 @@ const EMPTY_TOKEN_PRICES: TokenPrices = {
   obol: { price: 0, change24h: 0 },
 };
 
+export interface UseTokenPricesOptions {
+  enabled?: boolean;
+}
+
+export function isObolSymbol(symbol: string | undefined): boolean {
+  return symbol?.trim().toUpperCase() === 'OBOL';
+}
+
+export function formatUsdcAmount(amount: number): string {
+  if (!Number.isFinite(amount) || amount < 0) return '';
+  return amount.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: amount >= 1 ? 2 : 6,
+  });
+}
+
+export function obolAmountToUsdc(
+  amount: string | number,
+  obolUsdPrice: number | null | undefined
+): string | null {
+  if (
+    obolUsdPrice === null ||
+    obolUsdPrice === undefined ||
+    !Number.isFinite(obolUsdPrice) ||
+    obolUsdPrice <= 0
+  ) {
+    return null;
+  }
+
+  const parsedAmount =
+    typeof amount === 'number'
+      ? amount
+      : Number(String(amount).replace(/,/g, '').trim());
+  if (!Number.isFinite(parsedAmount) || parsedAmount < 0) return null;
+
+  return formatUsdcAmount(parsedAmount * obolUsdPrice);
+}
+
 export function normalizeTokenPrices(
   data: CoinGeckoPriceResponse
 ): TokenPrices {
@@ -54,13 +92,14 @@ export async function fetchTokenPrices(): Promise<TokenPrices> {
   return normalizeTokenPrices(data);
 }
 
-export function useTokenPrices() {
+export function useTokenPrices(options: UseTokenPricesOptions = {}) {
   const query = useQuery({
     queryKey: ['token-prices', 'usd'],
     queryFn: fetchTokenPrices,
     staleTime: TOKEN_PRICE_REFRESH_MS,
     refetchInterval: TOKEN_PRICE_REFRESH_MS,
     refetchIntervalInBackground: true,
+    enabled: options.enabled ?? true,
   });
 
   const tokenPrices = query.data ?? EMPTY_TOKEN_PRICES;

@@ -6,6 +6,7 @@ import { useAccount } from 'wagmi';
 
 import { ChainIcon } from '@/components/atoms/ChainIcon';
 import { CopyButton } from '@/components/atoms/CopyButton';
+import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
 import { Identicon } from './Identicon';
 import { ServicesSubNav } from './ServicesSubNav';
 import { NewListingDialog } from './NewListingDialog';
@@ -146,9 +147,12 @@ function EarningsStrip({ rollup }: { rollup: EarningsRollup }) {
           </Flex>
           <Flex css={{ alignItems: 'baseline', gap: 6 }}>
             <Mono css={{ fontSize: '$3', color: '$body' }}>
-              + {rollup.total7d.OBOL}
+              <ObolAmountSwitch
+                amount={rollup.total7d.OBOL}
+                symbol="OBOL"
+                prefix="+"
+              />
             </Mono>
-            <Text css={{ fontSize: '$1', color: '$muted' }}>OBOL</Text>
           </Flex>
         </StripCell>
 
@@ -184,9 +188,8 @@ function EarningsStrip({ rollup }: { rollup: EarningsRollup }) {
                 <Mono
                   css={{ fontSize: '$3', color: empty ? '$muted' : '$body' }}
                 >
-                  {OBOL}
+                  <ObolAmountSwitch amount={OBOL} symbol="OBOL" />
                 </Mono>
-                <Text css={{ fontSize: '$1', color: '$muted' }}>OBOL</Text>
               </Flex>
             </StripCell>
           );
@@ -475,11 +478,8 @@ function ListingRow({
           <Mono
             css={{ color: '$light', fontSize: '$3', fontWeight: '$semibold' }}
           >
-            {price}
-          </Mono>{' '}
-          <Text css={{ color: '$body', fontSize: '$2', display: 'inline' }}>
-            {asset}
-          </Text>
+            <ObolAmountSwitch amount={price} symbol={asset} align="right" />
+          </Mono>
         </Box>
 
         <Box>

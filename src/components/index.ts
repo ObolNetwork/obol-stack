@@ -9,6 +9,7 @@ export { ChainIcon } from './atoms/ChainIcon';
 export { CountBadge } from './atoms/CountBadge';
 export { FilterChip } from './atoms/FilterChip';
 export { ItemCard } from './atoms/ItemCard';
+export { ObolAmountSwitch } from './atoms/ObolAmountSwitch';
 export { PercentageChip } from './atoms/PercentageChip';
 export { SearchInput } from './atoms/SearchInput';
 export { SectionTitle } from './atoms/SectionTitle';

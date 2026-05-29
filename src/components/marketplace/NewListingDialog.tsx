@@ -1,12 +1,17 @@
 'use client';
 
-import type { ChangeEvent, MouseEvent as ReactMouseEvent } from 'react';
+import type {
+  ChangeEvent,
+  MouseEvent as ReactMouseEvent,
+  ReactNode,
+} from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { useAccount } from 'wagmi';
 
 import { ChainIcon } from '@/components/atoms/ChainIcon';
 import { CopyButton } from '@/components/atoms/CopyButton';
+import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
 import type { ChainName } from '@/types/dashboard';
 
 export interface NewListingDialogProps {
@@ -154,7 +159,7 @@ function FormField({
   children,
 }: {
   label: string;
-  hint?: string;
+  hint?: ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -764,13 +769,19 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
 
           <FormField
             label="Pricing"
-            hint={`Buyers will be charged ${priceAmount} ${priceToken} per ${
-              priceUnit === 'mtok'
-                ? 'million tokens'
-                : priceUnit === 'req'
-                  ? 'request'
-                  : 'hour'
-            }.`}
+            hint={
+              <>
+                Buyers will be charged{' '}
+                <ObolAmountSwitch amount={priceAmount} symbol={priceToken} />{' '}
+                per{' '}
+                {priceUnit === 'mtok'
+                  ? 'million tokens'
+                  : priceUnit === 'req'
+                    ? 'request'
+                    : 'hour'}
+                .
+              </>
+            }
           >
             <Box
               css={{
