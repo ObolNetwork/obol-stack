@@ -25,6 +25,7 @@ import {
   type AssetBalance,
 } from '../../../hooks/useWalletAssetBalances';
 import { explorerUrlFor } from '../../../lib/config/agent-balance-tokens';
+import { isDefaultSellAgent } from '../../../lib/services/agent-runtime';
 import type { AgentInstance } from '@/types/agent';
 
 function displayModelName(raw: string): string {
@@ -365,9 +366,7 @@ export function AgentInstanceCard({
     : null;
 
   const showSellCta =
-    instance.runtime === 'openclaw' &&
-    instance.id === 'default' &&
-    displayStatus === 'running';
+    isDefaultSellAgent(instance) && displayStatus === 'running';
 
   const provider = status?.model ? inferProvider(status.model) : null;
   const showOpenclawTokenError =

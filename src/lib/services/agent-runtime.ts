@@ -92,6 +92,19 @@ export function getAgentDashboardHostname(
   return getAgentDashboardUrl(id, runtime, domain).replace(/^https?:\/\//, '');
 }
 
+export function isDefaultSellAgent({
+  id,
+  runtime,
+}: {
+  id: string;
+  runtime: AgentRuntime;
+}): boolean {
+  if (runtime === 'hermes') {
+    return id === DEFAULT_AGENT_ID;
+  }
+  return id === 'default';
+}
+
 export function getAgentServiceUrl({
   id,
   runtime = 'openclaw',

@@ -9,6 +9,7 @@ import {
   getAgentNamespace,
   getAgentServiceUrl,
   getRuntimeFromNamespace,
+  isDefaultSellAgent,
 } from './agent-runtime.ts';
 
 describe('agent runtime URL helpers', () => {
@@ -136,6 +137,25 @@ describe('agent runtime URL helpers', () => {
     assert.equal(
       getAgentNamespace('obol-agent', 'openclaw'),
       `${AGENT_RUNTIME_CONFIG.openclaw.namespacePrefix}obol-agent`
+    );
+  });
+
+  it('marks only default runtime agents as sell-capable', () => {
+    assert.equal(
+      isDefaultSellAgent({ runtime: 'hermes', id: 'obol-agent' }),
+      true
+    );
+    assert.equal(
+      isDefaultSellAgent({ runtime: 'openclaw', id: 'default' }),
+      true
+    );
+    assert.equal(
+      isDefaultSellAgent({ runtime: 'hermes', id: 'research-agent' }),
+      false
+    );
+    assert.equal(
+      isDefaultSellAgent({ runtime: 'openclaw', id: 'obol-agent' }),
+      false
     );
   });
 });
