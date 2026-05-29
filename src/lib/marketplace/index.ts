@@ -6,8 +6,10 @@
 
 export * from './types';
 export {
+  fetchRawCatalog,
   fetchCatalog,
   mapCatalog,
+  CATALOG_SERVICE,
   type CatalogSnapshot,
   type RawCatalogEntry,
 } from './catalog';

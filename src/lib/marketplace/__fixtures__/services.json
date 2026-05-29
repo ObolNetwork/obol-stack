@@ -19,8 +19,13 @@
     "chainId": 1,
     "asset": {
       "symbol": "OBOL",
-      "address": "0x2222222222222222222222222222222222222222",
-      "decimals": 18
+      "address": "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7",
+      "decimals": 18,
+      "transferMethod": "permit2",
+      "eip712Domain": {
+        "name": "Obol Network",
+        "version": "1"
+      }
     },
     "description": "Agent-backed quant analyst for on-chain OBOL payment tests.",
     "isDemo": false,
@@ -43,7 +48,12 @@
     "asset": {
       "symbol": "USDC",
       "address": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
-      "decimals": 6
+      "decimals": 6,
+      "transferMethod": "eip3009",
+      "eip712Domain": {
+        "name": "USDC",
+        "version": "2"
+      }
     },
     "description": "Self-hosted coder model with a 32k context window.",
     "isDemo": false,
@@ -65,7 +75,12 @@
     "asset": {
       "symbol": "USDC",
       "address": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
-      "decimals": 6
+      "decimals": 6,
+      "transferMethod": "eip3009",
+      "eip712Domain": {
+        "name": "USDC",
+        "version": "2"
+      }
     },
     "description": "Bare Ollama endpoint, x402-gated.",
     "isDemo": true,
@@ -89,10 +104,16 @@
     "asset": {
       "symbol": "USDC",
       "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
-      "decimals": 6
+      "decimals": 6,
+      "transferMethod": "eip3009",
+      "eip712Domain": {
+        "name": "USD Coin",
+        "version": "2"
+      }
     },
     "description": "Agent that summarises legal documents.",
     "isDemo": false,
-    "registrationPending": false
+    "registrationPending": false,
+    "drainEndsAt": "2026-05-29T12:00:00Z"
   }
 ]

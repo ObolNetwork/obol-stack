@@ -287,6 +287,12 @@ function drainEndsAt(
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+function parseDrainEndsAt(value: string | undefined): Date | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function formatCountdown(target: Date, now: Date): string {
   const deltaMs = target.getTime() - now.getTime();
   if (deltaMs <= 0) return 'expiring';
@@ -330,8 +336,9 @@ function publicEndpoint(
 export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
   const displayName = offer.registration?.name || offer.name;
   const price = formatPrice(offer);
-  const symbol = offer.payment?.asset?.symbol || 'USDC';
-  const network = offer.payment?.network;
+  const symbol = offer.payment?.asset?.symbol || 'token';
+  const network = offer.caip2Network || offer.payment?.network;
+  const transferMethod = offer.payment?.asset?.transferMethod;
   // type=agent leaves spec.model and registration.skills empty by design;
   // the linked Agent's resolved view is the source of truth.
   const modelName = offer.model?.name || offer.agentResolution?.model;
@@ -344,7 +351,8 @@ export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
   const charged = offer.usage?.chargedRequests;
   const endpoint = publicEndpoint(offer.endpoint, tunnelURL);
 
-  const drainEnd = drainEndsAt(offer.conditions);
+  const drainEnd =
+    parseDrainEndsAt(offer.drainEndsAt) ?? drainEndsAt(offer.conditions);
   const isDraining = drainEnd !== null;
   const now = useNow(1000, isDraining);
   const countdown = drainEnd ? formatCountdown(drainEnd, now) : null;
@@ -365,6 +373,28 @@ export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
               }}
             >
               {modelName}
+            </TypeBadge>
+          )}
+          {offer.isDemo && <TypeBadge>Demo</TypeBadge>}
+          {offer.registrationPending && (
+            <TypeBadge
+              css={{
+                color: '#f5c542',
+                borderColor: 'rgba(245, 197, 66, 0.35)',
+                background: 'rgba(245, 197, 66, 0.1)',
+              }}
+            >
+              Registration pending
+            </TypeBadge>
+          )}
+          {transferMethod && (
+            <TypeBadge
+              css={{
+                color: '$body',
+                borderColor: 'rgba(255, 255, 255, 0.12)',
+              }}
+            >
+              {transferMethod}
             </TypeBadge>
           )}
           {endpoint && (

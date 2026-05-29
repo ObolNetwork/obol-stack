@@ -3,6 +3,12 @@ import { SellClient } from '@/lib/services/sell';
 import { AgentClient } from '@/lib/services/agents';
 import { PrometheusClient } from '@/lib/services/prometheus';
 import { linkOfferToAgent } from '@/lib/services/services-join';
+import { fetchRawCatalog } from '@/lib/marketplace';
+import {
+  STACK_UNREACHABLE,
+  isStackUnreachable,
+} from '@/lib/marketplace/errors';
+import { offerKey, serviceOfferFromCatalog } from '@/lib/services/sell-catalog';
 import type { ServiceOffer } from '@/types/sell';
 import type { AgentInstance } from '@/types/agent';
 
@@ -11,9 +17,12 @@ export const dynamic = 'force-dynamic';
 
 /**
  * GET /api/sell/list
- * Lists all ServiceOffer CRs, enriched with the matching agent (when the
- * upstream namespace is a hermes- or openclaw- agent) and charged-request
- * counts scraped from Prometheus.
+ * Lists controller-published catalog services, enriched with the matching
+ * ServiceOffer CR, local agent, and charged-request counts when available.
+ *
+ * The catalog is the row source. Raw ServiceOffer CRs are intentionally
+ * best-effort enrichment only so the operator UI cannot drift from the
+ * public storefront and partner-agent /api/services.json wire contract.
  */
 export async function GET() {
   try {
@@ -22,14 +31,18 @@ export async function GET() {
     const prom = new PrometheusClient();
 
     // Two trust tiers:
-    //  - offers + agents come from apiserver; failure here is fatal because
-    //    we have nothing to render.
-    //  - Prometheus queries are best-effort; if Prom is down/restarting we
-    //    still want to show the offers list, just with `usage: null` cells.
-    const [offers, agents] = await Promise.all([
-      sell.listServiceOffers(),
+    //  - catalog comes from the controller-authored /api/services.json and
+    //    is the only source allowed to create rows.
+    //  - ServiceOffer CRs, agents, and Prometheus are best-effort enrichments.
+    const catalog = await fetchRawCatalog();
+
+    const [liveOffers, agents] = await Promise.all([
+      safeListServiceOffers(sell),
       safeListAgents(agentsClient),
     ]);
+    const liveByKey = new Map(
+      liveOffers.map(offer => [offerKey(offer.namespace, offer.name), offer])
+    );
 
     const promResults = await Promise.allSettled([
       prom.chargedSales7dByOffer(),
@@ -59,6 +72,15 @@ export async function GET() {
       Map<string, number>,
     ];
 
+    const offers = catalog
+      .map(entry =>
+        serviceOfferFromCatalog(
+          entry,
+          liveByKey.get(offerKey(entry.namespace ?? '', entry.name ?? ''))
+        )
+      )
+      .filter((offer): offer is ServiceOffer => offer !== null);
+
     const enriched: ServiceOffer[] = offers.map(offer => {
       const key = `${offer.namespace}/${offer.name}`;
       const charged = sales.get(key);
@@ -80,10 +102,30 @@ export async function GET() {
     return NextResponse.json({ offers: enriched });
   } catch (error) {
     console.error('[Sell List] Error:', error);
+    if (isStackUnreachable(error)) {
+      return NextResponse.json(
+        { error: 'Obol Stack unreachable', code: STACK_UNREACHABLE },
+        { status: 503 }
+      );
+    }
     return NextResponse.json(
       { error: 'Failed to list ServiceOffers' },
       { status: 500 }
     );
+  }
+}
+
+async function safeListServiceOffers(
+  client: SellClient
+): Promise<ServiceOffer[]> {
+  try {
+    return await client.listServiceOffers();
+  } catch (error) {
+    console.warn(
+      '[Sell List] ServiceOffer CR list failed, enrichment disabled:',
+      error
+    );
+    return [];
   }
 }
 

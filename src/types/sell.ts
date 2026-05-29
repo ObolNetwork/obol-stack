@@ -9,6 +9,11 @@ export interface ServiceOfferAsset {
   symbol?: string;
   decimals?: number;
   address?: string;
+  transferMethod?: string;
+  eip712Domain?: {
+    name?: string;
+    version?: string;
+  };
 }
 
 export interface ServiceOfferPrice {
@@ -74,6 +79,22 @@ export interface ServiceOffer {
   namespace: string;
   type: ServiceOfferType;
   status?: string;
+  /** Decimal price string from /api/services.json, before display formatting. */
+  priceRaw?: string;
+  /** Catalog price slot, e.g. perRequest, perMTok, perHour, perEpoch. */
+  priceUnit?: string;
+  /** Atomic-units string from /api/services.json for x402 signing preflight. */
+  priceAtomicUnits?: string;
+  /** CAIP-2 network identifier from /api/services.json, e.g. eip155:84532. */
+  caip2Network?: string;
+  /** Numeric EVM chain id from /api/services.json. */
+  chainId?: number;
+  /** True for controller-marked demo services in /api/services.json. */
+  isDemo?: boolean;
+  /** True when the payment route is live but ERC-8004 registration is pending. */
+  registrationPending?: boolean;
+  /** RFC3339 drain deadline from /api/services.json. Present only while draining. */
+  drainEndsAt?: string;
   /** True when the controller annotation `obol.org/paused` is set. */
   paused?: boolean;
   /** ISO-8601 of CR creation (from metadata.creationTimestamp). */

@@ -39,6 +39,11 @@ export interface MarketplaceAsset {
   symbol: string;
   address: string;
   decimals: number;
+  transferMethod?: string;
+  eip712Domain?: {
+    name?: string;
+    version?: string;
+  };
 }
 
 export interface MarketplaceNetwork {
@@ -77,6 +82,8 @@ export interface ServiceListItem {
   payTo: string;
   status: MarketplaceStatus;
   isDemo: boolean;
+  /** RFC3339 drain deadline from /api/services.json. Present only while draining. */
+  drainEndsAt?: string;
   description: string;
   /** Deterministic seed (hash of slug) — historically gradient banners,
    *  now also the identicon fallback when payTo is missing. */

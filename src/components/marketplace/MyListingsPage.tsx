@@ -377,8 +377,19 @@ function deriveStatus(offer: ServiceOffer): ListingStatus {
   const upstream = conditions.find(c => c.type === 'UpstreamHealthy');
   if (upstream && upstream.status !== 'True') return 'unreachable';
   const ready = conditions.find(c => c.type === 'Ready');
-  if (ready?.status !== 'True') return 'degraded';
-  return 'live';
+  if (ready) return ready.status === 'True' ? 'live' : 'degraded';
+  return offer.status === 'Ready' ? 'live' : 'degraded';
+}
+
+function listingPrice(offer: ServiceOffer): string {
+  return (
+    offer.priceRaw ??
+    offer.payment?.price?.perRequest ??
+    offer.payment?.price?.perMTok ??
+    offer.payment?.price?.perHour ??
+    offer.payment?.price?.perEpoch ??
+    '—'
+  );
 }
 
 interface RowMutators {
@@ -402,11 +413,13 @@ function ListingRow({
         ? 'unreachable'
         : undefined;
 
-  const chain = offer.payment?.network ?? '';
+  const chain = offer.caip2Network ?? offer.payment?.network ?? '';
   const chainIcon = toChainName(chain);
-  const price = offer.payment?.price?.perRequest ?? '—';
-  const asset = offer.payment?.asset?.symbol ?? 'USDC';
-  const registered = Boolean(offer.agentResolution || offer.endpoint);
+  const price = listingPrice(offer);
+  const asset = offer.payment?.asset?.symbol ?? 'token';
+  const registered = Boolean(
+    offer.agentResolution || offer.endpoint || offer.registrationPending
+  );
   const reqs = offer.usage?.requests24h ?? offer.usage?.chargedRequests ?? 0;
 
   return (

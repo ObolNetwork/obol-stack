@@ -45,7 +45,14 @@ describe('mapCatalog', () => {
     assert.equal(demo.priceUnit, 'agent-turn');
     assert.equal(demo.price, '10');
     assert.equal(demo.asset.symbol, 'OBOL');
+    assert.equal(
+      demo.asset.address,
+      raw.find(it => it.name === 'demo-quant').asset.address
+    );
     assert.equal(demo.asset.decimals, 18);
+    assert.equal(demo.asset.transferMethod, 'permit2');
+    assert.equal(demo.asset.eip712Domain.name, 'Obol Network');
+    assert.equal(demo.asset.eip712Domain.version, '1');
     assert.equal(demo.network.caip2, 'eip155:1');
     assert.equal(demo.network.chainId, 1);
   });
@@ -138,6 +145,13 @@ describe('mapCatalog', () => {
     const out = mapCatalog(raw);
     const ollama = out.find(it => it.name === 'ollama-gated');
     assert.equal(ollama.isDemo, true);
+  });
+
+  it('preserves drainEndsAt from the catalog', async () => {
+    const raw = await loadRaw();
+    const out = mapCatalog(raw);
+    const legal = out.find(it => it.name === 'legal-summarizer');
+    assert.equal(legal.drainEndsAt, '2026-05-29T12:00:00Z');
   });
 });
 
