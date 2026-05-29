@@ -1,5 +1,5 @@
-import React, { useState, ReactNode, useRef, useEffect } from 'react';
-import { Box, Flex, styled, theme } from '@obolnetwork/obol-ui';
+import { useState, useRef, useEffect, useId, type ReactNode } from 'react';
+import { Box, styled, theme } from '@obolnetwork/obol-ui';
 import { Up } from '@/icons';
 
 export interface AccordionProps {
@@ -18,19 +18,23 @@ const AccordionContainer = styled(Box, {
   padding: '$lg',
 });
 
-const AccordionHeader = styled(Flex, {
+const AccordionHeader = styled('button', {
   position: 'relative',
+  display: 'flex',
   alignItems: 'start',
   width: '100%',
+  padding: 0,
+  border: 0,
+  background: 'transparent',
+  color: 'inherit',
+  font: 'inherit',
+  textAlign: 'left',
+  cursor: 'pointer',
   transition: 'all 0.2s ease',
 
-  variants: {
-    disabled: {
-      true: {
-        cursor: 'not-allowed',
-        opacity: 0.6,
-      },
-    },
+  '&:disabled': {
+    cursor: 'not-allowed',
+    opacity: 0.6,
   },
 
   '&:hover': {
@@ -96,6 +100,9 @@ export function Accordion({
 }: AccordionProps) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const contentRef = useRef<HTMLDivElement>(null);
+  const reactId = useId();
+  const headerId = `${reactId}-accordion-header`;
+  const contentId = `${reactId}-accordion-content`;
 
   const handleToggle = () => {
     if (disabled) return;
@@ -145,15 +152,26 @@ export function Accordion({
 
   return (
     <AccordionContainer className={className}>
-      <AccordionHeader disabled={disabled}>
+      <AccordionHeader
+        type="button"
+        disabled={disabled}
+        id={headerId}
+        aria-expanded={isExpanded}
+        aria-controls={contentId}
+        onClick={handleToggle}
+      >
         <HeaderContent>{header}</HeaderContent>
-        <ChevronIcon expanded={isExpanded} data-chevron onClick={handleToggle}>
+        <ChevronIcon expanded={isExpanded} data-chevron aria-hidden="true">
           <Up size="s" color={theme.colors.body.value} />
         </ChevronIcon>
       </AccordionHeader>
 
       <AccordionContent
         ref={contentRef}
+        id={contentId}
+        role="region"
+        aria-labelledby={headerId}
+        aria-hidden={!isExpanded}
         expanded={isExpanded}
         onTransitionEnd={handleTransitionEnd}
       >
