@@ -6,6 +6,7 @@ import type {
   AgentInstanceHealth,
   AgentRuntime,
 } from '@/types/agent';
+import type { AgentRegistrationRef } from '@/lib/services/agent-registration';
 import type { WalletMetadata } from '@/types/openclaw';
 
 export function useAgentInstances() {
@@ -161,6 +162,9 @@ export interface AgentRegistrationDoc {
   x402Support: boolean;
   active: boolean;
   supportedTrust?: string[];
+  registrations?: AgentRegistrationRef[];
+  metadata?: Record<string, string>;
+  provenance?: Record<string, string>;
 }
 
 export function useAgentRegistration() {

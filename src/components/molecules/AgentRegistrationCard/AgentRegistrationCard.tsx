@@ -12,6 +12,10 @@ import {
   useAgentRegistration,
   type AgentRegistrationService,
 } from '../../../hooks/useAgents';
+import {
+  agentRegistrationExplorerUrl,
+  agentRegistrationLabel,
+} from '@/lib/services/agent-registration';
 
 const Body = styled(Box, {
   display: 'flex',
@@ -62,14 +66,82 @@ const MetaRow = styled(Flex, {
   alignItems: 'center',
 });
 
+const DetailBlock = styled(Box, {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '$xxs',
+  padding: '$xs 0',
+});
+
+const DetailTitle = styled(Text, {
+  fontSize: '$1',
+  color: '$muted',
+  fontWeight: '$medium',
+  textTransform: 'uppercase',
+});
+
+const IdentityRow = styled(Flex, {
+  flexDirection: 'column',
+  gap: '2px',
+});
+
+const IdentityText = styled(Text, {
+  fontSize: '$1',
+  color: '$light',
+  fontFamily: 'monospace',
+  wordBreak: 'break-all',
+});
+
+const IdentityLink = styled(Link, {
+  fontSize: '$1',
+  color: '$obolGreen',
+  fontFamily: 'monospace',
+  wordBreak: 'break-all',
+});
+
+const RegistryText = styled(Text, {
+  fontSize: '10px',
+  color: '$muted',
+  fontFamily: 'monospace',
+  wordBreak: 'break-all',
+});
+
+const ChipRow = styled(Flex, {
+  gap: '$xxs',
+  flexWrap: 'wrap',
+});
+
+const MetaChip = styled(Text, {
+  fontSize: '10px',
+  color: '$body',
+  backgroundColor: 'rgba(255, 255, 255, 0.04)',
+  border: '1px solid rgba(255, 255, 255, 0.08)',
+  borderRadius: '4px',
+  padding: '1px 6px',
+  lineHeight: 1.4,
+  fontFamily: 'monospace',
+});
+
 const NotPublished = styled(Text, {
   fontSize: '$2',
   color: '$body',
   padding: '$sm 0',
 });
 
+function metadataEntries(
+  metadata: Record<string, string> | undefined
+): Array<[string, string]> {
+  return Object.entries(metadata ?? {}).filter(
+    ([key, value]) =>
+      key.trim() !== '' && typeof value === 'string' && value.trim() !== ''
+  );
+}
+
 export function AgentRegistrationCard() {
   const { registration, tunnelURL, loading } = useAgentRegistration();
+  const registrationEntries = registration?.registrations ?? [];
+  const topLevelMetadata = metadataEntries(registration?.metadata);
+  const provenanceEntries = metadataEntries(registration?.provenance);
 
   const headerContent = <SectionTitle>Agent Registration</SectionTitle>;
 
@@ -116,6 +188,57 @@ export function AgentRegistrationCard() {
 
               {registration.description && (
                 <Description>{registration.description}</Description>
+              )}
+
+              {registrationEntries.length > 0 && (
+                <DetailBlock>
+                  <DetailTitle>On-chain identity</DetailTitle>
+                  {registrationEntries.map((entry, index) => {
+                    const label = agentRegistrationLabel(entry);
+                    const explorerUrl = agentRegistrationExplorerUrl(entry);
+                    return (
+                      <IdentityRow
+                        key={`${entry.agentRegistry}-${entry.agentId}-${index}`}
+                      >
+                        {explorerUrl ? (
+                          <IdentityLink href={explorerUrl} target="_blank">
+                            {label}
+                            <OpenInNew size="sm" />
+                          </IdentityLink>
+                        ) : (
+                          <IdentityText>{label}</IdentityText>
+                        )}
+                        <RegistryText>{entry.agentRegistry}</RegistryText>
+                      </IdentityRow>
+                    );
+                  })}
+                </DetailBlock>
+              )}
+
+              {topLevelMetadata.length > 0 && (
+                <DetailBlock>
+                  <DetailTitle>Metadata</DetailTitle>
+                  <ChipRow>
+                    {topLevelMetadata.map(([key, value]) => (
+                      <MetaChip key={key}>
+                        {key}={value}
+                      </MetaChip>
+                    ))}
+                  </ChipRow>
+                </DetailBlock>
+              )}
+
+              {provenanceEntries.length > 0 && (
+                <DetailBlock>
+                  <DetailTitle>Provenance</DetailTitle>
+                  <ChipRow>
+                    {provenanceEntries.map(([key, value]) => (
+                      <MetaChip key={key}>
+                        {key}={value}
+                      </MetaChip>
+                    ))}
+                  </ChipRow>
+                </DetailBlock>
               )}
 
               {registration.services?.length > 0 && (
