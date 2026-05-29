@@ -90,57 +90,6 @@ export function useAgentStatus(instance: AgentInstance | null) {
   return { status, loading, error, refetch: fetchStatus };
 }
 
-export function useAgentToken(instance: AgentInstance | null) {
-  const [token, setToken] = useState<string | null>(null);
-  const [tokenError, setTokenError] = useState<string | null>(null);
-
-  const runtime = instance?.runtime;
-  const id = instance?.id;
-
-  const fetchToken = useCallback(async () => {
-    if (!runtime || !id) {
-      setToken(null);
-      setTokenError(null);
-      return;
-    }
-
-    try {
-      const response = await fetch(
-        `/api/agents/token?runtime=${runtime}&id=${id}`
-      );
-      if (response.ok) {
-        const data = await response.json();
-        setToken(data?.token ?? null);
-        setTokenError(null);
-      } else if (response.status === 404) {
-        setToken(null);
-        setTokenError('Token not found');
-      } else {
-        setToken(null);
-        let message = 'Failed to fetch token';
-        try {
-          const bodyText = await response.text();
-          message += bodyText
-            ? `: ${response.status} ${bodyText}`
-            : `: ${response.status}`;
-        } catch {
-          // Ignore response body parsing failures.
-        }
-        setTokenError(message);
-      }
-    } catch {
-      setToken(null);
-      setTokenError('Failed to fetch token');
-    }
-  }, [id, runtime]);
-
-  useEffect(() => {
-    fetchToken();
-  }, [fetchToken]);
-
-  return { token, tokenError };
-}
-
 export function useTunnelURL() {
   const [tunnelURL, setTunnelURL] = useState<string | null>(null);
 

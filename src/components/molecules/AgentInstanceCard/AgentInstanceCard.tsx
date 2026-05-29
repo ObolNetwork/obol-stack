@@ -16,7 +16,6 @@ import { CopyButton } from '../../atoms/CopyButton/CopyButton';
 import { SellInferenceModal } from '../SellInferenceModal';
 import {
   useAgentStatus,
-  useAgentToken,
   useAgentWalletMetadata,
   useTunnelURL,
 } from '../../../hooks/useAgents';
@@ -330,9 +329,6 @@ export function AgentInstanceCard({
   onSelect,
 }: AgentInstanceCardProps) {
   const { status, loading } = useAgentStatus(instance);
-  const { token, tokenError } = useAgentToken(
-    instance.runtime === 'openclaw' ? instance : null
-  );
   const { metadata } = useAgentWalletMetadata(instance);
   const { tunnelURL } = useTunnelURL();
 
@@ -355,8 +351,8 @@ export function AgentInstanceCard({
   const dashboardBaseUrl =
     instance.runtime === 'openclaw'
       ? tunnelURL
-        ? `${tunnelURL}${token ? `/#token=${token}` : ''}`
-        : `http://${instance.hostname}${token ? `/#token=${token}` : ''}`
+        ? tunnelURL
+        : `http://${instance.hostname}`
       : instance.dashboardHostname
         ? `http://${instance.dashboardHostname}`
         : null;
@@ -369,8 +365,6 @@ export function AgentInstanceCard({
     isDefaultSellAgent(instance) && displayStatus === 'running';
 
   const provider = status?.model ? inferProvider(status.model) : null;
-  const showOpenclawTokenError =
-    Boolean(tokenError) && instance.runtime === 'openclaw';
 
   return (
     <CardContainer id={`agent-${instance.runtime}-${instance.id}`}>
@@ -505,15 +499,6 @@ export function AgentInstanceCard({
                     : `${provider ?? 'Unknown'} · unreachable${
                         status.apiError ? ` — ${status.apiError}` : ''
                       }`}
-              </DetailValue>
-            </DetailRow>
-          )}
-
-          {showOpenclawTokenError && (
-            <DetailRow>
-              <DetailLabel css={{ color: '$error' }}>Token:</DetailLabel>
-              <DetailValue css={{ color: '$error' }}>
-                {tokenError} — run: obol openclaw token --regenerate
               </DetailValue>
             </DetailRow>
           )}

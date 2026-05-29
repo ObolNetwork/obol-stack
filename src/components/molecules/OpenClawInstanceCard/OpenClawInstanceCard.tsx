@@ -14,7 +14,6 @@ import { CopyButton } from '../../atoms/CopyButton/CopyButton';
 import { SellInferenceModal } from '../SellInferenceModal';
 import {
   useOpenClawStatus,
-  useOpenClawToken,
   useWalletMetadata,
   useTunnelURL,
 } from '../../../hooks/useOpenClaw';
@@ -174,7 +173,6 @@ export function OpenClawInstanceCard({
           ? 'error'
           : 'unknown';
 
-  const { token, tokenError } = useOpenClawToken(instance.id);
   const { metadata } = useWalletMetadata(instance.id);
 
   const primaryAddress = metadata?.addresses?.[0]?.address ?? null;
@@ -182,8 +180,8 @@ export function OpenClawInstanceCard({
   const { tunnelURL } = useTunnelURL();
 
   const dashboardUrl = tunnelURL
-    ? `${tunnelURL}${token ? `/#token=${token}` : ''}`
-    : `http://${instance.namespace}.obol.stack${token ? `/#token=${token}` : ''}`;
+    ? tunnelURL
+    : `http://${instance.namespace}.obol.stack`;
 
   return (
     <CardContainer>
@@ -247,15 +245,6 @@ export function OpenClawInstanceCard({
               {balanceInfo.balance} ETH ({balanceInfo.network})
             </BalanceText>
           )}
-        </MetaItem>
-      )}
-
-      {tokenError && (
-        <MetaItem>
-          <MetaLabel css={{ color: '$error' }}>Token:</MetaLabel>
-          <MetaValue css={{ color: '$error' }}>
-            {tokenError} — run: obol openclaw token --regenerate
-          </MetaValue>
         </MetaItem>
       )}
 
