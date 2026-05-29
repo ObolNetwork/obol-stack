@@ -482,15 +482,22 @@ func (c *Controller) applyAgentObject(ctx context.Context, resource dynamic.Reso
 }
 
 // isCreateOnlyKind returns true for kinds that the controller refuses to
-// Update on subsequent reconciles. Either the Update would require
-// broader RBAC than we want (Namespace), or the resource has immutable
-// spec fields that reject any wholesale Update (PVC's
-// `spec is immutable after creation`). Mutable kinds (ConfigMap, Secret
-// data, Deployment, Service ports, ServiceAccount) keep going through
-// the normal Update path so reconciles still pick up rendered changes.
+// Update on subsequent reconciles. Reasons vary by kind:
+//   - Namespace: Update would require broader RBAC than we want.
+//   - PersistentVolumeClaim: immutable spec fields reject a wholesale Update.
+//   - Secret: the controller never mutates an agent Secret in place — the API
+//     token is preserved across reconciles, not rotated (see ensureAgentAPIKey),
+//     and the wallet keystore is minted once and never reshaped (see
+//     ensureSignerKeystore). Treating Secrets as create-only lets the
+//     ClusterRole drop the `update`/`patch` verbs, shrinking the Secret write
+//     surface to create + delete.
+//
+// Other mutable kinds (ConfigMap, Deployment, Service ports, ServiceAccount)
+// keep going through the normal Update path so reconciles still pick up
+// rendered changes.
 func isCreateOnlyKind(kind string) bool {
 	switch kind {
-	case "Namespace", "PersistentVolumeClaim":
+	case "Namespace", "PersistentVolumeClaim", "Secret":
 		return true
 	}
 	return false
