@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/util/workqueue"
 )
 
 func TestValidateAgentSpec_Happy(t *testing.T) {
@@ -208,6 +209,45 @@ func TestReconcileAgent_HappyPath_ProvisionsAndPins(t *testing.T) {
 	}
 }
 
+func TestReconcileAgent_WaitingForDeploymentRequeues(t *testing.T) {
+	oldDelay := agentReadinessRequeueDelay
+	agentReadinessRequeueDelay = 0
+	defer func() { agentReadinessRequeueDelay = oldDelay }()
+
+	agent := &monetizeapi.Agent{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "obol.org/v1alpha1",
+			Kind:       "Agent",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "quant",
+			Namespace: "agent-quant",
+		},
+		Spec: monetizeapi.AgentSpec{
+			Runtime: "hermes",
+			Model:   "qwen3.5:9b",
+			Skills:  []string{"addresses"},
+		},
+	}
+	c := newProvisioningTestController(t, agent, litellmSecretObject(t, "test-master-key"))
+
+	if err := c.reconcileAgent(context.Background(), "agent-quant/quant"); err != nil {
+		t.Fatalf("reconcileAgent (finalizer): %v", err)
+	}
+	if err := c.reconcileAgent(context.Background(), "agent-quant/quant"); err != nil {
+		t.Fatalf("reconcileAgent (waiting): %v", err)
+	}
+
+	key, shutdown := c.agentQueue.Get()
+	if shutdown {
+		t.Fatal("agent queue unexpectedly shut down")
+	}
+	if key != "agent-quant/quant" {
+		t.Fatalf("requeued key = %q, want agent-quant/quant", key)
+	}
+	c.agentQueue.Done(key)
+}
+
 func TestReconcileAgent_NoModel_ParksAtProvisioning(t *testing.T) {
 	// EffectiveModel returns "" when neither spec nor status carries one.
 	// The reconciler must surface that via a clear ModelUnpinned condition
@@ -326,6 +366,20 @@ func TestReconcileAgent_DeletionTriggersTeardown(t *testing.T) {
 	}
 }
 
+func TestTearDownAgent_SkipsUnownedFixedNameChildren(t *testing.T) {
+	agent := agentWithWallet(t, "doomed", "agent-doomed", true)
+	unowned := buildAgentAPISecret(agent, "secret")
+	unowned.SetLabels(map[string]string{"app.kubernetes.io/name": hermesServiceName})
+	c := newProvisioningTestController(t, agent, litellmSecretObject(t, "key"), unowned)
+
+	if err := c.tearDownAgent(context.Background(), agent); err != nil {
+		t.Fatalf("tearDownAgent: %v", err)
+	}
+	if !resourceExists(t, c, "secrets", "agent-doomed", hermesAPISecret) {
+		t.Fatal("unowned fixed-name Secret should not be deleted")
+	}
+}
+
 func newAgentTestController(t *testing.T, agents ...*monetizeapi.Agent) *Controller {
 	t.Helper()
 
@@ -383,6 +437,7 @@ func newProvisioningTestController(t *testing.T, agent *monetizeapi.Agent, seedO
 		services:    dynClient.Resource(monetizeapi.ServiceGVR),
 		configMaps:  dynClient.Resource(monetizeapi.ConfigMapGVR),
 		deployments: dynClient.Resource(monetizeapi.DeploymentGVR),
+		agentQueue:  workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 	}
 }
 

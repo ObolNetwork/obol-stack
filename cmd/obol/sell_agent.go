@@ -430,8 +430,10 @@ func runAgentBackedDemo(
 		u.Dim("  Run on-chain discovery later: obol sell register --chain " + chain)
 	}
 
+	ready := waitForOfferReady(cfg, u, name, offerNs, 2*time.Minute)
+
 	u.Blank()
-	printDemoTryIt(u, name, typeName, price, symbol, chain, tunnelURL, false)
+	printDemoTryIt(u, name, typeName, price, symbol, chain, tunnelURL, ready)
 
 	return nil
 }
