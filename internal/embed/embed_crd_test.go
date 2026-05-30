@@ -791,6 +791,105 @@ func TestX402VerifierImage_CarriesAgentAuthFix(t *testing.T) {
 	}
 }
 
+// TestServiceOfferControllerSecretRBAC_Scoped guards the controller's Secret
+// access against the actual code paths in internal/serviceoffercontroller.
+// The reconciler touches exactly three Secrets by name (litellm-secrets,
+// hermes-api-server, remote-signer-keystore). Disclosure/mutation verbs
+// (get/list/watch/update/patch/delete) must therefore be resourceName-scoped
+// so a compromised controller cannot read or rewrite arbitrary cluster
+// Secrets. Only `create` may be unscoped — resourceNames cannot scope create
+// and agent namespaces are minted dynamically, but create is integrity-only
+// (it cannot read existing Secret contents).
+func TestServiceOfferControllerSecretRBAC_Scoped(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/x402.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+	docs := multiDoc(data)
+
+	role := findDocByName(docs, "ClusterRole", "serviceoffer-controller")
+	if role == nil {
+		t.Fatal("no ClusterRole 'serviceoffer-controller' found")
+	}
+	rules, ok := role["rules"].([]any)
+	if !ok {
+		t.Fatal("serviceoffer-controller ClusterRole has no rules")
+	}
+
+	// Any verb that can read or mutate an existing Secret. `create` is
+	// deliberately excluded — it cannot be resourceName-scoped.
+	scopableVerbs := map[string]bool{
+		"get": true, "list": true, "watch": true,
+		"update": true, "patch": true, "delete": true,
+	}
+	allowedNames := map[string]bool{
+		"litellm-secrets":        true,
+		"hermes-api-server":      true,
+		"remote-signer-keystore": true,
+	}
+
+	readNames := map[string]bool{}
+	deleteNames := map[string]bool{}
+	var sawCreate bool
+	for _, r := range rules {
+		rm := r.(map[string]any)
+		if !stringSet(rm["apiGroups"])[""] || !stringSet(rm["resources"])["secrets"] {
+			continue
+		}
+		verbs := stringSet(rm["verbs"])
+		names := stringSet(rm["resourceNames"])
+
+		if len(names) == 0 {
+			// Unscoped secrets rule: create is the only acceptable verb.
+			for v := range verbs {
+				if scopableVerbs[v] {
+					t.Errorf("serviceoffer-controller grants cluster-wide secrets:%q with no resourceNames — read/mutate surface must be scoped to the three named secrets", v)
+				}
+			}
+			if verbs["create"] {
+				sawCreate = true
+			}
+			continue
+		}
+
+		// Scoped rule: every name must be one the reconciler actually uses.
+		for n := range names {
+			if !allowedNames[n] {
+				t.Errorf("serviceoffer-controller secrets rule references unexpected resourceName %q (reconciler only touches litellm-secrets, hermes-api-server, remote-signer-keystore)", n)
+			}
+			if verbs["get"] {
+				readNames[n] = true
+			}
+			if verbs["delete"] {
+				deleteNames[n] = true
+			}
+		}
+		if verbs["list"] || verbs["watch"] || verbs["update"] || verbs["patch"] {
+			t.Error("serviceoffer-controller scoped secrets rule must not grant list/watch/update/patch — Secrets are create-only in the reconciler and all reads are by name")
+		}
+		if names["litellm-secrets"] && verbs["delete"] {
+			t.Error("serviceoffer-controller must not grant secrets:delete on litellm-secrets; the code only reads LITELLM_MASTER_KEY")
+		}
+	}
+
+	for _, name := range []string{"litellm-secrets", "hermes-api-server", "remote-signer-keystore"} {
+		if !readNames[name] {
+			t.Errorf("serviceoffer-controller must retain resourceName-scoped secrets:get on %s", name)
+		}
+	}
+	for _, name := range []string{"hermes-api-server", "remote-signer-keystore"} {
+		if !deleteNames[name] {
+			// tearDownAgent (agent.go) deletes these on Agent CR deletion.
+			// Without delete the teardown 403s, the finalizer never clears,
+			// and the CR is stranded in Terminating.
+			t.Errorf("serviceoffer-controller must grant resourceName-scoped secrets:delete on %s for agent teardown", name)
+		}
+	}
+	if !sawCreate {
+		t.Error("serviceoffer-controller must retain secrets:create for minting the per-agent API token + wallet keystore in dynamic namespaces")
+	}
+}
+
 func TestAgentRBAC_NoOverlyBroadPermissions(t *testing.T) {
 	data, err := ReadInfrastructureFile("base/templates/obol-agent-monetize-rbac.yaml")
 	if err != nil {

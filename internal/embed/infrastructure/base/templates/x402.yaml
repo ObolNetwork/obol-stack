@@ -140,9 +140,19 @@ rules:
     resources: ["namespaces"]
     verbs: ["get", "list", "watch", "create"]
   # Per-agent runtime resources written by the Agent reconciler.
-  # `create` cannot be safely resourceName-scoped in Kubernetes RBAC,
-  # but follow-up reads/updates/deletes are limited to the fixed child
-  # object names the controller owns.
+  # ServiceAccount + PVC are namespace-scoped child resources.
+  #
+  # Secrets: the reconciler touches exactly three, by name:
+  #   - litellm-secrets        get               (read LITELLM_MASTER_KEY, ns llm)
+  #   - hermes-api-server      get/delete/create (mint the agent API token)
+  #   - remote-signer-keystore get/delete/create (mint the agent wallet keystore)
+  # Secrets are create-only in the reconciler (isCreateOnlyKind): the API token
+  # is preserved, not rotated, and the keystore is minted once and never
+  # reshaped, so no `update`/`patch` verb is needed. `litellm-secrets` is
+  # get-only; delete is confined to the two per-agent Secret names that teardown
+  # owns. `create` is split into its own rule below: resourceNames cannot scope
+  # create, and agent namespaces are minted dynamically, so create stays
+  # namespace-wide. That is an integrity surface only.
   - apiGroups: [""]
     resources: ["serviceaccounts"]
     verbs: ["create"]
@@ -159,11 +169,15 @@ rules:
     verbs: ["get", "delete"]
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["create"]
+    resourceNames: ["litellm-secrets"]
+    verbs: ["get"]
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames: ["hermes-api-server", "remote-signer-keystore"]
-    verbs: ["get", "update", "delete"]
+    verbs: ["get", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list"]
@@ -182,13 +196,6 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Scoped to litellm-secrets only. Needed to read LITELLM_MASTER_KEY for
-  # hot-add/hot-delete via the LiteLLM HTTP API (no pod restart — preserves
-  # the x402-buyer sidecar's pod-local consumed-auth state).
-  - apiGroups: [""]
-    resources: ["secrets"]
-    resourceNames: ["litellm-secrets"]
-    verbs: ["get"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "create", "update", "patch", "delete"]

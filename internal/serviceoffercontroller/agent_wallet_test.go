@@ -80,14 +80,16 @@ func TestEnsureAgentWallet_FreshKeystore(t *testing.T) {
 
 func TestEnsureAgentWallet_ReusesExistingKeystore(t *testing.T) {
 	agent := agentWithWallet(t, "quant", "agent-quant", true)
-	// Pre-seed a Secret with a known address — the controller must
-	// recover that address rather than mint a fresh keypair.
+	// Pre-seed a Secret with the current controller-created shape and a known
+	// address. The controller must recover that address rather than mint a
+	// fresh keypair.
 	preSeeded := buildSignerKeystoreSecret("agent-quant", &openclaw.KeystoreMaterial{
 		Address:      "0x1111111111111111111111111111111111111111",
 		KeystoreUUID: "existing-uuid",
 		KeystoreJSON: []byte(`{"crypto":{}}`),
 		Password:     "preseed",
 	})
+	ensureRemoteSignerSecretLabels(preSeeded, agent.Name)
 	c := newProvisioningTestController(t, agent, litellmSecretObject(t, "key"), preSeeded)
 
 	address, err := c.ensureAgentWallet(context.Background(), agent)
@@ -127,92 +129,6 @@ func TestEnsureAgentWallet_ReusesExistingKeystore(t *testing.T) {
 	}
 }
 
-func TestEnsureAgentWallet_MigratesLegacyKeystoreKey(t *testing.T) {
-	agent := agentWithWallet(t, "quant", "agent-quant", true)
-	legacySecret := buildSignerKeystoreSecret("agent-quant", &openclaw.KeystoreMaterial{
-		Address:      "0x1111111111111111111111111111111111111111",
-		KeystoreUUID: "existing-uuid",
-		KeystoreJSON: []byte(`{"crypto":{}}`),
-		Password:     "preseed",
-	})
-	dataMap, found, err := unstructured.NestedStringMap(legacySecret.Object, "data")
-	if err != nil {
-		t.Fatalf("read generated secret data: %v", err)
-	}
-	if !found || dataMap[remoteSignerKeystoreKey] == "" {
-		t.Fatalf("generated secret missing %q data: %v", remoteSignerKeystoreKey, dataMap)
-	}
-	dataMap["existing-uuid.json"] = dataMap[remoteSignerKeystoreKey]
-	delete(dataMap, remoteSignerKeystoreKey)
-	if err := unstructured.SetNestedStringMap(legacySecret.Object, dataMap, "data"); err != nil {
-		t.Fatalf("set legacy data: %v", err)
-	}
-	c := newProvisioningTestController(t, agent, litellmSecretObject(t, "key"), legacySecret)
-
-	address, err := c.ensureAgentWallet(context.Background(), agent)
-	if err != nil {
-		t.Fatalf("ensureAgentWallet: %v", err)
-	}
-	if address != "0x1111111111111111111111111111111111111111" {
-		t.Errorf("address = %q, want pre-seeded value", address)
-	}
-
-	secret, err := c.client.Resource(monetizeapi.SecretGVR).Namespace("agent-quant").Get(context.Background(), remoteSignerSecretName, metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("get secret: %v", err)
-	}
-	migrated, found, err := unstructured.NestedStringMap(secret.Object, "data")
-	if err != nil {
-		t.Fatalf("read migrated secret data: %v", err)
-	}
-	if !found {
-		t.Fatal("migrated secret has no data")
-	}
-	if migrated[remoteSignerKeystoreKey] == "" {
-		t.Fatalf("legacy keystore secret was not migrated to %q: keys=%v", remoteSignerKeystoreKey, migrated)
-	}
-	if migrated[remoteSignerKeystoreKey] != migrated["existing-uuid.json"] {
-		t.Errorf("migrated keystore data differs from legacy key")
-	}
-	if migrated["password"] != dataMap["password"] {
-		t.Error("migrated secret password changed")
-	}
-}
-
-func TestEnsureAgentWallet_RejectsAmbiguousLegacyKeystoreKeys(t *testing.T) {
-	agent := agentWithWallet(t, "quant", "agent-quant", true)
-	legacySecret := buildSignerKeystoreSecret("agent-quant", &openclaw.KeystoreMaterial{
-		Address:      "0x1111111111111111111111111111111111111111",
-		KeystoreUUID: "existing-uuid",
-		KeystoreJSON: []byte(`{"crypto":{"id":"first"}}`),
-		Password:     "preseed",
-	})
-	dataMap := remoteSignerSecretData(t, legacySecret)
-	dataMap["existing-uuid.json"] = dataMap[remoteSignerKeystoreKey]
-	dataMap["other-uuid.json"] = base64.StdEncoding.EncodeToString([]byte(`{"crypto":{"id":"second"}}`))
-	delete(dataMap, remoteSignerKeystoreKey)
-	if err := unstructured.SetNestedStringMap(legacySecret.Object, dataMap, "data"); err != nil {
-		t.Fatalf("set ambiguous legacy data: %v", err)
-	}
-	c := newProvisioningTestController(t, agent, litellmSecretObject(t, "key"), legacySecret)
-
-	_, err := c.ensureAgentWallet(context.Background(), agent)
-	if err == nil {
-		t.Fatal("expected ambiguous legacy keystore error")
-	}
-	if !strings.Contains(err.Error(), "multiple legacy keystore JSON data keys") {
-		t.Fatalf("error = %v, want ambiguous legacy keystore message", err)
-	}
-	secret := getRemoteSignerSecret(t, c, "agent-quant")
-	after := remoteSignerSecretData(t, secret)
-	if after[remoteSignerKeystoreKey] != "" {
-		t.Fatal("ambiguous legacy secret should not get a canonical keystore key")
-	}
-	if resourceExists(t, c, "deployments", "agent-quant", remoteSignerName) {
-		t.Fatal("remote-signer deployment should not be applied after ambiguous keystore error")
-	}
-}
-
 func TestEnsureAgentWallet_RejectsExistingSecretWithoutAddressAnnotation(t *testing.T) {
 	agent := agentWithWallet(t, "quant", "agent-quant", true)
 	orphaned := buildSignerKeystoreSecret("agent-quant", &openclaw.KeystoreMaterial{
@@ -241,65 +157,6 @@ func TestEnsureAgentWallet_RejectsExistingSecretWithoutAddressAnnotation(t *test
 	}
 	if resourceExists(t, c, "deployments", "agent-quant", remoteSignerName) {
 		t.Fatal("remote-signer deployment should not be applied after missing annotation error")
-	}
-}
-
-func TestEnsureAgentWallet_RejectsAnnotatedSecretWithoutKeystoreJSON(t *testing.T) {
-	agent := agentWithWallet(t, "quant", "agent-quant", true)
-	broken := buildSignerKeystoreSecret("agent-quant", &openclaw.KeystoreMaterial{
-		Address:      "0x1111111111111111111111111111111111111111",
-		KeystoreUUID: "existing-uuid",
-		KeystoreJSON: []byte(`{"crypto":{}}`),
-		Password:     "preseed",
-	})
-	dataMap := remoteSignerSecretData(t, broken)
-	delete(dataMap, remoteSignerKeystoreKey)
-	if err := unstructured.SetNestedStringMap(broken.Object, dataMap, "data"); err != nil {
-		t.Fatalf("set broken data: %v", err)
-	}
-	c := newProvisioningTestController(t, agent, litellmSecretObject(t, "key"), broken)
-
-	_, err := c.ensureAgentWallet(context.Background(), agent)
-	if err == nil {
-		t.Fatal("expected missing keystore JSON error")
-	}
-	if !strings.Contains(err.Error(), "has wallet annotation but no keystore JSON data") {
-		t.Fatalf("error = %v, want missing keystore JSON message", err)
-	}
-	after := remoteSignerSecretData(t, getRemoteSignerSecret(t, c, "agent-quant"))
-	if after[remoteSignerKeystoreKey] != "" {
-		t.Fatal("broken secret should not get an empty canonical keystore key")
-	}
-	if after["password"] != dataMap["password"] {
-		t.Error("broken secret password changed despite migration failure")
-	}
-	if resourceExists(t, c, "deployments", "agent-quant", remoteSignerName) {
-		t.Fatal("remote-signer deployment should not be applied after missing keystore JSON error")
-	}
-}
-
-func TestEnsureAgentWallet_RejectsMalformedSecretData(t *testing.T) {
-	agent := agentWithWallet(t, "quant", "agent-quant", true)
-	malformed := buildSignerKeystoreSecret("agent-quant", &openclaw.KeystoreMaterial{
-		Address:      "0x1111111111111111111111111111111111111111",
-		KeystoreUUID: "existing-uuid",
-		KeystoreJSON: []byte(`{"crypto":{}}`),
-		Password:     "preseed",
-	})
-	malformed.Object["data"] = map[string]any{
-		"password": float64(123),
-	}
-	c := newProvisioningTestController(t, agent, litellmSecretObject(t, "key"), malformed)
-
-	_, err := c.ensureAgentWallet(context.Background(), agent)
-	if err == nil {
-		t.Fatal("expected malformed Secret data error")
-	}
-	if !strings.Contains(err.Error(), "read remote-signer-keystore data") {
-		t.Fatalf("error = %v, want malformed Secret data message", err)
-	}
-	if resourceExists(t, c, "deployments", "agent-quant", remoteSignerName) {
-		t.Fatal("remote-signer deployment should not be applied after malformed Secret data error")
 	}
 }
 
@@ -353,6 +210,7 @@ func TestReconcileAgent_WithExistingWallet_DoesNotRotateKeyMaterial(t *testing.T
 		KeystoreJSON: []byte(`{"crypto":{"ciphertext":"preserved"}}`),
 		Password:     "preseed",
 	})
+	ensureRemoteSignerSecretLabels(preSeeded, agent.Name)
 	wantData := remoteSignerSecretData(t, preSeeded)
 	c := newProvisioningTestController(t, agent, litellmSecretObject(t, "key"), preSeeded)
 
