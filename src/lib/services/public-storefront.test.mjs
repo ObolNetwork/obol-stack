@@ -6,6 +6,7 @@ import {
   LOCAL_STOREFRONT_URL,
   normalizePublicBaseUrl,
   publicResourceUrl,
+  publicServiceEndpoint,
   publicStorefrontUrl,
 } from './public-storefront.ts';
 
@@ -33,6 +34,27 @@ describe('public storefront links', () => {
     assert.equal(
       publicResourceUrl(null, 'api/services.json'),
       'http://obol.stack:8080/api/services.json'
+    );
+  });
+
+  it('builds service endpoints from either tunnel or local fallback', () => {
+    assert.equal(
+      publicServiceEndpoint('/services/demo-quant', null),
+      'http://obol.stack:8080/services/demo-quant'
+    );
+    assert.equal(
+      publicServiceEndpoint(
+        'http://obol.stack:8080/services/demo-quant?count=1',
+        null
+      ),
+      'http://obol.stack:8080/services/demo-quant?count=1'
+    );
+    assert.equal(
+      publicServiceEndpoint(
+        '/services/demo-quant?count=1',
+        'https://seller.trycloudflare.com/public/'
+      ),
+      'https://seller.trycloudflare.com/public/services/demo-quant?count=1'
     );
   });
 });

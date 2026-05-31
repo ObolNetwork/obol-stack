@@ -22,3 +22,22 @@ export function publicResourceUrl(
   const normalizedPath = path.startsWith('/') ? path : `/${path}`;
   return `${publicStorefrontUrl(tunnelURL)}${normalizedPath}`;
 }
+
+export function publicServiceEndpoint(
+  endpoint: string | undefined,
+  tunnelURL: string | null | undefined
+): string | null {
+  const storefront = publicStorefrontUrl(tunnelURL);
+
+  try {
+    const base = new URL(storefront);
+    const basePath = base.pathname.replace(/\/$/, '');
+    if (!endpoint) return `${base.origin}${basePath}`;
+
+    const relativeBase = new URL(`${base.origin}${basePath || ''}/`);
+    const resolvedEndpoint = new URL(endpoint, relativeBase);
+    return `${base.origin}${basePath}${resolvedEndpoint.pathname}${resolvedEndpoint.search}${resolvedEndpoint.hash}`;
+  } catch {
+    return null;
+  }
+}

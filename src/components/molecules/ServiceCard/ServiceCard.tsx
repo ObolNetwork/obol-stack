@@ -19,6 +19,7 @@ import {
   serviceOfferAssetSymbol,
   serviceOfferTrustBadges,
 } from '@/lib/services/service-offer-display';
+import { publicServiceEndpoint } from '@/lib/services/public-storefront';
 import type {
   ServiceOffer,
   ServiceOfferAgentLink,
@@ -271,16 +272,6 @@ function scrollToAgent(link: ServiceOfferAgentLink) {
 }
 
 /**
- * Rewrite the controller-published endpoint (which uses the local
- * `obol.stack` hostname) to use the public Cloudflare tunnel as the base.
- * Returns null when the tunnel URL is unavailable so the local-only
- * `obol.stack` URL is never surfaced as a clickable link.
- *
- * The controller writes either a full URL (older offers) or a path-only
- * value like "/services/demo-quant" (current ServiceOffer status). We
- * resolve the latter against the tunnel URL as a base so both work.
- */
-/**
  * Pulls the drain end time out of the Draining condition. Backend writes
  * the RFC3339 timestamp into condition.message; if that's ever missing we
  * fall back to deriving it from spec.drainAt + spec.drainGracePeriod (not
@@ -329,24 +320,6 @@ function useNow(intervalMs = 1000, enabled = true): Date {
   return now;
 }
 
-function publicEndpoint(
-  endpoint: string | undefined,
-  tunnelURL: string | null
-): string | null {
-  if (!tunnelURL) return null;
-  try {
-    const tunnel = new URL(tunnelURL);
-    const tunnelPath = tunnel.pathname.replace(/\/$/, '');
-    if (!endpoint) {
-      return `${tunnel.origin}${tunnelPath}` || tunnel.toString();
-    }
-    const ep = new URL(endpoint, tunnel);
-    return `${tunnel.origin}${tunnelPath}${ep.pathname}${ep.search}${ep.hash}`;
-  } catch {
-    return null;
-  }
-}
-
 export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
   const [deleteState, setDeleteState] = useState<'idle' | 'submitting'>('idle');
   const [actionError, setActionError] = useState<string | null>(null);
@@ -366,7 +339,7 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
   const visibleSkills = skills.slice(0, 3);
   const overflowSkills = Math.max(0, skills.length - visibleSkills.length);
   const charged = offer.usage?.chargedRequests;
-  const endpoint = publicEndpoint(offer.endpoint, tunnelURL);
+  const endpoint = publicServiceEndpoint(offer.endpoint, tunnelURL);
 
   const drainEnd =
     parseDrainEndsAt(offer.drainEndsAt) ?? drainEndsAt(offer.conditions);
