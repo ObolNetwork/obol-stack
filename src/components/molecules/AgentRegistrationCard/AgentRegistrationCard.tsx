@@ -173,8 +173,9 @@ export function AgentRegistrationCard() {
 
           {!loading && !registration && (
             <NotPublished>
-              No registration published yet. Run <code>obol sell http …</code>{' '}
-              with <code>--registration.enabled=true</code> to publish one.
+              No registration published yet. Registration is enabled by default;
+              re-run <code>obol sell http …</code> without{' '}
+              <code>--no-register</code> to publish one.
               <Flex css={{ marginTop: '$xs' }}>
                 <Link
                   href={rawRegistrationUrl}

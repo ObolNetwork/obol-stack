@@ -46,8 +46,9 @@ export function AgentList({ onInstanceSelect }: AgentListProps) {
           {!loading && !error && instances.length === 0 && (
             <EmptyMessage>
               No agent instances found. Run <code>obol agent init</code> for the
-              default Hermes agent, or <code>obol hermes onboard</code> /{' '}
-              <code>obol openclaw onboard</code> for additional runtimes.
+              default Hermes agent, or <code>obol agent new &lt;name&gt;</code>{' '}
+              with <code>--runtime hermes</code> /{' '}
+              <code>--runtime openclaw</code> for a named runtime agent.
             </EmptyMessage>
           )}
           {instances.map(instance => (

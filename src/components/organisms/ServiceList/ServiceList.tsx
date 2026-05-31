@@ -83,7 +83,8 @@ export function ServiceList() {
           {!loading && !error && offers.length === 0 && (
             <EmptyMessage>
               No services for sale yet. Run <code>obol sell http …</code> or{' '}
-              <code>obol sell inference …</code> to publish one.
+              <code>obol sell inference …</code>, or make an agent sellable with{' '}
+              <code>obol sell agent …</code>.
             </EmptyMessage>
           )}
 
