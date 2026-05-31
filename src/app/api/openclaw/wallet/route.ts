@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { rejectCrossOriginCredentialRead } from '@/lib/middleware/origin-check';
 import { OpenClawClient } from '@/lib/services/openclaw';
 import type { WalletMetadata } from '@/types/openclaw';
 
@@ -8,6 +9,9 @@ import type { WalletMetadata } from '@/types/openclaw';
  * Returns empty addresses array if no wallet-metadata ConfigMap exists.
  */
 export async function GET(request: NextRequest) {
+  const csrfReject = rejectCrossOriginCredentialRead(request);
+  if (csrfReject) return csrfReject;
+
   const id = request.nextUrl.searchParams.get('id');
 
   if (!id) {

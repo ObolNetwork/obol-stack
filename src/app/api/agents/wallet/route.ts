@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AgentClient } from '@/lib/services/agents';
+import { rejectCrossOriginCredentialRead } from '@/lib/middleware/origin-check';
 import type { AgentInstance, AgentRuntime } from '@/types/agent';
 import type { WalletMetadata } from '@/types/openclaw';
 
 export async function GET(request: NextRequest) {
+  const csrfReject = rejectCrossOriginCredentialRead(request);
+  if (csrfReject) return csrfReject;
+
   const id = request.nextUrl.searchParams.get('id');
   const runtime = request.nextUrl.searchParams.get(
     'runtime'
