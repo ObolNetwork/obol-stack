@@ -79,7 +79,9 @@ export function ServiceList() {
           {loading && offers.length === 0 && (
             <LoadingState size="small" message="Loading services..." />
           )}
-          {error && <ErrorState message="Failed to load services" />}
+          {error && (
+            <ErrorState message="Failed to load services" onRetry={refetch} />
+          )}
           {!loading && !error && offers.length === 0 && (
             <EmptyMessage>
               No services for sale yet. Run <code>obol sell http …</code> or{' '}

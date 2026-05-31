@@ -24,7 +24,7 @@ const InstancesList = styled(Box, {
 });
 
 export function AgentList({ onInstanceSelect }: AgentListProps) {
-  const { instances, loading, error } = useAgentInstances();
+  const { instances, loading, error, refetch } = useAgentInstances();
 
   const headerContent = (
     <Flex css={{ alignItems: 'center', gap: '$sm', paddingRight: '$xl' }}>
@@ -42,7 +42,12 @@ export function AgentList({ onInstanceSelect }: AgentListProps) {
           {loading && (
             <LoadingState size="small" message="Loading instances..." />
           )}
-          {error && <ErrorState message="Failed to load agent instances" />}
+          {error && (
+            <ErrorState
+              message="Failed to load agent instances"
+              onRetry={refetch}
+            />
+          )}
           {!loading && !error && instances.length === 0 && (
             <EmptyMessage>
               No agent instances found. Run <code>obol agent init</code> for the

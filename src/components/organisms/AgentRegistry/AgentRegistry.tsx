@@ -157,6 +157,7 @@ export function AgentRegistry() {
     nextPage,
     prevPage,
     total,
+    refetch,
   } = useRegistryAgents(
     debouncedSearch || undefined,
     chainFilter,
@@ -217,7 +218,12 @@ export function AgentRegistry() {
           {loading && agents.length === 0 && (
             <LoadingState size="small" message="Querying agent registry..." />
           )}
-          {error && <ErrorState message={`Registry unavailable: ${error}`} />}
+          {error && (
+            <ErrorState
+              message={`Registry unavailable: ${error}`}
+              onRetry={refetch}
+            />
+          )}
           {!loading && !error && agents.length === 0 && (
             <EmptyMessage>
               {search || hasActiveFilters
