@@ -59,6 +59,7 @@ export function serviceOfferFromCatalog(
     createdAt: live?.createdAt,
     endpoint: (entry.endpoint ?? '').trim() || live?.endpoint,
     conditions: live?.conditions ?? [],
+    agent: live?.agent,
     model:
       modelName || modelRuntime
         ? { name: modelName, runtime: modelRuntime }

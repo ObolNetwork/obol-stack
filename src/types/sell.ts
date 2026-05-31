@@ -42,6 +42,15 @@ export interface ServiceOfferRegistration {
   domains?: string[];
 }
 
+export interface ServiceOfferAgentRef {
+  name?: string;
+  namespace?: string;
+}
+
+export interface ServiceOfferAgent {
+  ref?: ServiceOfferAgentRef;
+}
+
 export interface ServiceOfferUpstream {
   service?: string;
   namespace?: string;
@@ -103,6 +112,7 @@ export interface ServiceOffer {
   createdAt?: string;
   endpoint?: string;
   conditions?: ServiceOfferCondition[];
+  agent?: ServiceOfferAgent;
   model?: ServiceOfferModel;
   upstream?: ServiceOfferUpstream;
   payment?: ServiceOfferPayment;
