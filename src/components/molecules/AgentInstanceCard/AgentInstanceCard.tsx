@@ -395,14 +395,6 @@ export function AgentInstanceCard({
               {truncateAddress(primaryAddress)}
             </WalletAddressText>
             <CopyButton text={primaryAddress} title="Copy address" />
-            <ExplorerLink
-              href={`https://etherscan.io/address/${primaryAddress}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="View on Etherscan"
-            >
-              <OpenInNew size="sm" />
-            </ExplorerLink>
             {metadata && metadata.count > 1 && (
               <KeysBadge>+{metadata.count - 1} keys</KeysBadge>
             )}
