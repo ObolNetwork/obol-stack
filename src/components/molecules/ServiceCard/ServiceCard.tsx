@@ -444,7 +444,9 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
             <Link
               href={endpoint}
               target="_blank"
+              rel="noopener noreferrer"
               title="Open service in new tab"
+              aria-label="Open service in new tab"
               css={{
                 display: 'inline-flex',
                 alignItems: 'center',

@@ -232,7 +232,11 @@ export function WalletModal({
   };
   return (
     <ModalContent>
-      <CloseButton onClick={onClose}>
+      <CloseButton
+        type="button"
+        aria-label="Close wallet modal"
+        onClick={onClose}
+      >
         <Close size="xs" color={theme.colors.body.value} />
       </CloseButton>
 

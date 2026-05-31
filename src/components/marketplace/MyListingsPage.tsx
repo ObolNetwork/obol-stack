@@ -523,9 +523,11 @@ function ListingRow({
             </RowAction>
           )}
           <RowAction
+            type="button"
             disabled={mutators.pending}
             onClick={() => mutators.onDelete(offer)}
             title="Delete listing"
+            aria-label={`Delete listing ${offer.name}`}
           >
             ×
           </RowAction>

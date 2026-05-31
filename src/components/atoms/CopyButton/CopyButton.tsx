@@ -54,7 +54,12 @@ export function CopyButton({ text, title = 'Copy' }: CopyButtonProps) {
   };
 
   return (
-    <CopyBtn onClick={handleCopy} title={title}>
+    <CopyBtn
+      type="button"
+      onClick={handleCopy}
+      title={title}
+      aria-label={title}
+    >
       {copied ? (
         <CheckIcon
           width={13}

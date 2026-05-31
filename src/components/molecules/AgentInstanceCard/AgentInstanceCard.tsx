@@ -421,6 +421,7 @@ export function AgentInstanceCard({
                       target="_blank"
                       rel="noopener noreferrer"
                       title={`View on ${b.chain.chainName} explorer`}
+                      aria-label={`View ${b.token.symbol} on ${b.chain.chainName} explorer`}
                     >
                       <OpenInNew size="sm" />
                     </ExplorerLink>
