@@ -59,7 +59,7 @@ const ServiceName = styled(Text, {
 });
 
 const TypeBadge = styled(Text, {
-  fontSize: '10px',
+  fontSize: '$1',
   fontWeight: '$semibold',
   color: '$body',
   backgroundColor: 'rgba(255, 255, 255, 0.05)',
@@ -119,7 +119,7 @@ const SkillsRow = styled(Flex, {
 });
 
 const SkillChip = styled(Text, {
-  fontSize: '10px',
+  fontSize: '$1',
   color: '$body',
   backgroundColor: 'rgba(255, 255, 255, 0.04)',
   border: '1px solid rgba(255, 255, 255, 0.08)',
@@ -141,14 +141,14 @@ const ConditionsRow = styled(Flex, {
 const ConditionDot = styled(Flex, {
   alignItems: 'center',
   gap: '$xxxs',
-  fontSize: '10px',
+  fontSize: '$1',
   color: '$body',
 
   variants: {
     state: {
       ok: { color: '$obolGreen' },
       pending: { color: '$obolGold' },
-      missing: { color: '$body', opacity: 0.5 },
+      missing: { color: '$muted', opacity: 1 },
     },
   },
 });
@@ -161,7 +161,7 @@ const Dot = styled(Box, {
 });
 
 const DrainingBadge = styled(Text, {
-  fontSize: '10px',
+  fontSize: '$1',
   fontWeight: '$semibold',
   color: '#f5c542',
   backgroundColor: 'rgba(245, 197, 66, 0.1)',
@@ -174,7 +174,7 @@ const DrainingBadge = styled(Text, {
 });
 
 const UsageBadge = styled(Text, {
-  fontSize: '10px',
+  fontSize: '$1',
   fontWeight: '$semibold',
   color: '$obolGreen',
   backgroundColor: 'rgba(47, 228, 171, 0.08)',
@@ -338,6 +338,9 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
   const trustBadges = serviceOfferTrustBadges(offer.registration);
   const visibleSkills = skills.slice(0, 3);
   const overflowSkills = Math.max(0, skills.length - visibleSkills.length);
+  const domains = offer.registration?.domains ?? [];
+  const visibleDomains = domains.slice(0, 3);
+  const overflowDomains = Math.max(0, domains.length - visibleDomains.length);
   const charged = offer.usage?.chargedRequests;
   const endpoint = publicServiceEndpoint(offer.endpoint, tunnelURL);
 
@@ -509,6 +512,15 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
         </SkillsRow>
       )}
 
+      {visibleDomains.length > 0 && (
+        <SkillsRow>
+          {visibleDomains.map(domain => (
+            <SkillChip key={domain}>Domain: {domain}</SkillChip>
+          ))}
+          {overflowDomains > 0 && <SkillChip>+{overflowDomains}</SkillChip>}
+        </SkillsRow>
+      )}
+
       {trustBadges.length > 0 && (
         <SkillsRow>
           {trustBadges.map(method => (
@@ -525,16 +537,18 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
           return (
             <ConditionDot key={key} state={state}>
               <Dot />
-              <Text css={{ fontSize: '10px', color: 'inherit' }}>{short}</Text>
+              <Text css={{ fontSize: 'inherit', color: 'inherit' }}>
+                {short}
+              </Text>
             </ConditionDot>
           );
         })}
         <Text
           css={{
             marginLeft: 'auto',
-            fontSize: '10px',
+            fontSize: '$1',
             color: '$body',
-            opacity: 0.65,
+            opacity: 0.8,
             fontFamily: 'monospace',
           }}
         >
