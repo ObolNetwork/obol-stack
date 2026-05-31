@@ -261,6 +261,7 @@ export function OpenClawInstanceCard({
           <Link
             href={dashboardUrl}
             target="_blank"
+            rel="noopener noreferrer"
             css={{
               fontSize: '13px',
             }}

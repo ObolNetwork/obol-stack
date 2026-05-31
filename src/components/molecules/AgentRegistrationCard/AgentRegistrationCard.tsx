@@ -231,7 +231,11 @@ export function AgentRegistrationCard() {
                         key={`${entry.agentRegistry}-${entry.agentId}-${index}`}
                       >
                         {explorerUrl ? (
-                          <IdentityLink href={explorerUrl} target="_blank">
+                          <IdentityLink
+                            href={explorerUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
                             {label}
                             <OpenInNew size="sm" />
                           </IdentityLink>
@@ -324,7 +328,11 @@ export function AgentRegistrationCard() {
                   {endpointServices.map((s: AgentRegistrationService) => (
                     <ServiceRow key={s.name} css={{ marginTop: '$xxs' }}>
                       <ServiceLabel>{s.name}</ServiceLabel>
-                      <EndpointLink href={s.endpoint!} target="_blank">
+                      <EndpointLink
+                        href={s.endpoint!}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
                         {s.endpoint}
                         <OpenInNew size="sm" />
                       </EndpointLink>

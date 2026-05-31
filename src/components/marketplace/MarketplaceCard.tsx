@@ -456,7 +456,11 @@ function MarketplaceCardImpl({ item, onDetails, onBuy }: MarketplaceCardProps) {
           </SecondaryBtn>
           <Box css={{ flex: 1 }} />
           {skillUrl ? (
-            <SkillLink href={skillUrl} target="_blank" rel="noreferrer">
+            <SkillLink
+              href={skillUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               skill.md <ExternalLinkIcon width={12} height={12} />
             </SkillLink>
           ) : null}
