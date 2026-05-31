@@ -20,6 +20,11 @@ import { useAgentFilters } from '../../../hooks/useAgentFilters';
 import { useSearch } from '../../../hooks/useSearch';
 import { truncateAddress } from '../../../utils/address';
 import type { Agent8004 } from '@/types/registry';
+import {
+  registryCapabilityBadges,
+  registryChainBadges,
+  registryHealthBadge,
+} from '@/lib/services/registry-display';
 
 const AgentList = styled(Box, {
   display: 'flex',
@@ -35,8 +40,10 @@ const ToolBar = styled(Flex, {
 });
 
 const AgentTopRow = styled(Flex, {
-  alignItems: 'center',
+  alignItems: 'flex-start',
   justifyContent: 'space-between',
+  gap: '$xs',
+  flexWrap: 'wrap',
   marginBottom: '$xxs',
 });
 
@@ -69,6 +76,12 @@ const MetaRow = styled(Flex, {
   marginTop: '$xxs',
 });
 
+const CapabilityRow = styled(Flex, {
+  gap: '$xxs',
+  flexWrap: 'wrap',
+  marginTop: '$xs',
+});
+
 const OwnerAddr = styled(Text, {
   fontSize: '$1',
   color: '$muted',
@@ -85,15 +98,33 @@ function AgentCardItem({ agent }: { agent: Agent8004 }) {
 
   const webEndpoint = agent.services?.web?.endpoint;
   const mcpEndpoint = agent.services?.mcp?.endpoint;
+  const chainBadges = registryChainBadges(agent);
+  const healthBadge = registryHealthBadge(agent.health_status);
+  const capabilityBadges = registryCapabilityBadges(agent);
 
   return (
     <ItemCard>
       <AgentTopRow>
-        <Flex css={{ alignItems: 'center', gap: '$xs' }}>
+        <Flex
+          css={{
+            alignItems: 'center',
+            gap: '$xs',
+            flexWrap: 'wrap',
+            minWidth: 0,
+          }}
+        >
           <Avatar src={agent.image_url} alt={agent.name} fallback={initial} />
           <AgentName>{agent.name || `Agent #${agent.token_id}`}</AgentName>
           <AgentId>#{agent.token_id}</AgentId>
           {agent.is_verified && <Badge variant="green">verified</Badge>}
+          {chainBadges.map(badge => (
+            <Badge key={badge.key} variant={badge.variant}>
+              {badge.label}
+            </Badge>
+          ))}
+          {healthBadge && (
+            <Badge variant={healthBadge.variant}>{healthBadge.label}</Badge>
+          )}
         </Flex>
         <OwnerAddr>{truncateAddress(agent.owner_address)}</OwnerAddr>
       </AgentTopRow>
@@ -115,17 +146,38 @@ function AgentCardItem({ agent }: { agent: Agent8004 }) {
         {agent.total_score > 0 && (
           <Badge variant="code">{agent.total_score} pts</Badge>
         )}
+        {agent.star_count > 0 && (
+          <Badge variant="code">{agent.star_count} stars</Badge>
+        )}
       </MetaRow>
+
+      {capabilityBadges.length > 0 && (
+        <CapabilityRow>
+          {capabilityBadges.map(badge => (
+            <Badge key={badge.key} variant={badge.variant}>
+              {badge.label}
+            </Badge>
+          ))}
+        </CapabilityRow>
+      )}
 
       {(webEndpoint || mcpEndpoint) && (
         <Flex css={{ gap: '$sm', marginTop: '$xs', flexWrap: 'wrap' }}>
           {webEndpoint && (
-            <EndpointLink href={webEndpoint} target="_blank">
+            <EndpointLink
+              href={webEndpoint}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               {webEndpoint}
             </EndpointLink>
           )}
           {mcpEndpoint && (
-            <EndpointLink href={mcpEndpoint} target="_blank">
+            <EndpointLink
+              href={mcpEndpoint}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               MCP: {mcpEndpoint}
             </EndpointLink>
           )}
