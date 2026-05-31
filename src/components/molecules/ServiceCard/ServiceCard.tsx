@@ -15,7 +15,10 @@ import { CopyButton } from '../../atoms/CopyButton/CopyButton';
 import { ObolAmountSwitch } from '../../atoms/ObolAmountSwitch';
 import { StopDrainModal } from '../StopDrainModal';
 import { serviceOfferResourcePath } from '@/lib/services/sell-actions';
-import { serviceOfferAssetSymbol } from '@/lib/services/service-offer-display';
+import {
+  serviceOfferAssetSymbol,
+  serviceOfferTrustBadges,
+} from '@/lib/services/service-offer-display';
 import type {
   ServiceOffer,
   ServiceOfferAgentLink,
@@ -359,6 +362,7 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
     offer.registration?.skills && offer.registration.skills.length > 0
       ? offer.registration.skills
       : (offer.agentResolution?.skills ?? []);
+  const trustBadges = serviceOfferTrustBadges(offer.registration);
   const visibleSkills = skills.slice(0, 3);
   const overflowSkills = Math.max(0, skills.length - visibleSkills.length);
   const charged = offer.usage?.chargedRequests;
@@ -527,6 +531,16 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
             <SkillChip key={skill}>{skill}</SkillChip>
           ))}
           {overflowSkills > 0 && <SkillChip>+{overflowSkills}</SkillChip>}
+        </SkillsRow>
+      )}
+
+      {trustBadges.length > 0 && (
+        <SkillsRow>
+          {trustBadges.map(method => (
+            <SkillChip key={method} title="Supported trust method">
+              Trust: {method}
+            </SkillChip>
+          ))}
         </SkillsRow>
       )}
 

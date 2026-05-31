@@ -38,8 +38,17 @@ export interface ServiceOfferRegistration {
   name?: string;
   description?: string;
   image?: string;
+  services?: ServiceOfferRegistrationService[];
+  supportedTrust?: string[];
   skills?: string[];
   domains?: string[];
+  metadata?: Record<string, string>;
+}
+
+export interface ServiceOfferRegistrationService {
+  name?: string;
+  endpoint?: string;
+  version?: string;
 }
 
 export interface ServiceOfferAgentRef {
@@ -106,6 +115,8 @@ export interface ServiceOffer {
   registrationPending?: boolean;
   /** RFC3339 drain deadline from /api/services.json. Present only while draining. */
   drainEndsAt?: string;
+  /** Optional seller-provided provenance metadata from spec.provenance. */
+  provenance?: Record<string, string>;
   /** True when the controller annotation `obol.org/paused` is set. */
   paused?: boolean;
   /** ISO-8601 of CR creation (from metadata.creationTimestamp). */

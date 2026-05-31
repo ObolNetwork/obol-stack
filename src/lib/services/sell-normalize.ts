@@ -31,6 +31,7 @@ export function normalizeServiceOffer(raw: unknown): ServiceOffer {
     model: normalizeModel(spec.model),
     upstream: normalizeUpstream(spec.upstream),
     payment: normalizePayment(spec.payment),
+    provenance: normalizeStringRecord(spec.provenance),
     registration: normalizeRegistration(spec.registration),
     agentResolution: normalizeAgentResolution(status.agentResolution),
     // agentLink and usage are filled in by the API route after joining
@@ -166,11 +167,49 @@ function normalizeRegistration(value: unknown) {
     name: typeof r.name === 'string' ? r.name : undefined,
     description: typeof r.description === 'string' ? r.description : undefined,
     image: typeof r.image === 'string' ? r.image : undefined,
+    services: normalizeRegistrationServices(r.services),
+    supportedTrust: normalizeStringArray(r.supportedTrust),
     skills: Array.isArray(r.skills)
       ? r.skills.filter((s): s is string => typeof s === 'string')
       : undefined,
     domains: Array.isArray(r.domains)
       ? r.domains.filter((d): d is string => typeof d === 'string')
       : undefined,
+    metadata: normalizeStringRecord(r.metadata),
   };
+}
+
+function normalizeRegistrationServices(value: unknown) {
+  if (!Array.isArray(value)) return undefined;
+  const services = value
+    .filter(
+      (s): s is Record<string, unknown> => typeof s === 'object' && s !== null
+    )
+    .map(s => {
+      const service: { name?: string; endpoint?: string; version?: string } =
+        {};
+      if (typeof s.name === 'string') service.name = s.name;
+      if (typeof s.endpoint === 'string') service.endpoint = s.endpoint;
+      if (typeof s.version === 'string') service.version = s.version;
+      return service;
+    })
+    .filter(s => s.name || s.endpoint || s.version);
+  return services.length > 0 ? services : undefined;
+}
+
+function normalizeStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out = value.filter((s): s is string => typeof s === 'string');
+  return out.length > 0 ? out : undefined;
+}
+
+function normalizeStringRecord(
+  value: unknown
+): Record<string, string> | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const entries = Object.entries(value as Record<string, unknown>).filter(
+    (entry): entry is [string, string] => typeof entry[1] === 'string'
+  );
+  if (entries.length === 0) return undefined;
+  return Object.fromEntries(entries);
 }

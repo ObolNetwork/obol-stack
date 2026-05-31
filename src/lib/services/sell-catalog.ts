@@ -55,6 +55,7 @@ export function serviceOfferFromCatalog(
       typeof entry.drainEndsAt === 'string'
         ? entry.drainEndsAt.trim() || undefined
         : undefined,
+    provenance: live?.provenance,
     paused: live?.paused,
     createdAt: live?.createdAt,
     endpoint: (entry.endpoint ?? '').trim() || live?.endpoint,
