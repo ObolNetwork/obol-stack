@@ -4,6 +4,7 @@ import { Box, Flex, Link, OpenInNew, styled } from '@obolnetwork/obol-ui';
 import { WalletConnection } from '../../molecules/WalletConnection';
 import { TopNav, type TopNavId } from '../TopNav';
 import { isWalletConnectConfigured } from '@/lib/config/wagmi';
+import { publicStorefrontUrl } from '@/lib/services/public-storefront';
 import { useTunnelURL } from '../../../hooks/useAgents';
 
 // 3-column grid keeps the nav dead-center regardless of the left wordmark
@@ -47,6 +48,7 @@ export function DashboardHeader({
   onNavSelect,
 }: DashboardHeaderProps = {}) {
   const { tunnelURL } = useTunnelURL();
+  const storefrontUrl = publicStorefrontUrl(tunnelURL);
 
   return (
     <HeaderGrid>
@@ -120,12 +122,19 @@ export function DashboardHeader({
           alignItems: 'center',
         }}
       >
-        {tunnelURL && (
-          <StorefrontLink href={tunnelURL} target="_blank">
-            Storefront
-            <OpenInNew size="sm" />
-          </StorefrontLink>
-        )}
+        <StorefrontLink
+          href={storefrontUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          title={
+            tunnelURL
+              ? 'Open the public storefront'
+              : 'Open the local controller storefront'
+          }
+        >
+          Storefront
+          <OpenInNew size="sm" />
+        </StorefrontLink>
         {isWalletConnectConfigured() && <WalletConnection />}
       </Flex>
     </HeaderGrid>

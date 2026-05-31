@@ -20,6 +20,10 @@ import {
   hasCapabilityTaxonomy,
   serviceAvailabilityLabel,
 } from '@/lib/services/agent-registration-capabilities';
+import {
+  AGENT_REGISTRATION_PATH,
+  publicResourceUrl,
+} from '@/lib/services/public-storefront';
 
 const Body = styled(Box, {
   display: 'flex',
@@ -152,6 +156,10 @@ export function AgentRegistrationCard() {
     registration?.services?.filter(
       (s: AgentRegistrationService) => s.endpoint
     ) ?? [];
+  const rawRegistrationUrl = publicResourceUrl(
+    tunnelURL,
+    AGENT_REGISTRATION_PATH
+  );
 
   const headerContent = <SectionTitle>Agent Registration</SectionTitle>;
 
@@ -167,6 +175,17 @@ export function AgentRegistrationCard() {
             <NotPublished>
               No registration published yet. Run <code>obol sell http …</code>{' '}
               with <code>--registration.enabled=true</code> to publish one.
+              <Flex css={{ marginTop: '$xs' }}>
+                <Link
+                  href={rawRegistrationUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  css={{ fontSize: '$1' }}
+                >
+                  Open registration JSON
+                  <OpenInNew size="sm" />
+                </Link>
+              </Flex>
             </NotPublished>
           )}
 
@@ -318,18 +337,17 @@ export function AgentRegistrationCard() {
                 </Box>
               )}
 
-              {tunnelURL && (
-                <Flex css={{ marginTop: '$xs' }}>
-                  <Link
-                    href={`${tunnelURL.replace(/\/$/, '')}/.well-known/agent-registration.json`}
-                    target="_blank"
-                    css={{ fontSize: '$1' }}
-                  >
-                    View raw registration JSON
-                    <OpenInNew size="sm" />
-                  </Link>
-                </Flex>
-              )}
+              <Flex css={{ marginTop: '$xs' }}>
+                <Link
+                  href={rawRegistrationUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  css={{ fontSize: '$1' }}
+                >
+                  View raw registration JSON
+                  <OpenInNew size="sm" />
+                </Link>
+              </Flex>
             </>
           )}
         </Body>
