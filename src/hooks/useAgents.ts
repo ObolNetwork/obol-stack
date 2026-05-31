@@ -176,18 +176,28 @@ export function useAgentRegistration() {
     null
   );
   const [tunnelURL, setTunnelURL] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const fetchRegistration = useCallback(async () => {
     try {
+      setLoading(true);
+      setError(null);
       const response = await fetch('/api/agents/registration');
-      if (response.ok) {
-        const data = await response.json();
-        setRegistration(data?.registration ?? null);
-        setTunnelURL(data?.tunnelURL ?? null);
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || `HTTP ${response.status}`);
       }
-    } catch {
+
+      setRegistration(data?.registration ?? null);
+      setTunnelURL(data?.tunnelURL ?? null);
+    } catch (err) {
       setRegistration(null);
+      setTunnelURL(null);
+      setError(
+        err instanceof Error ? err.message : 'Failed to fetch registration'
+      );
     } finally {
       setLoading(false);
     }
@@ -197,7 +207,13 @@ export function useAgentRegistration() {
     fetchRegistration();
   }, [fetchRegistration]);
 
-  return { registration, tunnelURL, loading };
+  return {
+    registration,
+    tunnelURL,
+    loading,
+    error,
+    refetch: fetchRegistration,
+  };
 }
 
 export function isSupportedAgentRuntime(

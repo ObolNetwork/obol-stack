@@ -8,6 +8,7 @@ import { Avatar } from '../../atoms/Avatar';
 import { Accordion } from '../../molecules/Accordion';
 import { SectionTitle } from '../../atoms/SectionTitle';
 import { LoadingState } from '../../molecules/LoadingState';
+import { ErrorState } from '../../molecules/ErrorState';
 import {
   useAgentRegistration,
   type AgentRegistrationService,
@@ -146,7 +147,8 @@ function metadataEntries(
 }
 
 export function AgentRegistrationCard() {
-  const { registration, tunnelURL, loading } = useAgentRegistration();
+  const { registration, tunnelURL, loading, error, refetch } =
+    useAgentRegistration();
   const registrationEntries = registration?.registrations ?? [];
   const topLevelMetadata = metadataEntries(registration?.metadata);
   const provenanceEntries = metadataEntries(registration?.provenance);
@@ -171,7 +173,14 @@ export function AgentRegistrationCard() {
             <LoadingState size="small" message="Loading registration..." />
           )}
 
-          {!loading && !registration && (
+          {!loading && error && (
+            <ErrorState
+              message={`Registration unavailable: ${error}`}
+              onRetry={refetch}
+            />
+          )}
+
+          {!loading && !error && !registration && (
             <NotPublished>
               No registration published yet. Registration is enabled by default;
               re-run <code>obol sell http …</code> without{' '}
