@@ -35,4 +35,15 @@ describe('ServiceCard metadata presentation', () => {
     assert.doesNotMatch(source, /RoutePublished/);
     assert.doesNotMatch(source, /ConditionsRow/);
   });
+
+  it('pins the service status pill to the card header edge', async () => {
+    const source = await readFile(
+      'src/components/molecules/ServiceCard/ServiceCard.tsx',
+      'utf8'
+    );
+
+    assert.match(source, /const TopRow = styled\(Flex, \{[\s\S]*width: '100%'/);
+    assert.match(source, /const HeaderMeta = styled\(Flex, \{[\s\S]*flex: 1/);
+    assert.match(source, /const HeaderStatus = styled\(Flex, \{[\s\S]*marginLeft: 'auto'/);
+  });
 });

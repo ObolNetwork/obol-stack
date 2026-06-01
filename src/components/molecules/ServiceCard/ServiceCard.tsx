@@ -47,8 +47,24 @@ const CardContainer = styled(Box, {
 const TopRow = styled(Flex, {
   alignItems: 'center',
   justifyContent: 'space-between',
+  width: '100%',
   marginBottom: '$xs',
   gap: '$sm',
+});
+
+const HeaderMeta = styled(Flex, {
+  alignItems: 'center',
+  gap: '$xs',
+  flexWrap: 'wrap',
+  flex: 1,
+  minWidth: 0,
+});
+
+const HeaderStatus = styled(Flex, {
+  alignItems: 'center',
+  gap: '$xs',
+  flexShrink: 0,
+  marginLeft: 'auto',
 });
 
 const ServiceName = styled(Text, {
@@ -287,7 +303,7 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
   return (
     <CardContainer>
       <TopRow>
-        <Flex css={{ alignItems: 'center', gap: '$xs', flexWrap: 'wrap' }}>
+        <HeaderMeta>
           <ServiceName>{displayName}</ServiceName>
           <TypeBadge>{TYPE_LABEL[offer.type]}</TypeBadge>
           {modelName && (
@@ -339,8 +355,8 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
               <OpenInNew size="sm" />
             </Link>
           )}
-        </Flex>
-        <Flex css={{ alignItems: 'center', gap: '$xs' }}>
+        </HeaderMeta>
+        <HeaderStatus>
           {isDraining && (
             <DrainingBadge title={`Drain ends at ${drainEnd?.toISOString()}`}>
               Draining{countdown ? ` · ends in ${countdown}` : ''}
@@ -350,7 +366,7 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
             status={isDraining ? 'syncing' : isReady ? 'synced' : 'syncing'}
             label={isDraining ? 'Draining' : isReady ? 'Ready' : 'Pending'}
           />
-        </Flex>
+        </HeaderStatus>
       </TopRow>
 
       {offer.registration?.description && (
