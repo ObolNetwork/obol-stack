@@ -44,7 +44,8 @@ const CardContainer = styled(Box, {
   },
 });
 
-const TopRow = styled(Flex, {
+const TopRow = styled('div', {
+  display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
   width: '100%',
@@ -52,15 +53,17 @@ const TopRow = styled(Flex, {
   gap: '$sm',
 });
 
-const HeaderMeta = styled(Flex, {
+const HeaderMeta = styled('div', {
+  display: 'flex',
   alignItems: 'center',
   gap: '$xs',
   flexWrap: 'wrap',
-  flex: 1,
+  flex: '1 1 auto',
   minWidth: 0,
 });
 
-const HeaderStatus = styled(Flex, {
+const HeaderStatus = styled('div', {
+  display: 'flex',
   alignItems: 'center',
   gap: '$xs',
   flexShrink: 0,

@@ -42,8 +42,8 @@ describe('ServiceCard metadata presentation', () => {
       'utf8'
     );
 
-    assert.match(source, /const TopRow = styled\(Flex, \{[\s\S]*width: '100%'/);
-    assert.match(source, /const HeaderMeta = styled\(Flex, \{[\s\S]*flex: 1/);
-    assert.match(source, /const HeaderStatus = styled\(Flex, \{[\s\S]*marginLeft: 'auto'/);
+    assert.match(source, /const TopRow = styled\('div', \{[\s\S]*width: '100%'/);
+    assert.match(source, /const HeaderMeta = styled\('div', \{[\s\S]*flex: '1 1 auto'/);
+    assert.match(source, /const HeaderStatus = styled\('div', \{[\s\S]*marginLeft: 'auto'/);
   });
 });
