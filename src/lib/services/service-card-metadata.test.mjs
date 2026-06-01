@@ -21,6 +21,18 @@ describe('ServiceCard metadata presentation', () => {
 
     assert.doesNotMatch(source, /fontSize: '10px'/);
     assert.doesNotMatch(source, /opacity: 0\.5/);
-    assert.match(source, /missing: \{ color: '\$muted', opacity: 1 \}/);
+  });
+
+  it('does not render controller condition internals as card metadata', async () => {
+    const source = await readFile(
+      'src/components/molecules/ServiceCard/ServiceCard.tsx',
+      'utf8'
+    );
+
+    assert.doesNotMatch(source, /ModelReady/);
+    assert.doesNotMatch(source, /UpstreamHealthy/);
+    assert.doesNotMatch(source, /PaymentGateReady/);
+    assert.doesNotMatch(source, /RoutePublished/);
+    assert.doesNotMatch(source, /ConditionsRow/);
   });
 });

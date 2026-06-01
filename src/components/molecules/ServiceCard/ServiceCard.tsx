@@ -128,37 +128,6 @@ const SkillChip = styled(Text, {
   whiteSpace: 'nowrap',
 });
 
-const ConditionsRow = styled(Flex, {
-  alignItems: 'center',
-  gap: '$xs',
-  flexWrap: 'wrap',
-  marginTop: '$sm',
-  paddingTop: '$xs',
-  borderTop: '1px dashed $stroke',
-});
-
-const ConditionDot = styled(Flex, {
-  alignItems: 'center',
-  gap: '$xxxs',
-  fontSize: '$1',
-  color: '$body',
-
-  variants: {
-    state: {
-      ok: { color: '$obolGreen' },
-      pending: { color: '$obolGold' },
-      missing: { color: '$muted', opacity: 1 },
-    },
-  },
-});
-
-const Dot = styled(Box, {
-  width: 6,
-  height: 6,
-  borderRadius: '$round',
-  backgroundColor: 'currentColor',
-});
-
 const DrainingBadge = styled(Text, {
   fontSize: '$1',
   fontWeight: '$semibold',
@@ -201,14 +170,6 @@ const TYPE_LABEL: Record<ServiceOfferType, string> = {
   http: 'HTTP',
 };
 
-const CONDITION_ORDER: Array<{ key: string; short: string }> = [
-  { key: 'ModelReady', short: 'Model' },
-  { key: 'UpstreamHealthy', short: 'Upstream' },
-  { key: 'PaymentGateReady', short: 'Gate' },
-  { key: 'RoutePublished', short: 'Route' },
-  { key: 'Registered', short: 'Registered' },
-];
-
 function truncateAddress(address: string): string {
   if (address.length <= 10) return address;
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
@@ -229,24 +190,6 @@ function formatPrice(
 
 function pluralizeSales(n: number): string {
   return n === 1 ? '1 sale' : `${n.toLocaleString()} sales`;
-}
-
-function conditionState(
-  conditions: ServiceOfferCondition[] | undefined,
-  type: string
-): 'ok' | 'pending' | 'missing' {
-  const c = conditions?.find(x => x.type === type);
-  if (!c) return 'missing';
-  if (c.status === 'True') return 'ok';
-  return 'pending';
-}
-
-function conditionsToShow(offer: ServiceOffer) {
-  return CONDITION_ORDER.filter(({ key }) => {
-    if (key === 'ModelReady' && offer.type === 'http') return false;
-    if (key === 'Registered' && !offer.registration?.enabled) return false;
-    return true;
-  });
 }
 
 function agentDisplayName(link: ServiceOfferAgentLink): string {
@@ -494,31 +437,6 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
           ))}
         </SkillsRow>
       )}
-
-      <ConditionsRow>
-        {conditionsToShow(offer).map(({ key, short }) => {
-          const state = conditionState(offer.conditions, key);
-          return (
-            <ConditionDot key={key} state={state}>
-              <Dot />
-              <Text css={{ fontSize: 'inherit', color: 'inherit' }}>
-                {short}
-              </Text>
-            </ConditionDot>
-          );
-        })}
-        <Text
-          css={{
-            marginLeft: 'auto',
-            fontSize: '$1',
-            color: '$body',
-            opacity: 0.8,
-            fontFamily: 'monospace',
-          }}
-        >
-          {offer.namespace}/{offer.name}
-        </Text>
-      </ConditionsRow>
 
       <Flex
         css={{
