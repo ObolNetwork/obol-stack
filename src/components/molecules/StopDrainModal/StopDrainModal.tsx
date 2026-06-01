@@ -135,11 +135,8 @@ export function StopDrainModal({
             {grace}
           </Text>
           . The listing is removed from public discovery immediately. After the
-          grace period the route is torn down. The CR remains until you run{' '}
-          <Text as="span" css={{ fontFamily: 'monospace' }}>
-            obol sell delete
-          </Text>
-          .
+          grace period the route is torn down while the ServiceOffer record is
+          retained for status and audit history.
         </Text>
 
         <ResourceLine>

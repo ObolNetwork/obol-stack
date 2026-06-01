@@ -67,18 +67,6 @@ describe('privileged route origin guards', () => {
     }
   });
 
-  it('guards ServiceOffer pause, resume, and delete before Kubernetes writes', async () => {
-    const source = await read('src/app/api/sell/[name]/route.ts');
-    const guardCount = source.match(/rejectCrossOrigin\(req\)/g)?.length ?? 0;
-
-    assert.equal(guardCount, 2);
-    assertGuardBefore(
-      source,
-      'rejectCrossOrigin(req)',
-      /new SellClient\(/,
-      'origin guard must run before ServiceOffer mutation clients'
-    );
-  });
 });
 
 describe('chat message rendering', () => {

@@ -14,7 +14,6 @@ import { StatusPill } from '../../atoms/StatusIndicator';
 import { CopyButton } from '../../atoms/CopyButton/CopyButton';
 import { ObolAmountSwitch } from '../../atoms/ObolAmountSwitch';
 import { StopDrainModal } from '../StopDrainModal';
-import { serviceOfferResourcePath } from '@/lib/services/sell-actions';
 import {
   serviceOfferAssetSymbol,
   serviceOfferTrustBadges,
@@ -186,13 +185,6 @@ const UsageBadge = styled(Text, {
   fontVariantNumeric: 'tabular-nums',
 });
 
-const ActionError = styled(Text, {
-  marginTop: '$xxs',
-  fontSize: '$1',
-  color: '$test',
-  textAlign: 'right',
-});
-
 const AgentLinkText = styled('a', {
   fontSize: '$1',
   color: '$obolGreen',
@@ -321,8 +313,6 @@ function useNow(intervalMs = 1000, enabled = true): Date {
 }
 
 export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
-  const [deleteState, setDeleteState] = useState<'idle' | 'submitting'>('idle');
-  const [actionError, setActionError] = useState<string | null>(null);
   const displayName = offer.registration?.name || offer.name;
   const price = formatPrice(offer);
   const symbol = serviceOfferAssetSymbol(offer.payment);
@@ -350,32 +340,6 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
   const now = useNow(1000, isDraining);
   const countdown = drainEnd ? formatCountdown(drainEnd, now) : null;
   const isReady = !isDraining && offer.status === 'Ready';
-
-  const handleDelete = async () => {
-    const resource = `${offer.namespace}/${offer.name}`;
-    const confirmed = window.confirm(
-      `Delete ${resource}? This removes the ServiceOffer CR after controller cleanup.`
-    );
-    if (!confirmed) return;
-
-    setDeleteState('submitting');
-    setActionError(null);
-    try {
-      const response = await fetch(
-        serviceOfferResourcePath(offer.name, offer.namespace),
-        { method: 'DELETE' }
-      );
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data?.error || `Delete failed (${response.status})`);
-      }
-      await onChanged?.();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'unknown error');
-    } finally {
-      setDeleteState('idle');
-    }
-  };
 
   return (
     <CardContainer>
@@ -575,30 +539,13 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
               <Button
                 color="secondary"
                 title="Drain in-flight buyers, then tear down the route"
-                disabled={deleteState === 'submitting'}
               >
                 Stop &amp; drain
               </Button>
             }
           />
         )}
-        <Button
-          color="secondary"
-          type="button"
-          title="Delete the ServiceOffer CR"
-          disabled={deleteState === 'submitting'}
-          onClick={() => {
-            void handleDelete();
-          }}
-          css={{
-            color: '$test',
-            borderColor: 'rgba(255, 107, 107, 0.35)',
-          }}
-        >
-          {deleteState === 'submitting' ? 'Deleting...' : 'Delete'}
-        </Button>
       </Flex>
-      {actionError && <ActionError>{actionError}</ActionError>}
     </CardContainer>
   );
 }

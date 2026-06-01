@@ -15,7 +15,8 @@ export const dynamic = 'force-dynamic';
  *
  * Initiates a drain on a ServiceOffer by patching spec.drainAt (now) and
  * spec.drainGracePeriod (Go duration string). The CR is intentionally kept
- * around — `obol sell delete` remains the canonical full removal.
+ * around so sellers retain status and audit history after the route is torn
+ * down.
  *
  * Body: { name: string, namespace: string, grace?: string, force?: boolean }
  *

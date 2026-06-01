@@ -3,12 +3,7 @@
  * via the Kubernetes CustomObjectsApi.
  */
 
-import {
-  CustomObjectsApi,
-  KubeConfig,
-  PatchStrategy,
-  setHeaderOptions,
-} from '@kubernetes/client-node';
+import { CustomObjectsApi, KubeConfig } from '@kubernetes/client-node';
 import { ObjectCustomObjectsApi } from '@kubernetes/client-node/dist/gen/types/ObjectParamAPI';
 import https from 'node:https';
 import type { CreateServiceOfferRequest, ServiceOffer } from '@/types/sell';
@@ -42,52 +37,6 @@ export class SellClient {
       namespace: req.namespace,
       plural: CRD_PLURAL,
       body,
-    });
-  }
-
-  /**
-   * Set or clear the `obol.org/paused` annotation on a ServiceOffer.
-   *
-   * Kept as a harmless no-op against the backend bundle (which replaces
-   * pause-via-annotation with drain-via-spec) so the legacy
-   * /api/sell/[name] route continues to compile and run. New stop flows
-   * should call `patchServiceOffer` with spec.drainAt instead.
-   */
-  async setPaused(
-    name: string,
-    namespace: string,
-    paused: boolean
-  ): Promise<void> {
-    await this.customApi.patchNamespacedCustomObject(
-      {
-        group: CRD_GROUP,
-        version: CRD_VERSION,
-        namespace,
-        plural: CRD_PLURAL,
-        name,
-        body: {
-          metadata: {
-            annotations: {
-              'obol.org/paused': paused ? 'true' : null,
-            },
-          },
-        },
-      },
-      setHeaderOptions('Content-Type', PatchStrategy.MergePatch)
-    );
-  }
-
-  /**
-   * Delete a ServiceOffer CR. The controller's finalizer handles cleanup of
-   * downstream HTTPRoute, Middleware, ReferenceGrant, and RegistrationRequest.
-   */
-  async deleteServiceOffer(name: string, namespace: string): Promise<void> {
-    await this.customApi.deleteNamespacedCustomObject({
-      group: CRD_GROUP,
-      version: CRD_VERSION,
-      namespace,
-      plural: CRD_PLURAL,
-      name,
     });
   }
 
