@@ -114,9 +114,12 @@ export function SellInferenceModal({
     nameValue,
     chainValue,
     tokenValue,
+    paymentError,
+    disabledChainValues,
     isValid,
     register,
-    setValue,
+    selectPaymentToken,
+    selectPaymentChain,
     handleSubmit,
     onSubmit,
     handleClose,
@@ -225,9 +228,7 @@ export function SellInferenceModal({
                       key={token}
                       type="button"
                       active={tokenValue === token}
-                      onClick={() =>
-                        setValue('token', token, { shouldValidate: true })
-                      }
+                      onClick={() => selectPaymentToken(token)}
                     >
                       {token}
                     </TokenToggle>
@@ -238,7 +239,9 @@ export function SellInferenceModal({
                 <FieldLabel>Chain</FieldLabel>
                 <ChainSelector
                   value={chainValue}
-                  onChange={v => v && setValue('chain', v)}
+                  onChange={selectPaymentChain}
+                  disabledValues={disabledChainValues}
+                  disabledReason={`${tokenValue} is not configured on this chain.`}
                 />
               </FieldGroup>
             </InlineFields>
@@ -272,7 +275,9 @@ export function SellInferenceModal({
               </FieldGroup>
             </InlineFields>
 
-            {submitState === 'error' && <ErrorMessage>{errorMsg}</ErrorMessage>}
+            {(paymentError || submitState === 'error') && (
+              <ErrorMessage>{paymentError ?? errorMsg}</ErrorMessage>
+            )}
           </ModalBody>
 
           <ModalFooter>

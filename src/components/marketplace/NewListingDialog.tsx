@@ -12,6 +12,14 @@ import { useAccount } from 'wagmi';
 import { ChainIcon } from '@/components/atoms/ChainIcon';
 import { CopyButton } from '@/components/atoms/CopyButton';
 import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
+import {
+  CLIENT_SELL_ASSET_ENV,
+  isSellTokenSupportedOnChain,
+  reconcileSellPaymentSelection,
+  resolveSellAsset,
+  type SellPaymentChain,
+  type SellPaymentToken,
+} from '@/lib/services/sell-assets';
 import type { ChainName } from '@/types/dashboard';
 
 export interface NewListingDialogProps {
@@ -20,10 +28,10 @@ export interface NewListingDialogProps {
 }
 
 type ServiceType = 'inference' | 'route';
-type PaymentToken = 'USDC' | 'OBOL';
+type PaymentToken = SellPaymentToken;
 type PriceUnit = 'req' | 'mtok' | 'hour';
 type Visibility = 'local' | 'erc8004';
-type ChainKey = 'base' | 'base-sepolia' | 'mainnet';
+type ChainKey = SellPaymentChain;
 
 const TOKEN_PREFIX: Record<PaymentToken, string> = {
   USDC: '$',
@@ -206,6 +214,12 @@ const SegmentedButton = styled('button', {
       },
       false: { fontWeight: '$medium' },
     },
+    unavailable: {
+      true: {
+        cursor: 'not-allowed',
+        opacity: 0.5,
+      },
+    },
   },
 });
 
@@ -215,7 +229,7 @@ function Segmented<T extends string>({
   onChange,
 }: {
   value: T;
-  options: Array<{ k: T; label: string }>;
+  options: Array<{ k: T; label: string; disabled?: boolean; title?: string }>;
   onChange: (v: T) => void;
 }) {
   return (
@@ -227,7 +241,12 @@ function Segmented<T extends string>({
           role="tab"
           aria-selected={opt.k === value}
           active={opt.k === value}
-          onClick={() => onChange(opt.k)}
+          unavailable={opt.disabled}
+          disabled={opt.disabled}
+          title={opt.title}
+          onClick={() => {
+            if (!opt.disabled) onChange(opt.k);
+          }}
         >
           {opt.label}
         </SegmentedButton>
@@ -340,29 +359,47 @@ const ChainCard = styled('button', {
         fontWeight: '$semibold',
       },
     },
+    unavailable: {
+      true: {
+        cursor: 'not-allowed',
+        opacity: 0.48,
+      },
+    },
   },
 });
 
 function ChainPicker({
   value,
   onChange,
+  disabledChains = [],
+  disabledReason,
 }: {
   value: ChainKey;
   onChange: (k: ChainKey) => void;
+  disabledChains?: readonly ChainKey[];
+  disabledReason?: string;
 }) {
   return (
     <ChainGrid>
-      {CHAIN_OPTIONS.map(opt => (
-        <ChainCard
-          key={opt.k}
-          type="button"
-          active={opt.k === value}
-          onClick={() => onChange(opt.k)}
-        >
-          <ChainIcon chain={opt.icon} size={16} />
-          <span style={{ flex: 1 }}>{opt.label}</span>
-        </ChainCard>
-      ))}
+      {CHAIN_OPTIONS.map(opt => {
+        const disabled = disabledChains.includes(opt.k);
+        return (
+          <ChainCard
+            key={opt.k}
+            type="button"
+            active={opt.k === value}
+            unavailable={disabled}
+            disabled={disabled}
+            title={disabled ? disabledReason : undefined}
+            onClick={() => {
+              if (!disabled) onChange(opt.k);
+            }}
+          >
+            <ChainIcon chain={opt.icon} size={16} />
+            <span style={{ flex: 1 }}>{opt.label}</span>
+          </ChainCard>
+        );
+      })}
     </ChainGrid>
   );
 }
@@ -488,14 +525,14 @@ function VisibilityCard({
 
 // ── Footer buttons ──────────────────────────────────────────────────────
 
-const GhostBtn = styled('button', {
+const CliCopyGroup = styled('div', {
   background: 'transparent',
   border: '1px solid transparent',
   color: '$body',
   padding: '6px 10px',
   borderRadius: '$pill',
   fontSize: '$2',
-  cursor: 'pointer',
+  cursor: 'default',
   display: 'inline-flex',
   alignItems: 'center',
   gap: '$xxxs',
@@ -578,6 +615,20 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
   );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const paymentAsset = useMemo(
+    () => resolveSellAsset(chain, priceToken, CLIENT_SELL_ASSET_ENV),
+    [chain, priceToken]
+  );
+  const paymentError = paymentAsset.error ?? null;
+  const disabledChains = useMemo(
+    () =>
+      CHAIN_OPTIONS.filter(
+        opt =>
+          !isSellTokenSupportedOnChain(opt.k, priceToken, CLIENT_SELL_ASSET_ENV)
+      ).map(opt => opt.k),
+    [priceToken]
+  );
+
   // Reset transient submit state each time the dialog opens.
   useEffect(() => {
     if (open) {
@@ -614,11 +665,41 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
 
   if (!open) return null;
 
-  const canSubmit = Boolean(address) && !submitting && name.trim().length > 0;
+  const canSubmit =
+    Boolean(address) && !submitting && name.trim().length > 0 && !paymentError;
+
+  const handleTokenChange = (token: PaymentToken) => {
+    const next = reconcileSellPaymentSelection(
+      chain,
+      token,
+      CLIENT_SELL_ASSET_ENV
+    );
+    setPriceToken(next.token);
+    setChain(next.chain);
+    setSubmitState('idle');
+    setErrorMessage(null);
+  };
+
+  const handleChainChange = (nextChain: ChainKey) => {
+    const next = reconcileSellPaymentSelection(
+      nextChain,
+      priceToken,
+      CLIENT_SELL_ASSET_ENV
+    );
+    setChain(next.chain);
+    setPriceToken(next.token);
+    setSubmitState('idle');
+    setErrorMessage(null);
+  };
 
   const handleSubmit = async () => {
     if (!address) {
       setErrorMessage('Connect a wallet first — it receives x402 payments.');
+      setSubmitState('error');
+      return;
+    }
+    if (paymentError) {
+      setErrorMessage(paymentError);
       setSubmitState('error');
       return;
     }
@@ -799,7 +880,7 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
               />
               <Segmented<PaymentToken>
                 value={priceToken}
-                onChange={setPriceToken}
+                onChange={handleTokenChange}
                 options={[
                   { k: 'USDC', label: 'USDC' },
                   { k: 'OBOL', label: 'OBOL' },
@@ -821,7 +902,12 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
             label="Settlement chain"
             hint="Where x402 authorisations settle. Buyer wallets must match this chain."
           >
-            <ChainPicker value={chain} onChange={setChain} />
+            <ChainPicker
+              value={chain}
+              onChange={handleChainChange}
+              disabledChains={disabledChains}
+              disabledReason={`${priceToken} is not configured on this chain.`}
+            />
           </FormField>
 
           <FormField label="Visibility">
@@ -842,8 +928,8 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
             </VisibilityGrid>
           </FormField>
 
-          {submitState === 'error' && errorMessage ? (
-            <Banner tone="error">{errorMessage}</Banner>
+          {paymentError || (submitState === 'error' && errorMessage) ? (
+            <Banner tone="error">{paymentError ?? errorMessage}</Banner>
           ) : null}
           {submitState === 'success' ? (
             <Banner tone="success">
@@ -854,10 +940,10 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
         </Body>
 
         <Footer>
-          <GhostBtn type="button" title={cli}>
+          <CliCopyGroup title={cli}>
             <CopyButton text={cli} title="Copy CLI equivalent" />
             <Text css={{ fontSize: '$2' }}>Copy CLI equivalent</Text>
-          </GhostBtn>
+          </CliCopyGroup>
           <Box css={{ flex: 1 }} />
           <SecondaryBtn type="button" onClick={onClose}>
             Cancel
