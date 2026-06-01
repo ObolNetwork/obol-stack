@@ -774,6 +774,27 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
             fsGroup: %d
             fsGroupChangePolicy: OnRootMismatch
           initContainers:
+            - name: init-hermes-perms
+              image: %s
+              imagePullPolicy: IfNotPresent
+              securityContext:
+                runAsUser: 0
+                runAsGroup: 0
+                runAsNonRoot: false
+              command:
+                - sh
+                - -ec
+                - |
+                  # Hermes runs as a non-root UID, but its data PVC is a
+                  # local-path/hostPath volume where Kubernetes fsGroup is a
+                  # no-op. Chown the volume root every start so the non-root
+                  # main container can always write it, on every backend and
+                  # volume type. Do NOT replace this with fsGroup alone (see
+                  # the regression history around PVC ownership).
+                  chown -R %d:%d /data
+              volumeMounts:
+                - name: data
+                  mountPath: /data
             - name: init-hermes-data
               image: %s
               imagePullPolicy: IfNotPresent
@@ -847,7 +868,7 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                   value: %s
                 - name: OBOL_SKILLS_DIR
                   value: /data/.hermes/%s
-	`, desc.DataPVCName, namespace, desc.ServiceName, desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.ServiceName, desc.ServiceName, containerUID, containerGID, containerGID, quoteYAML(image()), desc.ServiceName, quoteYAML(image()), quoteYAML(hermesBinary), desc.DefaultPort, desc.DefaultPort, quoteYAML(primary), quoteYAML(namespace), obolSkillsDirName)
+	`, desc.DataPVCName, namespace, desc.ServiceName, desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.ServiceName, desc.ServiceName, containerUID, containerGID, containerGID, quoteYAML(image()), containerUID, containerGID, quoteYAML(image()), desc.ServiceName, quoteYAML(image()), quoteYAML(hermesBinary), desc.DefaultPort, desc.DefaultPort, quoteYAML(primary), quoteYAML(namespace), obolSkillsDirName)
 
 	if agentBaseURL != "" {
 		fmt.Fprintf(&b, "                - name: AGENT_BASE_URL\n                  value: %s\n", quoteYAML(agentBaseURL))
