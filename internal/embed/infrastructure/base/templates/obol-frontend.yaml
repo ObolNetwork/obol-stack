@@ -78,10 +78,10 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "configmaps"]
     verbs: ["get", "list"]
-  # ServiceOffer CRD — frontend sell modal creates offers
+  # ServiceOffer CRD — frontend sell modal creates offers and stop/drain patches
   - apiGroups: ["obol.org"]
-    resources: ["serviceoffers", "serviceoffers/status"]
-    verbs: ["get", "list", "create", "update", "patch", "delete"]
+    resources: ["serviceoffers"]
+    verbs: ["get", "list", "create", "patch"]
   # PurchaseRequest CRD — My Purchases lists agent buys. Read-only: the
   # agent and controller own writes.
   - apiGroups: ["obol.org"]

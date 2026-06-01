@@ -88,3 +88,36 @@ func TestObolFrontendDiscoveryRBAC_DoesNotGrantBroadSecretAccess(t *testing.T) {
 		}
 	}
 }
+
+func TestObolFrontendDiscoveryRBAC_ServiceOfferLeastPrivilege(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/obol-frontend.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+	docs := multiDoc(data)
+
+	role := findDocByName(docs, "ClusterRole", "obol-frontend-openclaw-discovery")
+	if role == nil {
+		t.Fatal("no ClusterRole 'obol-frontend-openclaw-discovery' found")
+	}
+	rules, ok := role["rules"].([]any)
+	if !ok || len(rules) == 0 {
+		t.Fatal("frontend discovery ClusterRole has no rules")
+	}
+
+	for _, required := range []string{"get", "list", "create", "patch"} {
+		if !hasVerbOnResource(rules, "obol.org", "serviceoffers", required) {
+			t.Fatalf("frontend ServiceOffer RBAC missing required verb %q", required)
+		}
+	}
+	for _, forbidden := range []string{"update", "delete"} {
+		if hasVerbOnResource(rules, "obol.org", "serviceoffers", forbidden) {
+			t.Fatalf("frontend ServiceOffer RBAC grants forbidden verb %q", forbidden)
+		}
+	}
+	for _, forbidden := range []string{"get", "list", "watch", "create", "update", "patch", "delete"} {
+		if hasVerbOnResource(rules, "obol.org", "serviceoffers/status", forbidden) {
+			t.Fatalf("frontend ServiceOffer RBAC grants status-subresource verb %q", forbidden)
+		}
+	}
+}
