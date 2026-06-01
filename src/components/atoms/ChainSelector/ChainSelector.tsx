@@ -8,6 +8,8 @@ export interface ChainSelectorProps {
   onChange: (value: ChainName | undefined) => void;
   /** Allow clicking the active option to deselect (for use as a filter) */
   allowDeselect?: boolean;
+  disabledValues?: readonly ChainName[];
+  disabledReason?: string;
 }
 
 const CHAINS: { value: ChainName; label: string }[] = [
@@ -56,6 +58,17 @@ const Option = styled('button', {
         },
       },
     },
+    unavailable: {
+      true: {
+        cursor: 'not-allowed',
+        opacity: 0.45,
+        '&:hover': {
+          background: '$bg03',
+          borderColor: '$stroke',
+          color: '$body',
+        },
+      },
+    },
   },
 });
 
@@ -63,8 +76,11 @@ export function ChainSelector({
   value,
   onChange,
   allowDeselect = false,
+  disabledValues = [],
+  disabledReason,
 }: ChainSelectorProps) {
   const handleClick = (chain: ChainName) => {
+    if (disabledValues.includes(chain)) return;
     if (allowDeselect && value === chain) {
       onChange(undefined);
     } else {
@@ -74,16 +90,22 @@ export function ChainSelector({
 
   return (
     <Container>
-      {CHAINS.map(chain => (
-        <Option
-          key={chain.value}
-          type="button"
-          active={value === chain.value}
-          onClick={() => handleClick(chain.value)}
-        >
-          {chain.label}
-        </Option>
-      ))}
+      {CHAINS.map(chain => {
+        const disabled = disabledValues.includes(chain.value);
+        return (
+          <Option
+            key={chain.value}
+            type="button"
+            active={value === chain.value}
+            unavailable={disabled}
+            disabled={disabled}
+            title={disabled ? disabledReason : undefined}
+            onClick={() => handleClick(chain.value)}
+          >
+            {chain.label}
+          </Option>
+        );
+      })}
     </Container>
   );
 }
