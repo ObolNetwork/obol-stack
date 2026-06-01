@@ -46,8 +46,38 @@ dev_image    := "localhost:54103/obol-stack-front-end:dev"
 dev-frontend:
     #!/usr/bin/env bash
     set -e
+    resolve_wallet_connect_project_id() {
+        if [ -n "${NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID:-}" ]; then
+            printf '%s' "$NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID"
+            return
+        fi
+        if [ -n "${WALLET_CONNECT_PROJECT_ID:-}" ]; then
+            printf '%s' "$WALLET_CONNECT_PROJECT_ID"
+            return
+        fi
+
+        local env_file="{{ frontend_dir }}/.env.local"
+        if [ -f "$env_file" ]; then
+            local line
+            line="$(grep -E '^(NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID|WALLET_CONNECT_PROJECT_ID)=' "$env_file" | tail -n 1 || true)"
+            line="${line#*=}"
+            line="${line%\"}"
+            line="${line#\"}"
+            printf '%s' "$line"
+        fi
+    }
+
+    build_args=()
+    wallet_connect_project_id="$(resolve_wallet_connect_project_id)"
+    if [ -n "$wallet_connect_project_id" ]; then
+        echo "→ WalletConnect project ID found; baking wallet UI into the Next.js bundle"
+        build_args+=(--build-arg "NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=$wallet_connect_project_id")
+    else
+        echo "→ WalletConnect project ID not found; wallet UI will be disabled"
+    fi
+
     echo "→ Building {{ dev_image }} from {{ frontend_dir }}"
-    docker build -t {{ dev_image }} {{ frontend_dir }}
+    docker build "${build_args[@]}" -t {{ dev_image }} {{ frontend_dir }}
     echo "→ Pushing {{ dev_image }} to local registry"
     docker push {{ dev_image }}
     echo "→ Restarting frontend deployment"
@@ -61,8 +91,38 @@ dev-frontend:
 dev-frontend-rebuild:
     #!/usr/bin/env bash
     set -e
+    resolve_wallet_connect_project_id() {
+        if [ -n "${NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID:-}" ]; then
+            printf '%s' "$NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID"
+            return
+        fi
+        if [ -n "${WALLET_CONNECT_PROJECT_ID:-}" ]; then
+            printf '%s' "$WALLET_CONNECT_PROJECT_ID"
+            return
+        fi
+
+        local env_file="{{ frontend_dir }}/.env.local"
+        if [ -f "$env_file" ]; then
+            local line
+            line="$(grep -E '^(NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID|WALLET_CONNECT_PROJECT_ID)=' "$env_file" | tail -n 1 || true)"
+            line="${line#*=}"
+            line="${line%\"}"
+            line="${line#\"}"
+            printf '%s' "$line"
+        fi
+    }
+
+    build_args=()
+    wallet_connect_project_id="$(resolve_wallet_connect_project_id)"
+    if [ -n "$wallet_connect_project_id" ]; then
+        echo "→ WalletConnect project ID found; baking wallet UI into the Next.js bundle"
+        build_args+=(--build-arg "NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=$wallet_connect_project_id")
+    else
+        echo "→ WalletConnect project ID not found; wallet UI will be disabled"
+    fi
+
     echo "→ Rebuilding {{ dev_image }} (no cache)"
-    docker build --no-cache -t {{ dev_image }} {{ frontend_dir }}
+    docker build --no-cache "${build_args[@]}" -t {{ dev_image }} {{ frontend_dir }}
     echo "→ Pushing {{ dev_image }} to local registry"
     docker push {{ dev_image }}
     echo "→ Restarting frontend deployment"
