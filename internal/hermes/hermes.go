@@ -757,6 +757,12 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
         app.kubernetes.io/managed-by: obol
     spec:
       replicas: 1
+      strategy:
+        # Hermes is a singleton backed by a ReadWriteOnce PVC. The default
+        # RollingUpdate surges a second pod that cannot mount the in-use RWO
+        # volume, deadlocking every redeploy/re-sync. Recreate terminates the
+        # old pod before starting the new one so the volume is free.
+        type: Recreate
       selector:
         matchLabels:
           app.kubernetes.io/name: %s

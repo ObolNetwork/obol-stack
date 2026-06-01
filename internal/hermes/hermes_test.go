@@ -148,6 +148,7 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		"chown -R 10000:10000 /data",
 		"runAsUser: 0",
 		"init-hermes-data",
+		"type: Recreate",
 		`Hermes binary missing from image: /opt/hermes/.venv/bin/hermes`,
 		`Hermes image is missing required extras: web,messaging,mcp,pty,cli,acp,google`,
 		`import fastapi, uvicorn, telegram, mcp, ptyprocess, simple_term_menu, googleapiclient`,
