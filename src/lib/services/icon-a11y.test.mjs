@@ -25,19 +25,11 @@ describe('icon-only control accessibility', () => {
     }
   });
 
-  it('labels modal and listing icon buttons', async () => {
+  it('labels modal icon buttons', async () => {
     const walletModal = await read(
       'src/components/molecules/WalletModal/WalletModal.tsx'
     );
     assert.match(walletModal, /aria-label="Close wallet modal"/);
-
-    const myListings = await read(
-      'src/components/marketplace/MyListingsPage.tsx'
-    );
-    assert.match(
-      myListings,
-      /aria-label=\{`Delete listing \$\{offer\.name\}`\}/
-    );
   });
 
   it('labels icon-only service and explorer links', async () => {

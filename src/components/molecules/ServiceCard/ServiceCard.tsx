@@ -14,7 +14,6 @@ import { StatusPill } from '../../atoms/StatusIndicator';
 import { CopyButton } from '../../atoms/CopyButton/CopyButton';
 import { ObolAmountSwitch } from '../../atoms/ObolAmountSwitch';
 import { StopDrainModal } from '../StopDrainModal';
-import { serviceOfferResourcePath } from '@/lib/services/sell-actions';
 import {
   serviceOfferAssetSymbol,
   serviceOfferTrustBadges,
@@ -45,11 +44,30 @@ const CardContainer = styled(Box, {
   },
 });
 
-const TopRow = styled(Flex, {
+const TopRow = styled('div', {
+  display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
+  width: '100%',
   marginBottom: '$xs',
   gap: '$sm',
+});
+
+const HeaderMeta = styled('div', {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '$xs',
+  flexWrap: 'wrap',
+  flex: '1 1 auto',
+  minWidth: 0,
+});
+
+const HeaderStatus = styled('div', {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '$xs',
+  flexShrink: 0,
+  marginLeft: 'auto',
 });
 
 const ServiceName = styled(Text, {
@@ -129,37 +147,6 @@ const SkillChip = styled(Text, {
   whiteSpace: 'nowrap',
 });
 
-const ConditionsRow = styled(Flex, {
-  alignItems: 'center',
-  gap: '$xs',
-  flexWrap: 'wrap',
-  marginTop: '$sm',
-  paddingTop: '$xs',
-  borderTop: '1px dashed $stroke',
-});
-
-const ConditionDot = styled(Flex, {
-  alignItems: 'center',
-  gap: '$xxxs',
-  fontSize: '$1',
-  color: '$body',
-
-  variants: {
-    state: {
-      ok: { color: '$obolGreen' },
-      pending: { color: '$obolGold' },
-      missing: { color: '$muted', opacity: 1 },
-    },
-  },
-});
-
-const Dot = styled(Box, {
-  width: 6,
-  height: 6,
-  borderRadius: '$round',
-  backgroundColor: 'currentColor',
-});
-
 const DrainingBadge = styled(Text, {
   fontSize: '$1',
   fontWeight: '$semibold',
@@ -186,13 +173,6 @@ const UsageBadge = styled(Text, {
   fontVariantNumeric: 'tabular-nums',
 });
 
-const ActionError = styled(Text, {
-  marginTop: '$xxs',
-  fontSize: '$1',
-  color: '$test',
-  textAlign: 'right',
-});
-
 const AgentLinkText = styled('a', {
   fontSize: '$1',
   color: '$obolGreen',
@@ -208,14 +188,6 @@ const TYPE_LABEL: Record<ServiceOfferType, string> = {
   'fine-tuning': 'Fine-tuning',
   http: 'HTTP',
 };
-
-const CONDITION_ORDER: Array<{ key: string; short: string }> = [
-  { key: 'ModelReady', short: 'Model' },
-  { key: 'UpstreamHealthy', short: 'Upstream' },
-  { key: 'PaymentGateReady', short: 'Gate' },
-  { key: 'RoutePublished', short: 'Route' },
-  { key: 'Registered', short: 'Registered' },
-];
 
 function truncateAddress(address: string): string {
   if (address.length <= 10) return address;
@@ -237,24 +209,6 @@ function formatPrice(
 
 function pluralizeSales(n: number): string {
   return n === 1 ? '1 sale' : `${n.toLocaleString()} sales`;
-}
-
-function conditionState(
-  conditions: ServiceOfferCondition[] | undefined,
-  type: string
-): 'ok' | 'pending' | 'missing' {
-  const c = conditions?.find(x => x.type === type);
-  if (!c) return 'missing';
-  if (c.status === 'True') return 'ok';
-  return 'pending';
-}
-
-function conditionsToShow(offer: ServiceOffer) {
-  return CONDITION_ORDER.filter(({ key }) => {
-    if (key === 'ModelReady' && offer.type === 'http') return false;
-    if (key === 'Registered' && !offer.registration?.enabled) return false;
-    return true;
-  });
 }
 
 function agentDisplayName(link: ServiceOfferAgentLink): string {
@@ -321,8 +275,6 @@ function useNow(intervalMs = 1000, enabled = true): Date {
 }
 
 export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
-  const [deleteState, setDeleteState] = useState<'idle' | 'submitting'>('idle');
-  const [actionError, setActionError] = useState<string | null>(null);
   const displayName = offer.registration?.name || offer.name;
   const price = formatPrice(offer);
   const symbol = serviceOfferAssetSymbol(offer.payment);
@@ -351,36 +303,10 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
   const countdown = drainEnd ? formatCountdown(drainEnd, now) : null;
   const isReady = !isDraining && offer.status === 'Ready';
 
-  const handleDelete = async () => {
-    const resource = `${offer.namespace}/${offer.name}`;
-    const confirmed = window.confirm(
-      `Delete ${resource}? This removes the ServiceOffer CR after controller cleanup.`
-    );
-    if (!confirmed) return;
-
-    setDeleteState('submitting');
-    setActionError(null);
-    try {
-      const response = await fetch(
-        serviceOfferResourcePath(offer.name, offer.namespace),
-        { method: 'DELETE' }
-      );
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(data?.error || `Delete failed (${response.status})`);
-      }
-      await onChanged?.();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'unknown error');
-    } finally {
-      setDeleteState('idle');
-    }
-  };
-
   return (
     <CardContainer>
       <TopRow>
-        <Flex css={{ alignItems: 'center', gap: '$xs', flexWrap: 'wrap' }}>
+        <HeaderMeta>
           <ServiceName>{displayName}</ServiceName>
           <TypeBadge>{TYPE_LABEL[offer.type]}</TypeBadge>
           {modelName && (
@@ -432,8 +358,8 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
               <OpenInNew size="sm" />
             </Link>
           )}
-        </Flex>
-        <Flex css={{ alignItems: 'center', gap: '$xs' }}>
+        </HeaderMeta>
+        <HeaderStatus>
           {isDraining && (
             <DrainingBadge title={`Drain ends at ${drainEnd?.toISOString()}`}>
               Draining{countdown ? ` · ends in ${countdown}` : ''}
@@ -443,7 +369,7 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
             status={isDraining ? 'syncing' : isReady ? 'synced' : 'syncing'}
             label={isDraining ? 'Draining' : isReady ? 'Ready' : 'Pending'}
           />
-        </Flex>
+        </HeaderStatus>
       </TopRow>
 
       {offer.registration?.description && (
@@ -531,31 +457,6 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
         </SkillsRow>
       )}
 
-      <ConditionsRow>
-        {conditionsToShow(offer).map(({ key, short }) => {
-          const state = conditionState(offer.conditions, key);
-          return (
-            <ConditionDot key={key} state={state}>
-              <Dot />
-              <Text css={{ fontSize: 'inherit', color: 'inherit' }}>
-                {short}
-              </Text>
-            </ConditionDot>
-          );
-        })}
-        <Text
-          css={{
-            marginLeft: 'auto',
-            fontSize: '$1',
-            color: '$body',
-            opacity: 0.8,
-            fontFamily: 'monospace',
-          }}
-        >
-          {offer.namespace}/{offer.name}
-        </Text>
-      </ConditionsRow>
-
       <Flex
         css={{
           marginTop: '$xs',
@@ -575,30 +476,13 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
               <Button
                 color="secondary"
                 title="Drain in-flight buyers, then tear down the route"
-                disabled={deleteState === 'submitting'}
               >
                 Stop &amp; drain
               </Button>
             }
           />
         )}
-        <Button
-          color="secondary"
-          type="button"
-          title="Delete the ServiceOffer CR"
-          disabled={deleteState === 'submitting'}
-          onClick={() => {
-            void handleDelete();
-          }}
-          css={{
-            color: '$test',
-            borderColor: 'rgba(255, 107, 107, 0.35)',
-          }}
-        >
-          {deleteState === 'submitting' ? 'Deleting...' : 'Delete'}
-        </Button>
       </Flex>
-      {actionError && <ActionError>{actionError}</ActionError>}
     </CardContainer>
   );
 }

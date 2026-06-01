@@ -117,7 +117,7 @@ export interface ServiceOffer {
   drainEndsAt?: string;
   /** Optional seller-provided provenance metadata from spec.provenance. */
   provenance?: Record<string, string>;
-  /** True when the controller annotation `obol.org/paused` is set. */
+  /** Legacy pause annotation, retained only so old CRs can still be labelled. */
   paused?: boolean;
   /** ISO-8601 of CR creation (from metadata.creationTimestamp). */
   createdAt?: string;

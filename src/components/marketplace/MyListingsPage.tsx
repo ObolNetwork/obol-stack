@@ -7,6 +7,7 @@ import { useAccount } from 'wagmi';
 import { ChainIcon } from '@/components/atoms/ChainIcon';
 import { CopyButton } from '@/components/atoms/CopyButton';
 import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
+import { StopDrainModal } from '@/components/molecules/StopDrainModal';
 import { Identicon } from './Identicon';
 import { ServicesSubNav } from './ServicesSubNav';
 import { NewListingDialog } from './NewListingDialog';
@@ -242,6 +243,10 @@ const RowCard = styled('div', {
         borderColor: 'rgba(250, 186, 90, 0.45)',
         boxShadow: 'inset 3px 0 0 0 #FABA5A',
       },
+      draining: {
+        borderColor: 'rgba(245, 197, 66, 0.45)',
+        boxShadow: 'inset 3px 0 0 0 #F5C542',
+      },
       unreachable: {
         borderColor: 'rgba(221, 96, 60, 0.55)',
         boxShadow: 'inset 3px 0 0 0 #DD603C',
@@ -272,6 +277,10 @@ const StuckStrip = styled('div', {
       paused: {
         background: 'rgba(250, 186, 90, 0.07)',
         borderColor: 'rgba(250, 186, 90, 0.25)',
+      },
+      draining: {
+        background: 'rgba(245, 197, 66, 0.07)',
+        borderColor: 'rgba(245, 197, 66, 0.25)',
       },
       unreachable: {
         background: 'rgba(221, 96, 60, 0.08)',
@@ -338,6 +347,11 @@ const StatusPill = styled('span', {
         color: '#FABA5A',
         borderColor: 'rgba(250, 186, 90, 0.5)',
       },
+      draining: {
+        background: 'rgba(245, 197, 66, 0.10)',
+        color: '#F5C542',
+        borderColor: 'rgba(245, 197, 66, 0.5)',
+      },
       unreachable: {
         background: 'rgba(221, 96, 60, 0.10)',
         color: '#DD603C',
@@ -372,9 +386,24 @@ const RowAction = styled('button', {
   },
 });
 
-type ListingStatus = 'live' | 'paused' | 'unreachable' | 'degraded';
+type ListingStatus =
+  | 'live'
+  | 'paused'
+  | 'draining'
+  | 'unreachable'
+  | 'degraded';
+
+function hasDrainSignal(offer: ServiceOffer): boolean {
+  if (offer.drainEndsAt) return true;
+  return (
+    offer.conditions?.some(
+      condition => condition.type === 'Draining' && condition.status === 'True'
+    ) ?? false
+  );
+}
 
 function deriveStatus(offer: ServiceOffer): ListingStatus {
+  if (hasDrainSignal(offer)) return 'draining';
   if (offer.paused) return 'paused';
   const conditions = offer.conditions ?? [];
   const upstream = conditions.find(c => c.type === 'UpstreamHealthy');
@@ -396,9 +425,7 @@ function listingPrice(offer: ServiceOffer): string {
 }
 
 interface RowMutators {
-  onPauseToggle: (offer: ServiceOffer) => void;
-  onDelete: (offer: ServiceOffer) => void;
-  pending: boolean;
+  onChanged: () => void | Promise<void>;
 }
 
 function ListingRow({
@@ -410,11 +437,13 @@ function ListingRow({
 }) {
   const status = deriveStatus(offer);
   const stuck =
-    status === 'paused'
-      ? 'paused'
-      : status === 'unreachable'
-        ? 'unreachable'
-        : undefined;
+    status === 'draining'
+      ? 'draining'
+      : status === 'paused'
+        ? 'paused'
+        : status === 'unreachable'
+          ? 'unreachable'
+          : undefined;
 
   const chain = offer.caip2Network ?? offer.payment?.network ?? '';
   const chainIcon = toChainName(chain);
@@ -431,6 +460,13 @@ function ListingRow({
         <StuckStrip tone="unreachable">
           <Box css={{ flex: 1 }}>Buyers can&apos;t reach this listing.</Box>
           <FilterBtn>Logs</FilterBtn>
+        </StuckStrip>
+      ) : stuck === 'draining' ? (
+        <StuckStrip tone="draining">
+          <Box css={{ flex: 1 }}>
+            Listing is draining. Existing buyers can finish in-flight payments;
+            public discovery shows the wind-down state.
+          </Box>
         </StuckStrip>
       ) : null}
       <RowBody>
@@ -498,39 +534,23 @@ function ListingRow({
         </Box>
 
         <Flex css={{ justifyContent: 'flex-end', gap: 6 }}>
-          {status === 'paused' ? (
-            <RowAction
-              tone="primary"
-              disabled={mutators.pending}
-              onClick={() => mutators.onPauseToggle(offer)}
-            >
-              {mutators.pending ? '…' : 'Resume'}
-            </RowAction>
-          ) : status === 'unreachable' ? (
-            <RowAction
-              tone="primary"
-              disabled={mutators.pending}
-              onClick={() => mutators.onPauseToggle(offer)}
-            >
-              {mutators.pending ? '…' : 'Pause'}
-            </RowAction>
-          ) : (
-            <RowAction
-              disabled={mutators.pending}
-              onClick={() => mutators.onPauseToggle(offer)}
-            >
-              {mutators.pending ? '…' : 'Pause'}
-            </RowAction>
+          {status !== 'draining' && (
+            <StopDrainModal
+              name={offer.name}
+              namespace={offer.namespace}
+              onDrained={() => {
+                void mutators.onChanged();
+              }}
+              trigger={
+                <RowAction
+                  type="button"
+                  title="Drain in-flight buyers, then tear down the route"
+                >
+                  Stop &amp; drain
+                </RowAction>
+              }
+            />
           )}
-          <RowAction
-            type="button"
-            disabled={mutators.pending}
-            onClick={() => mutators.onDelete(offer)}
-            title="Delete listing"
-            aria-label={`Delete listing ${offer.name}`}
-          >
-            ×
-          </RowAction>
         </Flex>
       </RowBody>
     </RowCard>
@@ -609,7 +629,6 @@ export function MyListingsPage() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
 
   const fetchOffers = useCallback(async () => {
     setErr(null);
@@ -630,73 +649,6 @@ export function MyListingsPage() {
     const id = setInterval(fetchOffers, 30_000);
     return () => clearInterval(id);
   }, [fetchOffers]);
-
-  const markPending = useCallback((key: string, on: boolean) => {
-    setPending(prev => {
-      const next = new Set(prev);
-      if (on) next.add(key);
-      else next.delete(key);
-      return next;
-    });
-  }, []);
-
-  const handlePauseToggle = useCallback(
-    async (offer: ServiceOffer) => {
-      const key = offerKey(offer);
-      const action = offer.paused ? 'resume' : 'pause';
-      markPending(key, true);
-      try {
-        const r = await fetch(
-          `/api/sell/${encodeURIComponent(offer.name)}?ns=${encodeURIComponent(offer.namespace)}&action=${action}`,
-          { method: 'PATCH' }
-        );
-        if (!r.ok) {
-          const body = await r.json().catch(() => ({}));
-          throw new Error(body.error ?? `HTTP ${r.status}`);
-        }
-        await fetchOffers();
-      } catch (e) {
-        setErr(
-          e instanceof Error ? e.message : `Failed to ${action} ${offer.name}`
-        );
-      } finally {
-        markPending(key, false);
-      }
-    },
-    [fetchOffers, markPending]
-  );
-
-  const handleDelete = useCallback(
-    async (offer: ServiceOffer) => {
-      const confirmed =
-        typeof window === 'undefined'
-          ? false
-          : window.confirm(
-              `Delete listing "${offer.name}" in ${offer.namespace}? This removes the HTTPRoute, Middleware, and ERC-8004 registration request. Cannot be undone.`
-            );
-      if (!confirmed) return;
-      const key = offerKey(offer);
-      markPending(key, true);
-      try {
-        const r = await fetch(
-          `/api/sell/${encodeURIComponent(offer.name)}?ns=${encodeURIComponent(offer.namespace)}`,
-          { method: 'DELETE' }
-        );
-        if (!r.ok) {
-          const body = await r.json().catch(() => ({}));
-          throw new Error(body.error ?? `HTTP ${r.status}`);
-        }
-        await fetchOffers();
-      } catch (e) {
-        setErr(
-          e instanceof Error ? e.message : `Failed to delete ${offer.name}`
-        );
-      } finally {
-        markPending(key, false);
-      }
-    },
-    [fetchOffers, markPending]
-  );
 
   const myOffers = useMemo(() => {
     // Cold start: while we still don't know the operator's wallet set,
@@ -831,9 +783,7 @@ export function MyListingsPage() {
                     key={key}
                     offer={offer}
                     mutators={{
-                      onPauseToggle: handlePauseToggle,
-                      onDelete: handleDelete,
-                      pending: pending.has(key),
+                      onChanged: fetchOffers,
                     }}
                   />
                 );
