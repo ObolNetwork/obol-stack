@@ -144,6 +144,9 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		"containerPort: 8642",
 		"containerPort: 9119",
 		"fsGroupChangePolicy: OnRootMismatch",
+		"init-hermes-perms",
+		"chown -R 10000:10000 /data",
+		"runAsUser: 0",
 		"init-hermes-data",
 		`Hermes binary missing from image: /opt/hermes/.venv/bin/hermes`,
 		`Hermes image is missing required extras: web,messaging,mcp,pty,cli,acp,google`,
@@ -166,8 +169,6 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		"git clone",
 		"uv pip install",
 		"/data/.hermes/hermes-agent",
-		"init-hermes-perms",
-		"chown -R 10000:10000 /data",
 	} {
 		if strings.Contains(values, banned) {
 			t.Fatalf("generateValues() contains banned fragment %q:\n%s", banned, values)
