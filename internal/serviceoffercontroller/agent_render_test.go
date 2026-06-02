@@ -256,6 +256,26 @@ func TestRenderHermesConfig_HasModelAndSkillsDir(t *testing.T) {
 	}
 }
 
+// Sub-agents share LiteLLM with the master, so we cannot cap output tokens
+// per-model. Instead, every CRD-rendered agent runs under tighter Hermes
+// knobs so a single sale stays inside the 100s Cloudflare free-tunnel
+// window. If any of these drift it should fail loudly.
+func TestRenderHermesConfig_SubAgentConstraints(t *testing.T) {
+	cfg := renderHermesConfig("qwen3.5:9b", "lit-key")
+	for _, must := range []string{
+		`lifetime_seconds: 90`,
+		`max_turns: 30`,
+		`reasoning_effort: low`,
+		`disabled_toolsets:`,
+		`- memory`,
+		`- web`,
+	} {
+		if !strings.Contains(cfg, must) {
+			t.Errorf("hermes config missing sub-agent constraint %q\n---\n%s", must, cfg)
+		}
+	}
+}
+
 func TestGenerateAPIKey_HexAndUnique(t *testing.T) {
 	a, err := generateAPIKey()
 	if err != nil {

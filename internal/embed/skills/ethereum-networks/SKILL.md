@@ -200,6 +200,31 @@ python3 scripts/rpc.py eth_getBalance 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045
 python3 scripts/rpc.py --network hoodi eth_chainId
 ```
 
+### Filter flags (use these on noisy results)
+
+`eth_getLogs` and receipt/block responses can be huge. Use these flags to
+reduce the JSON before it lands in your context. ALL are opt-in; without
+them the script behaves as before.
+
+```bash
+# How many Transfer events on USDC in this range? (No log array returned.)
+python3 scripts/rpc.py --count --where 'topics[0]=0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef' \
+    eth_getLogs 0x1500000 0x1500200 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+
+# Last 10 Transfer events, only block + topics fields:
+python3 scripts/rpc.py --tail 10 --fields blockNumber,topics \
+    --where 'topics[0]=0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef' \
+    eth_getLogs 0x1500000 0x1500200 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48
+
+# Trim a receipt to the fields you actually want:
+python3 scripts/rpc.py --fields transactionHash,status,gasUsed,blockNumber \
+    eth_getTransactionReceipt 0xabc...
+```
+
+Filters: `--fields a,b,c` (key projection), `--where k=v,k=v` (equality
+AND filter, supports `topics[N]`), `--limit N` / `--tail N`, `--count`
+(replace array with a count summary).
+
 ## Constraints
 
 - **Read-only** — no private keys, no signing, no state changes

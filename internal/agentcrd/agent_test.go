@@ -144,6 +144,41 @@ func TestSeedHostFiles_FreshAgent(t *testing.T) {
 			t.Errorf("missing %s: %v", skillFile, err)
 		}
 	}
+
+	marker := HostNoBundledSkillsMarkerPath(cfg, "quant")
+	if _, err := os.Stat(marker); err != nil {
+		t.Errorf("no-bundled-skills marker missing: %v", err)
+	}
+}
+
+// The marker must already exist on a re-seed (e.g. agent objective change) —
+// SeedHostFiles is idempotent, and a missing marker would cause Hermes to
+// re-seed its bundled skills on the next sync. Lock the invariant.
+func TestSeedHostFiles_MarkerIsIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{DataDir: dir}
+
+	if _, err := SeedHostFiles(cfg, "quant", []string{"gas"}, "obj v1", SeedOptions{}); err != nil {
+		t.Fatalf("first seed: %v", err)
+	}
+	marker := HostNoBundledSkillsMarkerPath(cfg, "quant")
+	stat1, err := os.Stat(marker)
+	if err != nil {
+		t.Fatalf("marker missing after first seed: %v", err)
+	}
+
+	if _, err := SeedHostFiles(cfg, "quant", []string{"gas"}, "obj v2", SeedOptions{OverwriteSoul: true}); err != nil {
+		t.Fatalf("second seed: %v", err)
+	}
+	stat2, err := os.Stat(marker)
+	if err != nil {
+		t.Fatalf("marker missing after second seed: %v", err)
+	}
+	// Same inode/mtime → we did not rewrite it. The marker is a presence flag,
+	// not content, so touching it on every reconcile would be needless churn.
+	if !stat1.ModTime().Equal(stat2.ModTime()) {
+		t.Errorf("marker rewritten on second seed; should be left alone")
+	}
 }
 
 func TestSeedHostFiles_PreservesExistingSoul(t *testing.T) {

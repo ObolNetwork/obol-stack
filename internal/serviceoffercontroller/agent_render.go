@@ -88,6 +88,14 @@ func agentManifests(agent *monetizeapi.Agent, litellmKey, apiKey string) ([]*uns
 // so the embedded indentation in the ConfigMap stays exactly as Hermes
 // expects, matching the master agent's known-good shape from
 // internal/hermes.generateConfig.
+//
+// Sub-agent constraints: every Agent CR is a sub-agent-for-sale (the
+// master is deployed via `obol agent init`, not via ServiceOffer), so the
+// terminal/agent caps below apply unconditionally. The Cloudflare free
+// tunnel cuts off requests at 100s, so lifetime_seconds is bounded under
+// that. max_turns and reasoning_effort cap chattiness, and
+// disabled_toolsets drops Hermes tool families that aren't useful in a
+// paid-service context (memory persistence, web search).
 func renderHermesConfig(model, litellmKey string) string {
 	return fmt.Sprintf(`model:
   default: %q
@@ -98,8 +106,14 @@ terminal:
   backend: local
   cwd: /data/.hermes/workspace
   timeout: 180
-  lifetime_seconds: 300
+  lifetime_seconds: 90
   docker_mount_cwd_to_workspace: false
+agent:
+  max_turns: 30
+  reasoning_effort: low
+  disabled_toolsets:
+    - memory
+    - web
 skills:
   external_dirs:
     - /data/.hermes/obol-skills

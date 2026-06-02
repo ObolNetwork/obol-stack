@@ -239,6 +239,18 @@ func WriteSkillSubset(dst string, names []string) error {
 			if walkErr != nil {
 				return walkErr
 			}
+			// __pycache__ dirs and .pyc files get generated whenever a dev runs
+			// the skill's python scripts locally before `go build`. They'd then
+			// get baked into the embed.FS and seeded onto every agent's PVC,
+			// bloating the prompt scan and confusing python on a different
+			// interpreter version. Skip them defensively here as well as via
+			// the skills/.gitignore that keeps them out of the repo.
+			if d.IsDir() && d.Name() == "__pycache__" {
+				return fs.SkipDir
+			}
+			if !d.IsDir() && strings.HasSuffix(d.Name(), ".pyc") {
+				return nil
+			}
 			rel := strings.TrimPrefix(path, src)
 			rel = strings.TrimPrefix(rel, "/")
 			out := skillDst
