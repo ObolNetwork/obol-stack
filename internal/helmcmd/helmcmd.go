@@ -10,6 +10,8 @@
 package helmcmd
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -184,4 +186,40 @@ func UpdateRepos(helmBinary string, names []string) ([]byte, error) {
 	cmd := exec.Command(helmBinary, args...)
 	out, err := cmd.CombinedOutput()
 	return out, err
+}
+
+// LocalRepos returns the user's helm-CLI repo configuration as a name → URL
+// map by running `helm repo list -o json`. When no repos are configured helm
+// exits non-zero with "no repositories" on stderr; that case is reported as
+// an empty map with a nil error so callers can treat it as "nothing matched"
+// rather than a hard failure.
+func LocalRepos(helmBinary string) (map[string]string, error) {
+	cmd := exec.Command(helmBinary, "repo", "list", "-o", "json")
+	out, err := cmd.Output()
+	if err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) && strings.Contains(string(ee.Stderr), "no repositories") {
+			return map[string]string{}, nil
+		}
+		return nil, fmt.Errorf("helm repo list: %w", err)
+	}
+	return parseHelmRepoList(out)
+}
+
+func parseHelmRepoList(data []byte) (map[string]string, error) {
+	var entries []struct {
+		Name string `json:"name"`
+		URL  string `json:"url"`
+	}
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return nil, fmt.Errorf("parse helm repo list json: %w", err)
+	}
+	repos := make(map[string]string, len(entries))
+	for _, e := range entries {
+		if e.Name == "" || e.URL == "" {
+			continue
+		}
+		repos[e.Name] = e.URL
+	}
+	return repos, nil
 }

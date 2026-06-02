@@ -83,7 +83,7 @@ internal REST endpoint:
 ```
 tip: Configure your Slack app event subscription:
      https://<tunnel-host>/api/webhooks/slack
-tip: REST API: http://centaur.obol.stack:8080
+tip: REST API: http://centaur.obol.stack
 ```
 
 Paste the webhook URL into your Slack app (step 1.6 above).

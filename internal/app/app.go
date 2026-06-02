@@ -39,26 +39,41 @@ func Install(cfg *config.Config, u *ui.UI, chartRef string, opts InstallOptions)
 		return err
 	}
 
-	// 2. If repo/chart format, resolve via ArtifactHub
+	// 2. If repo/chart format, resolve the repo URL. Prefer the user's local
+	//    `helm repo` config so charts published to repos already added during
+	//    `obol stack up` (notably `obol` → obolnetwork.github.io/helm-charts)
+	//    resolve without an ArtifactHub round-trip — and keep working when
+	//    ArtifactHub is unreachable.
 	if chart.NeedsResolution() {
-		u.Info("Resolving chart via ArtifactHub...")
-
-		client := NewArtifactHubClient()
-
-		info, err := client.ResolveChart(chartRef)
-		if err != nil {
-			return err
+		helmBinary := filepath.Join(cfg.BinDir, "helm")
+		if repos, err := helmcmd.LocalRepos(helmBinary); err == nil {
+			if url, ok := repos[chart.RepoName]; ok {
+				chart.RepoURL = url
+				u.Detail("Resolved (local helm repo)", fmt.Sprintf("%s/%s", chart.RepoName, chart.ChartName))
+				u.Detail("Repository URL", url)
+			}
 		}
 
-		chart.RepoURL = info.RepoURL
+		if chart.RepoURL == "" {
+			u.Info("Resolving chart via ArtifactHub...")
 
-		chart.RepoName = info.RepoName
-		if chart.Version == "" {
-			chart.Version = info.Version
+			client := NewArtifactHubClient()
+
+			info, err := client.ResolveChart(chartRef)
+			if err != nil {
+				return err
+			}
+
+			chart.RepoURL = info.RepoURL
+
+			chart.RepoName = info.RepoName
+			if chart.Version == "" {
+				chart.Version = info.Version
+			}
+
+			u.Detail("Resolved", fmt.Sprintf("%s/%s version %s", info.RepoName, info.ChartName, info.Version))
+			u.Detail("Repository URL", info.RepoURL)
 		}
-
-		u.Detail("Resolved", fmt.Sprintf("%s/%s version %s", info.RepoName, info.ChartName, info.Version))
-		u.Detail("Repository URL", info.RepoURL)
 	}
 
 	// Apply version override from CLI flag
