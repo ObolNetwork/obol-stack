@@ -52,6 +52,19 @@ func HostSoulPath(cfg *config.Config, name string) string {
 	return filepath.Join(HostHomePath(cfg, name), "SOUL.md")
 }
 
+// HostNoBundledSkillsMarkerPath returns the location of the `.no-bundled-skills`
+// marker file inside the agent's Hermes profile. When this file exists, Hermes'
+// installer, `hermes update`, and skill syncs skip seeding bundled skills.
+//
+// Sub-agents only ever need the narrow, operator-chosen skill subset we layer
+// in via OBOL_SKILLS_DIR; Hermes' ~80 bundled skills (apple-notes, spotify,
+// github-pr-workflow, gif-search, Pokemon-player, …) just bloat the system
+// prompt for an EVM-focused paid service. The marker is the official
+// upstream-supported opt-out; see Hermes docs/user-guide/features/skills.
+func HostNoBundledSkillsMarkerPath(cfg *config.Config, name string) string {
+	return filepath.Join(HostHomePath(cfg, name), ".no-bundled-skills")
+}
+
 // HostLegacySoulPath is the pre-profile seed path used before Hermes profile
 // casing was aligned. It is read during migration only.
 func HostLegacySoulPath(cfg *config.Config, name string) string {
@@ -84,7 +97,30 @@ func SeedHostFiles(cfg *config.Config, name string, skills []string, objective s
 			return false, fmt.Errorf("write skills: %w", err)
 		}
 	}
+	if err := writeNoBundledSkillsMarker(cfg, name); err != nil {
+		return false, fmt.Errorf("write no-bundled-skills marker: %w", err)
+	}
 	return WriteSoul(cfg, name, objective, opts.OverwriteSoul)
+}
+
+// writeNoBundledSkillsMarker drops a `.no-bundled-skills` file into the agent's
+// Hermes profile dir so the runtime skips seeding its ~80 bundled skills.
+// Idempotent: an existing marker is left as-is. The file is intentionally empty;
+// Hermes treats presence-as-flag.
+func writeNoBundledSkillsMarker(cfg *config.Config, name string) error {
+	path := HostNoBundledSkillsMarkerPath(cfg, name)
+	if _, err := os.Lstat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("stat marker: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create home dir: %w", err)
+	}
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		return fmt.Errorf("write marker: %w", err)
+	}
+	return nil
 }
 
 // WriteSoul renders and writes SOUL.md for the named agent. When overwrite is
