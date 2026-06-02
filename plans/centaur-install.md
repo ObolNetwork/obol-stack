@@ -69,16 +69,37 @@ Upstream's `contrib/chart` runs as-is on raw k8s. To make it an Obol app we need
 ### Iron-proxy is a vendored MITM proxy
 `services/iron-proxy/Dockerfile` is `FROM ironsh/iron-proxy:0.42.0-rc.2`. We
 can't change its DNS behaviour to forward `*.svc.cluster.local` to CoreDNS
-without forking. Sidestep: set `NO_PROXY=*.svc.cluster.local,cluster.local` in
-the sandbox env so HTTP clients bypass iron-proxy entirely for cluster-internal
+without forking.
+
+**v0.1 sidestep**: set `NO_PROXY=*.svc.cluster.local,cluster.local` in the
+sandbox env so HTTP clients bypass iron-proxy entirely for cluster-internal
 calls. iron-proxy still gates *external* outbound (its security purpose).
 
-Cost: the LiteLLM master key sits in the sandbox env directly rather than
-behind iron-proxy substitution. Acceptable for single-user obol-stack
-installs where the user's wallet bounds the blast radius. V2 should mint a
-per-Centaur LiteLLM virtual key via LiteLLM's `/key/generate` admin API.
+Cost of the sidestep: the LiteLLM master key sits in the sandbox env directly
+rather than behind iron-proxy substitution. Acceptable for single-user
+obol-stack installs where the user's wallet bounds the blast radius.
+
+**v0.2 (waiting on upstream)**: [paradigmxyz/centaur#189](https://github.com/paradigmxyz/centaur/pull/189)
+adds `CENTAUR_LLM_GATEWAY_HOST` — a single env var on the API container that
+rewrites the iron-proxy host-allowlist for `ANTHROPIC_API_KEY` and
+`OPENAI_API_KEY` to point at a gateway instead of `api.anthropic.com` /
+`api.openai.com`. iron-proxy stays in the path; the master key never enters
+the sandbox env. Once the PR lands, we drop the NO_PROXY hack AND the
+`sandbox-egress-policy.yaml` NetworkPolicy override below, AND retire the
+"LiteLLM virtual-key per install" v2 item — the master key staying in
+iron-proxy makes that strictly less urgent.
+
+Open question on PR 189: the draft takes a bare hostname and the docs example
+shows `https://...`, implying iron-proxy talks HTTPS to the gateway. LiteLLM
+in our cluster is plain HTTP on `litellm.llm.svc:4000`. Asked upstream to
+support `http://host:port` (or an explicit scheme) — the alternative of
+fronting LiteLLM with TLS via Traefik just to satisfy iron-proxy is janky for
+traffic that never leaves the cluster.
 
 ### Sandbox NetworkPolicy blocks LiteLLM
+*v0.1 only — disappears once PR 189 lands and sandboxes no longer reach
+LiteLLM directly.*
+
 Upstream's `templates/networkpolicy.yaml:387` allows sandbox egress only to
 the API on :8000. We layer one extra NetworkPolicy in our umbrella chart:
 
@@ -236,12 +257,16 @@ to add a `--quiet` flag so scripts don't trip on it.)
 
 ## V2+ (explicitly deferred)
 
+- **v0.2: adopt `CENTAUR_LLM_GATEWAY_HOST`** once
+  [paradigmxyz/centaur#189](https://github.com/paradigmxyz/centaur/pull/189)
+  merges + upstream accepts our HTTP-gateway feedback. Removes the NO_PROXY
+  hack, the sandbox-egress NetworkPolicy override, and the master-key-in-sandbox
+  exposure all in one go.
 - 1Password Connect mode (`ironProxy.secretSource: onepassword-connect`)
 - Multi-harness selection (today: codex only)
 - gVisor as a first-class `obol stack` add-on
 - Auto-renewal of `IRON_MANAGEMENT_API_KEY` / `SANDBOX_SIGNING_KEY`
 - `obol app setup centaur` wizard (`setup.yaml` schema in chart)
-- LiteLLM virtual-key minting per Centaur install (kill the master-key-in-sandbox-env regression)
 
 ## Files touched
 
@@ -255,9 +280,18 @@ to add a `--quiet` flag so scripts don't trip on it.)
 - New chart `charts/centaur/` per layout above.
 - Renovate config update for ghcr centaur images.
 
-**Upstream PR (`paradigmxyz/centaur`)**:
-- Add `sandbox.extraEgress` + `ironProxy.extraEgress` value knobs to
-  `templates/networkpolicy.yaml` and `values.schema.json`.
+**Upstream tracking**:
+- [paradigmxyz/centaur#189](https://github.com/paradigmxyz/centaur/pull/189) —
+  `CENTAUR_LLM_GATEWAY_HOST`. We're asking them to support
+  `http://host:port` (or an explicit scheme/port) so an in-cluster plain-HTTP
+  LiteLLM works without a TLS-fronting hop. Adopt in v0.2.
+- Our own follow-up PR: add `sandbox.extraEgress` / `ironProxy.extraEgress`
+  value knobs to `templates/networkpolicy.yaml` and `values.schema.json` so we
+  can drop the `sandbox-egress-policy.yaml` override. Lower priority once PR
+  189 lands (we won't need the override at all).
+- Multi-arch image builds: staged on branch `feat/multi-arch-images` in the
+  upstream checkout — adds QEMU + `platforms: linux/amd64,linux/arm64`. Unblocks
+  Apple Silicon pulls; lets us re-add `@sha256:<digest>` pins in our values.
 
 ## Smoke test (`flows/flow-NN-centaur-install.sh`)
 
