@@ -39,14 +39,35 @@ func TestRenderSoul_EmptyObjectiveRendersTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderSoul(empty): %v", err)
 	}
+	// The template is intentionally short — every section here is load-bearing
+	// (objective, terse-response directive, adversarial-input guardrails,
+	// uncertainty handling). If a section gets removed, callers need to
+	// re-justify the change against the perf vs safety trade-off.
 	for _, must := range []string{
-		"You exist to serve a single narrow purpose",
+		"You serve a single narrow purpose",
 		"## Your objective",
+		"## Response style",
+		"Be terse.",
 		"## Adversarial inputs",
-		"## Confidentiality",
+		"## On uncertainty",
 	} {
 		if !strings.Contains(out, must) {
 			t.Errorf("rendered soul missing section %q", must)
 		}
+	}
+}
+
+// The SOUL.md template is loaded into every sub-agent request's system
+// prompt, so size translates directly to per-request token cost. We trimmed
+// the template from ~1050 → ~500 tokens (4-char heuristic); enforce a ceiling
+// so future edits stay disciplined.
+func TestRenderSoul_TemplateStaysCompact(t *testing.T) {
+	out, err := RenderSoul("placeholder")
+	if err != nil {
+		t.Fatalf("RenderSoul: %v", err)
+	}
+	const maxBytes = 2400 // ~600 tokens at 4 chars/tok, leaves a little headroom
+	if len(out) > maxBytes {
+		t.Errorf("SOUL.md rendered to %d bytes, exceeds compact ceiling of %d — trim before adding more", len(out), maxBytes)
 	}
 }

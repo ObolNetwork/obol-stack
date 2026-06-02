@@ -10,6 +10,28 @@ Examples:
     python3 rpc.py eth_getBalance 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045
     python3 rpc.py eth_call 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 0x18160ddd
     python3 rpc.py --network hoodi eth_blockNumber
+
+Filter flags (opt-in, all reduce the JSON before it lands in agent
+context — large eth_getLogs responses otherwise blow the budget):
+
+    --fields a,b,c   Keep only these top-level keys on each entry.
+                     For eth_getLogs: applies per-log.
+                     For eth_getTransactionReceipt / eth_getBlockByNumber:
+                     applies to the single returned object.
+
+    --where k=v,k=v  Equality filter for list results (eth_getLogs).
+                     ANDs all conditions; whole entry kept only if every
+                     condition holds. Supports top-level keys plus
+                     topics[N] (e.g. topics[0]=0xddf...3ef for Transfer).
+
+    --limit N        First N entries of a list result.
+    --tail N         Last N entries of a list result.
+    --count          Replace a list result with a {"count": N, ...} summary
+                     instead of the array.
+
+The filter flags are silent no-ops on results that don't make sense
+(e.g. --count on eth_blockNumber); existing callers without flags get
+identical output to the pre-filter version.
 """
 
 import json
@@ -170,23 +192,128 @@ def build_params(method, args):
     return list(args)
 
 
+def _extract_value_flag(argv, name):
+    """Pull `--name VALUE` out of argv (mutating-style). Returns the value or None."""
+    if name not in argv:
+        return None
+    idx = argv.index(name)
+    if idx + 1 >= len(argv):
+        print(f"Error: {name} requires a value", file=sys.stderr)
+        sys.exit(1)
+    value = argv[idx + 1]
+    del argv[idx:idx + 2]
+    return value
+
+
+def _extract_bool_flag(argv, name):
+    """Pull `--name` out of argv if present. Returns True/False."""
+    if name in argv:
+        argv.remove(name)
+        return True
+    return False
+
+
+def _topic_index(key):
+    """Return N for 'topics[N]' or None for any other key shape."""
+    if not (key.startswith("topics[") and key.endswith("]")):
+        return None
+    try:
+        return int(key[len("topics["):-1])
+    except ValueError:
+        return None
+
+
+def _entry_matches(entry, conds):
+    """True if every condition in conds equals the matching field in entry.
+
+    Supports top-level keys and topics[N] indexing on log entries. Values
+    are compared case-insensitively so users don't have to mirror the
+    exact checksum the node returned.
+    """
+    if not isinstance(entry, dict):
+        return False
+    for key, want in conds:
+        idx = _topic_index(key)
+        if idx is not None:
+            topics = entry.get("topics") or []
+            if idx >= len(topics):
+                return False
+            got = topics[idx]
+        else:
+            got = entry.get(key)
+        if got is None:
+            return False
+        if str(got).lower() != want.lower():
+            return False
+    return True
+
+
+def _project(entry, fields):
+    """Keep only `fields` on a dict entry. Pass through non-dicts unchanged."""
+    if not isinstance(entry, dict):
+        return entry
+    return {k: entry[k] for k in fields if k in entry}
+
+
+def apply_filters(result, params, fields, where, limit, tail, count):
+    """Reduce the raw RPC result per the filter flags. Pure / side-effect free."""
+    cond_pairs = []
+    if where:
+        for token in where.split(","):
+            token = token.strip()
+            if not token or "=" not in token:
+                continue
+            k, v = token.split("=", 1)
+            cond_pairs.append((k.strip(), v.strip()))
+
+    field_list = []
+    if fields:
+        field_list = [f.strip() for f in fields.split(",") if f.strip()]
+
+    if isinstance(result, list):
+        if cond_pairs:
+            result = [e for e in result if _entry_matches(e, cond_pairs)]
+        if count:
+            summary = {"count": len(result)}
+            # eth_getLogs params[0] carries from/toBlock; surface them so the
+            # agent gets a usable summary without re-asking the user.
+            if params and isinstance(params[0], dict):
+                if "fromBlock" in params[0]:
+                    summary["fromBlock"] = params[0]["fromBlock"]
+                if "toBlock" in params[0]:
+                    summary["toBlock"] = params[0]["toBlock"]
+            return summary
+        if tail is not None:
+            result = result[-tail:] if tail > 0 else result
+        if limit is not None:
+            result = result[:limit] if limit > 0 else result
+        if field_list:
+            result = [_project(e, field_list) for e in result]
+        return result
+
+    if isinstance(result, dict) and field_list:
+        return _project(result, field_list)
+
+    return result
+
+
 def main():
     argv = sys.argv[1:]
 
-    # Parse --network flag
-    network = None
-    if "--network" in argv:
-        idx = argv.index("--network")
-        if idx + 1 < len(argv):
-            network = argv[idx + 1]
-            argv = argv[:idx] + argv[idx + 2:]
-        else:
-            print("Error: --network requires a value (mainnet, hoodi, sepolia)", file=sys.stderr)
-            sys.exit(1)
+    # Parse --network and filter flags before positional args.
+    network = _extract_value_flag(argv, "--network")
+    fields = _extract_value_flag(argv, "--fields")
+    where = _extract_value_flag(argv, "--where")
+    limit_s = _extract_value_flag(argv, "--limit")
+    tail_s = _extract_value_flag(argv, "--tail")
+    count = _extract_bool_flag(argv, "--count")
+
+    limit = int(limit_s) if limit_s is not None else None
+    tail = int(tail_s) if tail_s is not None else None
 
     if not argv:
         net = network or DEFAULT_NETWORK
-        print(f"Usage: python3 rpc.py [--network NAME] <method> [param1] [param2] ...")
+        print(f"Usage: python3 rpc.py [--network NAME] [filters] <method> [param1] [param2] ...")
         print(f"\nEndpoint: {ERPC_BASE}/{net}")
         print(f"Network: {net}")
         print("\nCommon methods:")
@@ -197,13 +324,29 @@ def main():
         print("  eth_call <to> <data> [block]")
         print("  eth_getLogs <fromBlock> <toBlock> [address] [topic0]")
         print("  eth_getTransactionReceipt <txHash>")
+        print("\nFilters (opt-in; trim noisy results before they hit context):")
+        print("  --fields a,b,c    keep only listed keys per entry")
+        print("  --where k=v,...   equality filter on entries (supports topics[N])")
+        print("  --limit N         first N entries of a list result")
+        print("  --tail N          last N entries of a list result")
+        print("  --count           return {\"count\": N, ...} instead of an array")
         sys.exit(1)
 
     method = argv[0]
     args = argv[1:]
     params = build_params(method, args)
     result = rpc_call(method, params, network=network)
-    format_result(method, result)
+
+    filtered = apply_filters(result, params, fields, where, limit, tail, count)
+
+    # When the caller passes any filter flag, emit JSON so the structure is
+    # machine-parseable. format_result's pretty printing is for human use;
+    # filtered output is for downstream tool consumption.
+    if any(x is not None for x in (fields, where, limit, tail)) or count:
+        print(json.dumps(filtered, indent=2) if isinstance(filtered, (dict, list)) else filtered)
+        return
+
+    format_result(method, filtered)
 
 
 if __name__ == "__main__":
