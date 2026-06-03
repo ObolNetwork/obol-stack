@@ -43,29 +43,71 @@ frontend_dir := env("FRONTEND_DIR", justfile_directory() / "../obol-stack-front-
 dev_image    := "localhost:54103/obol-stack-front-end:dev"
 
 # Build frontend from local source, push to local registry, and restart the pod
-dev-frontend:
-    #!/usr/bin/env bash
-    set -e
-    echo "→ Building {{ dev_image }} from {{ frontend_dir }}"
-    docker build -t {{ dev_image }} {{ frontend_dir }}
-    echo "→ Pushing {{ dev_image }} to local registry"
-    docker push {{ dev_image }}
-    echo "→ Restarting frontend deployment"
-    obol kubectl set image deployment/obol-frontend-obol-app \
-        obol-app={{ dev_image }} -n obol-frontend
-    obol kubectl rollout restart deployment/obol-frontend-obol-app -n obol-frontend
-    obol kubectl rollout status deployment/obol-frontend-obol-app -n obol-frontend --timeout=120s
-    echo "✓ Frontend dev build live at http://obol.stack:8080"
+dev-frontend: (_dev-frontend-build "false" "true")
 
 # Rebuild and hot-swap frontend (skip docker cache for faster iteration)
-dev-frontend-rebuild:
+dev-frontend-rebuild: (_dev-frontend-build "true" "false")
+
+# Internal: build the frontend dev image, push it, and roll out the deployment.
+#   no_cache="true"   -> docker build --no-cache (forces a clean rebuild)
+#   set_image="true"  -> repoint the deployment at the dev tag (first build);
+#                        rebuilds skip this since the tag is already wired.
+#
+# The WalletConnect project ID is baked into the Next.js client bundle at build
+# time (it's public by design — browsers use it to reach WalletConnect). We keep
+# it out of tracked obol-stack files by resolving it at build time, in order:
+#   1. NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID env var
+#   2. WALLET_CONNECT_PROJECT_ID env var
+#   3. the frontend repo's .env.local
+_dev-frontend-build no_cache set_image:
     #!/usr/bin/env bash
     set -e
-    echo "→ Rebuilding {{ dev_image }} (no cache)"
-    docker build --no-cache -t {{ dev_image }} {{ frontend_dir }}
+
+    resolve_wallet_connect_project_id() {
+        if [ -n "${NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID:-}" ]; then
+            printf '%s' "$NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID"
+            return
+        fi
+        if [ -n "${WALLET_CONNECT_PROJECT_ID:-}" ]; then
+            printf '%s' "$WALLET_CONNECT_PROJECT_ID"
+            return
+        fi
+
+        local env_file="{{ frontend_dir }}/.env.local"
+        if [ -f "$env_file" ]; then
+            local line
+            line="$(grep -E '^(NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID|WALLET_CONNECT_PROJECT_ID)=' "$env_file" | tail -n 1 || true)"
+            line="${line#*=}"
+            line="${line%\"}"
+            line="${line#\"}"
+            printf '%s' "$line"
+        fi
+    }
+
+    build_args=()
+    wallet_connect_project_id="$(resolve_wallet_connect_project_id)"
+    if [ -n "$wallet_connect_project_id" ]; then
+        echo "→ WalletConnect project ID found; baking wallet UI into the Next.js bundle"
+        build_args+=(--build-arg "NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=$wallet_connect_project_id")
+    else
+        echo "→ WalletConnect project ID not found; wallet UI will be disabled"
+    fi
+
+    if [ "{{ no_cache }}" = "true" ]; then
+        echo "→ Rebuilding {{ dev_image }} (no cache) from {{ frontend_dir }}"
+        build_args+=(--no-cache)
+    else
+        echo "→ Building {{ dev_image }} from {{ frontend_dir }}"
+    fi
+
+    docker build "${build_args[@]}" -t {{ dev_image }} {{ frontend_dir }}
     echo "→ Pushing {{ dev_image }} to local registry"
     docker push {{ dev_image }}
     echo "→ Restarting frontend deployment"
+    if [ "{{ set_image }}" = "true" ]; then
+        obol kubectl set image deployment/obol-frontend-obol-app \
+            obol-app={{ dev_image }} -n obol-frontend
+    fi
     obol kubectl rollout restart deployment/obol-frontend-obol-app -n obol-frontend
     obol kubectl rollout status deployment/obol-frontend-obol-app -n obol-frontend --timeout=120s
     echo "✓ Frontend dev build live at http://obol.stack:8080"
