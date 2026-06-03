@@ -229,6 +229,13 @@ func Sync(cfg *config.Config, id string, u *ui.UI) error {
 		return err
 	}
 
+	// Clear any stale strategy.rollingUpdate before helm runs. A hermes
+	// deployment first created with the default RollingUpdate strategy keeps a
+	// k8s-defaulted rollingUpdate that helm won't remove when the manifest flips
+	// type to Recreate, so the upgrade is rejected and every obol model
+	// setup/prefer/sync silently fails to reach the running agent.
+	migrateDeploymentStrategy(cfg, agentruntime.Namespace(agentruntime.Hermes, id), u)
+
 	helmfileBinary := filepath.Join(cfg.BinDir, "helmfile")
 	syncArgs := append([]string{"-f", helmfilePath, "sync"}, helmcmd.SyncFlagsForVersion(filepath.Join(cfg.BinDir, "helm"))...)
 	cmd := exec.Command(helmfileBinary, syncArgs...)
@@ -472,6 +479,49 @@ func RegenerateToken(cfg *config.Config, id string, u *ui.UI) (string, error) {
 
 	u.Success("Token regenerated successfully")
 	return newToken, nil
+}
+
+// migrateDeploymentStrategy imperatively clears a stale
+// spec.strategy.rollingUpdate on an existing hermes deployment so a subsequent
+// helm upgrade to strategy.type=Recreate is accepted by the API server.
+//
+// A deployment that predates the Recreate template was created with the default
+// RollingUpdate strategy, which the API auto-populates with a rollingUpdate
+// block. Helm's three-way merge only patches strategy.type, leaving the stale
+// rollingUpdate in place, and the API then rejects the update ("rollingUpdate
+// may not be specified when strategy type is Recreate"). Emitting
+// rollingUpdate: null in the manifest does not survive bedag/raw + helm's null
+// handling, so a merge patch with an explicit null is the reliable fix.
+//
+// Best-effort: a missing deployment (fresh install) or already-Recreate
+// strategy makes this a harmless no-op, so failures are warned, not fatal.
+func migrateDeploymentStrategy(cfg *config.Config, namespace string, u *ui.UI) {
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	cmd := exec.Command(kubectlBinary, strategyMigrationPatchArgs(namespace)...)
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		// NotFound (fresh install) is expected and benign; helm creates the
+		// deployment fresh with the Recreate strategy. Only surface other
+		// failures as a warning so sync can still proceed.
+		if !strings.Contains(string(out), "NotFound") && !strings.Contains(string(out), "not found") {
+			u.Warnf("Could not pre-clear hermes deployment strategy (continuing): %v\n%s", err, string(out))
+		}
+	}
+}
+
+// strategyMigrationPatchArgs builds the kubectl args that clear a stale
+// strategy.rollingUpdate while pinning strategy.type=Recreate on the hermes
+// deployment. The explicit null in a strategic merge patch is what removes the
+// field that blocks the RollingUpdate -> Recreate migration.
+func strategyMigrationPatchArgs(namespace string) []string {
+	return []string{
+		"patch", "deployment/hermes",
+		"-n", namespace,
+		"--type=merge",
+		"-p", `{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}`,
+	}
 }
 
 func SyncDefaultModels(cfg *config.Config, u *ui.UI) error {
@@ -763,6 +813,15 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
         # volume, deadlocking every redeploy/re-sync. Recreate terminates the
         # old pod before starting the new one so the volume is free.
         type: Recreate
+        # NOTE: a deployment first created with the default RollingUpdate
+        # strategy carries a k8s-populated strategy.rollingUpdate that helm's
+        # upgrade does NOT clear when only type flips to Recreate, so the API
+        # rejects the update (rollingUpdate may not be specified when strategy
+        # type is Recreate) and obol model setup/prefer/sync then silently fail
+        # to apply the new model to the running agent. Emitting rollingUpdate:
+        # null here does not survive bedag/raw + helm's null handling, so the
+        # stale field is cleared imperatively in migrateDeploymentStrategy
+        # before each helmfile sync.
       selector:
         matchLabels:
           app.kubernetes.io/name: %s
