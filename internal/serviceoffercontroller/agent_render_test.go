@@ -1,6 +1,7 @@
 package serviceoffercontroller
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -263,6 +264,7 @@ func TestRenderHermesConfig_HasModelAndSkillsDir(t *testing.T) {
 func TestRenderHermesConfig_SubAgentConstraints(t *testing.T) {
 	cfg := renderHermesConfig("qwen3.5:9b", "lit-key")
 	for _, must := range []string{
+		`timeout: 80`,
 		`lifetime_seconds: 90`,
 		`max_turns: 30`,
 		`reasoning_effort: low`,
@@ -274,6 +276,36 @@ func TestRenderHermesConfig_SubAgentConstraints(t *testing.T) {
 			t.Errorf("hermes config missing sub-agent constraint %q\n---\n%s", must, cfg)
 		}
 	}
+
+	// A per-operation timeout larger than the whole session lifetime is
+	// incoherent: a single tool/command could nominally outlive the session
+	// the Cloudflare free tunnel caps at 100s. Parse both out of the rendered
+	// config and assert timeout <= lifetime_seconds.
+	timeout := parseTerminalInt(t, cfg, "timeout")
+	lifetime := parseTerminalInt(t, cfg, "lifetime_seconds")
+	if timeout > lifetime {
+		t.Errorf("terminal.timeout (%d) must be <= lifetime_seconds (%d)\n---\n%s", timeout, lifetime, cfg)
+	}
+}
+
+// parseTerminalInt extracts the integer value of a `key: <int>` line from the
+// rendered Hermes config. Fails the test if the key is absent or unparsable.
+func parseTerminalInt(t *testing.T, cfg, key string) int {
+	t.Helper()
+	for _, line := range strings.Split(cfg, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, key+":") {
+			continue
+		}
+		val := strings.TrimSpace(strings.TrimPrefix(trimmed, key+":"))
+		n, err := strconv.Atoi(val)
+		if err != nil {
+			t.Fatalf("parsing %q value %q: %v", key, val, err)
+		}
+		return n
+	}
+	t.Fatalf("config missing %q line\n---\n%s", key, cfg)
+	return 0
 }
 
 func TestGenerateAPIKey_HexAndUnique(t *testing.T) {
