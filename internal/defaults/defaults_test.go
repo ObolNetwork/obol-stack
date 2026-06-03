@@ -25,25 +25,37 @@ func TestCopyInfrastructure_DevModeRewritesDigestPins(t *testing.T) {
 	}
 	out := string(data)
 
-	// Every locally-built image must have lost its @sha256: pin and gained
-	// :latest, otherwise the cluster pulls a stale ghcr.io binary even
-	// when OBOL_DEVELOPMENT=true rebuilt the image locally.
+	// The dev rewrite swaps the published digest/SHA pins for the per-commit
+	// dev tag (dev-<sha>, or :latest when not a git checkout). In CI this is a
+	// git checkout, so expect dev-<sha>.
+	devTag := DevImageTag()
+
+	// Every locally-built image must have lost its @sha256: pin and gained the
+	// dev tag, otherwise the cluster pulls a stale ghcr.io binary even when
+	// OBOL_DEVELOPMENT=true rebuilt the image locally.
 	for _, base := range devLocallyBuiltImageBases {
 		if strings.Contains(out, base+"@sha256:") {
 			t.Errorf("dev mode left digest pin on %s in %s", base, x402Path)
 		}
 	}
-	for _, want := range []string{
-		"ghcr.io/obolnetwork/x402-verifier:latest",
-		"ghcr.io/obolnetwork/serviceoffer-controller:latest",
+	for _, base := range []string{
+		"ghcr.io/obolnetwork/x402-verifier",
+		"ghcr.io/obolnetwork/serviceoffer-controller",
 	} {
+		want := base + ":" + devTag
 		if !strings.Contains(out, want) {
 			t.Errorf("dev mode did not rewrite to %q in %s", want, x402Path)
 		}
 	}
 
+	// The persisted dev tag MUST equal what was stamped into the manifests, or
+	// internal/stack would build/import a tag the cluster doesn't pin.
+	if got := ReadDevImageTag(cfg); got != devTag {
+		t.Errorf("persisted dev image tag = %q, want %q", got, devTag)
+	}
+
 	// Combo tag+digest form (used by x402-buyer in llm.yaml) must be
-	// rewritten to a clean `:latest` with no stale `@sha256:` suffix.
+	// rewritten to a clean `:<devTag>` with no stale `@sha256:` suffix.
 	// Regression guard for the bug where the old regex matched only
 	// the `:b13254e` part and left `@sha256:...` behind, causing Docker
 	// to silently pull the registry-pinned image instead of the local
@@ -55,14 +67,34 @@ func TestCopyInfrastructure_DevModeRewritesDigestPins(t *testing.T) {
 		t.Fatalf("read llm.yaml: %v", err)
 	}
 	llmOut := string(llmData)
-	if !strings.Contains(llmOut, "ghcr.io/obolnetwork/x402-buyer:latest") {
-		t.Errorf("dev mode did not rewrite x402-buyer to :latest in %s", llmPath)
+	buyer := "ghcr.io/obolnetwork/x402-buyer"
+	if !strings.Contains(llmOut, buyer+":"+devTag) {
+		t.Errorf("dev mode did not rewrite x402-buyer to :%s in %s", devTag, llmPath)
 	}
-	if strings.Contains(llmOut, "ghcr.io/obolnetwork/x402-buyer:latest@sha256:") {
-		t.Errorf("dev mode left orphan @sha256: suffix on x402-buyer:latest in %s — regex missed the combo form", llmPath)
+	if strings.Contains(llmOut, buyer+":"+devTag+"@sha256:") {
+		t.Errorf("dev mode left orphan @sha256: suffix on x402-buyer:%s in %s — regex missed the combo form", devTag, llmPath)
 	}
-	if strings.Contains(llmOut, "ghcr.io/obolnetwork/x402-buyer@sha256:") {
+	if strings.Contains(llmOut, buyer+"@sha256:") {
 		t.Errorf("dev mode left @sha256: digest pin on x402-buyer in %s — regex missed it", llmPath)
+	}
+}
+
+func TestDevImageTag_Format(t *testing.T) {
+	// Tests run inside the git checkout, so expect dev-<sha>; tolerate the
+	// :latest fallback for non-git build environments.
+	tag := DevImageTag()
+	if tag == "latest" {
+		t.Skip("not a git checkout (DevImageTag fell back to latest) — nothing to assert")
+	}
+	if !regexp.MustCompile(`^dev-[0-9a-f]{7,40}$`).MatchString(tag) {
+		t.Errorf("DevImageTag() = %q, want dev-<short-sha> or latest", tag)
+	}
+}
+
+func TestReadDevImageTag_FallbackWhenAbsent(t *testing.T) {
+	cfg := &config.Config{ConfigDir: t.TempDir()}
+	if got := ReadDevImageTag(cfg); got != "latest" {
+		t.Errorf("ReadDevImageTag with no file = %q, want latest", got)
 	}
 }
 

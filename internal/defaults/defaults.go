@@ -25,7 +25,49 @@ const (
 	stackIDFile      = ".stack-id"
 	stackBackendFile = ".stack-backend"
 	stampFile        = ".obol-defaults-stamp"
+	// devImageTagFile records the tag the dev-mode manifest rewrite stamped
+	// the locally-built images with. internal/stack reads it at build time so
+	// the image it builds/imports matches what the rendered manifests pin —
+	// even if HEAD moved between `stack init` and `stack up`.
+	devImageTagFile = ".dev-image-tag"
 )
+
+// DevImageTag returns the tag used for locally-built dev images under
+// OBOL_DEVELOPMENT. It is `dev-<short-git-sha>` of the working tree, so each
+// branch/worktree builds a distinct tag and parallel dev stacks sharing one
+// Docker daemon never clobber each other's images (the `:latest` collision that
+// let a sibling worktree's build poison an unrelated stack). Committing changes
+// the SHA and triggers a fresh build; uncommitted changes reuse the committed
+// tag unless OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES is set. Falls back to `latest`
+// when the source is not a git checkout (e.g. a tarball build), preserving the
+// previous behaviour there.
+func DevImageTag() string {
+	cmd := exec.Command("git", "rev-parse", "--short=12", "HEAD")
+	out, err := cmd.Output()
+	if err != nil {
+		return "latest"
+	}
+	sha := strings.TrimSpace(string(out))
+	if !regexp.MustCompile(`^[0-9a-f]{7,40}$`).MatchString(sha) {
+		return "latest"
+	}
+	return "dev-" + sha
+}
+
+// ReadDevImageTag returns the dev image tag persisted at CopyInfrastructure
+// time, or "latest" if none was recorded (non-dev install, or pre-dates this
+// mechanism). internal/stack uses it to tag the images it builds.
+func ReadDevImageTag(cfg *config.Config) string {
+	data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, devImageTagFile))
+	if err != nil {
+		return "latest"
+	}
+	tag := strings.TrimSpace(string(data))
+	if tag == "" {
+		return "latest"
+	}
+	return tag
+}
 
 // RefreshInfrastructureIfChanged refreshes the generated defaults tree when
 // the embedded infrastructure assets, backend, or stack ID changed.
@@ -63,15 +105,20 @@ func CopyInfrastructure(cfg *config.Config, backendName, stackID string) error {
 	}
 
 	// Under OBOL_DEVELOPMENT we build images from the working tree and
-	// import them into k3d as `<image>:latest`. The embedded templates
-	// pin published digests for production safety, which means the
-	// cluster ignores our locally-built images and silently uses stale
-	// ghcr.io binaries. Rewrite digest pins to :latest after copy so the
-	// dev cycle Just Works without operators having to kubectl-set-image
-	// every loop.
+	// import them into k3d. The embedded templates pin published digests for
+	// production safety, which means the cluster ignores our locally-built
+	// images and silently uses stale ghcr.io binaries. Rewrite the digest
+	// pins to a per-commit `dev-<sha>` tag after copy so the dev cycle Just
+	// Works without operators having to kubectl-set-image every loop, and so
+	// parallel worktree stacks don't collide on a shared `:latest`. Persist
+	// the tag so internal/stack builds/imports the exact tag we pinned here.
 	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
-		if err := rewriteDevDigestPins(defaultsDir); err != nil {
+		devTag := DevImageTag()
+		if err := rewriteDevDigestPins(defaultsDir, devTag); err != nil {
 			return fmt.Errorf("rewrite dev digest pins: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(cfg.ConfigDir, devImageTagFile), []byte(devTag), 0o600); err != nil {
+			return fmt.Errorf("persist dev image tag: %w", err)
 		}
 	}
 
@@ -106,7 +153,7 @@ var devLocallyBuiltImageBases = []string{
 // — in either case the local dev build is tagged `:latest`, so the
 // rewrite needs to catch both forms or `obol stack up` would pull from
 // the registry instead of using the freshly-built local image.
-func rewriteDevDigestPins(defaultsDir string) error {
+func rewriteDevDigestPins(defaultsDir, devTag string) error {
 	patterns := make([]*regexp.Regexp, 0, len(devLocallyBuiltImageBases))
 	replaceWith := make([]string, 0, len(devLocallyBuiltImageBases))
 	for _, base := range devLocallyBuiltImageBases {
@@ -122,7 +169,7 @@ func rewriteDevDigestPins(defaultsDir string) error {
 		// silently bypasses the local build (root cause of the no-debug-logs
 		// regression in flow-11 step 43 chase, May 2026).
 		patterns = append(patterns, regexp.MustCompile(regexp.QuoteMeta(base)+"(:[a-f0-9]{7,40}@sha256:[a-f0-9]{64}|@sha256:[a-f0-9]{64}|:[a-f0-9]{7,40})"))
-		replaceWith = append(replaceWith, base+":latest")
+		replaceWith = append(replaceWith, base+":"+devTag)
 	}
 
 	return filepath.WalkDir(defaultsDir, func(path string, d fs.DirEntry, walkErr error) error {
