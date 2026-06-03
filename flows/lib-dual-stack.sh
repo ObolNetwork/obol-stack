@@ -139,6 +139,18 @@ stack_init_and_up_with_retry() {
             sleep 10
             continue
         fi
+        # Docker Desktop (macOS) intermittently fails to create the gRPC-FUSE
+        # mount source for a k3d node's workspace dir under sustained
+        # cluster-churn, so the k3s node never reports ready and k3d rolls the
+        # cluster back. The host dir exists (reset_flow_workspace mkdir's it);
+        # this is a daemon-side file-sharing race. A fresh cluster on retry
+        # clears it.
+        if [ "$attempt" -lt 3 ] && echo "$out" | grep -qiE "error while creating mount source path|failed to get ready: error waiting for log line|status=restarting|Cluster creation FAILED"; then
+            echo "  $label stack up hit a transient k3d/Docker mount race; retrying (attempt $((attempt + 1))/3)"
+            "$runner" stack down >/dev/null 2>&1 || true
+            sleep 10
+            continue
+        fi
 
         fail "$label: stack up failed (exit $rc)"
         emit_metrics
