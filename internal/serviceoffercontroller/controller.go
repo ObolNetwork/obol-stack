@@ -984,7 +984,7 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 			}
 
 			status.Phase = registrationPhaseAwaitingExternal
-			status.Message = "Waiting for external ERC-8004 registration"
+			status.Message = awaitingExternalRegistrationMessage(registrationChain)
 			status.RegistrationOwner = offer.Spec.Payment.PayTo
 			status.RegistrationURI = status.PublishedURL
 			fromBlock := int64(height) - 1024
@@ -1007,7 +1007,7 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 		}
 		if !found {
 			status.Phase = registrationPhaseAwaitingExternal
-			status.Message = fmt.Sprintf("Waiting for external ERC-8004 registration for owner %s", status.RegistrationOwner)
+			status.Message = awaitingExternalRegistrationMessage(registrationChain)
 			return c.updateRegistrationStatus(ctx, raw, status)
 		}
 
@@ -1390,6 +1390,21 @@ func truncateMessage(message string) string {
 		return message
 	}
 	return message[:200]
+}
+
+// awaitingExternalRegistrationMessage builds the operator-facing message shown
+// while a ServiceOffer's registration is enabled but the on-chain ERC-8004
+// registration tx has not yet landed. The on-chain tx is submitted by the
+// operator (via `obol sell register`), never by the controller, so the message
+// names the exact command and reassures that the offer already serves paid
+// traffic — the offer is operationally usable even though Ready stays False
+// until the registration is recorded on-chain (see offerOperationallyReady).
+func awaitingExternalRegistrationMessage(chain string) string {
+	cmd := "obol sell register"
+	if chain = strings.TrimSpace(chain); chain != "" {
+		cmd += " --chain " + chain
+	}
+	return truncateMessage("Awaiting external ERC-8004 registration tx — submit with `" + cmd + "`; offer already serves paid traffic")
 }
 
 func getenvDefault(key, fallback string) string {

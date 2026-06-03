@@ -255,6 +255,25 @@ Examples:
 
 			if !register {
 				u.Dim("Registration skipped (--no-register). Run `obol sell register --chain " + chain + "` later for on-chain discovery.")
+			} else {
+				// sell agent is declare-only: it sets spec.registration and
+				// relies on the controller + a manual `obol sell register`. Make
+				// the Ready=False consequence, gas need, and signer/payee split
+				// legible instead of leaving the operator to discover them.
+				aw := strings.TrimSpace(agent.WalletAddress)
+				if aw == "" {
+					if resolved, werr := hermes.ResolveWalletAddress(cfg); werr == nil {
+						aw = resolved
+					}
+				}
+				printRegistrationNotice(u, registrationNotice{
+					Mode:        regNoticeDeclareOnly,
+					Chain:       chain,
+					PayTo:       payTo,
+					AgentWallet: aw,
+					OfferName:   name,
+					Namespace:   offerNs,
+				})
 			}
 			return nil
 		},
