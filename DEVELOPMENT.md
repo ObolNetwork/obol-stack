@@ -47,7 +47,13 @@ skaffold dev --kube-context=kind-obol-stack --port-forward
 
 ```bash
 # Build Docker image
-docker build -t obol-frontend:latest .
+# Prefer the helper: it bakes the WalletConnect project ID into the client
+# bundle (resolved from NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID,
+# WALLET_CONNECT_PROJECT_ID, or .env.local) so the wallet UI works.
+scripts/build-frontend-image.sh --tag obol-frontend:latest
+
+# Or the bare command (wallet UI disabled unless you pass the build-arg yourself):
+# docker build -t obol-frontend:latest .
 
 # Load into Kind cluster
 kind load docker-image obol-frontend:latest --name obol-stack
