@@ -24,6 +24,8 @@ const (
 	skillCatalogConfigMapName = "obol-skill-md"
 	skillCatalogRouteName     = "obol-skill-md-route"
 	servicesJSONRouteName     = "obol-services-json-route"
+	openAPIRouteName          = "obol-openapi-route"
+	apiDocsRouteName          = "obol-api-docs-route"
 )
 
 // restrictedPodSecurityContext returns a Pod-level securityContext that
@@ -245,7 +247,7 @@ func agentIdentityLabels(identity *monetizeapi.AgentIdentity, appName string) ma
 	}
 }
 
-func buildSkillCatalogConfigMap(content, servicesJSON string) *unstructured.Unstructured {
+func buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
@@ -261,7 +263,9 @@ func buildSkillCatalogConfigMap(content, servicesJSON string) *unstructured.Unst
 			"data": map[string]any{
 				"skill.md":      content,
 				"services.json": servicesJSON,
-				"httpd.conf":    ".md:text/markdown\n.json:application/json\n",
+				"openapi.json":  openAPIJSON,
+				"api.html":      apiDocsHTML,
+				"httpd.conf":    ".md:text/markdown\n.json:application/json\n.html:text/html\n",
 			},
 		},
 	}
@@ -322,6 +326,12 @@ func buildSkillCatalogDeployment(contentHash string) *unstructured.Unstructured 
 									"items": []any{
 										map[string]any{"key": "skill.md", "path": "skill.md"},
 										map[string]any{"key": "services.json", "path": "api/services.json"},
+										map[string]any{"key": "openapi.json", "path": "openapi.json"},
+										// busybox httpd resolves /api/ → /api/index.html, so the
+										// Scalar shell sits at api/index.html. The /api Exact
+										// HTTPRoute also matches the trailing-slash variant so the
+										// resolver kicks in either way.
+										map[string]any{"key": "api.html", "path": "api/index.html"},
 									},
 								},
 							},
@@ -392,6 +402,119 @@ func buildSkillCatalogHTTPRoute() *unstructured.Unstructured {
 								"path": map[string]any{
 									"type":  "Exact",
 									"value": "/skill.md",
+								},
+							},
+						},
+						"backendRefs": []any{
+							map[string]any{
+								"name":      skillCatalogConfigMapName,
+								"namespace": skillCatalogNamespace,
+								"port":      int64(8080),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// buildOpenAPIHTTPRoute exposes the aggregate OpenAPI 3.1 document at the
+// stable public path /openapi.json. The route deliberately omits a
+// hostnames restriction so it's reachable both on the local cluster
+// (obol.stack:8080) AND through the public Cloudflare tunnel — the spec
+// is meant to be discoverable by any client. /openapi.json contains no
+// secret material (payment addresses + chain selectors are also published
+// on /skill.md and ERC-8004); future "tighten all public routes" cleanups
+// must NOT add a hostnames filter here.
+func buildOpenAPIHTTPRoute() *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "HTTPRoute",
+			"metadata": map[string]any{
+				"name":      openAPIRouteName,
+				"namespace": skillCatalogNamespace,
+				"labels": map[string]any{
+					"obol.org/managed-by": "serviceoffer-controller",
+				},
+			},
+			"spec": map[string]any{
+				"parentRefs": []any{
+					map[string]any{
+						"name":        "traefik-gateway",
+						"namespace":   "traefik",
+						"sectionName": "web",
+					},
+				},
+				"rules": []any{
+					map[string]any{
+						"matches": []any{
+							map[string]any{
+								"path": map[string]any{
+									"type":  "Exact",
+									"value": "/openapi.json",
+								},
+							},
+						},
+						"backendRefs": []any{
+							map[string]any{
+								"name":      skillCatalogConfigMapName,
+								"namespace": skillCatalogNamespace,
+								"port":      int64(8080),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// buildAPIDocsHTTPRoute exposes the Scalar UI shell at /api and /api/.
+// Two Exact rules are needed because Gateway API's Exact matcher does not
+// normalize trailing slashes; busybox httpd resolves /api/ to
+// api/index.html inside the mounted ConfigMap volume.
+//
+// /api/services.json (also Exact) is registered as its own HTTPRoute and
+// continues to win the path because Exact-vs-Exact is decided by literal
+// match — /api vs /api/services.json never overlap.
+//
+// Same hostnames posture as /openapi.json: explicitly tunnel-reachable.
+// Do not add a hostnames filter without rethinking the discovery story.
+func buildAPIDocsHTTPRoute() *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "HTTPRoute",
+			"metadata": map[string]any{
+				"name":      apiDocsRouteName,
+				"namespace": skillCatalogNamespace,
+				"labels": map[string]any{
+					"obol.org/managed-by": "serviceoffer-controller",
+				},
+			},
+			"spec": map[string]any{
+				"parentRefs": []any{
+					map[string]any{
+						"name":        "traefik-gateway",
+						"namespace":   "traefik",
+						"sectionName": "web",
+					},
+				},
+				"rules": []any{
+					map[string]any{
+						"matches": []any{
+							map[string]any{
+								"path": map[string]any{
+									"type":  "Exact",
+									"value": "/api",
+								},
+							},
+							map[string]any{
+								"path": map[string]any{
+									"type":  "Exact",
+									"value": "/api/",
 								},
 							},
 						},

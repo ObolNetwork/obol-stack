@@ -100,9 +100,10 @@ func TestBuildAgentIdentityRegistrationDeployment_RestrictedPSS(t *testing.T) {
 	assertRestrictedPSS(t, agentIdentityRegistrationName(identity), spec)
 }
 
-// TestBuildSkillCatalogConfigMap: exposes skill.md + services.json + httpd conf.
+// TestBuildSkillCatalogConfigMap: exposes skill.md + services.json + openapi.json
+// + api docs HTML + httpd conf.
 func TestBuildSkillCatalogConfigMap(t *testing.T) {
-	cm := buildSkillCatalogConfigMap("# Catalog", `[{"name":"a"}]`)
+	cm := buildSkillCatalogConfigMap("# Catalog", `[{"name":"a"}]`, `{"openapi":"3.1.0"}`, "<html>shell</html>")
 
 	if cm.GetName() != skillCatalogConfigMapName {
 		t.Errorf("name = %q, want %q", cm.GetName(), skillCatalogConfigMapName)
@@ -117,7 +118,13 @@ func TestBuildSkillCatalogConfigMap(t *testing.T) {
 	if data["services.json"] != `[{"name":"a"}]` {
 		t.Errorf("services.json payload mismatch, got %v", data["services.json"])
 	}
-	if conf, _ := data["httpd.conf"].(string); !strings.Contains(conf, ".md:text/markdown") || !strings.Contains(conf, ".json:application/json") {
+	if data["openapi.json"] != `{"openapi":"3.1.0"}` {
+		t.Errorf("openapi.json payload mismatch, got %v", data["openapi.json"])
+	}
+	if data["api.html"] != "<html>shell</html>" {
+		t.Errorf("api.html payload mismatch, got %v", data["api.html"])
+	}
+	if conf, _ := data["httpd.conf"].(string); !strings.Contains(conf, ".md:text/markdown") || !strings.Contains(conf, ".json:application/json") || !strings.Contains(conf, ".html:text/html") {
 		t.Errorf("httpd.conf missing required mime mappings: %q", conf)
 	}
 	// Managed-by label so the controller owns cleanup on uninstall.
@@ -149,25 +156,34 @@ func TestBuildSkillCatalogDeployment(t *testing.T) {
 		t.Error("different content hashes must produce different annotations")
 	}
 
-	// Verify the services.json path gets mounted under api/ (so the route can
-	// serve /api/services.json). Covers the switch in the skill-catalog volume
-	// layout.
+	// Verify the services.json, openapi.json, and api/index.html paths get
+	// mounted under the right locations. Covers the volume layout the routes
+	// expect: /api/services.json, /openapi.json, /api/ → api/index.html.
 	podSpec, _ := template1["spec"].(map[string]any)
 	volumes, _ := podSpec["volumes"].([]any)
-	var foundServicesPath bool
+	expectedPaths := map[string]string{
+		"services.json": "api/services.json",
+		"openapi.json":  "openapi.json",
+		"api.html":      "api/index.html",
+	}
+	foundPaths := map[string]string{}
 	for _, v := range volumes {
 		vm, _ := v.(map[string]any)
 		cm, _ := vm["configMap"].(map[string]any)
 		items, _ := cm["items"].([]any)
 		for _, it := range items {
 			item, _ := it.(map[string]any)
-			if item["key"] == "services.json" && item["path"] == "api/services.json" {
-				foundServicesPath = true
+			key, _ := item["key"].(string)
+			path, _ := item["path"].(string)
+			if _, ok := expectedPaths[key]; ok {
+				foundPaths[key] = path
 			}
 		}
 	}
-	if !foundServicesPath {
-		t.Error("expected services.json to be mounted at api/services.json")
+	for key, wantPath := range expectedPaths {
+		if got := foundPaths[key]; got != wantPath {
+			t.Errorf("volume mount for %q = %q, want %q", key, got, wantPath)
+		}
 	}
 }
 

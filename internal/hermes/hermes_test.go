@@ -149,6 +149,10 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		"runAsUser: 0",
 		"init-hermes-data",
 		"type: Recreate",
+		// Explicit null so strategic-merge clears the inherited rollingUpdate
+		// block on upgrade from a pre-strategy-switch install. Don't remove
+		// without re-reading hermes.go's comment on this line.
+		"rollingUpdate: null",
 		`Hermes binary missing from image: /opt/hermes/.venv/bin/hermes`,
 		`Hermes image is missing required extras: web,messaging,mcp,pty,cli,acp,google`,
 		`import fastapi, uvicorn, telegram, mcp, ptyprocess, simple_term_menu, googleapiclient`,

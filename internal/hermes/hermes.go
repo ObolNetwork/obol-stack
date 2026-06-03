@@ -763,6 +763,13 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
         # volume, deadlocking every redeploy/re-sync. Recreate terminates the
         # old pod before starting the new one so the volume is free.
         type: Recreate
+        # Explicit null so the strategic-merge patch CLEARS any inherited
+        # rollingUpdate sub-block from clusters that had Hermes deployed
+        # before this strategy switch. The API server rejects Recreate +
+        # rollingUpdate coexisting; without this null, every upgrade past
+        # the strategy change fails with the spec.strategy.rollingUpdate
+        # Forbidden error. Safe on fresh installs (field stays unset).
+        rollingUpdate: null
       selector:
         matchLabels:
           app.kubernetes.io/name: %s
