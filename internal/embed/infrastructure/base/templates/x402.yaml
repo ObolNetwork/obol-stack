@@ -343,7 +343,15 @@ spec:
           type: RuntimeDefault
       containers:
         - name: controller
-          image: ghcr.io/obolnetwork/serviceoffer-controller:f5d94fc@sha256:c6aa6259e3a6bc61a5f4f7203d8c68cfdd861a8d365f9629d234d13b949bf48e
+          # MUST be an image whose reconciler treats Secret as create-only
+          # (isCreateOnlyKind includes "Secret"). The ClusterRole above grants
+          # NO secrets update/patch verb, so a controller that Updates the
+          # per-agent hermes-api-server / remote-signer-keystore Secrets on
+          # re-reconcile 403s and per-agent provisioning never converges. The
+          # prior pin (f5d94fc) predated that source change and shipped the
+          # bug; 503016b (rc9 commit 503016bf, image 0.10.0-rc9) carries it.
+          # See TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix.
+          image: ghcr.io/obolnetwork/serviceoffer-controller:503016b@sha256:bec62ea04842caf62980b529a89f5d553987a106c3167eb45209a8b278121957
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

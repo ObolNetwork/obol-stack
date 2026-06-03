@@ -230,8 +230,12 @@ func TestEmbeddedImages_X402ControllerAndBuyerUseFixPins(t *testing.T) {
 		ref  string
 	}{
 		{
+			// Repinned off the f5d94fc side-branch build (which predated the
+			// Secret-create-only reconciler change) to the rc9 release image
+			// (commit 503016b, image 0.10.0-rc9).
+			// See TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix.
 			file: "base/templates/x402.yaml",
-			ref:  "ghcr.io/obolnetwork/serviceoffer-controller:f5d94fc@sha256:c6aa6259e3a6bc61a5f4f7203d8c68cfdd861a8d365f9629d234d13b949bf48e",
+			ref:  "ghcr.io/obolnetwork/serviceoffer-controller:503016b@sha256:bec62ea04842caf62980b529a89f5d553987a106c3167eb45209a8b278121957",
 		},
 		{
 			file: "base/templates/llm.yaml",

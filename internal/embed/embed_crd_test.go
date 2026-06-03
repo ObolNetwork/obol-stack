@@ -791,6 +791,28 @@ func TestX402VerifierImage_CarriesAgentAuthFix(t *testing.T) {
 	}
 }
 
+// TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix is the tripwire
+// for the per-agent provisioning 403 (GA blocker). The controller ClusterRole
+// in x402.yaml grants no secrets update/patch verb because the reconciler
+// treats Secret as create-only (isCreateOnlyKind). The image MUST therefore be
+// built from source that has that behaviour — the prior f5d94fc side-branch pin
+// did not, so the deployed binary Updated the per-agent Secrets on re-reconcile
+// and 403'd. 503016b (rc9 commit 503016bf, image 0.10.0-rc9) carries the fix.
+// Bumping this pin requires a conscious, documented change here so a future
+// downgrade can't silently re-ship the bug.
+func TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/x402.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+
+	const ref = "ghcr.io/obolnetwork/serviceoffer-controller:503016b@sha256:bec62ea04842caf62980b529a89f5d553987a106c3167eb45209a8b278121957"
+	if !strings.Contains(string(data), "image: "+ref) {
+		t.Fatalf("serviceoffer-controller image must carry the Secret-create-only reconciler fix "+
+			"(else per-agent provisioning 403s under the no-update/patch Secret RBAC): %s", ref)
+	}
+}
+
 // TestServiceOfferControllerSecretRBAC_Scoped guards the controller's Secret
 // access against the actual code paths in internal/serviceoffercontroller.
 // The reconciler touches exactly three Secrets by name (litellm-secrets,
