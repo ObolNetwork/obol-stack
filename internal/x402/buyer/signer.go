@@ -3,12 +3,108 @@ package buyer
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	x402types "github.com/coinbase/x402/go/types"
 )
+
+// authExpirySafetyMarginSec is how far before its on-chain deadline an auth is
+// considered already expired for selection. The window between picking an auth
+// and the facilitator settling it is a few seconds; dropping auths inside this
+// margin avoids racing a voucher that expires mid-flight (which the facilitator
+// rejects as invalid_payment_expired, surfacing as a 503 to the caller).
+const authExpirySafetyMarginSec int64 = 10
+
+// authDeadlineUnix returns the unix expiry of a pre-signed auth and whether one
+// was found. Permit2 vouchers (OBOL) carry a real "deadline" (~5 min out);
+// ERC-3009 vouchers (USDC) carry "validBefore". The value lives in the v2
+// payment payload; the legacy flat ValidBefore field is a fallback. Auths with
+// no discoverable deadline are treated as non-expiring (ok=false) and never
+// dropped — only an explicitly-past deadline removes an auth from the pool.
+func authDeadlineUnix(a *PreSignedAuth) (int64, bool) {
+	if a == nil {
+		return 0, false
+	}
+	if a.Payment != nil {
+		if d, ok := payloadDeadlineUnix(a.Payment.Payload); ok {
+			return d, true
+		}
+	}
+	return parseUnixValue(a.ValidBefore)
+}
+
+// payloadDeadlineUnix extracts the expiry from a v2 payment payload, covering
+// both the Permit2 (permit2Authorization.deadline) and ERC-3009
+// (authorization.validBefore) shapes.
+func payloadDeadlineUnix(payload map[string]any) (int64, bool) {
+	if payload == nil {
+		return 0, false
+	}
+	if p2, ok := payload["permit2Authorization"].(map[string]any); ok {
+		if d, ok := parseUnixValue(p2["deadline"]); ok {
+			return d, true
+		}
+	}
+	if authz, ok := payload["authorization"].(map[string]any); ok {
+		if d, ok := parseUnixValue(authz["validBefore"]); ok {
+			return d, true
+		}
+	}
+	return 0, false
+}
+
+// parseUnixValue coerces a unix-timestamp field that may arrive as a JSON
+// string, float64, json.Number, or integer into an int64.
+func parseUnixValue(v any) (int64, bool) {
+	switch t := v.(type) {
+	case string:
+		if t == "" {
+			return 0, false
+		}
+		n, err := strconv.ParseInt(t, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	case json.Number:
+		n, err := t.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return n, true
+	case float64:
+		return int64(t), true
+	case int64:
+		return t, true
+	case int:
+		return int64(t), true
+	default:
+		return 0, false
+	}
+}
+
+// dropExpiredAuthsLocked removes auths whose deadline is at or inside the safety
+// margin from the head of the pool. Caller must hold s.mu. It returns the number
+// dropped. Auths with no discoverable deadline (e.g. USDC validBefore in 2106)
+// are kept.
+func (s *PreSignedSigner) dropExpiredAuthsLocked(now int64) int {
+	dropped := 0
+	for len(s.auths) > 0 {
+		dl, ok := authDeadlineUnix(s.auths[0])
+		if ok && dl <= now+authExpirySafetyMarginSec {
+			s.auths = s.auths[1:]
+			dropped++
+			continue
+		}
+		break
+	}
+	return dropped
+}
 
 // PreSignedSigner implements Signer using pre-signed ERC-3009
 // TransferWithAuthorization vouchers. It pops one auth from the pool per
@@ -117,6 +213,16 @@ func (s *PreSignedSigner) HoldSign(req *x402types.PaymentRequirements) (*x402typ
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Discard auths that have expired (or expire within the safety margin)
+	// before picking. The pool is FIFO and a pre-signed batch shares roughly
+	// one deadline, so without this an expired batch is served auth-by-auth,
+	// each returning a 503 invalid_payment_expired from the verifier, until the
+	// whole expired batch is burned through. USDC vouchers carry a far-future
+	// validBefore and are never dropped here.
+	if dropped := s.dropExpiredAuthsLocked(time.Now().Unix()); dropped > 0 {
+		log.Printf("x402-buyer: dropped %d expired pre-signed auth(s) before signing (%d remaining)", dropped, len(s.auths))
+	}
 
 	if len(s.auths) == 0 {
 		return nil, nil, fmt.Errorf("pre-signed auth pool exhausted (spent %d): %w",

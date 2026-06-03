@@ -2,8 +2,10 @@ package buyer
 
 import (
 	"encoding/json"
+	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	x402types "github.com/coinbase/x402/go/types"
 )
@@ -340,7 +342,7 @@ func TestPreSignedSigner_SignGenericPayment(t *testing.T) {
 				"from": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
 				"spender": "0x402085c248EeA27D92E8b30b2C58ed07f9E20001",
 				"nonce": "42",
-				"deadline": "99",
+				"deadline": "99999999999",
 				"permitted": {
 					"token": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
 					"amount": "1000"
@@ -397,5 +399,107 @@ func makeAuth(sig string) *PreSignedAuth {
 		ValidAfter:  "0",
 		ValidBefore: "4294967295",
 		Nonce:       "0xdeadbeef" + sig,
+	}
+}
+
+// makePermit2Auth builds a Permit2 (OBOL) pre-signed auth with the given
+// on-chain deadline (unix seconds) carried in the v2 payment payload — the
+// shape buy.py emits for the OBOL path.
+func makePermit2Auth(id string, deadline int64) *PreSignedAuth {
+	payment := &x402types.PaymentPayload{
+		X402Version: 2,
+		Accepted: x402types.PaymentRequirements{
+			Scheme:  "exact",
+			Network: "eip155:84532",
+			Amount:  "1000",
+			PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+			Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		},
+		Payload: map[string]any{
+			"signature": "0x" + id,
+			"permit2Authorization": map[string]any{
+				"from":     "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+				"nonce":    id,
+				"deadline": strconv.FormatInt(deadline, 10),
+			},
+		},
+	}
+	return &PreSignedAuth{ID: id, Payment: payment}
+}
+
+// TestAuthDeadlineUnix covers expiry extraction across the Permit2, nested
+// ERC-3009, and legacy-flat shapes — the load-bearing helper behind the
+// expired-auth filter.
+func TestAuthDeadlineUnix(t *testing.T) {
+	if d, ok := authDeadlineUnix(makePermit2Auth("1", 1234567890)); !ok || d != 1234567890 {
+		t.Errorf("permit2 deadline: got (%d,%v), want (1234567890,true)", d, ok)
+	}
+	// Legacy flat ERC-3009 validBefore (USDC path) — far future, parsed.
+	if d, ok := authDeadlineUnix(makeAuth("a")); !ok || d != 4294967295 {
+		t.Errorf("flat validBefore: got (%d,%v), want (4294967295,true)", d, ok)
+	}
+	// Nested ERC-3009 authorization.validBefore.
+	nested := &PreSignedAuth{Payment: &x402types.PaymentPayload{Payload: map[string]any{
+		"authorization": map[string]any{"validBefore": "1700000000"},
+	}}}
+	if d, ok := authDeadlineUnix(nested); !ok || d != 1700000000 {
+		t.Errorf("nested validBefore: got (%d,%v), want (1700000000,true)", d, ok)
+	}
+	// No deadline anywhere -> not found (never dropped).
+	if _, ok := authDeadlineUnix(&PreSignedAuth{Payment: &x402types.PaymentPayload{Payload: map[string]any{}}}); ok {
+		t.Error("auth with no deadline must report ok=false")
+	}
+	if _, ok := authDeadlineUnix(nil); ok {
+		t.Error("nil auth must report ok=false")
+	}
+}
+
+// TestPreSignedSigner_DropsExpiredAuths is the regression for the 503
+// invalid_payment_expired cascade: HoldSign must skip expired Permit2 vouchers
+// at the head of the FIFO pool instead of serving them.
+func TestPreSignedSigner_DropsExpiredAuths(t *testing.T) {
+	now := time.Now().Unix()
+	expiredA := makePermit2Auth("expA", now-60)
+	expiredB := makePermit2Auth("expB", now-5) // inside the safety margin
+	fresh := makePermit2Auth("fresh", now+3600)
+
+	signer := NewPreSignedSigner(
+		"base-sepolia",
+		"0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		"1000", "OBOL", 18,
+		[]*PreSignedAuth{expiredA, expiredB, fresh},
+		0, nil,
+	)
+
+	req := &x402types.PaymentRequirements{
+		Network: "eip155:84532",
+		PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+		Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		Amount:  "1000",
+	}
+
+	_, held, err := signer.HoldSign(req)
+	if err != nil {
+		t.Fatalf("HoldSign: %v", err)
+	}
+	if held.ID != "fresh" {
+		t.Fatalf("expected the fresh auth to be served, got %q (expired auths were not skipped)", held.ID)
+	}
+	if r := signer.Remaining(); r != 0 {
+		t.Fatalf("expected pool drained to 0 after serving the only fresh auth, got %d", r)
+	}
+
+	// A pool of only-expired auths must exhaust, not serve an expired voucher.
+	expiredOnly := NewPreSignedSigner(
+		"base-sepolia",
+		"0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+		"0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		"1000", "OBOL", 18,
+		[]*PreSignedAuth{makePermit2Auth("x", now-100), makePermit2Auth("y", now-100)},
+		0, nil,
+	)
+	if _, _, err := expiredOnly.HoldSign(req); err == nil {
+		t.Fatal("expected exhausted-pool error when all auths are expired, got nil")
 	}
 }
