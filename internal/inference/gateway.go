@@ -181,6 +181,10 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 	paymentMiddleware := x402pkg.NewForwardAuthMiddleware(x402pkg.ForwardAuthConfig{
 		FacilitatorURL: g.config.FacilitatorURL,
 		VerifyOnly:     g.config.VerifyOnly,
+		// The standalone inference gateway is in-process and settlement-aware,
+		// so a configured VerifyOnly=false is correct by design — suppress the
+		// misleading per-request warning on this path.
+		SettlesInProcess: true,
 	}, []x402types.PaymentRequirements{requirement})
 
 	// Initialise key backend: TEE (Linux) or SE (macOS), mutually exclusive.
