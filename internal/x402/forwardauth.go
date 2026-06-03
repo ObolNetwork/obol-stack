@@ -47,6 +47,15 @@ type ForwardAuthConfig struct {
 	// "ways to pay" prompts) while x402-aware clients keep getting JSON.
 	// Nil keeps today's behaviour: every 402 is JSON.
 	SendPaymentRequired SendPaymentRequiredFunc
+
+	// SettlesInProcess marks the in-process seller-gateway path (HandleProxy /
+	// obol sell inference) where VerifyOnly=false is correct BY DESIGN — the
+	// middleware proxies to the real upstream and settles only after a <400
+	// response, so the verifyOnly=false warning would be misleading noise on
+	// every paid request. When true, that warning is suppressed. It does NOT
+	// change settlement behaviour; the genuinely-dangerous Traefik ForwardAuth
+	// path leaves this false and still warns if an operator flips VerifyOnly.
+	SettlesInProcess bool
 }
 
 // facilitatorVerifyRequest is the JSON body sent to POST /verify and /settle.
@@ -97,7 +106,7 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 	verifyClient := &http.Client{Timeout: facilitatorVerifyTimeout}
 	settleClient := &http.Client{Timeout: facilitatorSettleTimeout}
 
-	if !cfg.VerifyOnly {
+	if !cfg.VerifyOnly && !cfg.SettlesInProcess {
 		log.Printf("x402: WARNING verifyOnly=false — settlement will run after upstream success. " +
 			"This is ONLY safe for in-process middleware (e.g. obol sell inference) that sees " +
 			"the real upstream status. Behind Traefik ForwardAuth this debits the payer before " +

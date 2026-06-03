@@ -497,3 +497,36 @@ func TestForwardAuth_VerifyOnlyTrue_NoStartupWarning(t *testing.T) {
 		t.Fatalf("did not expect verifyOnly warning when VerifyOnly=true, got:\n%s", gotLog)
 	}
 }
+
+// TestForwardAuth_SettlesInProcess_SuppressesWarning pins the fix for the
+// per-request log spam on the in-process seller gateway (HandleProxy / obol
+// sell inference): that path sets VerifyOnly=false BY DESIGN (it proxies to the
+// real upstream and settles after a <400 response), so the verifyOnly=false
+// warning is misleading there. SettlesInProcess=true must silence it while
+// leaving the dangerous Traefik ForwardAuth path (SettlesInProcess=false) loud.
+func TestForwardAuth_SettlesInProcess_SuppressesWarning(t *testing.T) {
+	var buf bytes.Buffer
+
+	origFlags := log.Flags()
+	origOutput := log.Writer()
+
+	log.SetFlags(0)
+	log.SetOutput(&buf)
+	t.Cleanup(func() {
+		log.SetFlags(origFlags)
+		log.SetOutput(origOutput)
+	})
+
+	_ = NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL:   "http://example.invalid",
+		VerifyOnly:       false,
+		SettlesInProcess: true,
+	}, []x402types.PaymentRequirements{{
+		Scheme:  "exact",
+		Network: "eip155:84532",
+	}})
+
+	if gotLog := buf.String(); strings.Contains(gotLog, "verifyOnly=false") {
+		t.Fatalf("SettlesInProcess=true must suppress the verifyOnly=false warning, got:\n%s", gotLog)
+	}
+}

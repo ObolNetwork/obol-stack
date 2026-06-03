@@ -239,8 +239,13 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	display := buildPaymentDisplay(rule, chain, asset, wallet, requirement.Amount)
 
 	middleware := NewForwardAuthMiddleware(ForwardAuthConfig{
-		FacilitatorURL:      cfg.FacilitatorURL,
+		FacilitatorURL: cfg.FacilitatorURL,
+		// HandleProxy is the in-process seller gateway: it proxies to the real
+		// upstream and settles only after a <400 response, so verifyOnly=false
+		// is correct here. SettlesInProcess suppresses the (otherwise
+		// per-request) verifyOnly=false warning on this safe path.
 		VerifyOnly:          false,
+		SettlesInProcess:    true,
 		Extensions:          extensions,
 		SendPaymentRequired: NewHTMLAwarePaymentRequired(display),
 	}, []x402types.PaymentRequirements{requirement})
