@@ -499,11 +499,12 @@ Examples:
 									Namespace:   svcNs,
 								})
 							}
+						} else {
+							// Registration enabled but auto-register not attempted (e.g.
+							// the tunnel URL was not ready): surface the Ready=False
+							// consequence + completion path instead of failing silently.
+							noticeInferenceRegistrationSkipped(u, cfg, soSpec, cmd.String("chain"), wallet, name, svcNs)
 						}
-						// Registration enabled but auto-register not attempted (e.g.
-						// the tunnel URL was not ready): surface the Ready=False
-						// consequence + completion path instead of failing silently.
-						noticeInferenceRegistrationSkipped(u, cfg, soSpec, cmd.String("chain"), wallet, name, svcNs)
 					}
 				}
 			}
