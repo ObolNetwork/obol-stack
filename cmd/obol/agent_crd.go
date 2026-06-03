@@ -7,6 +7,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/agentcrd"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
+	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/urfave/cli/v3"
 )
@@ -40,6 +41,43 @@ type createCRDAgentOptions struct {
 	Interactive  bool // when true, prompt for any missing fields with sensible defaults
 }
 
+// validatePinnedModel rejects a non-empty --model that LiteLLM doesn't serve,
+// so `obol agent new --model X` fails at creation time instead of provisioning
+// an agent whose every chat call returns "no healthy deployments for this
+// model". A transient registry-list error is a warning, not a hard failure;
+// an empty model is always allowed (the controller auto-pins the cluster
+// default at first reconcile).
+func validatePinnedModel(cfg *config.Config, u *ui.UI, modelName string) error {
+	if strings.TrimSpace(modelName) == "" {
+		return nil
+	}
+	configured, err := model.GetConfiguredModels(cfg)
+	if err != nil {
+		u.Dim(fmt.Sprintf("Could not verify model %q against LiteLLM (%v); continuing", modelName, err))
+		return nil
+	}
+	if len(configured) > 0 && !isModelConfigured(modelName, configured) {
+		return fmt.Errorf("model %q is not configured in LiteLLM\n  Available: %s\n  Run `obol model list` to see models, or omit --model to let the controller auto-pin the cluster default",
+			modelName, strings.Join(configured, ", "))
+	}
+	return nil
+}
+
+// isModelConfigured reports whether name is an exact entry in the LiteLLM model
+// list. The `paid/*` wildcard is a routing namespace, not a callable model, so
+// it is never accepted as a pin (mirrors pickAgentDefault in sell_agent.go).
+func isModelConfigured(name string, configured []string) bool {
+	if name == "paid/*" {
+		return false
+	}
+	for _, m := range configured {
+		if m == name {
+			return true
+		}
+	}
+	return false
+}
+
 // createCRDAgent does the actual host-seed + kubectl-apply work. Returns
 // when the Agent CR is in place; the controller takes over from there.
 func createCRDAgent(cfg *config.Config, u *ui.UI, opts createCRDAgentOptions) error {
@@ -71,6 +109,13 @@ func createCRDAgent(cfg *config.Config, u *ui.UI, opts createCRDAgentOptions) er
 		// will want one; the operator can decline.
 		ans := strings.TrimSpace(promptOrDefault(u, "Provision a wallet for this agent? [Y/n]", "Y"))
 		createWallet = !strings.EqualFold(ans, "n") && !strings.EqualFold(ans, "no")
+	}
+
+	// Fail fast on a pinned model LiteLLM doesn't serve. Without this the Agent
+	// CR provisions cleanly but every chat call returns "no healthy deployments
+	// for this model", which is hard to trace back to the typo.
+	if err := validatePinnedModel(cfg, u, model); err != nil {
+		return err
 	}
 
 	skills, err := agentcrd.ParseSkills(skillsCSV)
