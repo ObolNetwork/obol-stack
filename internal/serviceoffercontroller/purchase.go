@@ -95,6 +95,16 @@ func (c *Controller) reconcilePurchase(ctx context.Context, key string) error {
 	return nil
 }
 
+// isSidecarUpstreamGone reports whether a checkBuyerStatus error means the
+// x402-buyer sidecar no longer lists the upstream at all. That is the signal
+// that a delete-drain is complete: there is nothing left for the sidecar to
+// consume. It is deliberately a string match on the error checkBuyerStatus
+// returns (purchase_helpers.go) so both the entry switch and the terminal
+// cleanup check in reconcileDeletingPurchase agree on what "drained" means.
+func isSidecarUpstreamGone(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "not found in sidecar status")
+}
+
 func (c *Controller) reconcileDeletingPurchase(ctx context.Context, pr *monetizeapi.PurchaseRequest, raw *unstructured.Unstructured) error {
 	buyerNS := pr.EffectiveBuyerNamespace()
 	status := pr.Status
@@ -105,6 +115,17 @@ func (c *Controller) reconcileDeletingPurchase(ctx context.Context, pr *monetize
 	case err == nil:
 		status.Remaining = remaining
 		status.Spent = spent
+	case isSidecarUpstreamGone(err):
+		// The sidecar no longer reports this upstream. That deleted-upstream
+		// signal IS the drain-done signal: collapse Remaining to 0 so cleanup
+		// and finalizer removal proceed below. Without this case, a Configured
+		// purchase with Remaining>0 fell through to the next case, kept
+		// Remaining>0, and requeued every 5s forever — stranding the CR in
+		// Terminating until its finalizer was force-removed by hand. The
+		// terminal not-found check at the end of this function already treats
+		// the same signal as drain-complete; this keeps the entry switch
+		// consistent with it.
+		status.Remaining = 0
 	case purchaseConditionIsTrue(status.Conditions, "Configured") && status.Remaining > 0:
 		log.Printf("purchase %s/%s: delete drain waiting for sidecar status: %v", pr.Namespace, pr.Name, err)
 	default:
@@ -146,7 +167,7 @@ func (c *Controller) reconcileDeletingPurchase(ctx context.Context, pr *monetize
 		}
 		c.purchaseQueue.AddAfter(pr.Namespace+"/"+pr.Name, 5*time.Second)
 		return nil
-	} else if !strings.Contains(err.Error(), "not found in sidecar status") {
+	} else if !isSidecarUpstreamGone(err) {
 		setPurchaseCondition(
 			&status.Conditions,
 			"Deleting",

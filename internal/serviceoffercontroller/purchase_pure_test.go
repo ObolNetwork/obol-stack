@@ -1,11 +1,41 @@
 package serviceoffercontroller
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 )
+
+// --- isSidecarUpstreamGone (delete-drain finalizer hang regression) ----------
+
+// TestIsSidecarUpstreamGone locks in the fix for the delete-drain hang: a
+// PurchaseRequest stuck in Terminating because reconcileDeletingPurchase kept
+// Remaining>0 forever when checkBuyerStatus reported the upstream gone. Only
+// the specific "not found in sidecar status" signal must count as drained;
+// transient errors (e.g. the litellm pod unreachable) must NOT.
+func TestIsSidecarUpstreamGone(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil error is not gone", nil, false},
+		{"upstream gone (bare)", errors.New(`upstream "docuseal" not found in sidecar status`), true},
+		{"upstream gone (wrapped)", fmt.Errorf("checkBuyerStatus: %w", errors.New(`upstream "x" not found in sidecar status`)), true},
+		{"transient: no litellm pods is NOT gone", errors.New("no litellm pods in llm"), false},
+		{"transient: connection refused is NOT gone", errors.New("dial tcp 10.0.0.1:8402: connect: connection refused"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isSidecarUpstreamGone(tc.err); got != tc.want {
+				t.Errorf("isSidecarUpstreamGone(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
 
 // --- purchaseConditionIsTrue ------------------------------------------------
 
