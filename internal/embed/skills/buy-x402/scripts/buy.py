@@ -499,6 +499,60 @@ def _active_auth_pool(existing_auths, live_status):
     return auths[-remaining:]
 
 
+def _auth_deadline(auth):
+    """Return the unix expiry of a pre-signed auth, or None if none is set.
+
+    Permit2 (OBOL) vouchers carry permit2Authorization.deadline; ERC-3009 (USDC)
+    vouchers carry authorization.validBefore (USDC uses a far-future value). The
+    legacy flat validBefore is a fallback. Mirrors authDeadlineUnix in the Go
+    buyer sidecar (internal/x402/buyer/signer.go)."""
+    auth = auth or {}
+    payload = (auth.get("payment") or {}).get("payload") or {}
+    for value in (
+        (payload.get("permit2Authorization") or {}).get("deadline"),
+        (payload.get("authorization") or {}).get("validBefore"),
+        auth.get("validBefore"),
+    ):
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _count_valid_auths(auths, now=None):
+    """Split an auth pool into (valid, expired) counts by on-chain deadline.
+
+    Auths with no discoverable deadline count as valid (USDC validBefore is
+    ~year 2106). Used to make the displayed "remaining" expiry-aware so an
+    operator/agent does not treat an all-expired pool as ready to spend."""
+    if now is None:
+        now = int(time.time())
+    valid = expired = 0
+    for a in auths or []:
+        deadline = _auth_deadline(a)
+        if deadline is not None and deadline <= now:
+            expired += 1
+        else:
+            valid += 1
+    return valid, expired
+
+
+def _expired_in_active_pool(spec, live_status):
+    """Count expired auths among the currently-active pool, defensively.
+
+    Falls back to the full preSignedAuths list if the live remaining count
+    can't be reconciled with the pool (e.g. sidecar mid-reload)."""
+    try:
+        pool = _active_auth_pool(spec.get("preSignedAuths"), live_status)
+    except ValueError:
+        pool = spec.get("preSignedAuths") or []
+    _, expired = _count_valid_auths(pool)
+    return expired
+
+
 def _build_active_auth_pool(existing_auths, live_status, new_auths):
     return _active_auth_pool(existing_auths, live_status) + list(new_auths or [])
 
@@ -1558,9 +1612,11 @@ def cmd_list():
         alias = live.get("public_model") or status.get("publicModel") or f"paid/{spec.get('model', name)}"
         price = (spec.get("payment") or {}).get("price", "?")
         chain = live.get("network") or (spec.get("payment") or {}).get("network", "?")
+        expired = _expired_in_active_pool(spec, live)
+        remaining_col = f"{remaining} ({expired} expired)" if expired else f"{remaining}"
         print(f"{name:<20} {alias:<32} "
               f"{str(price):<12} {chain:<15} "
-              f"{remaining}")
+              f"{remaining_col}")
 
 
 # ---------------------------------------------------------------------------
@@ -1585,7 +1641,12 @@ def cmd_status(name):
     print(f"Endpoint: {live_status.get('url') or _normalize_endpoint(spec.get('endpoint', '?'))}")
     print(f"Model:    {live_status.get('remote_model') or spec.get('model', '?')}")
     print(f"Chain:    {live_status.get('network') or (spec.get('payment') or {}).get('network', '?')}")
-    print(f"Auths remaining: {live_status.get('remaining', status.get('remaining', 0))}")
+    remaining_display = live_status.get('remaining', status.get('remaining', 0))
+    expired = _expired_in_active_pool(spec, live_status)
+    print(f"Auths remaining: {remaining_display}")
+    if expired:
+        print(f"  WARNING: {expired} of {remaining_display} remaining auth(s) are EXPIRED and unusable; "
+              f"run `buy {name} ...` to top up with fresh authorizations")
     print(f"Auths spent:     {live_status.get('spent', status.get('spent', 0))}")
     print()
 
