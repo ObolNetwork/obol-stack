@@ -131,6 +131,10 @@ func modelSetupCommand(cfg *config.Config) *cli.Command {
 }
 
 func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
+	// Only auto-promote models the user named explicitly. Auto-detecting every
+	// pulled model (the len==0 branch below) must not reshuffle the model_list.
+	explicit := setupPromoteList(models)
+
 	if len(models) == 0 {
 		// Diagnostic: check Ollama connectivity
 		u.Info("Checking Ollama connectivity...")
@@ -177,7 +181,7 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 
 	u.Successf("Ollama configured. To change later, run: obol model setup (or obol model remove <name>)")
 
-	return syncAgentModels(cfg, u)
+	return promoteAndSync(cfg, u, explicit)
 }
 
 func setupCloudProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, models []string) error {
@@ -237,13 +241,48 @@ func setupCloudProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, m
 	u.Print("")
 	u.Successf("Model configured. To change later, run: obol model setup (or obol model remove <name>)")
 
-	return syncAgentModels(cfg, u)
+	return promoteAndSync(cfg, u, models)
 }
 
 // syncAgentModels re-renders the stack-managed Hermes default agent from the
 // current LiteLLM model inventory.
 func syncAgentModels(cfg *config.Config, u *ui.UI) error {
 	return hermes.SyncDefaultModels(cfg, u)
+}
+
+// setupPromoteList decides which models a provider setup should promote to
+// primary. Explicitly named models are promoted (so `obol model setup` makes
+// the just-configured model the agent's primary). When a setup auto-discovers
+// its full inventory instead (Ollama with no --model), the slice is empty and
+// nothing is promoted — auto-detection must never silently reshuffle the
+// operator's model_list (the spark2 footgun). Returns a fresh slice so the
+// caller can mutate its own copy without aliasing this one.
+func setupPromoteList(userSpecified []string) []string {
+	return append([]string(nil), userSpecified...)
+}
+
+// promoteAndSync moves the just-configured model(s) to the head of the LiteLLM
+// model_list so the first becomes the agent's primary, then syncs the agent.
+// `obol model setup` configures providers by appending to the model_list, so a
+// newly added model would otherwise sit at the tail and never become primary —
+// users had to run `obol model prefer` manually for setup to "take". Promoting
+// by default makes a freshly configured model take effect immediately; users
+// reorder afterward with `obol model prefer`.
+//
+// Promotion is best-effort: the provider is already configured, so a promote
+// failure (e.g. an unexpected name mismatch) warns and still syncs rather than
+// failing the whole setup. An empty list (e.g. Ollama auto-detect of every
+// pulled model) skips promotion and just syncs.
+func promoteAndSync(cfg *config.Config, u *ui.UI, models []string) error {
+	if len(models) > 0 {
+		if err := model.PreferModels(cfg, u, models); err != nil {
+			u.Warnf("Configured, but could not promote %s to primary: %v", strings.Join(models, ", "), err)
+			u.Dim("  Set the primary yourself with: obol model prefer " + models[0])
+		} else {
+			u.Successf("Primary model is now %s (reorder anytime with: obol model prefer <model>)", models[0])
+		}
+	}
+	return syncAgentModels(cfg, u)
 }
 
 func modelSyncCommand(cfg *config.Config) *cli.Command {
@@ -286,7 +325,7 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 			if cmd.Bool("no-sync") {
 				return nil
 			}
-			return syncAgentModels(cfg, u)
+			return promoteAndSync(cfg, u, []string{modelName})
 		},
 	}
 }
