@@ -489,9 +489,21 @@ Examples:
 								ExpectedOwner: wallet,
 							}); err != nil {
 								u.Warnf("automatic sell registration failed: %v", err)
-								u.Dim("  Re-run later with: obol sell register " + name + " -n " + svcNs)
+								aw, _ := hermes.ResolveWalletAddress(cfg)
+								printRegistrationNotice(u, registrationNotice{
+									Mode:        regNoticeAutoFailed,
+									Chain:       cmd.String("chain"),
+									PayTo:       wallet,
+									AgentWallet: aw,
+									OfferName:   name,
+									Namespace:   svcNs,
+								})
 							}
 						}
+						// Registration enabled but auto-register not attempted (e.g.
+						// the tunnel URL was not ready): surface the Ready=False
+						// consequence + completion path instead of failing silently.
+						noticeInferenceRegistrationSkipped(u, cfg, soSpec, cmd.String("chain"), wallet, name, svcNs)
 					}
 				}
 			}
@@ -873,6 +885,15 @@ Examples:
 						AgentDesc:     registrationDescriptionForPrompt(name, reg),
 						ExpectedOwner: wallet,
 					}); err != nil {
+						aw, _ := hermes.ResolveWalletAddress(cfg)
+						printRegistrationNotice(u, registrationNotice{
+							Mode:        regNoticeAutoFailed,
+							Chain:       cmd.String("chain"),
+							PayTo:       wallet,
+							AgentWallet: aw,
+							OfferName:   name,
+							Namespace:   ns,
+						})
 						return fmt.Errorf("automatic sell registration failed: %w", err)
 					}
 				}
@@ -972,12 +993,38 @@ func shouldAutoRegisterSell(spec map[string]any, tunnelURL string) bool {
 	if tunnelURL == "" {
 		return false
 	}
+	return registrationEnabledInSpec(spec)
+}
+
+// registrationEnabledInSpec reports whether a ServiceOffer spec map has
+// ERC-8004 registration enabled.
+func registrationEnabledInSpec(spec map[string]any) bool {
 	reg, ok := spec["registration"].(map[string]any)
 	if !ok {
 		return false
 	}
 	enabled, _ := reg["enabled"].(bool)
 	return enabled
+}
+
+// noticeInferenceRegistrationSkipped prints the cluster-routed `sell inference`
+// advisory for the case where registration is enabled but the auto-register
+// step was not attempted (e.g. the tunnel URL was not ready in time). It is a
+// no-op when registration is disabled. Extracted so the inference Action stays
+// within the control-flow nesting budget.
+func noticeInferenceRegistrationSkipped(u *ui.UI, cfg *config.Config, soSpec map[string]any, chain, payTo, name, ns string) {
+	if !registrationEnabledInSpec(soSpec) {
+		return
+	}
+	aw, _ := hermes.ResolveWalletAddress(cfg)
+	printRegistrationNotice(u, registrationNotice{
+		Mode:        regNoticeAutoSkipped,
+		Chain:       chain,
+		PayTo:       payTo,
+		AgentWallet: aw,
+		OfferName:   name,
+		Namespace:   ns,
+	})
 }
 
 func registrationNameForPrompt(fallback string, reg map[string]any) string {
