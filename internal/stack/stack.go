@@ -1141,9 +1141,20 @@ func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 	serverCID := k3dServerContainerID(clusterName)
 	cache := loadImportedImageCache(cfg)
 
+	// Tag locally-built images with the per-commit dev tag the manifest
+	// rewrite stamped (defaults.CopyInfrastructure persisted it). This keeps a
+	// branch/worktree's images on their own tag instead of a shared :latest,
+	// so parallel dev stacks on one Docker daemon can't clobber each other's
+	// images (the cross-worktree poisoning that masquerades as a stale build).
+	devTag := stackdefaults.ReadDevImageTag(cfg)
+
 	var built, pulled, imported, total int
 
 	for _, img := range baseLocalImages {
+		// img.tag carries the published `:latest` placeholder; swap it for the
+		// dev tag the rendered manifests actually pin.
+		imgTag := strings.TrimSuffix(img.tag, ":latest") + ":" + devTag
+
 		contextDir := projectRoot
 		if img.contextDir != "" {
 			if filepath.IsAbs(img.contextDir) {
@@ -1163,27 +1174,27 @@ func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 
 		total++
 
-		if shouldForceRebuild(img.tag) || !dockerImageAvailableLocally(img.tag) {
+		if shouldForceRebuild(imgTag) || !dockerImageAvailableLocally(imgTag) {
 			if u != nil {
-				u.Infof("Building %s from %s", img.tag, img.dockerfile)
+				u.Infof("Building %s from %s", imgTag, img.dockerfile)
 			}
 			buildCmd := exec.Command("docker", "build",
 				"-f", dockerfilePath,
-				"-t", img.tag,
+				"-t", imgTag,
 				contextDir,
 			)
 			buildCmd.Stdout = os.Stdout
 			buildCmd.Stderr = os.Stderr
 			if err := buildCmd.Run(); err != nil {
 				if u != nil {
-					u.Warnf("Failed to build %s: %v", img.tag, err)
+					u.Warnf("Failed to build %s: %v", imgTag, err)
 				}
 				continue
 			}
 			built++
 		}
 
-		if importImageWithCache(k3dBinary, clusterName, img.tag, serverCID, &cache, u) {
+		if importImageWithCache(k3dBinary, clusterName, imgTag, serverCID, &cache, u) {
 			imported++
 		}
 	}
