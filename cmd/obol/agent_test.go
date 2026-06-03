@@ -398,3 +398,29 @@ func mkdirAgentInstance(t *testing.T, cfg *config.Config, runtime agentruntime.R
 		t.Fatalf("create %s instance %q: %v", runtime, id, err)
 	}
 }
+
+// TestIsModelConfigured covers the membership check behind the `obol agent new
+// --model X` preflight: known models pass, unknown ones are rejected, and the
+// `paid/*` wildcard meta route is never accepted as a pin.
+func TestIsModelConfigured(t *testing.T) {
+	configured := []string{"qwen3.6", "qwen3.5:9b", "paid/*", "paid/aeon"}
+	cases := []struct {
+		name  string
+		model string
+		want  bool
+	}{
+		{"known model", "qwen3.6", true},
+		{"known tagged model", "qwen3.5:9b", true},
+		{"concrete paid model", "paid/aeon", true},
+		{"unknown model", "gpt-9000", false},
+		{"wildcard meta route is not a pin", "paid/*", false},
+		{"empty is not a member", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isModelConfigured(tc.model, configured); got != tc.want {
+				t.Errorf("isModelConfigured(%q) = %v, want %v", tc.model, got, tc.want)
+			}
+		})
+	}
+}
