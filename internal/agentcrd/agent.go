@@ -85,6 +85,18 @@ type SeedOptions struct {
 // data path. SOUL.md is only written when missing (or when OverwriteSoul is
 // true).
 //
+// CONTRACT — sub-agents-for-sale ONLY. This helper also writes the
+// `.no-bundled-skills` marker (see writeNoBundledSkillsMarker), which makes
+// Hermes skip its ~80 bundled skills and run with just the operator-chosen
+// subset. That is correct for a narrow, EVM-focused paid service but WRONG for
+// the stack-managed master agent, which keeps the full bundled set. The master
+// (internal/hermes) seeds its own home via a separate path (it does not call
+// this) and must NEVER be routed through SeedHostFiles, or it would silently
+// lose its bundled skills. The reusable seed primitives this is built from
+// (WriteSoul, embed.WriteSkillSubset) deliberately do NOT write the marker, so
+// the objective-only update path — and any future master-side reuse — stays
+// safe; locked by TestMarkerOnlyWrittenBySeedHostFiles.
+//
 // Returns whether SOUL.md was written this call so callers can report the
 // difference between "fresh agent" and "existing agent, skills resynced".
 func SeedHostFiles(cfg *config.Config, name string, skills []string, objective string, opts SeedOptions) (soulWritten bool, err error) {

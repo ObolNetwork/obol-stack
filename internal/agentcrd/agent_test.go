@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/embed"
 )
 
 func TestValidateName(t *testing.T) {
@@ -179,6 +180,56 @@ func TestSeedHostFiles_MarkerIsIdempotent(t *testing.T) {
 	if !stat1.ModTime().Equal(stat2.ModTime()) {
 		t.Errorf("marker rewritten on second seed; should be left alone")
 	}
+}
+
+// The `.no-bundled-skills` marker must be written ONLY by SeedHostFiles, never
+// by the lower-level seed primitives (WriteSoul, embed.WriteSkillSubset) that
+// the master/objective-only paths could reuse. SeedHostFiles is the
+// sub-agents-for-sale seam; the master agent (internal/hermes) seeds via those
+// primitives and must keep its ~80 bundled skills. If a future refactor moved
+// the marker write down into a shared primitive, the master would silently lose
+// them — this test fails first.
+func TestMarkerOnlyWrittenBySeedHostFiles(t *testing.T) {
+	// WriteSoul on its own — the objective-rewrite path — must not drop a marker.
+	t.Run("WriteSoul", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &config.Config{DataDir: dir}
+
+		if _, err := WriteSoul(cfg, "quant", "objective only", true); err != nil {
+			t.Fatalf("WriteSoul: %v", err)
+		}
+		if _, err := os.Stat(HostNoBundledSkillsMarkerPath(cfg, "quant")); !os.IsNotExist(err) {
+			t.Fatalf("WriteSoul created a .no-bundled-skills marker (err=%v); only SeedHostFiles may", err)
+		}
+	})
+
+	// Writing the skill subset into the agent's skills dir — the primitive a
+	// master/full-skill path would call — must not drop a marker either.
+	t.Run("WriteSkillSubset", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &config.Config{DataDir: dir}
+
+		if err := embed.WriteSkillSubset(HostSkillsPath(cfg, "quant"), []string{"addresses"}); err != nil {
+			t.Fatalf("WriteSkillSubset: %v", err)
+		}
+		if _, err := os.Stat(HostNoBundledSkillsMarkerPath(cfg, "quant")); !os.IsNotExist(err) {
+			t.Fatalf("embed.WriteSkillSubset created a .no-bundled-skills marker (err=%v); only SeedHostFiles may", err)
+		}
+	})
+
+	// Sanity anchor: the full SeedHostFiles seam DOES write the marker, so the
+	// negative assertions above are meaningful and not testing a dead path.
+	t.Run("SeedHostFiles", func(t *testing.T) {
+		dir := t.TempDir()
+		cfg := &config.Config{DataDir: dir}
+
+		if _, err := SeedHostFiles(cfg, "quant", []string{"addresses"}, "obj", SeedOptions{}); err != nil {
+			t.Fatalf("SeedHostFiles: %v", err)
+		}
+		if _, err := os.Stat(HostNoBundledSkillsMarkerPath(cfg, "quant")); err != nil {
+			t.Fatalf("SeedHostFiles must write the .no-bundled-skills marker: %v", err)
+		}
+	})
 }
 
 func TestSeedHostFiles_PreservesExistingSoul(t *testing.T) {

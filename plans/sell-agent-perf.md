@@ -115,11 +115,22 @@ All flags opt-in; existing callers untouched. ~50 LOC, stdlib only.
 | Knob | Old | New |
 |------|-----|-----|
 | `terminal.lifetime_seconds` | 300 | **90** |
+| `terminal.timeout` | 180 | **80** (measured; see Post-review hardening #3) |
 | `agent.max_turns` | 90 (default) | **30** |
 | `agent.reasoning_effort` | medium (default) | **low** |
 | `agent.disabled_toolsets` | — | `[memory, web]` |
-| SOUL.md size | ~1050 tok | **~500 tok** |
+| SOUL.md template | 2128 bytes | **1460 bytes** (measured; rendered ~1480 bytes, ~370 tok) |
 | `addresses` SKILL.md | ~7k tok | **~1k tok** (rest in `references/`) |
+
+The earlier "~1050 -> ~500 tok" SOUL estimate was optimistic. The
+**measured** result is a template shrink from 2128 -> 1460 bytes; rendered
+SOUL.md (after objective interpolation) is ~1480 bytes, ~370 tokens at
+4 chars/token — a real reduction, just not as large as guessed.
+
+The addresses skill split preserved **all 177 unique contract addresses
+exactly** across 8 `references/` files (verified by diff against the
+pre-split SKILL.md). No address was dropped, renamed, or mistyped in the
+move — only the prompt-load footprint changed.
 
 ## Files touched
 
@@ -144,3 +155,29 @@ All flags opt-in; existing callers untouched. ~50 LOC, stdlib only.
 - Confirm marker file present in the agent PVC:
   `ls -la <DataDir>/agent-quant/hermes-data/.hermes/.no-bundled-skills`
 - Eyeball Hermes pod logs for "skipping bundled skills" on startup.
+
+## Post-review hardening (PR #582 follow-up)
+
+Three follow-ups landed on this branch after review. None reopen the
+decisions above; they tighten the contract and add coverage.
+
+- **#2 — `SeedHostFiles` marker contract + regression test.**
+  `SeedHostFiles` now carries an explicit "sub-agents only" doc contract:
+  the `.no-bundled-skills` marker is written **only** by `SeedHostFiles`,
+  never by the reusable seed primitives (`WriteSoul`,
+  `embed.WriteSkillSubset`) that a master or objective-only path could
+  route through. A regression test locks this in, so a future refactor that
+  pushes the marker write down into a shared primitive — the way the master
+  (which seeds via its own `internal/hermes` path) could accidentally
+  inherit it — fails first.
+- **#3 — `terminal.timeout` lowered 180 -> 80.** It now stays
+  `<= terminal.lifetime_seconds` (90), so a single operation can no longer
+  outlive the session. (Previously a 180s per-op timeout could exceed the
+  90s session lifetime.) Reflected in the Numbers table above.
+- **#1 — integration test for marker + config honoring.** A new
+  `//go:build integration` test deploys a sub-agent and verifies the Hermes
+  image actually honors the new state: the `.no-bundled-skills` marker on
+  the PVC, the new `agent.*` / `lifetime_seconds` keys in the rendered
+  ConfigMap, and a behavioral skip-bundled-skills signal from the running
+  pod. It skips gracefully without a cluster (consistent with the rest of
+  the integration suite).
