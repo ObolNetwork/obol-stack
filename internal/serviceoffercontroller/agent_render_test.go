@@ -198,12 +198,26 @@ func TestAgentManifests_ProfileSeedInitContainer(t *testing.T) {
 
 	podSpec := dep["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
 	inits := podSpec["initContainers"].([]any)
-	if len(inits) != 1 {
-		t.Fatalf("initContainers length = %d, want 1", len(inits))
+	if len(inits) != 2 {
+		t.Fatalf("initContainers length = %d, want 2 (init-perms + profile-seed)", len(inits))
 	}
-	init := inits[0].(map[string]any)
+	// init[0] must be the root chown that re-owns the local-path volume to the
+	// Hermes UID before the non-root profile-seed init runs its mkdir.
+	chown := inits[0].(map[string]any)
+	if chown["name"] != "init-perms" {
+		t.Errorf("init[0] name = %v, want init-perms (root chown must run first)", chown["name"])
+	}
+	chownSC := chown["securityContext"].(map[string]any)
+	if chownSC["runAsUser"] != int64(0) {
+		t.Errorf("init-perms runAsUser = %v, want 0 (must be root to chown a hostPath volume)", chownSC["runAsUser"])
+	}
+	chownCmd := chown["command"].([]any)
+	if script := chownCmd[len(chownCmd)-1].(string); !strings.Contains(script, "chown -R 10000:10000 /data") {
+		t.Errorf("init-perms command = %q, want chown -R 10000:10000 /data", script)
+	}
+	init := inits[1].(map[string]any)
 	if init["name"] != "profile-seed" {
-		t.Errorf("init name = %v, want profile-seed", init["name"])
+		t.Errorf("init[1] name = %v, want profile-seed", init["name"])
 	}
 	args := init["args"].([]any)
 	if len(args) != 1 {

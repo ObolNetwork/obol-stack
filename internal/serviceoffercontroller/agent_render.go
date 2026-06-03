@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 
+	"github.com/ObolNetwork/obol-stack/internal/k8sperm"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -337,6 +338,19 @@ func agentPodSpec(agent *monetizeapi.Agent) map[string]any {
 			"fsGroupChangePolicy": "OnRootMismatch",
 		},
 		"initContainers": []any{
+			// The agent's data PVC is a local-path (hostPath) volume the
+			// provisioner chowns to 1000:1000, but Hermes runs as 10000.
+			// fsGroup is a no-op on hostPath, so without a root chown first
+			// the non-root profile-seed init below hits "Permission denied"
+			// on its mkdir and the pod never starts — the demo-quant
+			// Provisioning hang. The master agent has the identical init
+			// (internal/hermes/hermes.go); the shared helper keeps the two
+			// paths from drifting. agent-* namespaces are not PSS-restricted,
+			// so a root init is admissible here. Must run before profile-seed.
+			k8sperm.RootChownInitContainer(
+				"init-perms", hermesImage(), hermesContainerUID, hermesContainerGID,
+				[]k8sperm.ChownMount{{Name: "data", MountPath: "/data"}},
+			),
 			buildAgentProfileInitContainer(),
 		},
 		"containers": []any{
