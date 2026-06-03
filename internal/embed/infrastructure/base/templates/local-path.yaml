@@ -28,8 +28,18 @@ data:
   setup: |-
     #!/bin/sh
     set -eu
-    mkdir -m 0755 -p "${VOL_DIR}"
+    # Cross-platform volume ownership (k3d/macOS + native k3s/Linux).
+    # local-path PVs are hostPath-typed, so the kubelet ignores pod fsGroup —
+    # the directory ownership/mode this script sets is the ONLY thing a
+    # non-root workload can rely on. We chown to 1000:1000 (the historical
+    # default that OpenClaw and the x402-buyer align their UID to) and add
+    # group-write + setgid so any workload sharing GID 1000 can also write and
+    # new files inherit the GID. Workloads that must run as a different UID in
+    # a non-restricted namespace get a root chown init container instead (see
+    # internal/k8sperm and plans/volume-permission-hardening.md).
+    mkdir -m 0775 -p "${VOL_DIR}"
     chown -R 1000:1000 "${VOL_DIR}"
+    chmod 2775 "${VOL_DIR}"
   teardown: |-
     #!/bin/sh
     set -eu

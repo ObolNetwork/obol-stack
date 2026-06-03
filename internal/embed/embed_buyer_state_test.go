@@ -1,6 +1,7 @@
 package embed
 
 import (
+	"fmt"
 	"testing"
 )
 
@@ -88,5 +89,39 @@ func TestBuyerStatePVC(t *testing.T) {
 	// would block indefinitely.
 	if strat := nested(dep, "spec", "strategy", "type"); strat != "Recreate" {
 		t.Errorf("litellm Deployment strategy.type = %v, want Recreate (RWO PVC cannot be co-mounted during surge)", strat)
+	}
+
+	// The x402-buyer sidecar must run as UID/GID 1000 to match the owner
+	// local-path provisions the state PVC with. fsGroup is a no-op on
+	// hostPath-backed local-path volumes and a root chown init is forbidden
+	// in the restricted-PSS llm namespace, so UID alignment is the only way
+	// the sidecar can write /state/consumed.json. If this regresses to 65532,
+	// the buyer silently fails to persist consumed auths on the first paid
+	// call (Permission denied on a 1000:1000-owned dir) — the same re-spend
+	// cascade the PVC was introduced to prevent.
+	containers, ok := nested(dep, "spec", "template", "spec", "containers").([]any)
+	if !ok {
+		t.Fatal("litellm Deployment has no containers")
+	}
+	var buyer map[string]any
+	for _, c := range containers {
+		cm, ok := c.(map[string]any)
+		if ok && cm["name"] == "x402-buyer" {
+			buyer = cm
+			break
+		}
+	}
+	if buyer == nil {
+		t.Fatal("x402-buyer container missing from litellm Deployment")
+	}
+	// Compare via fmt to avoid depending on yaml.v3's exact numeric type.
+	if u := nested(buyer, "securityContext", "runAsUser"); fmt.Sprintf("%v", u) != "1000" {
+		t.Errorf("x402-buyer securityContext.runAsUser = %v, want 1000 (must match local-path owner of x402-buyer-state PVC)", u)
+	}
+	if g := nested(buyer, "securityContext", "runAsGroup"); fmt.Sprintf("%v", g) != "1000" {
+		t.Errorf("x402-buyer securityContext.runAsGroup = %v, want 1000", g)
+	}
+	if nr := nested(buyer, "securityContext", "runAsNonRoot"); nr != true {
+		t.Errorf("x402-buyer securityContext.runAsNonRoot = %v, want true (restricted PSS)", nr)
 	}
 }
