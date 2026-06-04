@@ -116,6 +116,18 @@ type RouteRule struct {
 	// AgentRuntime is the runtime backing the agent ("hermes", etc).
 	// Surfaced as `accepts[].extra.agentRuntime`.
 	AgentRuntime string `yaml:"agentRuntime,omitempty"`
+
+	// OfferType records the originating ServiceOffer.spec.type
+	// (inference, http, agent, fine-tuning). The HTML 402 renderer uses
+	// this to pick type-appropriate copy and Buy CTAs.
+	OfferType string `yaml:"offerType,omitempty"`
+
+	// Model is the upstream model identifier for inference and agent
+	// offers. For type=inference it mirrors ServiceOffer.spec.model.name;
+	// for type=agent it mirrors AgentResolution.Model. Surfaced in the
+	// 402 page's primary Buy card so users can copy a fully-formed
+	// `obol buy inference --model ...` command.
+	Model string `yaml:"model,omitempty"`
 }
 
 // LoadConfig reads and parses a pricing configuration YAML file.

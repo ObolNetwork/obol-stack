@@ -151,10 +151,11 @@
       </header>
 
       <h1>Payment required</h1>
-      <p class="lede">This Obol Agent service requires a payment to access.</p>
+      <p class="lede">{{.Lede}}</p>
 
       <div class="card">
         <h2>Service</h2>
+        {{if .OfferDescription}}<p class="lede" style="margin-bottom:14px">{{.OfferDescription}}</p>{{end}}
         <dl class="grid">
           <dt>Endpoint</dt><dd>{{.Endpoint}}</dd>
           <dt>Network</dt><dd>{{.NetworkLabel}}</dd>
@@ -174,6 +175,19 @@
             {{end}}
           </dd>
         </dl>
+      </div>
+
+      <div class="card">
+        <h2>{{.PrimaryTitle}}</h2>
+        <p class="lede" style="margin-bottom:12px">{{.PrimaryLede}}</p>
+        <div class="copy-wrap">
+          {{if .PrimaryIsCode}}
+          <pre class="json" id="p-primary">{{.PrimaryPayload}}</pre>
+          {{else}}
+          <div class="prompt" id="p-primary">{{.PrimaryPayload}}</div>
+          {{end}}
+          <button class="copy" data-target="p-primary" type="button">Copy</button>
+        </div>
       </div>
 
       <div class="card">

@@ -177,6 +177,80 @@ func TestHTMLAware_DegradeWithoutDisplay(t *testing.T) {
 	mustContain(t, body, "1000 (atomic units)") // price falls back to atomic units
 }
 
+// Inference offers should surface the canonical `obol buy inference` CLI
+// command as the primary Buy card with the seller URL and model id
+// pre-filled, plus the operator-supplied description on the Service card.
+func TestHTMLAware_InferenceShowsCLIPrimaryAndDescription(t *testing.T) {
+	d := sampleDisplay()
+	d.OfferType = "inference"
+	d.OfferName = "aeon7"
+	d.Model = "AEON-7"
+	d.OfferDescription = "Remote 35B reasoning model with 32k context."
+
+	render := NewHTMLAwarePaymentRequired(d)
+	r := httptest.NewRequest("GET", "/services/aeon7", nil)
+	r.Header.Set("Accept", "text/html")
+	r.Header.Set("X-Forwarded-Host", "agent.example.tunnel.dev")
+	r.Header.Set("X-Forwarded-Proto", "https")
+	w := httptest.NewRecorder()
+	render(w, r, []x402types.PaymentRequirements{sampleRequirement()}, nil)
+
+	body := w.Body.String()
+	mustContain(t, body, "Buy with the Obol CLI")
+	mustContain(t, body, "obol buy inference aeon7")
+	mustContain(t, body, "--model AEON-7")
+	mustContain(t, body, "https://agent.example.tunnel.dev/services/agent-quant")
+	mustContain(t, body, "paid/AEON-7")
+	// Operator description bubbles into Service card + OG.
+	mustContain(t, body, "Remote 35B reasoning model with 32k context.")
+	// Lede explains that you're paying for remote inference, not an agent.
+	mustContain(t, body, "remote model time")
+}
+
+// Agent offers should explain that the buyer needs a prompt and POST a
+// chat-completions body, not just attach a payment header.
+func TestHTMLAware_AgentShowsChatCompletionsPrimary(t *testing.T) {
+	d := sampleDisplay()
+	d.OfferType = "agent"
+	d.OfferName = "agent-quant"
+	d.Model = "qwen3.5:9b"
+
+	render := NewHTMLAwarePaymentRequired(d)
+	r := httptest.NewRequest("GET", "/services/agent-quant", nil)
+	r.Header.Set("Accept", "text/html")
+	w := httptest.NewRecorder()
+	render(w, r, []x402types.PaymentRequirements{sampleRequirement()}, nil)
+
+	body := w.Body.String()
+	mustContain(t, body, "Send a prompt (OpenAI chat-completions)")
+	// JSON snippet sits inside <pre>; html/template escapes quotes.
+	mustContain(t, body, `&#34;model&#34;: &#34;qwen3.5:9b&#34;`)
+	mustContain(t, body, `&#34;messages&#34;:`)
+	mustContain(t, body, "X-PAYMENT")
+	// Lede frames the offer as an agent (tools/skills/memory), not a model.
+	mustContain(t, body, "tools, skills, and memory")
+}
+
+// HTTP offers (the default) keep the existing single-prompt Pay-with-Obol
+// CTA — no CLI command, no chat-completions body.
+func TestHTMLAware_HTTPKeepsLegacyCopy(t *testing.T) {
+	d := sampleDisplay()
+	d.OfferType = "http"
+
+	render := NewHTMLAwarePaymentRequired(d)
+	r := httptest.NewRequest("GET", "/services/agent-quant", nil)
+	r.Header.Set("Accept", "text/html")
+	w := httptest.NewRecorder()
+	render(w, r, []x402types.PaymentRequirements{sampleRequirement()}, nil)
+
+	body := w.Body.String()
+	mustContain(t, body, "Pay with your Obol Agent")
+	mustContain(t, body, "buy-x402 skill")
+	if strings.Contains(body, "obol buy inference") {
+		t.Errorf("http-type 402 page should NOT show the inference CLI primary card")
+	}
+}
+
 func TestFormatAmount(t *testing.T) {
 	cases := []struct {
 		atomic   string

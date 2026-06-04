@@ -53,6 +53,33 @@ type PaymentDisplay struct {
 	// chain (e.g. https://basescan.org/address/0x...). Empty when the chain
 	// isn't in the explorer registry.
 	ExplorerURL string
+
+	// OfferType is the ServiceOffer.spec.type that produced this route
+	// (inference, agent, http, fine-tuning). Drives the type-aware lede,
+	// Buy CTAs, and prompt copy. Empty means "http" semantics for the
+	// renderer (the safest default — single-shot pay).
+	OfferType string
+
+	// OfferName is the originating ServiceOffer.metadata.name. The HTML
+	// template surfaces it on the inference Buy card so users get a
+	// concrete `obol buy inference <name>` they can paste.
+	OfferName string
+
+	// OfferDescription is the operator-supplied service description
+	// (ServiceOffer.spec.registration.description). The renderer surfaces
+	// it under the Service card and in the OG/meta description when set.
+	OfferDescription string
+
+	// AgentModel is the upstream model id (when known) — surfaced on the
+	// inference Buy card so users can copy a full `obol buy inference`
+	// command with --model pre-filled.
+	AgentModel string
+
+	// Model is the user-facing upstream model identifier (mirrors
+	// ServiceOffer.spec.model.name for inference and AgentResolution.Model
+	// for agent). Preferred over AgentModel for the inference Buy card
+	// because it's populated for type=inference too.
+	Model string
 }
 
 // SendPaymentRequiredFunc is the renderer signature compatible with the
@@ -157,41 +184,52 @@ func sendPaymentRequiredHTML(w http.ResponseWriter, r *http.Request, requirement
 	}
 	payToDisplay := truncateAddress(payToFull)
 
-	promptObol := buildObolPrompt(siteURL, endpoint, display)
-	promptOther := buildOtherAgentPrompt(siteURL, endpoint, display)
+	typeCopy := buildTypeCopy(siteURL, endpoint, display)
 
 	data := struct {
-		Title         string
-		Description   string
-		PageURL       string
-		StorefrontURL string
-		WordmarkURL   string
-		OGImageURL    string
-		Endpoint      string
-		NetworkLabel  string
-		PriceDisplay  string
-		PayToDisplay  string
-		PayToFull     string
-		ExplorerURL   string
-		PromptObol    string
-		PromptOther   string
-		JSONBody      string
+		Title            string
+		Description      string
+		PageURL          string
+		StorefrontURL    string
+		WordmarkURL      string
+		OGImageURL       string
+		Endpoint         string
+		NetworkLabel     string
+		PriceDisplay     string
+		PayToDisplay     string
+		PayToFull        string
+		ExplorerURL      string
+		OfferDescription string
+		Lede             string
+		PrimaryTitle     string
+		PrimaryLede      string
+		PrimaryIsCode    bool
+		PrimaryPayload   string
+		PromptObol       string
+		PromptOther      string
+		JSONBody         string
 	}{
-		Title:         "Payment required — Obol Stack",
-		Description:   buildMetaDescription(display),
-		PageURL:       pageURL,
-		StorefrontURL: siteURL,
-		WordmarkURL:   siteURL + "/obol-stack-logo.png",
-		OGImageURL:    siteURL + "/og-payment-required.png",
-		Endpoint:      endpoint,
-		NetworkLabel:  networkLabel,
-		PriceDisplay:  priceDisplay,
-		PayToDisplay:  payToDisplay,
-		PayToFull:     payToFull,
-		ExplorerURL:   display.ExplorerURL,
-		PromptObol:    promptObol,
-		PromptOther:   promptOther,
-		JSONBody:      string(indented),
+		Title:            "Payment required — Obol Stack",
+		Description:      buildMetaDescription(display),
+		PageURL:          pageURL,
+		StorefrontURL:    siteURL,
+		WordmarkURL:      siteURL + "/obol-stack-logo.png",
+		OGImageURL:       siteURL + "/og-payment-required.png",
+		Endpoint:         endpoint,
+		NetworkLabel:     networkLabel,
+		PriceDisplay:     priceDisplay,
+		PayToDisplay:     payToDisplay,
+		PayToFull:        payToFull,
+		ExplorerURL:      display.ExplorerURL,
+		OfferDescription: display.OfferDescription,
+		Lede:             typeCopy.Lede,
+		PrimaryTitle:     typeCopy.PrimaryTitle,
+		PrimaryLede:      typeCopy.PrimaryLede,
+		PrimaryIsCode:    typeCopy.PrimaryIsCode,
+		PrimaryPayload:   typeCopy.PrimaryPayload,
+		PromptObol:       typeCopy.PromptObol,
+		PromptOther:      typeCopy.PromptOther,
+		JSONBody:         string(indented),
 	}
 
 	var buf bytes.Buffer
@@ -206,20 +244,175 @@ func sendPaymentRequiredHTML(w http.ResponseWriter, r *http.Request, requirement
 	_, _ = w.Write(buf.Bytes())
 }
 
-// buildMetaDescription returns the shared og/twitter/description string. Uses
-// the dynamic price+asset+network when available; otherwise the static fallback.
+// buildMetaDescription returns the shared og/twitter/description string. The
+// operator-supplied description wins; otherwise we fall back to the dynamic
+// price+asset+network blurb (or a static line when neither is available).
 func buildMetaDescription(d PaymentDisplay) string {
+	if d.OfferDescription != "" {
+		return d.OfferDescription
+	}
 	if d.PriceDisplay != "" && d.NetworkLabel != "" {
 		return fmt.Sprintf("Unlock this Obol Agent service. Pay %s on %s, settled via x402.", d.PriceDisplay, d.NetworkLabel)
 	}
 	return "Unlock this Obol Agent service. Pay per call in USDC or OBOL, settled via x402."
 }
 
-// buildObolPrompt generates the natural-language instruction the user sends
-// to their own Obol Agent. The agent already has the buy-x402 skill loaded,
-// so the prompt only needs to identify the endpoint, price, asset, network.
-func buildObolPrompt(siteURL, endpoint string, d PaymentDisplay) string {
+// typeCopy is the per-offer-type render payload. The renderer produces one
+// of these from the PaymentDisplay so the template can stay branch-free.
+type typeCopy struct {
+	// Lede sits under <h1>Payment required</h1> and explains what the
+	// service actually does at a high level.
+	Lede string
+
+	// PrimaryTitle / PrimaryLede / PrimaryPayload drive the first "Buy"
+	// card. For inference, PrimaryPayload is a shell command and
+	// PrimaryIsCode is true so the template renders it in <pre><code>;
+	// for agent + http it's a natural-language prompt rendered as a copy
+	// snippet.
+	PrimaryTitle   string
+	PrimaryLede    string
+	PrimaryIsCode  bool
+	PrimaryPayload string
+
+	// PromptObol / PromptOther are the secondary copy cards (Obol agent
+	// w/ buy-x402 skill, and generic AI agent). They follow the
+	// pre-existing one-liner prompt shape.
+	PromptObol  string
+	PromptOther string
+}
+
+func buildTypeCopy(siteURL, endpoint string, d PaymentDisplay) typeCopy {
 	url := siteURL + endpoint
+	switch normalizeOfferType(d.OfferType) {
+	case "inference":
+		return inferenceCopy(url, d)
+	case "agent":
+		return agentCopy(url, d)
+	default:
+		return httpCopy(url, d)
+	}
+}
+
+// normalizeOfferType collapses the spec.type values into the three render
+// branches. Empty falls back to "inference" historically (the original
+// default), but the storefront defaults new offers to "http" — match that
+// behavior here so unknown/unset types stay on the safest (single-shot pay)
+// CTA.
+func normalizeOfferType(t string) string {
+	switch t {
+	case "inference":
+		return "inference"
+	case "agent":
+		return "agent"
+	default:
+		return "http"
+	}
+}
+
+// inferenceCopy: primary CTA is `obol buy inference`, the CLI command that
+// pre-pays the seller and registers the model as `paid/<model>` in the
+// local LiteLLM gateway. Secondary cards still expose the agent-prompt and
+// raw-JSON paths, but reframed so users understand they're buying remote
+// model time, not an agent with tools/memory.
+func inferenceCopy(url string, d PaymentDisplay) typeCopy {
+	model := strings.TrimSpace(d.Model)
+	if model == "" {
+		model = "<model-id>"
+	}
+	name := strings.TrimSpace(d.OfferName)
+	if name == "" {
+		name = "remote-inference"
+	}
+
+	cmd := fmt.Sprintf(
+		"obol buy inference %s \\\n  --seller %s \\\n  --model %s \\\n  --budget 1 \\\n  --no-verify-identity",
+		name, url, model,
+	)
+
+	prompt := fmt.Sprintf(
+		"Use the buy-x402 skill's `buy` command to pre-pay %s for the %s model. "+
+			"This is remote inference — once the auths are signed, route requests "+
+			"through LiteLLM as `paid/%s` and report the response.",
+		url, model, model,
+	)
+
+	other := fmt.Sprintf(
+		"Read https://obol.org/llms.txt to learn how Obol's x402 micropayments work. "+
+			"I want to use the remote LLM at %s (model %s) as a paid OpenAI-compatible "+
+			"chat-completions endpoint. Pre-sign a budget of EIP-3009/Permit2 authorisations "+
+			"and POST chat-completions bodies with the X-PAYMENT header attached.",
+		url, model,
+	)
+
+	return typeCopy{
+		Lede: "This is a paid inference endpoint — remote model time gated by x402 micropayments. " +
+			"The cleanest way to consume it is the Obol CLI, which loads the model into your local LiteLLM " +
+			"gateway as `paid/<model>` so your agent and tools can call it like any other OpenAI-compatible model.",
+		PrimaryTitle:   "Buy with the Obol CLI",
+		PrimaryLede:    "Pre-pays the seller through your obol-agent's wallet and exposes the model as `paid/" + model + "` in your local LiteLLM gateway. Adjust `--budget`, drop `--no-verify-identity` once the seller is registered on ERC-8004.",
+		PrimaryIsCode:  true,
+		PrimaryPayload: cmd,
+		PromptObol:     prompt,
+		PromptOther:    other,
+	}
+}
+
+// agentCopy: primary CTA is "send a prompt" — agents have skills + tools
+// + memory, not just inference, so the buyer almost always wants to
+// include an instruction with the purchase. POSTs an OpenAI
+// chat-completions body with X-PAYMENT attached so a buying agent has
+// both the structure and the why.
+func agentCopy(url string, d PaymentDisplay) typeCopy {
+	model := strings.TrimSpace(d.Model)
+	modelClause := ""
+	modelLine := ""
+	if model != "" {
+		modelClause = fmt.Sprintf(`"model": "%s",`, model)
+		modelLine = " (running " + model + ")"
+	}
+
+	body := fmt.Sprintf(`POST %s
+Content-Type: application/json
+X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
+
+{
+  %s
+  "messages": [
+    {"role": "user", "content": "<your prompt to this agent goes here>"}
+  ]
+}`, url, modelClause)
+
+	prompt := fmt.Sprintf(
+		"Use the buy-x402 skill's `pay` command to call the Obol Agent at %s%s. "+
+			"This is an *agent*, not a raw model — it has its own skills, tools, and memory. "+
+			"Include a clear instruction in the chat-completions body so the agent knows what to do.",
+		url, modelLine,
+	)
+
+	other := fmt.Sprintf(
+		"Read https://obol.org/llms.txt to learn how Obol's x402 micropayments work. "+
+			"Help me call the Obol Agent at %s%s — it's an autonomous agent (tools + skills + memory), "+
+			"not a raw LLM. POST OpenAI-style chat-completions JSON with a real prompt in `messages`, "+
+			"attach a signed EIP-3009/Permit2 authorisation as `X-PAYMENT`, and report what the agent does.",
+		url, modelLine,
+	)
+
+	return typeCopy{
+		Lede: "This is an Obol Agent — tools, skills, and memory, not just a model. " +
+			"You're buying one round of work from another autonomous agent, so plan to send it a real prompt: " +
+			"POST OpenAI chat-completions JSON with your instructions in the `messages` array.",
+		PrimaryTitle:   "Send a prompt (OpenAI chat-completions)",
+		PrimaryLede:    "Agents accept OpenAI-style chat-completions bodies. Include your actual instruction in `messages`; the X-PAYMENT header carries one pre-signed authorisation per request.",
+		PrimaryIsCode:  true,
+		PrimaryPayload: body,
+		PromptObol:     prompt,
+		PromptOther:    other,
+	}
+}
+
+// httpCopy: legacy default. Stateless single-shot pay; no model, no
+// pre-payment, no LiteLLM mounting. Matches the pre-existing copy.
+func httpCopy(url string, d PaymentDisplay) typeCopy {
 	priceClause := ""
 	if d.PriceDisplay != "" {
 		priceClause = " Pay " + d.PriceDisplay + "."
@@ -228,30 +421,36 @@ func buildObolPrompt(siteURL, endpoint string, d PaymentDisplay) string {
 	if d.NetworkLabel != "" {
 		netClause = " Network: " + d.NetworkLabel + "."
 	}
-	return fmt.Sprintf("Use the buy-x402 skill to buy access to %s.%s%s", url, priceClause, netClause)
-}
+	prompt := fmt.Sprintf("Use the buy-x402 skill's `pay` command to call %s once.%s%s", url, priceClause, netClause)
 
-// buildOtherAgentPrompt generates a self-contained instruction for any
-// generic AI agent (Claude, ChatGPT, Gemini, etc.) that does NOT have the
-// Obol skills pre-loaded. It points the agent at obol.org/llms.txt and
-// the public skills repo so it can self-orient before signing the payment.
-func buildOtherAgentPrompt(siteURL, endpoint string, d PaymentDisplay) string {
-	url := siteURL + endpoint
-	priceClause := "the listed price"
+	priceWord := "the listed price"
 	if d.PriceDisplay != "" {
-		priceClause = d.PriceDisplay
+		priceWord = d.PriceDisplay
 	}
-	netClause := ""
+	onNet := ""
 	if d.NetworkLabel != "" {
-		netClause = " on " + d.NetworkLabel
+		onNet = " on " + d.NetworkLabel
 	}
-	return fmt.Sprintf(
+	other := fmt.Sprintf(
 		"Read https://obol.org/llms.txt and skim https://github.com/ObolNetwork/skills "+
 			"to learn how Obol Agents pay for x402 services. Then help me buy access to %s "+
 			"for %s%s. Sign the EIP-3009 or Permit2 authorisation and call the endpoint "+
 			"with the X-PAYMENT header.",
-		url, priceClause, netClause,
+		url, priceWord, onNet,
 	)
+
+	return typeCopy{
+		Lede:          "This is a paid HTTP endpoint gated by x402 micropayments. Each call is a one-shot purchase — no subscription, no pre-payment, no LLM model behind it.",
+		PrimaryTitle:  "Pay with your Obol Agent",
+		PrimaryLede:   "Paste this into your Obol Agent — it has the `buy-x402` skill pre-loaded and will sign one authorisation per request.",
+		PrimaryIsCode: false,
+		// PrimaryPayload doubles as PromptObol for http; keep both
+		// populated so the template can stay symmetrical and the
+		// "Pay with another AI agent" card still renders.
+		PrimaryPayload: prompt,
+		PromptObol:     prompt,
+		PromptOther:    other,
+	}
 }
 
 // truncateAddress shortens a hex address for display: 0xa1b2c3...f9c0.
