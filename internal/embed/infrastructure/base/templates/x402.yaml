@@ -349,9 +349,10 @@ spec:
           # per-agent hermes-api-server / remote-signer-keystore Secrets on
           # re-reconcile 403s and per-agent provisioning never converges. The
           # prior pin (f5d94fc) predated that source change and shipped the
-          # bug; 503016b (rc9 commit 503016bf, image 0.10.0-rc9) carries it.
+          # bug; b39bcaa (post-rc10 main) carries it, and also ships PR #590's
+          # actionable pending-registration status message.
           # See TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix.
-          image: ghcr.io/obolnetwork/serviceoffer-controller:503016b@sha256:bec62ea04842caf62980b529a89f5d553987a106c3167eb45209a8b278121957
+          image: ghcr.io/obolnetwork/serviceoffer-controller:b39bcaa@sha256:f5afbba041f83c52c1d48c61db443138da76a12afed0bd29ba719984fc73b189
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
