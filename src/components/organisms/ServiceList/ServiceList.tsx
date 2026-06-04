@@ -61,7 +61,7 @@ function partitionOffers(offers: ServiceOffer[]) {
 }
 
 export function ServiceList() {
-  const { offers, loading, error } = useServiceOffers();
+  const { offers, loading, error, refetch } = useServiceOffers();
   const { tunnelURL } = useTunnelURL();
   const { agentOffers, httpOffers } = partitionOffers(offers);
 
@@ -79,11 +79,14 @@ export function ServiceList() {
           {loading && offers.length === 0 && (
             <LoadingState size="small" message="Loading services..." />
           )}
-          {error && <ErrorState message="Failed to load services" />}
+          {error && (
+            <ErrorState message="Failed to load services" onRetry={refetch} />
+          )}
           {!loading && !error && offers.length === 0 && (
             <EmptyMessage>
               No services for sale yet. Run <code>obol sell http …</code> or{' '}
-              <code>obol sell inference …</code> to publish one.
+              <code>obol sell inference …</code>, or make an agent sellable with{' '}
+              <code>obol sell agent …</code>.
             </EmptyMessage>
           )}
 
@@ -107,6 +110,7 @@ export function ServiceList() {
                       key={`${offer.namespace}/${offer.name}`}
                       offer={offer}
                       tunnelURL={tunnelURL}
+                      onChanged={refetch}
                     />
                   ))
                 )}
@@ -128,6 +132,7 @@ export function ServiceList() {
                       key={`${offer.namespace}/${offer.name}`}
                       offer={offer}
                       tunnelURL={tunnelURL}
+                      onChanged={refetch}
                     />
                   ))
                 )}

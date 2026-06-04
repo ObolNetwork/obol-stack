@@ -97,12 +97,15 @@ const HeaderTitle = styled(Text, {
   color: '#e1e9eb',
 });
 
-const CloseButton = styled(Box, {
+const CloseButton = styled('button', {
   width: '$lg',
   height: '$lg',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
+  padding: 0,
+  border: 'none',
+  background: 'transparent',
   cursor: 'pointer',
   color: '#b8c5c7',
   transition: 'color 0.2s ease',
@@ -316,7 +319,11 @@ export function OpenClawChatSidebar({
               {instance ? `openclaw-${instance.id}` : 'OpenClaw'}
             </HeaderTitle>
           </Flex>
-          <CloseButton onClick={handleClose}>
+          <CloseButton
+            type="button"
+            aria-label="Close chat"
+            onClick={handleClose}
+          >
             <Close size="s" />
           </CloseButton>
         </HeaderContainer>

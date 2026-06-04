@@ -6,7 +6,6 @@ import {
   Flex,
   Text,
   Button,
-  TextField,
   styled,
   ResponsiveDialog,
 } from '@obolnetwork/obol-ui';
@@ -25,20 +24,6 @@ const ModalBody = styled(Box, {
   flexDirection: 'column',
   gap: '$md',
   flex: 1,
-});
-
-const FieldGroup = styled(Box, {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '$xxxs',
-});
-
-const FieldLabel = styled(Text, {
-  fontSize: '$1',
-  color: '$body',
-  fontWeight: '$medium',
-  letterSpacing: '0.03em',
-  textTransform: 'uppercase',
 });
 
 const ModalFooter = styled(Flex, {
@@ -72,7 +57,6 @@ export function StopDrainModal({
   onDrained,
 }: StopDrainModalProps) {
   const [open, setOpen] = useState(false);
-  const [grace, setGrace] = useState('1h');
   const [submitState, setSubmitState] = useState<SubmitState>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -80,10 +64,9 @@ export function StopDrainModal({
     setOpen(false);
     setSubmitState('idle');
     setErrorMsg(null);
-    setGrace('1h');
   };
 
-  const submit = async (force: boolean) => {
+  const submit = async () => {
     setSubmitState('submitting');
     setErrorMsg(null);
     try {
@@ -93,7 +76,6 @@ export function StopDrainModal({
         body: JSON.stringify({
           name,
           namespace,
-          ...(force ? { force: true } : { grace }),
         }),
       });
       const data = await response.json().catch(() => ({}));
@@ -130,37 +112,15 @@ export function StopDrainModal({
           >
             {name}
           </Text>
-          ? Buyers with in-flight payments will be served for{' '}
-          <Text as="span" css={{ color: '$light', fontFamily: 'monospace' }}>
-            {grace}
-          </Text>
-          . The listing is removed from public discovery immediately. After the
-          grace period the route is torn down. The CR remains until you run{' '}
-          <Text as="span" css={{ fontFamily: 'monospace' }}>
-            obol sell delete
-          </Text>
-          .
+          ? The listing is removed from public discovery immediately. Buyers
+          with in-flight payments can finish during the drain window, then the
+          route is torn down while the ServiceOffer record is retained for
+          status and audit history.
         </Text>
 
         <ResourceLine>
           {namespace}/{name}
         </ResourceLine>
-
-        <FieldGroup>
-          <FieldLabel>Grace period (Go duration)</FieldLabel>
-          <TextField
-            value={grace}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-              setGrace(e.target.value)
-            }
-            placeholder="1h"
-            disabled={submitState === 'submitting'}
-          />
-          <Text css={{ fontSize: '$1', color: '$muted' }}>
-            Examples: 1h, 30m, 5m. Default 1h. Protects ERC-8004 reputation
-            against abrupt teardowns that look like crashes.
-          </Text>
-        </FieldGroup>
 
         {submitState === 'error' && errorMsg && (
           <ErrorMessage>{errorMsg}</ErrorMessage>
@@ -177,19 +137,10 @@ export function StopDrainModal({
           Cancel
         </Button>
         <Button
-          color="secondary"
-          type="button"
-          onClick={() => submit(true)}
-          disabled={submitState === 'submitting'}
-          title="Skip the grace period — buyers with pending requests will see errors"
-        >
-          Force stop now
-        </Button>
-        <Button
           color="primary"
           type="button"
-          onClick={() => submit(false)}
-          disabled={submitState === 'submitting' || grace.trim() === ''}
+          onClick={submit}
+          disabled={submitState === 'submitting'}
         >
           {submitState === 'submitting' ? 'Draining…' : 'Stop & drain'}
         </Button>

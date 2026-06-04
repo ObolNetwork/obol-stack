@@ -82,12 +82,15 @@ const RuntimeLabel = styled(Text, {
   letterSpacing: '0.08em',
 });
 
-const CloseButton = styled(Box, {
+const CloseButton = styled('button', {
   width: '$lg',
   height: '$lg',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
+  padding: 0,
+  border: 'none',
+  background: 'transparent',
   cursor: 'pointer',
   color: '#b8c5c7',
   transition: 'color 0.2s ease',
@@ -319,7 +322,11 @@ export function AgentChatSidebar({
           </Flex>
           {instance && <RuntimeLabel>{runtimeLabel(instance)}</RuntimeLabel>}
         </Flex>
-        <CloseButton onClick={handleClose}>
+        <CloseButton
+          type="button"
+          aria-label="Close chat"
+          onClick={handleClose}
+        >
           <Close size="s" />
         </CloseButton>
       </HeaderContainer>

@@ -7,6 +7,7 @@ import { ArrowRightIcon, ExternalLinkIcon } from '@radix-ui/react-icons';
 import { Badge } from '@/components/atoms/Badge';
 import { ChainIcon } from '@/components/atoms/ChainIcon';
 import { CopyButton } from '@/components/atoms/CopyButton';
+import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
 import type { ServiceListItem } from '@/lib/marketplace/types';
 import type { ChainName } from '@/types/dashboard';
 import type { ServiceOfferType } from '@/types/sell';
@@ -265,25 +266,12 @@ const FieldLabel = styled(Text, {
   letterSpacing: '0.03em',
 });
 
-const PriceBig = styled(Text, {
+const EmptyPrice = styled(Text, {
   fontFamily: 'monospace',
   color: '$light',
   fontSize: '$7',
   fontWeight: '$semibold',
   letterSpacing: 0,
-});
-
-const PriceToken = styled(Text, {
-  fontSize: '$2',
-  color: '$body',
-  marginLeft: 6,
-});
-
-const PriceUnit = styled(Text, {
-  fontFamily: 'monospace',
-  fontSize: '$1',
-  color: '$muted',
-  marginTop: 2,
 });
 
 const ChainBadge = styled(Flex, {
@@ -468,7 +456,11 @@ function MarketplaceCardImpl({ item, onDetails, onBuy }: MarketplaceCardProps) {
           </SecondaryBtn>
           <Box css={{ flex: 1 }} />
           {skillUrl ? (
-            <SkillLink href={skillUrl} target="_blank" rel="noreferrer">
+            <SkillLink
+              href={skillUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               skill.md <ExternalLinkIcon width={12} height={12} />
             </SkillLink>
           ) : null}
@@ -479,9 +471,16 @@ function MarketplaceCardImpl({ item, onDetails, onBuy }: MarketplaceCardProps) {
         <Box>
           <FieldLabel>Price</FieldLabel>
           <Box css={{ marginTop: 6 }}>
-            <PriceBig>{item.price || '-'}</PriceBig>
-            {item.price ? <PriceToken>{item.asset.symbol}</PriceToken> : null}
-            <PriceUnit>{PRICE_UNIT_LABEL[item.priceUnit]}</PriceUnit>
+            {item.price ? (
+              <ObolAmountSwitch
+                amount={item.price}
+                symbol={item.asset.symbol}
+                unit={PRICE_UNIT_LABEL[item.priceUnit]}
+                variant="rail"
+              />
+            ) : (
+              <EmptyPrice>-</EmptyPrice>
+            )}
           </Box>
         </Box>
 

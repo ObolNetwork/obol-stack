@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
 
-import { rejectCrossOrigin } from './origin-check.ts';
+import {
+  rejectCrossOrigin,
+  rejectCrossOriginCredentialRead,
+} from './origin-check.ts';
 
 function makeRequest(method, headers = {}) {
   // NextRequest accepts the standard Request initializer; for the helper's
@@ -125,9 +128,7 @@ describe('rejectCrossOrigin', () => {
   });
 
   it('rejects malformed Origin string gracefully (no throw)', async () => {
-    const res = rejectCrossOrigin(
-      makeRequest('POST', { origin: 'not-a-url' })
-    );
+    const res = rejectCrossOrigin(makeRequest('POST', { origin: 'not-a-url' }));
     assert.notEqual(res, null);
     assert.equal(res.status, 403);
   });
@@ -206,6 +207,45 @@ describe('rejectCrossOrigin', () => {
     const res = rejectCrossOrigin(
       makeRequest('POST', { origin: 'http://localhost:4000' })
     );
+    assert.equal(res, null);
+  });
+});
+
+describe('rejectCrossOriginCredentialRead', () => {
+  afterEach(() => {
+    delete process.env.OBOL_FRONTEND_ALLOWED_ORIGINS;
+  });
+
+  it('passes GET token reads with allowed Origin', () => {
+    const res = rejectCrossOriginCredentialRead(
+      makeRequest('GET', { origin: 'http://obol.stack:8080' })
+    );
+    assert.equal(res, null);
+  });
+
+  it('passes GET token reads with allowed Referer fallback', () => {
+    const res = rejectCrossOriginCredentialRead(
+      makeRequest('GET', { referer: 'http://obol.stack:8080/agents' })
+    );
+    assert.equal(res, null);
+  });
+
+  it('blocks GET token reads from a disallowed Origin', async () => {
+    const res = rejectCrossOriginCredentialRead(
+      makeRequest('GET', { origin: 'http://evil.com' })
+    );
+    assert.notEqual(res, null);
+    assert.equal(res.status, 403);
+  });
+
+  it('blocks GET token reads with no Origin or Referer', async () => {
+    const res = rejectCrossOriginCredentialRead(makeRequest('GET'));
+    assert.notEqual(res, null);
+    assert.equal(res.status, 403);
+  });
+
+  it('still lets OPTIONS preflight pass', () => {
+    const res = rejectCrossOriginCredentialRead(makeRequest('OPTIONS'));
     assert.equal(res, null);
   });
 });

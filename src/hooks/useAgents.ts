@@ -6,6 +6,7 @@ import type {
   AgentInstanceHealth,
   AgentRuntime,
 } from '@/types/agent';
+import type { AgentRegistrationRef } from '@/lib/services/agent-registration';
 import type { WalletMetadata } from '@/types/openclaw';
 
 export function useAgentInstances() {
@@ -90,57 +91,6 @@ export function useAgentStatus(instance: AgentInstance | null) {
   return { status, loading, error, refetch: fetchStatus };
 }
 
-export function useAgentToken(instance: AgentInstance | null) {
-  const [token, setToken] = useState<string | null>(null);
-  const [tokenError, setTokenError] = useState<string | null>(null);
-
-  const runtime = instance?.runtime;
-  const id = instance?.id;
-
-  const fetchToken = useCallback(async () => {
-    if (!runtime || !id) {
-      setToken(null);
-      setTokenError(null);
-      return;
-    }
-
-    try {
-      const response = await fetch(
-        `/api/agents/token?runtime=${runtime}&id=${id}`
-      );
-      if (response.ok) {
-        const data = await response.json();
-        setToken(data?.token ?? null);
-        setTokenError(null);
-      } else if (response.status === 404) {
-        setToken(null);
-        setTokenError('Token not found');
-      } else {
-        setToken(null);
-        let message = 'Failed to fetch token';
-        try {
-          const bodyText = await response.text();
-          message += bodyText
-            ? `: ${response.status} ${bodyText}`
-            : `: ${response.status}`;
-        } catch {
-          // Ignore response body parsing failures.
-        }
-        setTokenError(message);
-      }
-    } catch {
-      setToken(null);
-      setTokenError('Failed to fetch token');
-    }
-  }, [id, runtime]);
-
-  useEffect(() => {
-    fetchToken();
-  }, [fetchToken]);
-
-  return { token, tokenError };
-}
-
 export function useTunnelURL() {
   const [tunnelURL, setTunnelURL] = useState<string | null>(null);
 
@@ -201,6 +151,10 @@ export interface AgentRegistrationService {
   name: string;
   endpoint?: string;
   version?: string;
+  skills?: string[];
+  domains?: string[];
+  available?: boolean;
+  drainEndsAt?: string;
 }
 
 export interface AgentRegistrationDoc {
@@ -212,6 +166,9 @@ export interface AgentRegistrationDoc {
   x402Support: boolean;
   active: boolean;
   supportedTrust?: string[];
+  registrations?: AgentRegistrationRef[];
+  metadata?: Record<string, string>;
+  provenance?: Record<string, string>;
 }
 
 export function useAgentRegistration() {
@@ -219,18 +176,28 @@ export function useAgentRegistration() {
     null
   );
   const [tunnelURL, setTunnelURL] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const fetchRegistration = useCallback(async () => {
     try {
+      setLoading(true);
+      setError(null);
       const response = await fetch('/api/agents/registration');
-      if (response.ok) {
-        const data = await response.json();
-        setRegistration(data?.registration ?? null);
-        setTunnelURL(data?.tunnelURL ?? null);
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error || `HTTP ${response.status}`);
       }
-    } catch {
+
+      setRegistration(data?.registration ?? null);
+      setTunnelURL(data?.tunnelURL ?? null);
+    } catch (err) {
       setRegistration(null);
+      setTunnelURL(null);
+      setError(
+        err instanceof Error ? err.message : 'Failed to fetch registration'
+      );
     } finally {
       setLoading(false);
     }
@@ -240,7 +207,13 @@ export function useAgentRegistration() {
     fetchRegistration();
   }, [fetchRegistration]);
 
-  return { registration, tunnelURL, loading };
+  return {
+    registration,
+    tunnelURL,
+    loading,
+    error,
+    refetch: fetchRegistration,
+  };
 }
 
 export function isSupportedAgentRuntime(

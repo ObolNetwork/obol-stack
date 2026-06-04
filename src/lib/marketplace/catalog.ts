@@ -19,7 +19,7 @@ import type {
 import { classifyFetchFailure } from './errors.ts';
 import type { ServiceOfferType } from '@/types/sell';
 
-const CATALOG_SERVICE =
+export const CATALOG_SERVICE =
   process.env.MARKETPLACE_CATALOG_URL ||
   'http://obol-skill-md.x402.svc.cluster.local:8080/api/services.json';
 
@@ -51,10 +51,16 @@ export interface RawCatalogEntry {
     symbol?: string;
     address?: string;
     decimals?: number;
+    transferMethod?: string;
+    eip712Domain?: {
+      name?: string;
+      version?: string;
+    };
   };
   description?: string;
   isDemo?: boolean;
   registrationPending?: boolean;
+  drainEndsAt?: string;
 }
 
 export interface CatalogSnapshot {
@@ -65,6 +71,16 @@ export interface CatalogSnapshot {
 export async function fetchCatalog(
   url: string = CATALOG_SERVICE
 ): Promise<CatalogSnapshot> {
+  const body = await fetchRawCatalog(url);
+  return {
+    items: mapCatalog(body),
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+export async function fetchRawCatalog(
+  url: string = CATALOG_SERVICE
+): Promise<RawCatalogEntry[]> {
   let res: Response;
   try {
     res = await fetch(url, {
@@ -74,31 +90,20 @@ export async function fetchCatalog(
       next: { revalidate: 30 },
     });
   } catch (e) {
-    if (isDefaultCatalogMissing(url, e)) return emptyCatalog();
+    if (isDefaultCatalogMissing(url, e)) return [];
     // Network failure (DNS, ECONNREFUSED, abort). Classify as unreachable
     // so the API route can flip a typed error to the UI.
     throw classifyFetchFailure(e, 0);
   }
   if (!res.ok) {
-    if (res.status === 404 && isDefaultCatalogService(url))
-      return emptyCatalog();
+    if (res.status === 404 && isDefaultCatalogService(url)) return [];
     throw classifyFetchFailure(
       new Error(`catalog fetch ${url} → HTTP ${res.status}`),
       res.status
     );
   }
   const body = (await res.json()) as unknown;
-  return {
-    items: mapCatalog(body),
-    fetchedAt: new Date().toISOString(),
-  };
-}
-
-function emptyCatalog(): CatalogSnapshot {
-  return {
-    items: [],
-    fetchedAt: new Date().toISOString(),
-  };
+  return Array.isArray(body) ? (body as RawCatalogEntry[]) : [];
 }
 
 function isDefaultCatalogService(url: string): boolean {
@@ -181,6 +186,10 @@ function mapEntry(entry: RawCatalogEntry): ServiceListItem | null {
     payTo: (entry.payTo ?? '').trim(),
     status: deriveStatus(entry),
     isDemo: entry.isDemo === true,
+    drainEndsAt:
+      typeof entry.drainEndsAt === 'string'
+        ? entry.drainEndsAt.trim()
+        : undefined,
     description: (entry.description ?? '').trim(),
     bannerSeed: bannerSeed(slug),
   };
@@ -242,6 +251,14 @@ function mapAsset(raw: RawCatalogEntry['asset']): MarketplaceAsset {
     symbol: (raw?.symbol || 'USDC').toUpperCase(),
     address: (raw?.address ?? '').trim(),
     decimals: typeof raw?.decimals === 'number' ? raw.decimals : 6,
+    transferMethod: (raw?.transferMethod ?? '').trim() || undefined,
+    eip712Domain:
+      raw?.eip712Domain && (raw.eip712Domain.name || raw.eip712Domain.version)
+        ? {
+            name: (raw.eip712Domain.name ?? '').trim() || undefined,
+            version: (raw.eip712Domain.version ?? '').trim() || undefined,
+          }
+        : undefined,
   };
 }
 

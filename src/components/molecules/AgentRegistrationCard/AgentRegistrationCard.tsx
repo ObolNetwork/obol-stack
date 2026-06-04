@@ -8,10 +8,23 @@ import { Avatar } from '../../atoms/Avatar';
 import { Accordion } from '../../molecules/Accordion';
 import { SectionTitle } from '../../atoms/SectionTitle';
 import { LoadingState } from '../../molecules/LoadingState';
+import { ErrorState } from '../../molecules/ErrorState';
 import {
   useAgentRegistration,
   type AgentRegistrationService,
 } from '../../../hooks/useAgents';
+import {
+  agentRegistrationExplorerUrl,
+  agentRegistrationLabel,
+} from '@/lib/services/agent-registration';
+import {
+  hasCapabilityTaxonomy,
+  serviceAvailabilityLabel,
+} from '@/lib/services/agent-registration-capabilities';
+import {
+  AGENT_REGISTRATION_PATH,
+  publicResourceUrl,
+} from '@/lib/services/public-storefront';
 
 const Body = styled(Box, {
   display: 'flex',
@@ -62,14 +75,93 @@ const MetaRow = styled(Flex, {
   alignItems: 'center',
 });
 
+const DetailBlock = styled(Box, {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '$xxs',
+  padding: '$xs 0',
+});
+
+const DetailTitle = styled(Text, {
+  fontSize: '$1',
+  color: '$muted',
+  fontWeight: '$medium',
+  textTransform: 'uppercase',
+});
+
+const IdentityRow = styled(Flex, {
+  flexDirection: 'column',
+  gap: '2px',
+});
+
+const IdentityText = styled(Text, {
+  fontSize: '$1',
+  color: '$light',
+  fontFamily: 'monospace',
+  wordBreak: 'break-all',
+});
+
+const IdentityLink = styled(Link, {
+  fontSize: '$1',
+  color: '$obolGreen',
+  fontFamily: 'monospace',
+  wordBreak: 'break-all',
+});
+
+const RegistryText = styled(Text, {
+  fontSize: '10px',
+  color: '$muted',
+  fontFamily: 'monospace',
+  wordBreak: 'break-all',
+});
+
+const ChipRow = styled(Flex, {
+  gap: '$xxs',
+  flexWrap: 'wrap',
+});
+
+const MetaChip = styled(Text, {
+  fontSize: '10px',
+  color: '$body',
+  backgroundColor: 'rgba(255, 255, 255, 0.04)',
+  border: '1px solid rgba(255, 255, 255, 0.08)',
+  borderRadius: '4px',
+  padding: '1px 6px',
+  lineHeight: 1.4,
+  fontFamily: 'monospace',
+});
+
 const NotPublished = styled(Text, {
   fontSize: '$2',
   color: '$body',
   padding: '$sm 0',
 });
 
+function metadataEntries(
+  metadata: Record<string, string> | undefined
+): Array<[string, string]> {
+  return Object.entries(metadata ?? {}).filter(
+    ([key, value]) =>
+      key.trim() !== '' && typeof value === 'string' && value.trim() !== ''
+  );
+}
+
 export function AgentRegistrationCard() {
-  const { registration, tunnelURL, loading } = useAgentRegistration();
+  const { registration, tunnelURL, loading, error, refetch } =
+    useAgentRegistration();
+  const registrationEntries = registration?.registrations ?? [];
+  const topLevelMetadata = metadataEntries(registration?.metadata);
+  const provenanceEntries = metadataEntries(registration?.provenance);
+  const capabilityServices =
+    registration?.services?.filter(hasCapabilityTaxonomy) ?? [];
+  const endpointServices =
+    registration?.services?.filter(
+      (s: AgentRegistrationService) => s.endpoint
+    ) ?? [];
+  const rawRegistrationUrl = publicResourceUrl(
+    tunnelURL,
+    AGENT_REGISTRATION_PATH
+  );
 
   const headerContent = <SectionTitle>Agent Registration</SectionTitle>;
 
@@ -81,10 +173,29 @@ export function AgentRegistrationCard() {
             <LoadingState size="small" message="Loading registration..." />
           )}
 
-          {!loading && !registration && (
+          {!loading && error && (
+            <ErrorState
+              message={`Registration unavailable: ${error}`}
+              onRetry={refetch}
+            />
+          )}
+
+          {!loading && !error && !registration && (
             <NotPublished>
-              No registration published yet. Run <code>obol sell http …</code>{' '}
-              with <code>--registration.enabled=true</code> to publish one.
+              No registration published yet. Registration is enabled by default;
+              re-run <code>obol sell http …</code> without{' '}
+              <code>--no-register</code> to publish one.
+              <Flex css={{ marginTop: '$xs' }}>
+                <Link
+                  href={rawRegistrationUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  css={{ fontSize: '$1' }}
+                >
+                  Open registration JSON
+                  <OpenInNew size="sm" />
+                </Link>
+              </Flex>
             </NotPublished>
           )}
 
@@ -118,39 +229,143 @@ export function AgentRegistrationCard() {
                 <Description>{registration.description}</Description>
               )}
 
-              {registration.services?.length > 0 && (
-                <Box>
-                  {registration.services
-                    .filter((s: AgentRegistrationService) => s.endpoint)
-                    .map((s: AgentRegistrationService) => (
-                      <ServiceRow key={s.name} css={{ marginTop: '$xxs' }}>
-                        <ServiceLabel>{s.name}</ServiceLabel>
-                        <EndpointLink href={s.endpoint!} target="_blank">
-                          {s.endpoint}
-                          <OpenInNew size="sm" />
-                        </EndpointLink>
-                        {s.version && (
-                          <Text css={{ fontSize: '$1', color: '$muted' }}>
-                            v{s.version}
-                          </Text>
+              {registrationEntries.length > 0 && (
+                <DetailBlock>
+                  <DetailTitle>On-chain identity</DetailTitle>
+                  {registrationEntries.map((entry, index) => {
+                    const label = agentRegistrationLabel(entry);
+                    const explorerUrl = agentRegistrationExplorerUrl(entry);
+                    return (
+                      <IdentityRow
+                        key={`${entry.agentRegistry}-${entry.agentId}-${index}`}
+                      >
+                        {explorerUrl ? (
+                          <IdentityLink
+                            href={explorerUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            {label}
+                            <OpenInNew size="sm" />
+                          </IdentityLink>
+                        ) : (
+                          <IdentityText>{label}</IdentityText>
                         )}
-                      </ServiceRow>
+                        <RegistryText>{entry.agentRegistry}</RegistryText>
+                      </IdentityRow>
+                    );
+                  })}
+                </DetailBlock>
+              )}
+
+              {topLevelMetadata.length > 0 && (
+                <DetailBlock>
+                  <DetailTitle>Metadata</DetailTitle>
+                  <ChipRow>
+                    {topLevelMetadata.map(([key, value]) => (
+                      <MetaChip key={key}>
+                        {key}={value}
+                      </MetaChip>
                     ))}
+                  </ChipRow>
+                </DetailBlock>
+              )}
+
+              {provenanceEntries.length > 0 && (
+                <DetailBlock>
+                  <DetailTitle>Provenance</DetailTitle>
+                  <ChipRow>
+                    {provenanceEntries.map(([key, value]) => (
+                      <MetaChip key={key}>
+                        {key}={value}
+                      </MetaChip>
+                    ))}
+                  </ChipRow>
+                </DetailBlock>
+              )}
+
+              {capabilityServices.length > 0 && (
+                <DetailBlock>
+                  <Flex
+                    css={{ alignItems: 'center', gap: '$xs', flexWrap: 'wrap' }}
+                  >
+                    <DetailTitle>Capabilities</DetailTitle>
+                    {capabilityServices.map((service, index) => {
+                      const label = serviceAvailabilityLabel(service);
+                      return label ? (
+                        <Badge
+                          key={`${service.name}-${service.version ?? index}`}
+                          variant="yellow"
+                        >
+                          {label}
+                        </Badge>
+                      ) : null;
+                    })}
+                  </Flex>
+                  {capabilityServices.map((service, index) => (
+                    <Box key={`${service.name}-${service.version ?? index}`}>
+                      {service.version && (
+                        <Text css={{ fontSize: '$1', color: '$muted' }}>
+                          OASF v{service.version}
+                        </Text>
+                      )}
+                      {(service.skills?.length ?? 0) > 0 && (
+                        <ChipRow css={{ marginTop: '$xxs' }}>
+                          {service.skills!.map(skill => (
+                            <MetaChip key={`skill-${skill}`}>
+                              skill:{skill}
+                            </MetaChip>
+                          ))}
+                        </ChipRow>
+                      )}
+                      {(service.domains?.length ?? 0) > 0 && (
+                        <ChipRow css={{ marginTop: '$xxs' }}>
+                          {service.domains!.map(domain => (
+                            <MetaChip key={`domain-${domain}`}>
+                              domain:{domain}
+                            </MetaChip>
+                          ))}
+                        </ChipRow>
+                      )}
+                    </Box>
+                  ))}
+                </DetailBlock>
+              )}
+
+              {endpointServices.length > 0 && (
+                <Box>
+                  {endpointServices.map((s: AgentRegistrationService) => (
+                    <ServiceRow key={s.name} css={{ marginTop: '$xxs' }}>
+                      <ServiceLabel>{s.name}</ServiceLabel>
+                      <EndpointLink
+                        href={s.endpoint!}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        {s.endpoint}
+                        <OpenInNew size="sm" />
+                      </EndpointLink>
+                      {s.version && (
+                        <Text css={{ fontSize: '$1', color: '$muted' }}>
+                          v{s.version}
+                        </Text>
+                      )}
+                    </ServiceRow>
+                  ))}
                 </Box>
               )}
 
-              {tunnelURL && (
-                <Flex css={{ marginTop: '$xs' }}>
-                  <Link
-                    href={`${tunnelURL.replace(/\/$/, '')}/.well-known/agent-registration.json`}
-                    target="_blank"
-                    css={{ fontSize: '$1' }}
-                  >
-                    View raw registration JSON
-                    <OpenInNew size="sm" />
-                  </Link>
-                </Flex>
-              )}
+              <Flex css={{ marginTop: '$xs' }}>
+                <Link
+                  href={rawRegistrationUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  css={{ fontSize: '$1' }}
+                >
+                  View raw registration JSON
+                  <OpenInNew size="sm" />
+                </Link>
+              </Flex>
             </>
           )}
         </Body>

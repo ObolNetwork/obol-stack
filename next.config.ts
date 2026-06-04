@@ -62,15 +62,6 @@ const nextConfig: NextConfig = {
     return config;
   },
 
-  async rewrites() {
-    return [
-      {
-        source: "/monitoring/:path*",
-        destination: "http://monitoring.obol.stack/:path*",
-      },
-    ];
-  },
-
   async headers() {
     return [
       {

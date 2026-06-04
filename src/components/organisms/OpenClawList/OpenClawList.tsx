@@ -24,7 +24,7 @@ const InstancesList = styled(Box, {
 });
 
 export function OpenClawList({ onInstanceSelect }: OpenClawListProps) {
-  const { instances, loading, error } = useOpenClawInstances();
+  const { instances, loading, error, refetch } = useOpenClawInstances();
 
   const headerContent = (
     <Flex css={{ alignItems: 'center', gap: '$sm', paddingRight: '$xl' }}>
@@ -42,7 +42,9 @@ export function OpenClawList({ onInstanceSelect }: OpenClawListProps) {
           {loading && (
             <LoadingState size="small" message="Loading instances..." />
           )}
-          {error && <ErrorState message="Failed to load instances" />}
+          {error && (
+            <ErrorState message="Failed to load instances" onRetry={refetch} />
+          )}
           {!loading && !error && instances.length === 0 && (
             <EmptyMessage>
               No OpenClaw instances found. Run the command '

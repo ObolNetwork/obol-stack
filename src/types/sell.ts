@@ -9,6 +9,13 @@ export interface ServiceOfferAsset {
   symbol?: string;
   decimals?: number;
   address?: string;
+  transferMethod?: string;
+  eip712Name?: string;
+  eip712Version?: string;
+  eip712Domain?: {
+    name?: string;
+    version?: string;
+  };
 }
 
 export interface ServiceOfferPrice {
@@ -31,8 +38,26 @@ export interface ServiceOfferRegistration {
   name?: string;
   description?: string;
   image?: string;
+  services?: ServiceOfferRegistrationService[];
+  supportedTrust?: string[];
   skills?: string[];
   domains?: string[];
+  metadata?: Record<string, string>;
+}
+
+export interface ServiceOfferRegistrationService {
+  name?: string;
+  endpoint?: string;
+  version?: string;
+}
+
+export interface ServiceOfferAgentRef {
+  name?: string;
+  namespace?: string;
+}
+
+export interface ServiceOfferAgent {
+  ref?: ServiceOfferAgentRef;
 }
 
 export interface ServiceOfferUpstream {
@@ -74,12 +99,31 @@ export interface ServiceOffer {
   namespace: string;
   type: ServiceOfferType;
   status?: string;
-  /** True when the controller annotation `obol.org/paused` is set. */
+  /** Decimal price string from /api/services.json, before display formatting. */
+  priceRaw?: string;
+  /** Catalog price slot, e.g. perRequest, perMTok, perHour, perEpoch. */
+  priceUnit?: string;
+  /** Atomic-units string from /api/services.json for x402 signing preflight. */
+  priceAtomicUnits?: string;
+  /** CAIP-2 network identifier from /api/services.json, e.g. eip155:84532. */
+  caip2Network?: string;
+  /** Numeric EVM chain id from /api/services.json. */
+  chainId?: number;
+  /** True for controller-marked demo services in /api/services.json. */
+  isDemo?: boolean;
+  /** True when the payment route is live but ERC-8004 registration is pending. */
+  registrationPending?: boolean;
+  /** RFC3339 drain deadline from /api/services.json. Present only while draining. */
+  drainEndsAt?: string;
+  /** Optional seller-provided provenance metadata from spec.provenance. */
+  provenance?: Record<string, string>;
+  /** Legacy pause annotation, retained only so old CRs can still be labelled. */
   paused?: boolean;
   /** ISO-8601 of CR creation (from metadata.creationTimestamp). */
   createdAt?: string;
   endpoint?: string;
   conditions?: ServiceOfferCondition[];
+  agent?: ServiceOfferAgent;
   model?: ServiceOfferModel;
   upstream?: ServiceOfferUpstream;
   payment?: ServiceOfferPayment;
@@ -98,8 +142,11 @@ export interface ServiceOfferCondition {
 export interface CreateServiceOfferRequest {
   name: string;
   namespace: string;
+  type?: ServiceOfferType;
   wallet: string;
   chain: string;
+  token?: string;
+  asset?: ServiceOfferAsset;
   pricePerRequest: string;
   upstream: string;
   port: number;

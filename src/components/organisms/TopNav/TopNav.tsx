@@ -13,7 +13,9 @@ export interface TopNavItem {
 export const TOP_NAV_ITEMS: readonly TopNavItem[] = [
   { id: 'home', label: 'Home' },
   { id: 'marketplace', label: 'Marketplace', badge: 'NEW' },
-  { id: 'agents', label: 'Agents' },
+  // Agents is hidden for now — restore this entry to bring it back.
+  // The 'agents' id, route helpers, and API routes remain intact.
+  // { id: 'agents', label: 'Agents' },
 ] as const;
 
 const Nav = styled('nav', {

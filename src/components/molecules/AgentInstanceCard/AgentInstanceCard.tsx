@@ -16,7 +16,6 @@ import { CopyButton } from '../../atoms/CopyButton/CopyButton';
 import { SellInferenceModal } from '../SellInferenceModal';
 import {
   useAgentStatus,
-  useAgentToken,
   useAgentWalletMetadata,
   useTunnelURL,
 } from '../../../hooks/useAgents';
@@ -25,6 +24,7 @@ import {
   type AssetBalance,
 } from '../../../hooks/useWalletAssetBalances';
 import { explorerUrlFor } from '../../../lib/config/agent-balance-tokens';
+import { isDefaultSellAgent } from '../../../lib/services/agent-runtime';
 import type { AgentInstance } from '@/types/agent';
 
 function displayModelName(raw: string): string {
@@ -329,9 +329,6 @@ export function AgentInstanceCard({
   onSelect,
 }: AgentInstanceCardProps) {
   const { status, loading } = useAgentStatus(instance);
-  const { token, tokenError } = useAgentToken(
-    instance.runtime === 'openclaw' ? instance : null
-  );
   const { metadata } = useAgentWalletMetadata(instance);
   const { tunnelURL } = useTunnelURL();
 
@@ -354,8 +351,8 @@ export function AgentInstanceCard({
   const dashboardBaseUrl =
     instance.runtime === 'openclaw'
       ? tunnelURL
-        ? `${tunnelURL}${token ? `/#token=${token}` : ''}`
-        : `http://${instance.hostname}${token ? `/#token=${token}` : ''}`
+        ? tunnelURL
+        : `http://${instance.hostname}`
       : instance.dashboardHostname
         ? `http://${instance.dashboardHostname}`
         : null;
@@ -365,13 +362,9 @@ export function AgentInstanceCard({
     : null;
 
   const showSellCta =
-    instance.runtime === 'openclaw' &&
-    instance.id === 'default' &&
-    displayStatus === 'running';
+    isDefaultSellAgent(instance) && displayStatus === 'running';
 
   const provider = status?.model ? inferProvider(status.model) : null;
-  const showOpenclawTokenError =
-    Boolean(tokenError) && instance.runtime === 'openclaw';
 
   return (
     <CardContainer id={`agent-${instance.runtime}-${instance.id}`}>
@@ -402,14 +395,6 @@ export function AgentInstanceCard({
               {truncateAddress(primaryAddress)}
             </WalletAddressText>
             <CopyButton text={primaryAddress} title="Copy address" />
-            <ExplorerLink
-              href={`https://etherscan.io/address/${primaryAddress}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              title="View on Etherscan"
-            >
-              <OpenInNew size="sm" />
-            </ExplorerLink>
             {metadata && metadata.count > 1 && (
               <KeysBadge>+{metadata.count - 1} keys</KeysBadge>
             )}
@@ -436,6 +421,7 @@ export function AgentInstanceCard({
                       target="_blank"
                       rel="noopener noreferrer"
                       title={`View on ${b.chain.chainName} explorer`}
+                      aria-label={`View ${b.token.symbol} on ${b.chain.chainName} explorer`}
                     >
                       <OpenInNew size="sm" />
                     </ExplorerLink>
@@ -461,6 +447,7 @@ export function AgentInstanceCard({
           <Link
             href={dashboardUrl}
             target="_blank"
+            rel="noopener noreferrer"
             css={{
               fontSize: '13px',
             }}
@@ -506,15 +493,6 @@ export function AgentInstanceCard({
                     : `${provider ?? 'Unknown'} · unreachable${
                         status.apiError ? ` — ${status.apiError}` : ''
                       }`}
-              </DetailValue>
-            </DetailRow>
-          )}
-
-          {showOpenclawTokenError && (
-            <DetailRow>
-              <DetailLabel css={{ color: '$error' }}>Token:</DetailLabel>
-              <DetailValue css={{ color: '$error' }}>
-                {tokenError} — run: obol openclaw token --regenerate
               </DetailValue>
             </DetailRow>
           )}

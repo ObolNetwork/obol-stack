@@ -3,13 +3,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { Agent8004 } from '@/types/registry';
 import type { ChainOption } from '@/components/atoms/ChainSelector';
+import { chainIdForRegistryFilter } from '@/lib/services/registry-display';
 
 const PAGE_SIZE = 10;
-
-const CHAIN_ID_MAP: Record<string, number> = {
-  'base-sepolia': 84532,
-  base: 8453,
-};
 
 export function useRegistryAgents(
   search?: string,
@@ -24,7 +20,7 @@ export function useRegistryAgents(
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
 
-  const chainId = chainFilter ? (CHAIN_ID_MAP[chainFilter] ?? 84532) : 84532;
+  const chainId = chainIdForRegistryFilter(chainFilter);
 
   const fetchAgents = useCallback(
     async (currentPage: number) => {
@@ -33,8 +29,8 @@ export function useRegistryAgents(
         const params = new URLSearchParams({
           limit: String(PAGE_SIZE),
           page: String(currentPage),
-          chainId: String(chainId),
         });
+        if (chainId) params.set('chainId', String(chainId));
         if (search) params.set('search', search);
         if (protocolFilter) params.set('protocol', protocolFilter);
         if (x402Only) params.set('x402_supported', 'true');

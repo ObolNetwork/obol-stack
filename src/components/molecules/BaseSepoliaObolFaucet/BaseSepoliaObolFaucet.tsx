@@ -252,7 +252,7 @@ export function BaseSepoliaObolFaucet() {
       )}
       {errorMessage && <StatusText tone="warning">{errorMessage}</StatusText>}
       {txUrl && (
-        <TxLink href={txUrl} target="_blank" rel="noreferrer">
+        <TxLink href={txUrl} target="_blank" rel="noopener noreferrer">
           View transaction on BaseScan
         </TxLink>
       )}

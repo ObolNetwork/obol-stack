@@ -1,6 +1,7 @@
 import React from 'react';
 import { Image, Button, Flex, Text, styled, theme } from '@obolnetwork/obol-ui';
 import { Close } from '@/icons';
+import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
 import { useBalance, UseBalanceReturnType, useChainId } from 'wagmi';
 import { formatUnits } from 'viem';
 import { useTokenPrices } from '../../../hooks/useTokenPrices';
@@ -208,6 +209,11 @@ export function WalletModal({
   // Calculate balances in USD
   const ethBalanceUsd = calculateUsdBalance(ethBalance, ethPrice);
   const obolBalanceUsd = calculateUsdBalance(obolBalance, obolPrice);
+  const obolBalanceAmount = obolBalance
+    ? parseFloat(formatUnits(obolBalance.value, obolBalance.decimals)).toFixed(
+        4
+      )
+    : '0.0000';
 
   // Calculate total balance in USD
   const totalBalanceUsd = (
@@ -226,7 +232,11 @@ export function WalletModal({
   };
   return (
     <ModalContent>
-      <CloseButton onClick={onClose}>
+      <CloseButton
+        type="button"
+        aria-label="Close wallet modal"
+        onClick={onClose}
+      >
         <Close size="xs" color={theme.colors.body.value} />
       </CloseButton>
 
@@ -302,12 +312,7 @@ export function WalletModal({
               {formatChange(obolChange24h)}
             </TokenChangeText>
             <TokenChangeText color="body">
-              {obolBalance
-                ? parseFloat(
-                    formatUnits(obolBalance.value, obolBalance.decimals)
-                  ).toFixed(4)
-                : '0.0000'}{' '}
-              OBOL
+              <ObolAmountSwitch amount={obolBalanceAmount} symbol="OBOL" />
             </TokenChangeText>
           </TokenRowFlex>
         </TokenRow>

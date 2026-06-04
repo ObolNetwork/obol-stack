@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 
 import { CopyButton } from '@/components/atoms/CopyButton';
+import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
 import { LoadingState } from '@/components/molecules/LoadingState';
 import { ErrorState } from '@/components/molecules/ErrorState';
 import { StackUnreachableState } from '@/components/molecules/StackUnreachableState';
@@ -369,7 +370,11 @@ export function MarketplaceDetail({ slug, onBack }: MarketplaceDetailProps) {
             <KVRow>
               <KVLabel>Price</KVLabel>
               <KVValue>
-                {data.price || '—'} {data.asset.symbol}
+                <ObolAmountSwitch
+                  amount={data.price || '—'}
+                  symbol={data.asset.symbol}
+                  align="right"
+                />
               </KVValue>
             </KVRow>
             <KVRow>

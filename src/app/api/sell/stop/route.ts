@@ -5,6 +5,7 @@ import {
   parseStopRequest,
   type StopRequestInput,
 } from './drain';
+import { rejectCrossOrigin } from '@/lib/middleware/origin-check';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -14,7 +15,8 @@ export const dynamic = 'force-dynamic';
  *
  * Initiates a drain on a ServiceOffer by patching spec.drainAt (now) and
  * spec.drainGracePeriod (Go duration string). The CR is intentionally kept
- * around — `obol sell delete` remains the canonical full removal.
+ * around so sellers retain status and audit history after the route is torn
+ * down.
  *
  * Body: { name: string, namespace: string, grace?: string, force?: boolean }
  *
@@ -22,16 +24,8 @@ export const dynamic = 'force-dynamic';
  * 500 on K8s API failures.
  */
 export async function POST(request: NextRequest) {
-  // Same-origin / CSRF guard. Mirrors the project convention used by other
-  // mutating endpoints (request.nextUrl.origin matches request.headers.origin
-  // when the call came from this app).
-  const origin = request.headers.get('origin');
-  if (origin && origin !== request.nextUrl.origin) {
-    return NextResponse.json(
-      { error: 'cross-origin requests are not permitted' },
-      { status: 403 }
-    );
-  }
+  const csrfReject = rejectCrossOrigin(request);
+  if (csrfReject) return csrfReject;
 
   let body: StopRequestInput;
   try {

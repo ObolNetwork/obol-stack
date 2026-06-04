@@ -12,7 +12,13 @@ import {
 } from '@obolnetwork/obol-ui';
 import { StatusPill } from '../../atoms/StatusIndicator';
 import { CopyButton } from '../../atoms/CopyButton/CopyButton';
+import { ObolAmountSwitch } from '../../atoms/ObolAmountSwitch';
 import { StopDrainModal } from '../StopDrainModal';
+import {
+  serviceOfferAssetSymbol,
+  serviceOfferTrustBadges,
+} from '@/lib/services/service-offer-display';
+import { publicServiceEndpoint } from '@/lib/services/public-storefront';
 import type {
   ServiceOffer,
   ServiceOfferAgentLink,
@@ -23,6 +29,7 @@ import type {
 interface ServiceCardProps {
   offer: ServiceOffer;
   tunnelURL: string | null;
+  onChanged?: () => void | Promise<void>;
 }
 
 const CardContainer = styled(Box, {
@@ -37,11 +44,30 @@ const CardContainer = styled(Box, {
   },
 });
 
-const TopRow = styled(Flex, {
+const TopRow = styled('div', {
+  display: 'flex',
   alignItems: 'center',
   justifyContent: 'space-between',
+  width: '100%',
   marginBottom: '$xs',
   gap: '$sm',
+});
+
+const HeaderMeta = styled('div', {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '$xs',
+  flexWrap: 'wrap',
+  flex: '1 1 auto',
+  minWidth: 0,
+});
+
+const HeaderStatus = styled('div', {
+  display: 'flex',
+  alignItems: 'center',
+  gap: '$xs',
+  flexShrink: 0,
+  marginLeft: 'auto',
 });
 
 const ServiceName = styled(Text, {
@@ -51,7 +77,7 @@ const ServiceName = styled(Text, {
 });
 
 const TypeBadge = styled(Text, {
-  fontSize: '10px',
+  fontSize: '$1',
   fontWeight: '$semibold',
   color: '$body',
   backgroundColor: 'rgba(255, 255, 255, 0.05)',
@@ -111,7 +137,7 @@ const SkillsRow = styled(Flex, {
 });
 
 const SkillChip = styled(Text, {
-  fontSize: '10px',
+  fontSize: '$1',
   color: '$body',
   backgroundColor: 'rgba(255, 255, 255, 0.04)',
   border: '1px solid rgba(255, 255, 255, 0.08)',
@@ -121,39 +147,8 @@ const SkillChip = styled(Text, {
   whiteSpace: 'nowrap',
 });
 
-const ConditionsRow = styled(Flex, {
-  alignItems: 'center',
-  gap: '$xs',
-  flexWrap: 'wrap',
-  marginTop: '$sm',
-  paddingTop: '$xs',
-  borderTop: '1px dashed $stroke',
-});
-
-const ConditionDot = styled(Flex, {
-  alignItems: 'center',
-  gap: '$xxxs',
-  fontSize: '10px',
-  color: '$body',
-
-  variants: {
-    state: {
-      ok: { color: '$obolGreen' },
-      pending: { color: '$obolGold' },
-      missing: { color: '$body', opacity: 0.5 },
-    },
-  },
-});
-
-const Dot = styled(Box, {
-  width: 6,
-  height: 6,
-  borderRadius: '$round',
-  backgroundColor: 'currentColor',
-});
-
 const DrainingBadge = styled(Text, {
-  fontSize: '10px',
+  fontSize: '$1',
   fontWeight: '$semibold',
   color: '#f5c542',
   backgroundColor: 'rgba(245, 197, 66, 0.1)',
@@ -166,7 +161,7 @@ const DrainingBadge = styled(Text, {
 });
 
 const UsageBadge = styled(Text, {
-  fontSize: '10px',
+  fontSize: '$1',
   fontWeight: '$semibold',
   color: '$obolGreen',
   backgroundColor: 'rgba(47, 228, 171, 0.08)',
@@ -194,14 +189,6 @@ const TYPE_LABEL: Record<ServiceOfferType, string> = {
   http: 'HTTP',
 };
 
-const CONDITION_ORDER: Array<{ key: string; short: string }> = [
-  { key: 'ModelReady', short: 'Model' },
-  { key: 'UpstreamHealthy', short: 'Upstream' },
-  { key: 'PaymentGateReady', short: 'Gate' },
-  { key: 'RoutePublished', short: 'Route' },
-  { key: 'Registered', short: 'Registered' },
-];
-
 function truncateAddress(address: string): string {
   if (address.length <= 10) return address;
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
@@ -224,24 +211,6 @@ function pluralizeSales(n: number): string {
   return n === 1 ? '1 sale' : `${n.toLocaleString()} sales`;
 }
 
-function conditionState(
-  conditions: ServiceOfferCondition[] | undefined,
-  type: string
-): 'ok' | 'pending' | 'missing' {
-  const c = conditions?.find(x => x.type === type);
-  if (!c) return 'missing';
-  if (c.status === 'True') return 'ok';
-  return 'pending';
-}
-
-function conditionsToShow(offer: ServiceOffer) {
-  return CONDITION_ORDER.filter(({ key }) => {
-    if (key === 'ModelReady' && offer.type === 'http') return false;
-    if (key === 'Registered' && !offer.registration?.enabled) return false;
-    return true;
-  });
-}
-
 function agentDisplayName(link: ServiceOfferAgentLink): string {
   if (link.runtime === 'hermes' && link.id === 'obol-agent')
     return 'Obol Agent';
@@ -256,16 +225,6 @@ function scrollToAgent(link: ServiceOfferAgentLink) {
   }
 }
 
-/**
- * Rewrite the controller-published endpoint (which uses the local
- * `obol.stack` hostname) to use the public Cloudflare tunnel as the base.
- * Returns null when the tunnel URL is unavailable so the local-only
- * `obol.stack` URL is never surfaced as a clickable link.
- *
- * The controller writes either a full URL (older offers) or a path-only
- * value like "/services/demo-quant" (current ServiceOffer status). We
- * resolve the latter against the tunnel URL as a base so both work.
- */
 /**
  * Pulls the drain end time out of the Draining condition. Backend writes
  * the RFC3339 timestamp into condition.message; if that's ever missing we
@@ -284,6 +243,12 @@ function drainEndsAt(
   );
   if (!m) return null;
   const date = new Date(m[0]);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function parseDrainEndsAt(value: string | undefined): Date | null {
+  if (!value) return null;
+  const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
@@ -309,29 +274,12 @@ function useNow(intervalMs = 1000, enabled = true): Date {
   return now;
 }
 
-function publicEndpoint(
-  endpoint: string | undefined,
-  tunnelURL: string | null
-): string | null {
-  if (!tunnelURL) return null;
-  try {
-    const tunnel = new URL(tunnelURL);
-    const tunnelPath = tunnel.pathname.replace(/\/$/, '');
-    if (!endpoint) {
-      return `${tunnel.origin}${tunnelPath}` || tunnel.toString();
-    }
-    const ep = new URL(endpoint, tunnel);
-    return `${tunnel.origin}${tunnelPath}${ep.pathname}${ep.search}${ep.hash}`;
-  } catch {
-    return null;
-  }
-}
-
-export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
+export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
   const displayName = offer.registration?.name || offer.name;
   const price = formatPrice(offer);
-  const symbol = offer.payment?.asset?.symbol || 'USDC';
-  const network = offer.payment?.network;
+  const symbol = serviceOfferAssetSymbol(offer.payment);
+  const network = offer.caip2Network || offer.payment?.network;
+  const transferMethod = offer.payment?.asset?.transferMethod;
   // type=agent leaves spec.model and registration.skills empty by design;
   // the linked Agent's resolved view is the source of truth.
   const modelName = offer.model?.name || offer.agentResolution?.model;
@@ -339,12 +287,17 @@ export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
     offer.registration?.skills && offer.registration.skills.length > 0
       ? offer.registration.skills
       : (offer.agentResolution?.skills ?? []);
+  const trustBadges = serviceOfferTrustBadges(offer.registration);
   const visibleSkills = skills.slice(0, 3);
   const overflowSkills = Math.max(0, skills.length - visibleSkills.length);
+  const domains = offer.registration?.domains ?? [];
+  const visibleDomains = domains.slice(0, 3);
+  const overflowDomains = Math.max(0, domains.length - visibleDomains.length);
   const charged = offer.usage?.chargedRequests;
-  const endpoint = publicEndpoint(offer.endpoint, tunnelURL);
+  const endpoint = publicServiceEndpoint(offer.endpoint, tunnelURL);
 
-  const drainEnd = drainEndsAt(offer.conditions);
+  const drainEnd =
+    parseDrainEndsAt(offer.drainEndsAt) ?? drainEndsAt(offer.conditions);
   const isDraining = drainEnd !== null;
   const now = useNow(1000, isDraining);
   const countdown = drainEnd ? formatCountdown(drainEnd, now) : null;
@@ -353,7 +306,7 @@ export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
   return (
     <CardContainer>
       <TopRow>
-        <Flex css={{ alignItems: 'center', gap: '$xs', flexWrap: 'wrap' }}>
+        <HeaderMeta>
           <ServiceName>{displayName}</ServiceName>
           <TypeBadge>{TYPE_LABEL[offer.type]}</TypeBadge>
           {modelName && (
@@ -367,11 +320,35 @@ export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
               {modelName}
             </TypeBadge>
           )}
+          {offer.isDemo && <TypeBadge>Demo</TypeBadge>}
+          {offer.registrationPending && (
+            <TypeBadge
+              css={{
+                color: '#f5c542',
+                borderColor: 'rgba(245, 197, 66, 0.35)',
+                background: 'rgba(245, 197, 66, 0.1)',
+              }}
+            >
+              Registration pending
+            </TypeBadge>
+          )}
+          {transferMethod && (
+            <TypeBadge
+              css={{
+                color: '$body',
+                borderColor: 'rgba(255, 255, 255, 0.12)',
+              }}
+            >
+              {transferMethod}
+            </TypeBadge>
+          )}
           {endpoint && (
             <Link
               href={endpoint}
               target="_blank"
+              rel="noopener noreferrer"
               title="Open service in new tab"
+              aria-label="Open service in new tab"
               css={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -381,8 +358,8 @@ export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
               <OpenInNew size="sm" />
             </Link>
           )}
-        </Flex>
-        <Flex css={{ alignItems: 'center', gap: '$xs' }}>
+        </HeaderMeta>
+        <HeaderStatus>
           {isDraining && (
             <DrainingBadge title={`Drain ends at ${drainEnd?.toISOString()}`}>
               Draining{countdown ? ` · ends in ${countdown}` : ''}
@@ -392,7 +369,7 @@ export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
             status={isDraining ? 'syncing' : isReady ? 'synced' : 'syncing'}
             label={isDraining ? 'Draining' : isReady ? 'Ready' : 'Pending'}
           />
-        </Flex>
+        </HeaderStatus>
       </TopRow>
 
       {offer.registration?.description && (
@@ -403,7 +380,11 @@ export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
         <PriceRow>
           <InfoLabel>Price:</InfoLabel>
           <PriceValue>
-            {price.count} {symbol} / {price.unit}
+            <ObolAmountSwitch
+              amount={price.count}
+              symbol={symbol}
+              unit={`/ ${price.unit}`}
+            />
             {network && (
               <span style={{ marginLeft: '4px', color: 'inherit' }}>
                 on {network}
@@ -457,39 +438,40 @@ export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
         </SkillsRow>
       )}
 
-      <ConditionsRow>
-        {conditionsToShow(offer).map(({ key, short }) => {
-          const state = conditionState(offer.conditions, key);
-          return (
-            <ConditionDot key={key} state={state}>
-              <Dot />
-              <Text css={{ fontSize: '10px', color: 'inherit' }}>{short}</Text>
-            </ConditionDot>
-          );
-        })}
-        <Text
-          css={{
-            marginLeft: 'auto',
-            fontSize: '10px',
-            color: '$body',
-            opacity: 0.65,
-            fontFamily: 'monospace',
-          }}
-        >
-          {offer.namespace}/{offer.name}
-        </Text>
-      </ConditionsRow>
+      {visibleDomains.length > 0 && (
+        <SkillsRow>
+          {visibleDomains.map(domain => (
+            <SkillChip key={domain}>Domain: {domain}</SkillChip>
+          ))}
+          {overflowDomains > 0 && <SkillChip>+{overflowDomains}</SkillChip>}
+        </SkillsRow>
+      )}
 
-      {!isDraining && (
-        <Flex
-          css={{
-            marginTop: '$xs',
-            justifyContent: 'flex-end',
-          }}
-        >
+      {trustBadges.length > 0 && (
+        <SkillsRow>
+          {trustBadges.map(method => (
+            <SkillChip key={method} title="Supported trust method">
+              Trust: {method}
+            </SkillChip>
+          ))}
+        </SkillsRow>
+      )}
+
+      <Flex
+        css={{
+          marginTop: '$xs',
+          justifyContent: 'flex-end',
+          gap: '$xs',
+          flexWrap: 'wrap',
+        }}
+      >
+        {!isDraining && (
           <StopDrainModal
             name={offer.name}
             namespace={offer.namespace}
+            onDrained={() => {
+              void onChanged?.();
+            }}
             trigger={
               <Button
                 color="secondary"
@@ -499,8 +481,8 @@ export function ServiceCard({ offer, tunnelURL }: ServiceCardProps) {
               </Button>
             }
           />
-        </Flex>
-      )}
+        )}
+      </Flex>
     </CardContainer>
   );
 }

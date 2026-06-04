@@ -5,6 +5,7 @@ import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { Cross2Icon } from '@radix-ui/react-icons';
 
 import { CopyButton } from '@/components/atoms/CopyButton';
+import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
 import {
   buyPyCommand,
   computePreflight,
@@ -267,7 +268,10 @@ export function BuyDrawer({ item, open, onClose }: BuyDrawerProps) {
               <Row>
                 <RowLabel>Price / {item.priceUnit}</RowLabel>
                 <RowValue>
-                  {item.price || '—'} {item.asset.symbol}
+                  <ObolAmountSwitch
+                    amount={item.price || '—'}
+                    symbol={item.asset.symbol}
+                  />
                 </RowValue>
               </Row>
               <Row>
@@ -310,7 +314,10 @@ export function BuyDrawer({ item, open, onClose }: BuyDrawerProps) {
             >
               <RowLabel>Total</RowLabel>
               <RowValue>
-                {preflight.totalHuman} {item.asset.symbol}
+                <ObolAmountSwitch
+                  amount={preflight.totalHuman}
+                  symbol={item.asset.symbol}
+                />
               </RowValue>
             </Flex>
             <Flex

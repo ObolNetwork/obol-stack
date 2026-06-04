@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react';
-import { COINGECKO_IDS } from '../lib/constants/tokens';
+import { useQuery } from '@tanstack/react-query';
+import { COINGECKO_IDS } from '../lib/constants/tokens.ts';
+
+export const TOKEN_PRICE_REFRESH_MS = 5 * 60 * 1000;
 
 export interface TokenPrice {
   price: number;
@@ -11,60 +13,101 @@ export interface TokenPrices {
   obol: TokenPrice;
 }
 
-export function useTokenPrices() {
-  const [tokenPrices, setTokenPrices] = useState<TokenPrices>({
-    ethereum: { price: 0, change24h: 0 },
-    obol: { price: 0, change24h: 0 },
+type CoinGeckoPriceResponse = Record<
+  string,
+  {
+    usd?: number;
+    usd_24h_change?: number;
+  }
+>;
+
+const EMPTY_TOKEN_PRICES: TokenPrices = {
+  ethereum: { price: 0, change24h: 0 },
+  obol: { price: 0, change24h: 0 },
+};
+
+export interface UseTokenPricesOptions {
+  enabled?: boolean;
+}
+
+export function isObolSymbol(symbol: string | undefined): boolean {
+  return symbol?.trim().toUpperCase() === 'OBOL';
+}
+
+export function formatUsdcAmount(amount: number): string {
+  if (!Number.isFinite(amount) || amount < 0) return '';
+  return amount.toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: amount >= 1 ? 2 : 6,
   });
-  const [loading, setLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
+}
 
-  useEffect(() => {
-    const fetchTokenPrices = async () => {
-      setLoading(true);
-      setError(null);
+export function obolAmountToUsdc(
+  amount: string | number,
+  obolUsdPrice: number | null | undefined
+): string | null {
+  if (
+    obolUsdPrice === null ||
+    obolUsdPrice === undefined ||
+    !Number.isFinite(obolUsdPrice) ||
+    obolUsdPrice <= 0
+  ) {
+    return null;
+  }
 
-      try {
-        const response = await fetch(
-          `https://api.coingecko.com/api/v3/simple/price?ids=${COINGECKO_IDS.OBOL},${COINGECKO_IDS.ETHEREUM}&vs_currencies=usd&include_24hr_change=true`
-        );
+  const parsedAmount =
+    typeof amount === 'number'
+      ? amount
+      : Number(String(amount).replace(/,/g, '').trim());
+  if (!Number.isFinite(parsedAmount) || parsedAmount < 0) return null;
 
-        if (!response.ok) {
-          throw new Error('Failed to fetch token prices');
-        }
+  return formatUsdcAmount(parsedAmount * obolUsdPrice);
+}
 
-        const data = await response.json();
+export function normalizeTokenPrices(
+  data: CoinGeckoPriceResponse
+): TokenPrices {
+  return {
+    ethereum: {
+      price: data[COINGECKO_IDS.ETHEREUM]?.usd ?? 0,
+      change24h: data[COINGECKO_IDS.ETHEREUM]?.usd_24h_change ?? 0,
+    },
+    obol: {
+      price: data[COINGECKO_IDS.OBOL]?.usd ?? 0,
+      change24h: data[COINGECKO_IDS.OBOL]?.usd_24h_change ?? 0,
+    },
+  };
+}
 
-        setTokenPrices({
-          ethereum: {
-            price: data[COINGECKO_IDS.ETHEREUM]?.usd || 3200, // Fallback price
-            change24h: data[COINGECKO_IDS.ETHEREUM]?.usd_24h_change || 0,
-          },
-          obol: {
-            price: data[COINGECKO_IDS.OBOL]?.usd || 0.1, // Fallback price if not listed
-            change24h: data[COINGECKO_IDS.OBOL]?.usd_24h_change || 0,
-          },
-        });
-      } catch (err) {
-        console.error('Failed to fetch token prices:', err);
-        setError(err instanceof Error ? err.message : 'Unknown error');
+export async function fetchTokenPrices(): Promise<TokenPrices> {
+  const response = await fetch(
+    `https://api.coingecko.com/api/v3/simple/price?ids=${COINGECKO_IDS.OBOL},${COINGECKO_IDS.ETHEREUM}&vs_currencies=usd&include_24hr_change=true`
+  );
 
-        // Set fallback values on error
-        setTokenPrices({
-          ethereum: { price: 3200, change24h: 0 },
-          obol: { price: 0.1, change24h: 0 },
-        });
-      } finally {
-        setLoading(false);
-      }
-    };
+  if (!response.ok) {
+    throw new Error('Failed to fetch token prices');
+  }
 
-    fetchTokenPrices();
-  }, []);
+  const data = (await response.json()) as CoinGeckoPriceResponse;
+  return normalizeTokenPrices(data);
+}
+
+export function useTokenPrices(options: UseTokenPricesOptions = {}) {
+  const query = useQuery({
+    queryKey: ['token-prices', 'usd'],
+    queryFn: fetchTokenPrices,
+    staleTime: TOKEN_PRICE_REFRESH_MS,
+    refetchInterval: TOKEN_PRICE_REFRESH_MS,
+    refetchIntervalInBackground: true,
+    enabled: options.enabled ?? true,
+  });
+
+  const tokenPrices = query.data ?? EMPTY_TOKEN_PRICES;
+  const error = query.error instanceof Error ? query.error.message : null;
 
   return {
     tokenPrices,
-    loading,
+    loading: query.isLoading,
     error,
     // Convenience getters for backward compatibility
     ethPrice: tokenPrices.ethereum.price,

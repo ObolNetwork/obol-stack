@@ -1,4 +1,5 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
+import { rejectCrossOriginCredentialRead } from '@/lib/middleware/origin-check';
 import { AgentClient } from '@/lib/services/agents';
 import type { AgentInstance } from '@/types/agent';
 
@@ -26,7 +27,10 @@ interface OperatorWalletsResponse {
  * The marketplace pages treat the operator's "owned" set as
  * (agent wallets) ∪ (connected browser wallet) — see useOperatorWallets.
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const csrfReject = rejectCrossOriginCredentialRead(request);
+  if (csrfReject) return csrfReject;
+
   try {
     const client = new AgentClient();
     // Two apiserver round-trips total (vs N+1 before): one list of
