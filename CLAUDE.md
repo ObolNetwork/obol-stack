@@ -67,7 +67,8 @@ obol
 ├── agent           init (deploys obol-agent singleton),
 │                   auth --runtime <runtime> obol-agent  (Bearer token — canonical)
 ├── network         list, install, add, remove, status, sync, delete
-├── sell            inference, http, list, status, stop, delete, pricing, register
+├── sell            inference, http, agent, list, status, stop, delete, pricing, register
+├── buy             inference  (pre-pay a paid model via the agent's wallet — exposes `paid/<model>` through LiteLLM)
 ├── hermes          onboard, setup, sync, list, delete, wallet, skills
 │                   token   (LEGACY — prefer `obol agent auth`; can print CLI usage text and poison Bearer)
 ├── openclaw        onboard, setup, sync, list, delete, dashboard, cli, token, skills
@@ -119,6 +120,10 @@ For endpoints backed by host Ollama (`sell http --upstream ollama`), requests wi
 
 **Standalone inference gateway (`obol sell inference`)**: separate from the LiteLLM+buyer path. With a live cluster + kubeconfig, `obol sell inference` disables the gateway’s built-in x402 (`NoPaymentGate`) and publishes a `ServiceOffer` so **Traefik + x402-verifier** gate traffic to the host listener; run the gateway on the host (`127.0.0.1:<port>`) so the in-cluster Service+Endpoints can reach it. For a fully standalone host (no cluster), the gateway uses its **own** x402 middleware (`verifyOnly` / settle behavior per config).
 
+**Agent-backed offers (`obol sell agent <name>`)**: wraps an existing `Agent` CR (created via `obol agent new`) with a `type=agent` ServiceOffer. The controller resolves `spec.agent.ref` → the agent's Hermes endpoint (port 8642), surfaces `agentModel`/`agentSkills`/`agentRuntime` in the 402 response's `extra`, and gates `/services/<name>/*` through `x402-verifier.HandleProxy`. Hermes serves OpenAI-compatible `/v1/chat/completions`; both streaming and non-streaming requests are handled transparently by the same path.
+
+**Prefer `stream: true` for OpenAI-compatible paid endpoints**: SSE chunks now flush per-write end-to-end through `x402-verifier.HandleProxy` (the seller gateway for `sell agent` and `sell http`) — confirmed by `internal/x402/verifier_test.go::TestVerifier_HandleProxy_StreamsSSEChunks`. For any agent inference that might exceed the Cloudflare quick tunnel's ~100s idle window, **streaming is the right answer**: a non-streaming response sends zero bytes until upstream is done, and the tunnel drops the connection before the buffered body arrives. Non-streaming still works for short calls but has no server-side keep-alive — push clients toward `stream: true` whenever the consumer (LiteLLM, OpenAI SDK, browser, curl) supports it. Regression note: `statusRecorder.Flush` in `internal/x402/verifier.go` must forward to the underlying `http.Flusher` — embedding the bare `http.ResponseWriter` interface hides the concrete Flusher and silently buffers the whole response.
+
 Quick full-cycle smoke test (sell + buy):
 1. Unpaid gate check: POST seller route without `X-PAYMENT`, expect `402` + accepts requirements.
 2. Buy auths: run `buy.py buy <name> --endpoint <url> --model <id> --count N`, expect PurchaseRequest `Ready` and sidecar `/status` shows `remaining > 0`.
@@ -130,7 +135,7 @@ PurchaseRequest status caveat:
 - `PurchaseRequest.status` (including `conditions[].message`, `remaining`, `spent`) is the controller's last reconciled snapshot, not a live per-request counter.
 - For real-time auth pool state, and for any refill decision, always check `x402-buyer` `GET /status` in the litellm pod.
 
-**CLI**: `obol sell pricing --wallet --chain`, `obol sell inference <name> --model --price|--per-mtok [--token USDC|OBOL]`, `obol sell http <name> --wallet --chain --price|--per-request|--per-mtok --upstream --port --namespace --health-path [--token USDC|OBOL]`, `obol sell list|status|stop|delete`, `obol sell register --name --private-key-file`.
+**CLI**: `obol sell pricing --wallet --chain`, `obol sell inference <name> --model --price|--per-mtok [--token USDC|OBOL]`, `obol sell http <name> --wallet --chain --price|--per-request|--per-mtok --upstream --port --namespace --health-path [--token USDC|OBOL]`, `obol sell agent <name> --price [--token USDC|OBOL] [--chain ...] [--pay-to ...]`, `obol sell list|status|stop|delete`, `obol sell register --name --private-key-file`, `obol buy inference [<name>] --seller <url> --model <id> --budget <amt> [--token USDC|OBOL]`.
 
 **`obol sell http` flag reference** (common mistakes: `--model`, `--pay-to`, `--network` do NOT exist on this command):
 ```
