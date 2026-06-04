@@ -797,7 +797,8 @@ func TestX402VerifierImage_CarriesAgentAuthFix(t *testing.T) {
 // treats Secret as create-only (isCreateOnlyKind). The image MUST therefore be
 // built from source that has that behaviour — the prior f5d94fc side-branch pin
 // did not, so the deployed binary Updated the per-agent Secrets on re-reconcile
-// and 403'd. 503016b (rc9 commit 503016bf, image 0.10.0-rc9) carries the fix.
+// and 403'd. b39bcaa (post-rc10 main) carries the fix, and also ships PR #590's
+// actionable pending-registration status message.
 // Bumping this pin requires a conscious, documented change here so a future
 // downgrade can't silently re-ship the bug.
 func TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix(t *testing.T) {
@@ -806,7 +807,7 @@ func TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix(t *testing.T) {
 		t.Fatalf("ReadInfrastructureFile: %v", err)
 	}
 
-	const ref = "ghcr.io/obolnetwork/serviceoffer-controller:503016b@sha256:bec62ea04842caf62980b529a89f5d553987a106c3167eb45209a8b278121957"
+	const ref = "ghcr.io/obolnetwork/serviceoffer-controller:b39bcaa@sha256:f5afbba041f83c52c1d48c61db443138da76a12afed0bd29ba719984fc73b189"
 	if !strings.Contains(string(data), "image: "+ref) {
 		t.Fatalf("serviceoffer-controller image must carry the Secret-create-only reconciler fix "+
 			"(else per-agent provisioning 403s under the no-update/patch Secret RBAC): %s", ref)
