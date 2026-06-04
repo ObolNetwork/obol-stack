@@ -10,6 +10,7 @@ Purchase access to remote x402-gated services. There are two flows, picked by us
 
 - **`pay <url>`** — single-shot. Probe the URL, sign **one** payment authorization, attach `X-PAYMENT`, send the request, return the response. Stateless. Use for `type:http` services and any one-off purchase. Max loss = price of one request.
 - **`buy <name>`** — pre-payment budget. Pre-sign **N** authorizations, declare them in a `PurchaseRequest` CR, let the `x402-buyer` sidecar spend them transparently as the agent calls the model through LiteLLM at `paid/<remote-model>`. Use for long-running paid inference. Max loss = N × price; runtime path holds zero signer access.
+- **`buy <name> --model <id> --set-default`** — same as `buy` above, then adopt `paid/<remote-model>` as the agent's **own primary model**, in-pod, by itself: an atomic `hermes config set model.default` that Hermes re-reads per request (effective next chat turn, **no restart**, no host-side `obol model prefer`/`obol model sync`). Refuses if the model isn't selectable in LiteLLM. Pair with `--auto-refill` so the primary model doesn't brick when the pre-signed pool empties.
 
 Both flows auto-detect the token + transfer method from the seller's 402 response. Currently supported: **USDC via EIP-3009** (Base Sepolia, Base Mainnet, Ethereum Mainnet) and **OBOL via Permit2** (Ethereum Mainnet).
 
@@ -150,6 +151,7 @@ python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py maint
 | `probe <url> [--model <id>] [--type http\|inference] [--method GET\|POST]` | Send request without payment, parse 402 response for pricing |
 | `pay <url> [--type http\|inference] [--method GET\|POST] [--data <body>]` | Single-shot paid request: sign 1 auth, attach X-PAYMENT, send |
 | `buy <name> --endpoint <url> --model <id> [--budget N] [--count N]` | Pre-sign auths, create/update `PurchaseRequest`, expose `paid/<model>` |
+| `buy <name> --endpoint <url> --model <id> --set-default [--auto-refill]` | As above, then set `paid/<model>` as the agent's own primary model in-pod (no restart, no host CLI) |
 | `process <name> \| --all` | Reconcile `autoRefill` policies against live `x402-buyer` status |
 | `list` | List purchased providers + remaining auth counts |
 | `status <name>` | Check sidecar pod status + remaining auths |
