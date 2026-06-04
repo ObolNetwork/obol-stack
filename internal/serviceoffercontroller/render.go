@@ -912,6 +912,24 @@ func offerOperationallyReady(offer *monetizeapi.ServiceOffer) bool {
 // ready but has its on-chain ERC-8004 registration still pending. Used to
 // flip ServiceCatalogEntry.RegistrationPending so storefront UIs can show
 // a "registration pending" badge alongside the usable offer.
+// isDemoOffer reports whether an offer should be rendered under the
+// storefront's "Demo services" group. The legacy demo path puts offers
+// directly in the "demo" namespace, but the agent-backed demo path
+// (`obol sell demo quant`) lands the offer in agent-<name> because the
+// controller's confused-deputy guard requires the ServiceOffer and the
+// referenced Agent CR to share a namespace. To keep both paths grouping
+// together on the storefront, the CLI sets obol.org/demo=true on
+// agent-backed demos and we honour either signal.
+func isDemoOffer(offer *monetizeapi.ServiceOffer) bool {
+	if offer == nil {
+		return false
+	}
+	if offer.Namespace == "demo" {
+		return true
+	}
+	return offer.Labels["obol.org/demo"] == "true"
+}
+
 func offerAwaitingRegistration(offer *monetizeapi.ServiceOffer) bool {
 	if offer == nil {
 		return false
@@ -978,6 +996,17 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 			drainEndsAt = offer.DrainEndsAt().UTC().Format(time.RFC3339)
 		}
 
+		// Skills source matches the 402 renderer: for type=agent the
+		// resolved Agent allow-list wins (controller-populated), with a
+		// fallback to spec.registration.skills for non-agent offers
+		// that still want to surface skill tags on discovery.
+		var skills []string
+		if offer.IsAgent() && offer.Status.AgentResolution != nil && len(offer.Status.AgentResolution.Skills) > 0 {
+			skills = append([]string(nil), offer.Status.AgentResolution.Skills...)
+		} else if len(offer.Spec.Registration.Skills) > 0 {
+			skills = append([]string(nil), offer.Spec.Registration.Skills...)
+		}
+
 		svc := schemas.ServiceCatalogEntry{
 			Name:                offer.Name,
 			Namespace:           offer.Namespace,
@@ -988,7 +1017,8 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 			PayTo:               offer.Spec.Payment.PayTo,
 			Network:             offer.Spec.Payment.Network,
 			Description:         desc,
-			IsDemo:              offer.Namespace == "demo",
+			Skills:              skills,
+			IsDemo:              isDemoOffer(offer),
 			RegistrationPending: offerAwaitingRegistration(offer),
 			DrainEndsAt:         drainEndsAt,
 		}

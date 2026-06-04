@@ -5,9 +5,19 @@ import type { Service } from "@/types";
 
 const typeColors: Record<string, string> = {
   inference: "bg-obol-green/15 text-obol-green border border-obol-green/30",
+  agent: "bg-obol-green/15 text-obol-green border border-obol-green/30",
   http: "bg-bg03 text-text-body border border-stroke",
   "fine-tuning": "bg-amber/15 text-amber border border-amber/30",
 };
+
+// normalizeOfferType collapses the catalog's spec.type values into the
+// three branches the storefront renders. Mirrors the Go renderer's
+// normalizeOfferType in internal/x402/paymentrequired.go so the
+// storefront and 402 page agree on what each card surfaces.
+function normalizeOfferType(t: string): "inference" | "agent" | "http" {
+  if (t === "inference" || t === "agent") return t;
+  return "http";
+}
 
 type Tab = "agent" | "other-ai" | "code";
 
@@ -30,6 +40,18 @@ export function ServiceCard({ service }: { service: Service }) {
             )}
           </div>
           <p className="text-sm text-text-body mb-3">{service.description}</p>
+          {service.skills && service.skills.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-3" aria-label="Agent skills">
+              {service.skills.map((s) => (
+                <span
+                  key={s}
+                  className="inline-block rounded-full border border-stroke bg-bg03 px-2.5 py-0.5 text-xs text-text-body"
+                >
+                  {s}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         <span
           className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${typeColors[service.type] ?? typeColors.http}`}
@@ -112,14 +134,58 @@ function TabBar({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
   );
 }
 
+// BuyViaObolAgent branches on service.type so the prompt matches what
+// the buy-x402 skill actually does for that shape (`pay` for http,
+// `pay` against chat-completions for agents, `obol buy inference` CLI
+// for inference). Mirrors inferenceCopy/agentCopy/httpCopy in
+// internal/x402/paymentrequired.go.
 function BuyViaObolAgent({ service }: { service: Service }) {
-  const prompt = `Use the buy-x402 skill to call the paid service at ${service.endpoint}. It costs ${service.price} on ${service.network}. Report what it returns.`;
+  const kind = normalizeOfferType(service.type);
+
+  if (kind === "inference") {
+    const model = service.model || "<model-id>";
+    const cmd = `obol buy inference ${service.name} \\
+  --seller ${service.endpoint} \\
+  --model ${model} \\
+  --budget 1 \\
+  --no-verify-identity`;
+    return (
+      <div className="space-y-2">
+        <p className="text-xs text-text-muted">
+          This is paid <em>remote inference</em>. The Obol CLI pre-pays the
+          seller through your agent&apos;s wallet and exposes the model in
+          your local LiteLLM gateway as{" "}
+          <code className="font-mono text-obol-green">paid/{model}</code>, so
+          your agent and tools can call it like any other OpenAI-compatible
+          model.
+        </p>
+        <Snippet code={cmd} />
+      </div>
+    );
+  }
+
+  if (kind === "agent") {
+    const prompt = `Use the buy-x402 skill's \`pay\` command to call the Obol Agent at ${service.endpoint}. This is an *agent*, not a raw model — it has its own skills, tools, and memory. Include a clear instruction in the chat-completions body so the agent knows what to do.`;
+    return (
+      <div className="space-y-2">
+        <p className="text-xs text-text-muted">
+          Paste this into your Obol agent. You&apos;re paying another agent
+          for one round of work — be specific about what you want it to do.
+          The buy-x402 skill signs and sends the payment for you.
+        </p>
+        <Snippet code={prompt} />
+      </div>
+    );
+  }
+
+  // http (default): legacy single-shot pay.
+  const prompt = `Use the buy-x402 skill's \`pay\` command to call ${service.endpoint} once. Pay ${service.price} on ${service.network}. Report what it returns.`;
   return (
     <div className="space-y-2">
       <p className="text-xs text-text-muted">
         Paste this into your Obol agent. The agent uses the built-in{" "}
         <code className="font-mono text-obol-green">buy-x402</code> skill to
-        sign and send the payment.
+        sign one authorisation and call the endpoint.
       </p>
       <Snippet code={prompt} />
     </div>
@@ -127,14 +193,24 @@ function BuyViaObolAgent({ service }: { service: Service }) {
 }
 
 function BuyViaOtherAgent({ service }: { service: Service }) {
-  const prompt = `I want to purchase a service offered by an Obol Agent at ${service.endpoint} for ${service.price} on ${service.network}. Please install the run-obol-stack skill from https://github.com/ObolNetwork/skills, ask me for permission to set up the obol stack, and use the buy-x402 skill to make the purchase on my behalf.`;
+  const kind = normalizeOfferType(service.type);
+
+  let prompt: string;
+  if (kind === "inference") {
+    const model = service.model || "the advertised model";
+    prompt = `Read https://obol.org/llms.txt to learn how Obol's x402 micropayments work. I want to use the remote LLM at ${service.endpoint} (model ${model}) as a paid OpenAI-compatible chat-completions endpoint. Pre-sign a budget of EIP-3009 or Permit2 authorisations and POST chat-completions bodies with the X-PAYMENT header attached.`;
+  } else if (kind === "agent") {
+    const modelLine = service.model ? ` (running ${service.model})` : "";
+    prompt = `Read https://obol.org/llms.txt to learn how Obol's x402 micropayments work. Help me call the Obol Agent at ${service.endpoint}${modelLine} — it's an autonomous agent (tools + skills + memory), not a raw LLM. POST OpenAI-style chat-completions JSON with a real prompt in \`messages\`, attach a signed EIP-3009 or Permit2 authorisation as \`X-PAYMENT\`, and report what the agent does.`;
+  } else {
+    prompt = `I want to purchase a service offered by an Obol Agent at ${service.endpoint} for ${service.price} on ${service.network}. Please install the run-obol-stack skill from https://github.com/ObolNetwork/skills, ask me for permission to set up the obol stack, and use the buy-x402 skill to make the purchase on my behalf.`;
+  }
+
   return (
     <div className="space-y-2">
       <p className="text-xs text-text-muted">
-        Don&apos;t have an Obol agent yet? Any AI agent can purchase this
-        service after installing the{" "}
-        <code className="font-mono text-obol-green">run-obol-stack</code> skill
-        from{" "}
+        Paste this into Claude, ChatGPT, Gemini, or any AI agent with
+        internet access. The buy-x402 skill from{" "}
         <a
           href="https://github.com/ObolNetwork/skills"
           target="_blank"
@@ -142,9 +218,8 @@ function BuyViaOtherAgent({ service }: { service: Service }) {
           className="text-obol-green hover:underline"
         >
           ObolNetwork/skills
-        </a>
-        . The skill bootstraps the stack and asks for your permission before
-        spending.
+        </a>{" "}
+        bootstraps the stack and asks for your permission before spending.
       </p>
       <Snippet code={prompt} />
     </div>
@@ -152,6 +227,7 @@ function BuyViaOtherAgent({ service }: { service: Service }) {
 }
 
 function BuyWithCode({ service }: { service: Service }) {
+  const kind = normalizeOfferType(service.type);
   return (
     <div className="space-y-4">
       <div>
@@ -177,6 +253,49 @@ function BuyWithCode({ service }: { service: Service }) {
         </h4>
         <LanguageTabs service={service} />
       </div>
+
+      {kind === "agent" && (
+        <div>
+          <h4 className="text-xs font-semibold text-text-light mb-2">
+            3. Send a prompt (OpenAI chat-completions)
+          </h4>
+          <p className="text-xs text-text-muted mb-2">
+            Obol Agents accept OpenAI-style chat-completions bodies. A
+            request like the following will get you an answer:
+          </p>
+          <Snippet
+            code={`POST ${service.endpoint}
+Content-Type: application/json
+X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
+
+{
+${service.model ? `  "model": "${service.model}",\n` : ""}  "messages": [
+    {"role": "user", "content": "<your prompt to this agent goes here>"}
+  ]
+}`}
+          />
+        </div>
+      )}
+
+      {kind === "inference" && (
+        <div>
+          <h4 className="text-xs font-semibold text-text-light mb-2">
+            3. Call it as an OpenAI-compatible endpoint
+          </h4>
+          <p className="text-xs text-text-muted mb-2">
+            Once payment is settled, this endpoint accepts standard
+            chat-completions requests at{" "}
+            <code className="font-mono text-obol-green">
+              {service.endpoint}/v1/chat/completions
+            </code>
+            . The Obol CLI option above also installs it locally as{" "}
+            <code className="font-mono text-obol-green">
+              paid/{service.model || "<model>"}
+            </code>{" "}
+            so existing LiteLLM clients pick it up unchanged.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

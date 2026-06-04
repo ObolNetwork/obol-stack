@@ -417,6 +417,7 @@ func buildPaymentDisplay(rule *RouteRule, chain ChainInfo, asset AssetInfo, payT
 		OfferDescription: rule.Description,
 		AgentModel:       rule.AgentModel,
 		Model:            rule.Model,
+		AgentSkills:      append([]string(nil), rule.AgentSkills...),
 	}
 }
 

@@ -207,28 +207,50 @@ func TestHTMLAware_InferenceShowsCLIPrimaryAndDescription(t *testing.T) {
 	mustContain(t, body, "remote model time")
 }
 
-// Agent offers should explain that the buyer needs a prompt and POST a
-// chat-completions body, not just attach a payment header.
-func TestHTMLAware_AgentShowsChatCompletionsPrimary(t *testing.T) {
+// Agent offers should explain that the buyer is paying an autonomous
+// agent (not a model), surface its skills as pills under the description,
+// and append a chat-completions example next to the raw x402 JSON in the
+// "Pay manually" card rather than a separate primary CTA.
+func TestHTMLAware_AgentShowsChatCompletionsInPayManually(t *testing.T) {
 	d := sampleDisplay()
 	d.OfferType = "agent"
-	d.OfferName = "agent-quant"
+	d.OfferName = "quant"
 	d.Model = "qwen3.5:9b"
+	d.OfferDescription = "A simple example agent that can analyse Ethereum and Base for you"
+	d.AgentSkills = []string{"ethereum-networks", "gas", "addresses"}
 
 	render := NewHTMLAwarePaymentRequired(d)
-	r := httptest.NewRequest("GET", "/services/agent-quant", nil)
+	r := httptest.NewRequest("GET", "/services/quant", nil)
 	r.Header.Set("Accept", "text/html")
 	w := httptest.NewRecorder()
 	render(w, r, []x402types.PaymentRequirements{sampleRequirement()}, nil)
 
 	body := w.Body.String()
-	mustContain(t, body, "Send a prompt (OpenAI chat-completions)")
-	// JSON snippet sits inside <pre>; html/template escapes quotes.
+
+	// Primary "Send a prompt" card is gone — the example body lives in
+	// the Pay-manually card instead, after the raw x402 JSON.
+	if strings.Contains(body, "Send a prompt (OpenAI chat-completions)") {
+		t.Errorf("agent-type 402 page should NOT render a primary 'Send a prompt' card")
+	}
+	mustContain(t, body, "Pay manually (raw HTTP 402)")
+	mustContain(t, body, "Obol Agents accept OpenAI-style chat-completions bodies")
+	// Example chat-completions body (JSON snippet inside <pre>; html/template
+	// escapes the quotes).
 	mustContain(t, body, `&#34;model&#34;: &#34;qwen3.5:9b&#34;`)
 	mustContain(t, body, `&#34;messages&#34;:`)
-	mustContain(t, body, "X-PAYMENT")
-	// Lede frames the offer as an agent (tools/skills/memory), not a model.
-	mustContain(t, body, "tools, skills, and memory")
+
+	// Lede uses the operator-facing copy and links to docs.obol.org.
+	mustContain(t, body, "payment gate for an Obol Agent")
+	mustContain(t, body, "future of agentic commerce")
+	mustContain(t, body, `href="https://docs.obol.org/obol-stack"`)
+
+	// Description renders in the Service card.
+	mustContain(t, body, "A simple example agent that can analyse Ethereum and Base for you")
+
+	// Skills render as pills under the description.
+	mustContain(t, body, `<span class="skill-pill">ethereum-networks</span>`)
+	mustContain(t, body, `<span class="skill-pill">gas</span>`)
+	mustContain(t, body, `<span class="skill-pill">addresses</span>`)
 }
 
 // HTTP offers (the default) keep the existing single-prompt Pay-with-Obol

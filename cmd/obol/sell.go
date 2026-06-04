@@ -1376,7 +1376,7 @@ var demoTypes = map[string]demoSpec{
 	"quant": {
 		Type:         "quant",
 		Price:        "10",
-		Description:  "Agent-backed chain analyst (Agent CRD + ServiceOffer of type=agent)",
+		Description:  "A simple example agent that can analyse Ethereum and Base for you",
 		NeedsERPC:    true,
 		DefaultChain: "ethereum",
 		DefaultToken: "OBOL",

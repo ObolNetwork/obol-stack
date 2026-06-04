@@ -22,5 +22,11 @@ export interface Service {
   // for OBOL on base-sepolia and any non-mainnet OBOL deployment.
   asset?: ServiceAsset;
   description: string;
+  // skills are the OASF / buy-x402 skill names this offer advertises.
+  // For type=agent offers it mirrors AgentResolution.Skills (the
+  // resolved allow-list from the linked Agent CR); for non-agent
+  // offers it mirrors spec.registration.skills. Rendered as pills on
+  // the ServiceCard, matching the 402 page.
+  skills?: string[];
   isDemo: boolean;
 }

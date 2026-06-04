@@ -419,6 +419,16 @@ func runAgentBackedDemo(
 		"metadata": map[string]any{
 			"name":      name,
 			"namespace": offerNs,
+			// Agent-backed demos can't live in the legacy "demo"
+			// namespace today (the controller's confused-deputy guard at
+			// agent_resolver.go forces spec.agent.ref.namespace ==
+			// offer.namespace), so the catalog renderer can't infer
+			// "demo" from offer.namespace alone. The obol.org/demo
+			// label is the explicit signal — keep it set here so quant
+			// and friends show up under "Demo services" on the
+			// storefront. Drop this once we relax the cross-namespace
+			// guard (see plans/openapi-402-followups.md).
+			"labels": map[string]any{"obol.org/demo": "true"},
 		},
 		"spec": specMap,
 	}
