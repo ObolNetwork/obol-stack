@@ -1,0 +1,422 @@
+package serviceoffercontroller
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+
+	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// readyOfferWithSpec returns a ServiceOffer fixture with Ready=True so it
+// passes offerOperationallyReady. identity_render_test.go owns a different
+// `readyOffer` helper with a narrower signature — we keep this separate
+// instead of forcing a refactor of those tests.
+func readyOfferWithSpec(name, namespace string, spec monetizeapi.ServiceOfferSpec) *monetizeapi.ServiceOffer {
+	return &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec:       spec,
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+		},
+	}
+}
+
+// parseOpenAPI decodes the rendered spec into a generic map. We avoid a real
+// OpenAPI validator dependency in unit tests — structural assertions are
+// enough to lock in the contract phase 1 ships.
+func parseOpenAPI(t *testing.T, payload string) map[string]any {
+	t.Helper()
+	var out map[string]any
+	if err := json.Unmarshal([]byte(payload), &out); err != nil {
+		t.Fatalf("openapi document is not valid JSON: %v\n%s", err, payload)
+	}
+	return out
+}
+
+// dig descends through nested maps using dotted keys, returning the leaf
+// value or nil if any segment is missing.
+func dig(t *testing.T, m map[string]any, keys ...string) any {
+	t.Helper()
+	var cur any = m
+	for i, key := range keys {
+		curMap, ok := cur.(map[string]any)
+		if !ok {
+			t.Fatalf("dig: expected map at segment %d (%q), got %T", i, key, cur)
+		}
+		next, ok := curMap[key]
+		if !ok {
+			return nil
+		}
+		cur = next
+	}
+	return cur
+}
+
+func TestBuildOpenAPIDocument_EmptyCluster(t *testing.T) {
+	out := buildOpenAPIDocument(nil, "https://tunnel.example")
+	doc := parseOpenAPI(t, out)
+
+	if got := doc["openapi"]; got != openAPISpecVersion {
+		t.Errorf("openapi version = %v, want %s", got, openAPISpecVersion)
+	}
+
+	paths, _ := doc["paths"].(map[string]any)
+	if len(paths) != 0 {
+		t.Errorf("expected empty paths block, got %d entries: %v", len(paths), paths)
+	}
+
+	servers, _ := doc["servers"].([]any)
+	if len(servers) != 2 {
+		t.Fatalf("servers = %d entries, want tunnel + local", len(servers))
+	}
+	first := servers[0].(map[string]any)
+	if first["url"] != "https://tunnel.example" {
+		t.Errorf("servers[0].url = %v, want tunnel URL first", first["url"])
+	}
+
+	// Components are always emitted even when paths is empty — clients can
+	// still discover the x402 wire format from /openapi.json on a quiet operator.
+	if schemas := dig(t, doc, "components", "schemas"); schemas == nil {
+		t.Error("components.schemas missing on empty-cluster doc")
+	}
+	if sec := dig(t, doc, "components", "securitySchemes", "x402Payment"); sec == nil {
+		t.Error("components.securitySchemes.x402Payment missing")
+	}
+}
+
+func TestBuildOpenAPIDocument_NoTunnelOmitsTunnelServer(t *testing.T) {
+	doc := parseOpenAPI(t, buildOpenAPIDocument(nil, ""))
+	servers, _ := doc["servers"].([]any)
+	if len(servers) != 1 {
+		t.Fatalf("servers = %d entries, want only local fallback", len(servers))
+	}
+	first := servers[0].(map[string]any)
+	if first["url"] != localBaseURL {
+		t.Errorf("servers[0].url = %v, want %s", first["url"], localBaseURL)
+	}
+}
+
+func TestBuildOpenAPIDocument_InferenceOffer(t *testing.T) {
+	offer := readyOfferWithSpec("llama-3", "llm", monetizeapi.ServiceOfferSpec{
+		Type:     "inference",
+		Model:    monetizeapi.ServiceOfferModel{Name: "llama-3-70b", Runtime: "vllm"},
+		Upstream: monetizeapi.ServiceOfferUpstream{Service: "vllm", Port: 8000},
+		Payment: monetizeapi.ServiceOfferPayment{
+			Network: "base",
+			PayTo:   "0x1111111111111111111111111111111111111111",
+			Price:   monetizeapi.ServiceOfferPriceTable{PerMTok: "1.50"},
+		},
+		Registration: monetizeapi.ServiceOfferRegistration{
+			Description: "Llama-3 70B with vLLM",
+			Skills:      []string{"text-generation"},
+			Domains:     []string{"ai/llm"},
+		},
+	})
+
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, "https://tunnel.example"))
+
+	want := "/services/llama-3/v1/chat/completions"
+	op := dig(t, doc, "paths", want, "post")
+	if op == nil {
+		t.Fatalf("expected POST at %s, paths = %v", want, doc["paths"])
+	}
+	opMap := op.(map[string]any)
+
+	// Description carries operator copy.
+	if d := opMap["description"]; d != "Llama-3 70B with vLLM" {
+		t.Errorf("description = %v, want operator-supplied", d)
+	}
+	// Tags include the type + skill + domain (deduplicated).
+	tags, _ := opMap["tags"].([]any)
+	if !containsAny(tags, "inference", "text-generation", "ai/llm") {
+		t.Errorf("tags missing expected entries: %v", tags)
+	}
+	// Request body uses the OpenAI chat completions $ref.
+	body := dig(t, opMap, "requestBody", "content", "application/json", "schema")
+	if r, _ := body.(map[string]any)["$ref"].(string); !strings.HasSuffix(r, "OpenAIChatCompletionsRequest") {
+		t.Errorf("request body schema $ref = %v, want OpenAIChatCompletionsRequest", body)
+	}
+	// 402 is a $ref to the shared response.
+	ref402 := dig(t, opMap, "responses", "402")
+	if r, _ := ref402.(map[string]any)["$ref"].(string); r != "#/components/responses/PaymentRequired" {
+		t.Errorf("402 $ref = %v, want PaymentRequired component", ref402)
+	}
+	// 200 uses the chat-completions response schema.
+	successRef := dig(t, opMap, "responses", "200", "content", "application/json", "schema", "$ref")
+	if s, _ := successRef.(string); !strings.HasSuffix(s, "OpenAIChatCompletionsResponse") {
+		t.Errorf("200 schema $ref = %v, want OpenAIChatCompletionsResponse", successRef)
+	}
+	// x-x402-payment extension carries the payment block (CAIP-2 normalized).
+	xpay, _ := opMap["x-x402-payment"].(map[string]any)
+	if xpay == nil {
+		t.Fatalf("x-x402-payment extension missing")
+	}
+	if xpay["network"] != "eip155:8453" {
+		t.Errorf("network = %v, want CAIP-2 form", xpay["network"])
+	}
+	if xpay["payTo"] != "0x1111111111111111111111111111111111111111" {
+		t.Errorf("payTo = %v, want offer.payTo", xpay["payTo"])
+	}
+	price, _ := xpay["price"].(map[string]any)
+	if price["perMTok"] != "1.50" {
+		t.Errorf("price.perMTok = %v, want 1.50", price["perMTok"])
+	}
+	// Security requirement points at the x402Payment scheme.
+	sec, _ := opMap["security"].([]any)
+	if len(sec) != 1 {
+		t.Fatalf("expected one security requirement, got %v", sec)
+	}
+}
+
+// TestBuildOpenAPIDocument_AgentOfferSameShapeAsInference locks in the
+// user-confirmed decision: agent-type offers ship the OpenAI chat
+// completions endpoint, identical to inference. Renderers don't need
+// special-case agent handling.
+func TestBuildOpenAPIDocument_AgentOfferSameShapeAsInference(t *testing.T) {
+	offer := readyOfferWithSpec("hermes-agent", "hermes-obol-agent", monetizeapi.ServiceOfferSpec{
+		Type: "agent",
+		Payment: monetizeapi.ServiceOfferPayment{
+			Network: "base-sepolia",
+			PayTo:   "0x2222222222222222222222222222222222222222",
+			Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+		},
+	})
+	offer.Status.AgentResolution = &monetizeapi.ServiceOfferAgentResolution{Model: "qwen3.5:9b"}
+
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, ""))
+
+	if op := dig(t, doc, "paths", "/services/hermes-agent/v1/chat/completions", "post"); op == nil {
+		t.Fatalf("agent offer missing /v1/chat/completions endpoint, paths = %v", doc["paths"])
+	}
+	// Summary surfaces the resolved agent model (via status.agentResolution).
+	summary := dig(t, doc, "paths", "/services/hermes-agent/v1/chat/completions", "post", "summary")
+	if s, _ := summary.(string); !strings.Contains(s, "qwen3.5:9b") {
+		t.Errorf("summary = %v, want resolved agent model surfaced", summary)
+	}
+}
+
+func TestBuildOpenAPIDocument_HTTPOffer(t *testing.T) {
+	offer := readyOfferWithSpec("echo", "demo", monetizeapi.ServiceOfferSpec{
+		Type: "http",
+		Path: "/services/echo",
+		Payment: monetizeapi.ServiceOfferPayment{
+			Network: "base",
+			PayTo:   "0x3333333333333333333333333333333333333333",
+			Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.00001"},
+		},
+	})
+
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, ""))
+
+	op := dig(t, doc, "paths", "/services/echo", "post")
+	if op == nil {
+		t.Fatalf("http offer missing POST /services/echo, paths = %v", doc["paths"])
+	}
+	// HTTP offers get a generic JSON body, no $ref into OpenAI components.
+	schema := dig(t, op.(map[string]any), "requestBody", "content", "application/json", "schema")
+	schemaMap, _ := schema.(map[string]any)
+	if _, hasRef := schemaMap["$ref"]; hasRef {
+		t.Errorf("http offer request body should be generic, got $ref: %v", schema)
+	}
+	if schemaMap["type"] != "object" {
+		t.Errorf("http offer schema type = %v, want object", schemaMap["type"])
+	}
+}
+
+func TestBuildOpenAPIDocument_FineTuningOffer(t *testing.T) {
+	offer := readyOfferWithSpec("train", "demo", monetizeapi.ServiceOfferSpec{
+		Type: "fine-tuning",
+		Payment: monetizeapi.ServiceOfferPayment{
+			Network: "base",
+			PayTo:   "0x4444444444444444444444444444444444444444",
+			Price:   monetizeapi.ServiceOfferPriceTable{PerHour: "0.10"},
+		},
+	})
+
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, ""))
+
+	op := dig(t, doc, "paths", "/services/train", "post")
+	if op == nil {
+		t.Fatalf("fine-tuning offer missing POST /services/train, paths = %v", doc["paths"])
+	}
+	// Fine-tuning uses multipart/form-data, not JSON.
+	if mp := dig(t, op.(map[string]any), "requestBody", "content", "multipart/form-data"); mp == nil {
+		t.Errorf("fine-tuning offer missing multipart/form-data body")
+	}
+}
+
+func TestBuildOpenAPIDocument_ExcludesNotReadyAndDrained(t *testing.T) {
+	ready := readyOfferWithSpec("alpha", "demo", monetizeapi.ServiceOfferSpec{
+		Type:    "inference",
+		Payment: monetizeapi.ServiceOfferPayment{Network: "base", PayTo: "0xaa", Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"}},
+	})
+	notReady := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "beta", Namespace: "demo"},
+		Status:     monetizeapi.ServiceOfferStatus{Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "False"}}},
+	}
+
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{ready, notReady}, ""))
+	paths, _ := doc["paths"].(map[string]any)
+	if len(paths) != 1 {
+		t.Fatalf("paths = %d entries, want only the ready offer: %v", len(paths), paths)
+	}
+	if _, ok := paths["/services/alpha/v1/chat/completions"]; !ok {
+		t.Errorf("ready inference offer missing from paths: %v", paths)
+	}
+}
+
+// TestBuildOpenAPIDocument_TunnelURLTrailingSlash mirrors the same
+// safety check buildServiceCatalogJSON has — a stray trailing slash on
+// the configmap value should not produce a `//` in the spec servers[].
+func TestBuildOpenAPIDocument_TunnelURLTrailingSlash(t *testing.T) {
+	doc := parseOpenAPI(t, buildOpenAPIDocument(nil, "https://tunnel.example/"))
+	servers, _ := doc["servers"].([]any)
+	first := servers[0].(map[string]any)
+	if first["url"] != "https://tunnel.example" {
+		t.Errorf("servers[0].url = %v, want trailing-slash-stripped", first["url"])
+	}
+}
+
+// TestBuildOpenAPIDocument_MultipleOffersPathsDistinct ensures two offers
+// rendering at the same shape get distinct paths (the offer's
+// EffectivePath is the namespacing key).
+func TestBuildOpenAPIDocument_MultipleOffersPathsDistinct(t *testing.T) {
+	a := readyOfferWithSpec("a", "llm", monetizeapi.ServiceOfferSpec{
+		Type:    "inference",
+		Model:   monetizeapi.ServiceOfferModel{Name: "m1"},
+		Payment: monetizeapi.ServiceOfferPayment{Network: "base", PayTo: "0xaa", Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"}},
+	})
+	b := readyOfferWithSpec("b", "llm", monetizeapi.ServiceOfferSpec{
+		Type:    "inference",
+		Model:   monetizeapi.ServiceOfferModel{Name: "m2"},
+		Payment: monetizeapi.ServiceOfferPayment{Network: "base", PayTo: "0xbb", Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"}},
+	})
+
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{a, b}, ""))
+	paths, _ := doc["paths"].(map[string]any)
+	if _, ok := paths["/services/a/v1/chat/completions"]; !ok {
+		t.Errorf("offer a missing")
+	}
+	if _, ok := paths["/services/b/v1/chat/completions"]; !ok {
+		t.Errorf("offer b missing")
+	}
+}
+
+// TestBuildOpenAPIDocument_AggregateTags pins the union behavior — every
+// skill/domain across every offer becomes a top-level tag entry.
+func TestBuildOpenAPIDocument_AggregateTags(t *testing.T) {
+	a := readyOfferWithSpec("a", "llm", monetizeapi.ServiceOfferSpec{
+		Type:    "inference",
+		Payment: monetizeapi.ServiceOfferPayment{Network: "base", PayTo: "0xaa", Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"}},
+		Registration: monetizeapi.ServiceOfferRegistration{
+			Skills:  []string{"text-generation"},
+			Domains: []string{"ai/llm"},
+		},
+	})
+	b := readyOfferWithSpec("b", "llm", monetizeapi.ServiceOfferSpec{
+		Type:    "inference",
+		Payment: monetizeapi.ServiceOfferPayment{Network: "base", PayTo: "0xbb", Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"}},
+		Registration: monetizeapi.ServiceOfferRegistration{
+			Skills:  []string{"text-generation", "embeddings"},
+			Domains: []string{"ai/llm"},
+		},
+	})
+
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{a, b}, ""))
+	tags, _ := doc["tags"].([]any)
+	names := map[string]struct{}{}
+	for _, t := range tags {
+		tm, _ := t.(map[string]any)
+		if n, ok := tm["name"].(string); ok {
+			names[n] = struct{}{}
+		}
+	}
+	for _, want := range []string{"text-generation", "embeddings", "ai/llm"} {
+		if _, ok := names[want]; !ok {
+			t.Errorf("aggregate tags missing %q: %v", want, names)
+		}
+	}
+}
+
+// TestBuildOpenAPIHTTPRoute and TestBuildAPIDocsHTTPRoute pin the path
+// matchers — they are the contract Traefik resolves on, and the routes
+// must remain unrestricted (no hostnames filter) so they reach the public
+// tunnel as well as obol.stack:8080.
+func TestBuildOpenAPIHTTPRoute(t *testing.T) {
+	route := buildOpenAPIHTTPRoute()
+	if route.GetName() != openAPIRouteName {
+		t.Fatalf("name = %q, want %q", route.GetName(), openAPIRouteName)
+	}
+	spec, _ := route.Object["spec"].(map[string]any)
+	if _, hasHostnames := spec["hostnames"]; hasHostnames {
+		t.Error("openapi route must not have hostnames filter (tunnel-reachable by design)")
+	}
+	rules, _ := spec["rules"].([]any)
+	rule := rules[0].(map[string]any)
+	matches, _ := rule["matches"].([]any)
+	if got := matches[0].(map[string]any)["path"].(map[string]any)["value"]; got != "/openapi.json" {
+		t.Errorf("match path = %v, want /openapi.json", got)
+	}
+}
+
+func TestBuildAPIDocsHTTPRoute(t *testing.T) {
+	route := buildAPIDocsHTTPRoute()
+	if route.GetName() != apiDocsRouteName {
+		t.Fatalf("name = %q, want %q", route.GetName(), apiDocsRouteName)
+	}
+	spec, _ := route.Object["spec"].(map[string]any)
+	if _, hasHostnames := spec["hostnames"]; hasHostnames {
+		t.Error("api docs route must not have hostnames filter")
+	}
+	rules, _ := spec["rules"].([]any)
+	rule := rules[0].(map[string]any)
+	matches, _ := rule["matches"].([]any)
+	gotPaths := map[string]struct{}{}
+	for _, m := range matches {
+		path := m.(map[string]any)["path"].(map[string]any)
+		gotPaths[path["value"].(string)] = struct{}{}
+	}
+	for _, want := range []string{"/api", "/api/"} {
+		if _, ok := gotPaths[want]; !ok {
+			t.Errorf("api docs route missing %q match, got %v", want, gotPaths)
+		}
+	}
+}
+
+// TestScalarHTMLShell asserts the OG/theme contract: brand color, OG
+// metadata, and that the spec URL is pointed at the sibling /openapi.json.
+func TestScalarHTMLShell(t *testing.T) {
+	html := scalarHTML()
+
+	for _, want := range []string{
+		`<script id="api-reference" data-url="/openapi.json">`,
+		`#2FE4AB`,
+		`#091011`,
+		`property="og:title"`,
+		`property="og:image"`,
+		`name="twitter:card"`,
+		`name="theme-color"`,
+		"@scalar/api-reference@" + scalarBundleVersion,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("scalar HTML missing %q", want)
+		}
+	}
+}
+
+func containsAny(slice []any, wants ...string) bool {
+	got := map[string]struct{}{}
+	for _, item := range slice {
+		if s, ok := item.(string); ok {
+			got[s] = struct{}{}
+		}
+	}
+	for _, w := range wants {
+		if _, ok := got[w]; !ok {
+			return false
+		}
+	}
+	return true
+}
