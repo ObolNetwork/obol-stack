@@ -1698,7 +1698,7 @@ def cmd_balance(chain=None):
 # Pay (single-shot HTTP/x402 purchase)
 # ---------------------------------------------------------------------------
 
-def cmd_pay(url, method="GET", data=None, kind="http", network=None):
+def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=None):
     """Single-shot paid HTTP request: probe → pre-sign one auth → send with X-PAYMENT.
 
     Stateless. Does not create a PurchaseRequest, does not touch the buyer
@@ -1708,7 +1708,17 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None):
 
     `network` is an optional safety guard: when set, the seller's advertised
     chain must match it or `pay` aborts before signing.
+
+    `timeout` is the seconds to wait for the seller's response. Defaults to
+    ~100s (Cloudflare's free-tier tunnel cap — longer requests are killed by
+    the edge before our client sees a response anyway). Override for slower
+    inference (reasoning models, large batches) up to the seller's own
+    upstream/edge limit.
     """
+    if timeout is None or float(timeout) <= 0:
+        timeout = 100.0
+    else:
+        timeout = float(timeout)
     method = (method or "GET").upper()
 
     print(f"Probing {url} ...")
@@ -1807,7 +1817,7 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None):
     print(f"Sending paid {method} {target_url} ...")
     req = urllib.request.Request(target_url, data=request_data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=60) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read().decode(errors="replace")
             print(f"HTTP {resp.status}")
             settle = resp.headers.get("X-PAYMENT-RESPONSE")
@@ -1949,7 +1959,7 @@ def usage():
     print("Commands:")
     print("  probe <endpoint-url> [--model <id>] [--type http|inference] [--method GET|POST]")
     print("                                               Probe x402 pricing (default --type inference)")
-    print("  pay <url> [--type http|inference] [--method GET|POST] [--data '<body>'] [--network <name>]")
+    print("  pay <url> [--type http|inference] [--method GET|POST] [--data '<body>'] [--network <name>] [--timeout <seconds>]")
     print("                                               Single-shot paid request (sign 1 auth, attach X-PAYMENT)")
     print("                                               --network is a guard: aborts if seller is on a different chain")
     print("  buy <name> --endpoint <url> --model <id>     Pre-sign + configure paid/<model>")
@@ -1988,18 +1998,26 @@ if __name__ == "__main__":
     elif cmd == "pay":
         positional, opts = parse_flags(rest)
         if not positional:
-            print("Usage: pay <url> [--type http|inference] [--method GET|POST] [--data '<body>'] [--network <name>]", file=sys.stderr)
+            print("Usage: pay <url> [--type http|inference] [--method GET|POST] [--data '<body>'] [--network <name>] [--timeout <seconds>]", file=sys.stderr)
             sys.exit(1)
         kind = opts.get("type", "http")
         if kind not in ("http", "inference"):
             print(f"Error: --type must be 'http' or 'inference', got '{kind}'", file=sys.stderr)
             sys.exit(1)
+        timeout = opts.get("timeout")
+        if timeout is not None:
+            try:
+                timeout = float(timeout)
+            except ValueError:
+                print(f"Error: --timeout must be a number of seconds, got '{timeout}'", file=sys.stderr)
+                sys.exit(1)
         cmd_pay(
             positional[0],
             method=opts.get("method", "GET"),
             data=opts.get("data"),
             kind=kind,
             network=opts.get("network"),
+            timeout=timeout,
         )
 
     elif cmd == "buy":

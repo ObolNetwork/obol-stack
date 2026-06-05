@@ -195,8 +195,9 @@ Examples:
 				Usage: "Agent name for ERC-8004 registration (defaults to the offer name)",
 			},
 			&cli.StringFlag{
-				Name:  "register-description",
-				Usage: "Agent description for ERC-8004 registration",
+				Name:    "description",
+				Aliases: []string{"register-description"},
+				Usage:   "Human-readable description of the service. Surfaced on the 402 payment page, in the storefront catalog, and (when registration is enabled) on the ERC-8004 registration document.",
 			},
 			&cli.StringFlag{
 				Name:  "register-image",
@@ -296,6 +297,18 @@ Examples:
 			if modelFlag == "" {
 				return fmt.Errorf("--model is required (or run interactively to auto-detect)")
 			}
+			// LiteLLM's `paid/*` wildcard route doesn't match model names
+			// containing `/` — buyers signing against this seller would see
+			// requests fall through to the buyer sidecar with a 404 (see
+			// CLAUDE.md and the obol-agent's recent buy report). Reject
+			// up-front and suggest a `--` separator that survives the route.
+			if strings.Contains(modelFlag, "/") {
+				return fmt.Errorf(
+					"--model %q contains '/', which breaks LiteLLM's `paid/*` wildcard on the buyer side; "+
+						"use `--` (or another non-slash separator) — e.g. `%s` instead of `%s`",
+					modelFlag, strings.ReplaceAll(modelFlag, "/", "--"), modelFlag,
+				)
+			}
 
 			teeType := cmd.String("tee")
 			modelHash := cmd.String("model-hash")
@@ -345,7 +358,7 @@ Examples:
 			persistedRegistration, _, regErr := buildSellRegistrationConfig(name, sellRegistrationInput{
 				NoRegister:    cmd.Bool("no-register"),
 				Name:          cmd.String("register-name"),
-				Description:   cmd.String("register-description"),
+				Description:   cmd.String("description"),
 				Image:         cmd.String("register-image"),
 				Skills:        cmd.StringSlice("register-skills"),
 				Domains:       cmd.StringSlice("register-domains"),
@@ -601,8 +614,9 @@ Examples:
 				Usage: "Agent name for ERC-8004 registration",
 			},
 			&cli.StringFlag{
-				Name:  "register-description",
-				Usage: "Agent description for ERC-8004 registration",
+				Name:    "description",
+				Aliases: []string{"register-description"},
+				Usage:   "Human-readable description of the service. Surfaced on the 402 payment page, in the storefront catalog, and (when registration is enabled) on the ERC-8004 registration document.",
 			},
 			&cli.StringFlag{
 				Name:  "register-image",
@@ -799,7 +813,7 @@ Examples:
 				NoRegister:    cmd.Bool("no-register"),
 				Register:      cmd.Bool("register"),
 				Name:          cmd.String("register-name"),
-				Description:   cmd.String("register-description"),
+				Description:   cmd.String("description"),
 				Image:         cmd.String("register-image"),
 				Skills:        cmd.StringSlice("register-skills"),
 				Domains:       cmd.StringSlice("register-domains"),
@@ -1362,7 +1376,7 @@ var demoTypes = map[string]demoSpec{
 	"quant": {
 		Type:         "quant",
 		Price:        "10",
-		Description:  "Agent-backed chain analyst (Agent CRD + ServiceOffer of type=agent)",
+		Description:  "A simple example agent that can analyse Ethereum and Base for you",
 		NeedsERPC:    true,
 		DefaultChain: "ethereum",
 		DefaultToken: "OBOL",
@@ -3861,7 +3875,7 @@ func buildResumeGatewayArgs(d *inference.Deployment) []string {
 			args = append(args, "--register-name", v)
 		}
 		if v, _ := d.Registration["description"].(string); v != "" {
-			args = append(args, "--register-description", v)
+			args = append(args, "--description", v)
 		}
 		if v, _ := d.Registration["image"].(string); v != "" {
 			args = append(args, "--register-image", v)

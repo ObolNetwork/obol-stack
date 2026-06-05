@@ -75,8 +75,9 @@ Examples:
 				Usage: "Agent name for ERC-8004 registration (defaults to the offer name)",
 			},
 			&cli.StringFlag{
-				Name:  "register-description",
-				Usage: "Agent description for ERC-8004 registration (defaults to the agent's objective)",
+				Name:    "description",
+				Aliases: []string{"register-description"},
+				Usage:   "Human-readable description of the service. Surfaced on the 402 payment page, in the storefront catalog, and (when registration is enabled) on the ERC-8004 registration document. Defaults to the agent's objective.",
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -173,7 +174,7 @@ Examples:
 			if regName == "" {
 				regName = name
 			}
-			regDesc := strings.TrimSpace(cmd.String("register-description"))
+			regDesc := strings.TrimSpace(cmd.String("description"))
 			if regDesc == "" {
 				regDesc = agent.Objective
 			}
@@ -418,6 +419,16 @@ func runAgentBackedDemo(
 		"metadata": map[string]any{
 			"name":      name,
 			"namespace": offerNs,
+			// Agent-backed demos can't live in the legacy "demo"
+			// namespace today (the controller's confused-deputy guard at
+			// agent_resolver.go forces spec.agent.ref.namespace ==
+			// offer.namespace), so the catalog renderer can't infer
+			// "demo" from offer.namespace alone. The obol.org/demo
+			// label is the explicit signal — keep it set here so quant
+			// and friends show up under "Demo services" on the
+			// storefront. Drop this once we relax the cross-namespace
+			// guard (see plans/openapi-402-followups.md).
+			"labels": map[string]any{"obol.org/demo": "true"},
 		},
 		"spec": specMap,
 	}

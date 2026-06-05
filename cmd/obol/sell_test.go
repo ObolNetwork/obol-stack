@@ -1396,7 +1396,7 @@ func TestBuildResumeGatewayArgs(t *testing.T) {
 				"--per-mtok", "23",
 				"--facilitator", "https://x402.gcp.obol.tech",
 				"--register-name", "Qwen3.6-27B AEON Ultimate",
-				"--register-description", "Uncensored Qwen3.6-27B abliteration",
+				"--description", "Uncensored Qwen3.6-27B abliteration",
 				"--register-skills", "llm/inference",
 				"--register-skills", "llm/uncensored",
 				"--register-domains", "inference.v1337.org",
@@ -1419,7 +1419,7 @@ func TestBuildResumeGatewayArgs(t *testing.T) {
 			},
 			wantNoSub: []string{
 				"--register-name",
-				"--register-description",
+				"--description",
 			},
 		},
 		{

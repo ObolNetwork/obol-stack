@@ -107,6 +107,22 @@
         word-break: break-word;
       }
       .prompt + .prompt { margin-top: 12px; }
+      .skill-pills { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+      .skill-pill {
+        display: inline-block;
+        background: var(--bg03);
+        border: 1px solid var(--stroke);
+        color: var(--body);
+        font: 500 12px/1 "DM Sans", system-ui, sans-serif;
+        padding: 4px 10px;
+        border-radius: 999px;
+      }
+      .chat-completions {
+        margin-top: 16px;
+        padding-top: 14px;
+        border-top: 1px dashed var(--stroke);
+      }
+      .chat-completions p { margin: 0 0 10px; color: var(--body); font-size: 14px; }
       pre.json {
         margin: 0;
         background: var(--bg01);
@@ -151,10 +167,12 @@
       </header>
 
       <h1>Payment required</h1>
-      <p class="lede">This Obol Agent service requires a payment to access.</p>
+      <p class="lede">{{.Lede}}</p>
 
       <div class="card">
         <h2>Service</h2>
+        {{if .OfferDescription}}<p class="lede" style="margin-bottom:14px">{{.OfferDescription}}</p>{{end}}
+        {{if .Skills}}<div class="skill-pills" aria-label="Agent skills">{{range .Skills}}<span class="skill-pill">{{.}}</span>{{end}}</div>{{end}}
         <dl class="grid">
           <dt>Endpoint</dt><dd>{{.Endpoint}}</dd>
           <dt>Network</dt><dd>{{.NetworkLabel}}</dd>
@@ -175,6 +193,21 @@
           </dd>
         </dl>
       </div>
+
+      {{if .ShowPrimary}}
+      <div class="card">
+        <h2>{{.PrimaryTitle}}</h2>
+        <p class="lede" style="margin-bottom:12px">{{.PrimaryLede}}</p>
+        <div class="copy-wrap">
+          {{if .PrimaryIsCode}}
+          <pre class="json" id="p-primary">{{.PrimaryPayload}}</pre>
+          {{else}}
+          <div class="prompt" id="p-primary">{{.PrimaryPayload}}</div>
+          {{end}}
+          <button class="copy" data-target="p-primary" type="button">Copy</button>
+        </div>
+      </div>
+      {{end}}
 
       <div class="card">
         <h2>Pay with your Obol Agent</h2>
@@ -201,6 +234,15 @@
           <pre class="json" id="p-json">{{.JSONBody}}</pre>
           <button class="copy" data-target="p-json" type="button">Copy JSON</button>
         </div>
+        {{if .ChatCompletionsBody}}
+        <div class="chat-completions">
+          {{if .ChatCompletionsNote}}<p>{{.ChatCompletionsNote}}</p>{{end}}
+          <div class="copy-wrap">
+            <pre class="json" id="p-chat">{{.ChatCompletionsBody}}</pre>
+            <button class="copy" data-target="p-chat" type="button">Copy</button>
+          </div>
+        </div>
+        {{end}}
       </div>
 
       <footer>

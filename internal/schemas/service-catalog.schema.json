@@ -147,6 +147,14 @@
           "type": "string",
           "minLength": 1
         },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "OASF skills or buy-x402 skills the agent advertises. For type=agent offers this mirrors the resolved Agent.spec.skills allow-list; for non-agent offers it mirrors spec.registration.skills."
+        },
         "isDemo": {
           "type": "boolean"
         },

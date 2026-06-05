@@ -403,15 +403,21 @@ func mergeAgentExtras(req *x402types.PaymentRequirements, rule *RouteRule) {
 // (1 OBOL → 0.000000000000000001 OBOL).
 func buildPaymentDisplay(rule *RouteRule, chain ChainInfo, asset AssetInfo, payTo, atomicAmount string) PaymentDisplay {
 	return PaymentDisplay{
-		Endpoint:     rule.Pattern,
-		Network:      chain.Name,
-		NetworkLabel: humanizeNetwork(chain.Name),
-		AssetSymbol:  asset.Symbol,
-		AssetAddress: asset.Address,
-		PriceDisplay: FormatPriceDisplay(atomicAmount, asset.Decimals, asset.Symbol),
-		PriceAtomic:  atomicAmount,
-		PayToFull:    payTo,
-		ExplorerURL:  explorerAddressURL(chain.Name, payTo),
+		Endpoint:         rule.Pattern,
+		Network:          chain.Name,
+		NetworkLabel:     humanizeNetwork(chain.Name),
+		AssetSymbol:      asset.Symbol,
+		AssetAddress:     asset.Address,
+		PriceDisplay:     FormatPriceDisplay(atomicAmount, asset.Decimals, asset.Symbol),
+		PriceAtomic:      atomicAmount,
+		PayToFull:        payTo,
+		ExplorerURL:      explorerAddressURL(chain.Name, payTo),
+		OfferType:        rule.OfferType,
+		OfferName:        rule.OfferName,
+		OfferDescription: rule.Description,
+		AgentModel:       rule.AgentModel,
+		Model:            rule.Model,
+		AgentSkills:      append([]string(nil), rule.AgentSkills...),
 	}
 }
 

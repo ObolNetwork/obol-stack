@@ -30,7 +30,13 @@ type ServiceCatalogEntry struct {
 	ChainID          int64                `json:"chainId,omitempty"`
 	Asset            *ServiceCatalogAsset `json:"asset,omitempty"`
 	Description      string               `json:"description"`
-	IsDemo           bool                 `json:"isDemo"`
+	// Skills are the OASF / buy-x402 skill names this offer advertises.
+	// For type=agent offers it mirrors AgentResolution.Skills (the
+	// resolved allow-list from the linked Agent CR); for non-agent
+	// offers it mirrors spec.registration.skills. Surfaced as pills on
+	// the storefront ServiceCard.
+	Skills []string `json:"skills,omitempty"`
+	IsDemo bool     `json:"isDemo"`
 
 	// RegistrationPending is true when the offer is operationally ready
 	// (route published, payment gate active, upstream healthy) but its

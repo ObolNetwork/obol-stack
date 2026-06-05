@@ -71,6 +71,18 @@ This is one tx, ~46k gas, valid forever (unless the user later revokes). EIP-300
   storefront publishes machine-readable metadata at
   `<base>/api/services.json` with full asset, EIP-712 signing domain,
   transfer method, and atomic-unit price for every offered service.
+- **`pay` timeout defaults to ~100 s.** This is the Cloudflare free-tier
+  tunnel cap — longer requests get killed by the edge before our client
+  ever sees a response. Reasoning models, long generations, or large
+  batches need `--timeout <seconds>` set explicitly, and the seller's own
+  upstream/edge limit still applies.
+- **Avoid `/` in remote model identifiers.** LiteLLM's `paid/*` wildcard
+  route only matches a single segment; a remote `vendor/model` would
+  resolve to `paid/vendor/model` and miss the wildcard, so the request
+  falls through to the buyer sidecar and 404s. Sellers should use a non-
+  slash separator (e.g. `vendor--model`); buyers signing against a
+  legacy slashed name need the controller to insert an explicit LiteLLM
+  entry for the alias (`addLiteLLMModelEntry`).
 
 ## When to Use
 
