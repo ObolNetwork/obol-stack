@@ -6,14 +6,18 @@ package serviceoffercontroller
 const scalarBundleVersion = "1.34.0"
 
 // scalarBundleSRI is the Subresource Integrity hash for the pinned bundle.
-// Left empty in phase 1 — the bundle still loads, browsers just skip the
-// integrity check. Populate by running:
+// The /api page is served over the public tunnel, so the third-party Scalar
+// JS it pulls from jsdelivr must be integrity-checked: without this the
+// browser executes whatever the CDN returns, unverified. Re-derive on every
+// version bump (Renovate touches scalarBundleVersion above) by running:
 //
 //	curl -sL https://cdn.jsdelivr.net/npm/@scalar/api-reference@<version> \
 //	  | openssl dgst -sha384 -binary | base64
 //
-// and prefixing the result with `sha384-`. Re-derive on every version bump.
-const scalarBundleSRI = ""
+// and prefixing the result with `sha384-`. The hash is taken over the exact
+// (jsdelivr-minified) bytes that the pinned URL serves; it must be refreshed
+// in lockstep with scalarBundleVersion or the browser will block the script.
+const scalarBundleSRI = "sha384-tNJHhVh8smfB4VJcBxQf3Q0Soj15UqqyVJ6Q6OTwqGVEyxy57gfDLo7DGcSclH7I"
 
 // scalarHTML returns the static HTML shell served at /api. It loads the
 // pinned @scalar/api-reference bundle from jsdelivr, points it at the
