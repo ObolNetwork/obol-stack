@@ -18,7 +18,7 @@ Commands:
     buy <name> --endpoint <url> --model <id>      Pre-sign + author PurchaseRequest
         [--budget <micro-units>] [--count <N>]
         [--auto-refill[=true|false]] [--refill-threshold <N>]
-        [--refill-count <N>]
+        [--refill-count <N>] [--set-default]
     list                                          List purchased providers + remaining auths
     status <name>                                 Check sidecar health + remaining auths
     process <name>|--all                          Reconcile auto-refill policies
@@ -32,6 +32,8 @@ import base64
 import json
 import os
 import secrets
+import shutil
+import subprocess
 import sys
 import time
 import urllib.error
@@ -1527,6 +1529,160 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
     print(f"The model is now available as: paid/{model_id}")
     print("Use 'process --all' from a heartbeat/cron loop to reconcile auto-refill policies.")
 
+    if ready and opts.get("set_default"):
+        print()
+        _set_agent_default_model(model_id, auto_refill)
+
+
+# ---------------------------------------------------------------------------
+# Set-default: adopt a freshly-bought paid/<model> as the agent's primary model
+# ---------------------------------------------------------------------------
+
+HERMES_CONFIG_PATH = "/data/.hermes/config.yaml"
+HERMES_BIN_CANDIDATES = ("/opt/hermes/.venv/bin/hermes",)
+
+
+def _find_hermes_bin():
+    """Locate the in-pod Hermes binary, or None."""
+    for cand in HERMES_BIN_CANDIDATES:
+        if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            return cand
+    return shutil.which("hermes")
+
+
+def _read_hermes_model_cfg():
+    """Return (base_url, api_key) from the Hermes config, or (None, None)."""
+    try:
+        import yaml  # PyYAML ships in the agent runtime
+
+        with open(HERMES_CONFIG_PATH) as f:
+            data = yaml.safe_load(f) or {}
+        model = data.get("model") or {}
+        return model.get("base_url"), model.get("api_key")
+    except Exception:
+        return None, None
+
+
+def _litellm_has_model(alias):
+    """Best-effort check that `alias` is published in LiteLLM /v1/models.
+
+    Returns True if confirmed present OR if the check could not run (the
+    PurchaseRequest already reconciled Ready, which implies publication).
+    Returns False only when LiteLLM answered and the alias is absent.
+    """
+    base_url, api_key = _read_hermes_model_cfg()
+    if not base_url:
+        return True  # cannot verify; rely on PurchaseRequest Ready
+    url = base_url.rstrip("/") + "/models"
+    try:
+        req = urllib.request.Request(
+            url, headers={"Authorization": "Bearer " + (api_key or "")}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            payload = json.loads(resp.read().decode())
+        ids = {m.get("id") for m in payload.get("data", [])}
+        if alias in ids:
+            return True
+        print(f"  LiteLLM /v1/models does not list {alias!r}.", file=sys.stderr)
+        return False
+    except Exception as exc:
+        print(
+            f"  (could not query LiteLLM /v1/models: {exc}; "
+            f"relying on PurchaseRequest Ready)",
+            file=sys.stderr,
+        )
+        return True
+
+
+def _set_default_via_yaml(alias):
+    """Fallback writer: set model.default in the Hermes config, preserving siblings."""
+    try:
+        import yaml
+
+        with open(HERMES_CONFIG_PATH) as f:
+            data = yaml.safe_load(f) or {}
+        model = data.setdefault("model", {})
+        model["default"] = alias
+        tmp = HERMES_CONFIG_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            yaml.safe_dump(data, f, default_flow_style=False, sort_keys=True)
+        os.replace(tmp, HERMES_CONFIG_PATH)
+        print(
+            f"  Agent default model set to {alias!r} via config edit "
+            f"(effective next chat turn)."
+        )
+        return True
+    except Exception as exc:
+        print(f"  Failed to set agent default model via config edit: {exc}", file=sys.stderr)
+        return False
+
+
+def _set_agent_default_model(model_id, auto_refill):
+    """Adopt paid/<model_id> as the Hermes primary model, in-pod, no restart.
+
+    Prefers the native `hermes config set` writer (atomic write + per-request
+    re-read => no restart); falls back to a direct YAML edit. Refuses if the
+    model is not actually selectable in LiteLLM.
+    """
+    alias = f"paid/{model_id}"
+    if not os.path.isfile(HERMES_CONFIG_PATH):
+        print(
+            f"  --set-default skipped: {HERMES_CONFIG_PATH} not found "
+            f"(only the Hermes runtime is supported).",
+            file=sys.stderr,
+        )
+        return False
+    # Safety: a paid primary model bricks chat once the pre-signed pool empties.
+    if not (auto_refill and auto_refill.get("enabled")):
+        print(
+            "  WARNING: --set-default without --auto-refill. Once this is your primary",
+            file=sys.stderr,
+        )
+        print(
+            "           model, every chat turn fails when the pre-signed pool empties.",
+            file=sys.stderr,
+        )
+        print(
+            "           Re-run with --auto-refill, or run 'process --all' on a schedule.",
+            file=sys.stderr,
+        )
+    # Existence guard: never point the agent at an unpublished model.
+    if not _litellm_has_model(alias):
+        print(
+            f"  Refusing --set-default: {alias!r} is not selectable in LiteLLM; "
+            f"leaving the agent default unchanged.",
+            file=sys.stderr,
+        )
+        return False
+    # Primary path: native Hermes writer (atomic; per-request re-read, no restart).
+    hermes_bin = _find_hermes_bin()
+    if hermes_bin:
+        try:
+            res = subprocess.run(
+                [hermes_bin, "config", "set", "model.default", alias],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if res.returncode == 0:
+                print(
+                    f"  Agent default model set to {alias!r} "
+                    f"(effective next chat turn; no restart)."
+                )
+                return True
+            detail = (res.stderr or res.stdout or "").strip()
+            print(
+                f"  'hermes config set' failed (rc={res.returncode}): {detail}; "
+                f"falling back to config edit.",
+                file=sys.stderr,
+            )
+        except Exception as exc:
+            print(
+                f"  'hermes config set' error: {exc}; falling back to config edit.",
+                file=sys.stderr,
+            )
+    return _set_default_via_yaml(alias)
+
 
 # ---------------------------------------------------------------------------
 # Refill
@@ -1965,7 +2121,8 @@ def usage():
     print("  buy <name> --endpoint <url> --model <id>     Pre-sign + configure paid/<model>")
     print("       [--budget <micro-units>] [--count <N>]")
     print("       [--auto-refill[=true|false]] [--refill-threshold <N>]")
-    print("       [--refill-count <N>]")
+    print("       [--refill-count <N>] [--set-default]")
+    print("       --set-default  inference only: adopt paid/<model> as the agent's primary model")
     print("  list                                         List purchased providers")
     print("  status <name>                                Check sidecar + auths")
     print("  process <name> | --all                       Reconcile auto-refill policies")
