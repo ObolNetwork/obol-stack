@@ -13,6 +13,8 @@ Purchase access to remote x402-gated services. There are two flows, picked by us
 
 Both flows auto-detect the token + transfer method from the seller's 402 response. Currently supported: **USDC via EIP-3009** (Base Sepolia, Base Mainnet, Ethereum Mainnet) and **OBOL via Permit2** (Ethereum Mainnet).
 
+**Auth expiry (`OBOL_X402_AUTH_TTL` / `--auth-ttl`).** A pre-signed pool is spent over time, so each auth carries a *spendability* deadline — distinct from the per-request settle window (`maxTimeoutSeconds`). One knob controls **both** payment methods (Permit2 `deadline` and ERC-3009 `validBefore`): default **30 days (1 month)**; pass a number of seconds (floored at 300s = one settle window); or pass **`never`** (also `0`/`none`) for a non-expiring pool (mapped to the uint sentinel `4294967295`, ~year 2106, which both contracts accept). Set per-buy with `--auth-ttl <seconds|never>` or globally via the `OBOL_X402_AUTH_TTL` env. A too-short value silently expires the pool minutes after buy.
+
 Chain names follow the eRPC project aliases: `mainnet`, `base`, `base-sepolia`. CAIP-2 strings (`eip155:1`, `eip155:8453`, `eip155:84532`) and the alias `ethereum` are accepted on input and normalized internally. Unknown chains fail loudly with the supported list — buy.py will not silently sign against base-sepolia when the seller is on mainnet.
 
 ## Gasless Payments
