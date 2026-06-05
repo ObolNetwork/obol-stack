@@ -1632,6 +1632,16 @@ def _set_agent_default_model(model_id, auto_refill):
             file=sys.stderr,
         )
         return False
+    # Existence guard first: if we're going to refuse anyway, don't emit the
+    # auto-refill warning below — it describes a primary-model failure mode
+    # that can't happen when the default was never switched.
+    if not _litellm_has_model(alias):
+        print(
+            f"  Refusing --set-default: {alias!r} is not selectable in LiteLLM; "
+            f"leaving the agent default unchanged.",
+            file=sys.stderr,
+        )
+        return False
     # Safety: a paid primary model bricks chat once the pre-signed pool empties.
     if not (auto_refill and auto_refill.get("enabled")):
         print(
@@ -1646,14 +1656,6 @@ def _set_agent_default_model(model_id, auto_refill):
             "           Re-run with --auto-refill, or run 'process --all' on a schedule.",
             file=sys.stderr,
         )
-    # Existence guard: never point the agent at an unpublished model.
-    if not _litellm_has_model(alias):
-        print(
-            f"  Refusing --set-default: {alias!r} is not selectable in LiteLLM; "
-            f"leaving the agent default unchanged.",
-            file=sys.stderr,
-        )
-        return False
     # Primary path: native Hermes writer (atomic; per-request re-read, no restart).
     hermes_bin = _find_hermes_bin()
     if hermes_bin:

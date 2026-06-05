@@ -173,7 +173,7 @@ func TestHTMLAware_DegradeWithoutDisplay(t *testing.T) {
 	}
 	body := w.Body.String()
 	mustContain(t, body, "Payment required")
-	mustContain(t, body, "/anything") // endpoint falls back to URL.Path
+	mustContain(t, body, "/anything")           // endpoint falls back to URL.Path
 	mustContain(t, body, "1000 (atomic units)") // price falls back to atomic units
 }
 
@@ -366,4 +366,56 @@ func mustContain(t *testing.T, haystack, needle string) {
 	if !strings.Contains(haystack, needle) {
 		t.Errorf("body does not contain %q", needle)
 	}
+}
+
+// sanitizeDisplayToken must pass real model ids / offer names through
+// untouched while collapsing anything carrying shell metacharacters to the
+// placeholder — the values land in copy-pasteable commands on the public
+// 402 page.
+func TestSanitizeDisplayToken(t *testing.T) {
+	const ph = "<model-id>"
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"qwen3.5:9b", "qwen3.5:9b"},
+		{"AEON-7", "AEON-7"},
+		{"anthropic/claude-3-5-sonnet-latest", "anthropic/claude-3-5-sonnet-latest"},
+		{"gpt-5.4", "gpt-5.4"},
+		{"  qwen3.5:9b  ", "qwen3.5:9b"}, // trimmed
+		{"", ph},
+		{"   ", ph},
+		{"x; rm -rf ~", ph},
+		{"$(whoami)", ph},
+		{"a`id`b", ph},
+		{"a && b", ph},
+		{"a|b", ph},
+		{"a$b", ph},
+		{"a\nb", ph},
+		{`a"b`, ph},
+	}
+	for _, c := range cases {
+		if got := sanitizeDisplayToken(c.in, ph); got != c.want {
+			t.Errorf("sanitizeDisplayToken(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// A hostile ServiceOffer must never get its raw spec.model.name /
+// metadata.name reflected into the rendered copy-paste command.
+func TestInferenceCopy_StripsShellMetacharsFromCommand(t *testing.T) {
+	d := PaymentDisplay{
+		OfferType: "inference",
+		Model:     "x; rm -rf ~",
+		OfferName: "a && curl evil",
+	}
+	c := inferenceCopy("https://agent.example.tunnel.dev/services/x", d)
+	for _, bad := range []string{"rm -rf", "&&", "curl evil", ";"} {
+		if strings.Contains(c.PrimaryPayload, bad) {
+			t.Fatalf("hostile token leaked into command payload %q (contains %q)", c.PrimaryPayload, bad)
+		}
+	}
+	// Falls back to the safe placeholders instead.
+	mustContain(t, c.PrimaryPayload, "--model <model-id>")
+	mustContain(t, c.PrimaryPayload, "obol buy inference remote-inference")
 }
