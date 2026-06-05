@@ -8,10 +8,33 @@ import (
 	"html/template"
 	"math/big"
 	"net/http"
+	"regexp"
 	"strings"
 
 	x402types "github.com/coinbase/x402/go/types"
 )
+
+// displayTokenRe is the allowed charset for ServiceOffer-sourced strings
+// (offer name, model id) that get interpolated into copy-pasteable CLI
+// commands and prompts on the 402 page. It permits the model-id / k8s-name
+// vocabulary — alphanumerics plus `. _ : / -` — and nothing else, so shell
+// metacharacters can never reach a command a reader might paste.
+var displayTokenRe = regexp.MustCompile(`^[A-Za-z0-9._:/-]+$`)
+
+// sanitizeDisplayToken guards a CR-sourced string before it lands in a
+// copy-pasteable command on the public 402 page. A ServiceOffer is
+// operator-authored, but the page is served over the public tunnel, so a
+// hostile or fat-fingered spec.model.name / metadata.name must not smuggle
+// shell metacharacters into the rendered command. Anything that isn't a clean
+// model-id/k8s-name token (including empty/whitespace) collapses to the
+// caller's placeholder.
+func sanitizeDisplayToken(s, placeholder string) string {
+	s = strings.TrimSpace(s)
+	if s == "" || !displayTokenRe.MatchString(s) {
+		return placeholder
+	}
+	return s
+}
 
 //go:embed templates/payment_required.html
 var paymentRequiredHTMLSrc string
@@ -229,7 +252,7 @@ func sendPaymentRequiredHTML(w http.ResponseWriter, r *http.Request, requirement
 		NetworkLabel:        networkLabel,
 		PriceDisplay:        priceDisplay,
 		PayToDisplay:        payToDisplay,
-		PayToFull:            payToFull,
+		PayToFull:           payToFull,
 		ExplorerURL:         display.ExplorerURL,
 		OfferDescription:    display.OfferDescription,
 		Skills:              display.AgentSkills,
@@ -347,14 +370,8 @@ func normalizeOfferType(t string) string {
 // raw-JSON paths, but reframed so users understand they're buying remote
 // model time, not an agent with tools/memory.
 func inferenceCopy(url string, d PaymentDisplay) typeCopy {
-	model := strings.TrimSpace(d.Model)
-	if model == "" {
-		model = "<model-id>"
-	}
-	name := strings.TrimSpace(d.OfferName)
-	if name == "" {
-		name = "remote-inference"
-	}
+	model := sanitizeDisplayToken(d.Model, "<model-id>")
+	name := sanitizeDisplayToken(d.OfferName, "remote-inference")
 
 	cmd := fmt.Sprintf(
 		"obol buy inference %s \\\n  --seller %s \\\n  --model %s \\\n  --budget 1 \\\n  --no-verify-identity",
@@ -397,7 +414,7 @@ func inferenceCopy(url string, d PaymentDisplay) typeCopy {
 // example sits next to the raw x402 JSON in the Pay-manually card to
 // make the wire shape obvious to readers walking the spec by hand.
 func agentCopy(url string, d PaymentDisplay) typeCopy {
-	model := strings.TrimSpace(d.Model)
+	model := sanitizeDisplayToken(d.Model, "")
 	modelClause := ""
 	modelLine := ""
 	if model != "" {
