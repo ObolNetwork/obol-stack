@@ -18,7 +18,7 @@ Commands:
     buy <name> --endpoint <url> --model <id>      Pre-sign + author PurchaseRequest
         [--budget <micro-units>] [--count <N>]
         [--auto-refill[=true|false]] [--refill-threshold <N>]
-        [--refill-count <N>] [--set-default]
+        [--refill-count <N>] [--auth-ttl <seconds|never>] [--set-default]
     list                                          List purchased providers + remaining auths
     status <name>                                 Check sidecar health + remaining auths
     process <name>|--all                          Reconcile auto-refill policies
@@ -836,6 +836,36 @@ def _resolve_eip3009_domain(extra, chain, asset):
     return USDC_DOMAIN_NAME, USDC_DOMAIN_VERSION
 
 
+# Auth expiry — ONE knob (OBOL_X402_AUTH_TTL) for BOTH payment methods, so a
+# pre-signed pool always expires at the same wall-clock whether the seller takes
+# USDC (ERC-3009 validBefore) or OBOL (Permit2 deadline).
+DEFAULT_AUTH_TTL_SECONDS = 30 * 24 * 3600  # 1 month
+MAX_SAFE_DEADLINE = 4294967295  # 0xFFFFFFFF (~year 2106) == "never"; the uint
+# both USDC transferWithAuthorization (validBefore <) and the Permit2/x402
+# contracts (deadline <=) accept without overflow.
+
+
+def _auth_expiry():
+    """Absolute unix expiry shared by Permit2 `deadline` and ERC-3009 `validBefore`.
+
+    Controlled by OBOL_X402_AUTH_TTL:
+      - unset             -> now + 30 days (1 month; the default)
+      - <seconds>         -> now + max(seconds, 300)   (floor = one settle window)
+      - 0 / never / none  -> MAX_SAFE_DEADLINE          (no expiry, ~year 2106)
+
+    This is the pool's spendability lifetime — a separate concept from the
+    per-request settle window (payment.maxTimeoutSeconds).
+    """
+    raw = os.environ.get("OBOL_X402_AUTH_TTL", "").strip().lower()
+    if raw in ("0", "never", "none", "-1"):
+        return MAX_SAFE_DEADLINE
+    try:
+        ttl = max(int(raw), 300)
+    except (TypeError, ValueError):
+        ttl = DEFAULT_AUTH_TTL_SECONDS
+    return int(time.time()) + ttl
+
+
 def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payment=None, extensions=None):
     """Pre-sign N x402 payment payloads, defaulting to legacy ERC-3009 USDC."""
     chain = _resolve_chain(chain)
@@ -861,8 +891,8 @@ def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payme
             # mined, so wall-clock based "now - slack" can still be in the
             # future and the facilitator rejects with PaymentTooEarly().
             valid_after = "0"
-            expiry_window = max(int(payment.get("maxTimeoutSeconds", 60)), 300)
-            deadline = str(int(time.time()) + expiry_window)
+            # Permit2 deadline = the pool's spendability lifetime (see _auth_expiry).
+            deadline = str(_auth_expiry())
             permit2_nonce = str(int.from_bytes(secrets.token_bytes(32), "big"))
             typed_data = {
                 "types": {
@@ -997,6 +1027,7 @@ def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payme
                 extra, chain, payment.get("asset", usdc_addr),
             )
             nonce = "0x" + secrets.token_hex(32)
+            valid_before = str(_auth_expiry())
 
             typed_data = {
                 "types": {
@@ -1027,7 +1058,7 @@ def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payme
                     "to": pay_to,
                     "value": str(price),
                     "validAfter": "0",
-                    "validBefore": "4294967295",
+                    "validBefore": valid_before,
                     "nonce": nonce,
                 },
             }
@@ -1060,7 +1091,7 @@ def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payme
                         "to": pay_to,
                         "value": str(price),
                         "validAfter": "0",
-                        "validBefore": "4294967295",
+                        "validBefore": valid_before,
                         "nonce": nonce,
                     },
                 },
@@ -2123,7 +2154,8 @@ def usage():
     print("  buy <name> --endpoint <url> --model <id>     Pre-sign + configure paid/<model>")
     print("       [--budget <micro-units>] [--count <N>]")
     print("       [--auto-refill[=true|false]] [--refill-threshold <N>]")
-    print("       [--refill-count <N>] [--set-default]")
+    print("       [--refill-count <N>] [--auth-ttl <seconds|never>] [--set-default]")
+    print("       --auth-ttl     pool expiry: seconds, or 'never' (default 30d/1mo); env OBOL_X402_AUTH_TTL")
     print("       --set-default  inference only: adopt paid/<model> as the agent's primary model")
     print("  list                                         List purchased providers")
     print("  status <name>                                Check sidecar + auths")
@@ -2163,6 +2195,8 @@ if __name__ == "__main__":
         if kind not in ("http", "inference"):
             print(f"Error: --type must be 'http' or 'inference', got '{kind}'", file=sys.stderr)
             sys.exit(1)
+        if opts.get("auth_ttl") is not None:
+            os.environ["OBOL_X402_AUTH_TTL"] = str(opts["auth_ttl"])
         timeout = opts.get("timeout")
         if timeout is not None:
             try:
@@ -2192,6 +2226,8 @@ if __name__ == "__main__":
         if not endpoint or not model:
             print("Error: --endpoint and --model are required.", file=sys.stderr)
             sys.exit(1)
+        if opts.get("auth_ttl") is not None:
+            os.environ["OBOL_X402_AUTH_TTL"] = str(opts["auth_ttl"])
         cmd_buy(name, endpoint, model, budget, count, opts)
 
     elif cmd == "refill":
