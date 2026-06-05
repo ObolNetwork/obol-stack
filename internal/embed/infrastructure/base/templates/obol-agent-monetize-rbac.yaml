@@ -90,11 +90,9 @@ rules:
     verbs: ["get", "patch"]
     resourceNames:
       - litellm-secrets
-      - x402-buyer-admin
       - hermes-api-server
       - hermes-profile-seed
       - hermes-env
-      - ca-certificates
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create"]
