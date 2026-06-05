@@ -1,8 +1,10 @@
 package x402
 
 import (
+	"bufio"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -555,6 +557,28 @@ type statusRecorder struct {
 func (r *statusRecorder) WriteHeader(status int) {
 	r.status = status
 	r.ResponseWriter.WriteHeader(status)
+}
+
+// Flush proxies through to the underlying ResponseWriter's Flush, when
+// supported. Without this, embedding the http.ResponseWriter interface
+// hides the concrete writer's Flush from settlementInterceptor's
+// `i.w.(http.Flusher)` type assertion — SSE streams then sit in the
+// buffer until the handler returns, breaking `obol sell agent` for any
+// OpenAI-style streaming chat frontend. See TestVerifier_HandleProxy_StreamsSSEChunks.
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Hijack forwards to the underlying ResponseWriter so WebSocket upgrades
+// and any future protocol-switching paths keep working through the
+// settlement wrapper. Same rationale as Flush above.
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := r.ResponseWriter.(http.Hijacker); ok {
+		return h.Hijack()
+	}
+	return nil, nil, fmt.Errorf("hijacking not supported")
 }
 
 func prometheusLabels(rule *RouteRule) prometheus.Labels {
