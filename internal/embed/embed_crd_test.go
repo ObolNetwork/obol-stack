@@ -676,6 +676,40 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 		t.Error("factory ClusterRole should not grant Agent deletes")
 	}
 
+	// Wallet isolation: the factory's secrets get/patch must be resourceName-
+	// restricted and must never expose wallet keystores (remote-signer-keystore*),
+	// which are served only via the in-namespace remote-signer API.
+	hasStr := func(rm map[string]any, key, want string) bool {
+		vs, _ := rm[key].([]any)
+		for _, v := range vs {
+			if s, _ := v.(string); s == want {
+				return true
+			}
+		}
+		return false
+	}
+	secretsGetScoped := false
+	for _, r := range factoryRules {
+		rm, ok := r.(map[string]any)
+		if !ok || !hasStr(rm, "apiGroups", "") || !hasStr(rm, "resources", "secrets") || !hasStr(rm, "verbs", "get") {
+			continue
+		}
+		names, ok := rm["resourceNames"].([]any)
+		if !ok || len(names) == 0 {
+			t.Error("factory secrets 'get' must be resourceName-restricted (wallet isolation)")
+			continue
+		}
+		secretsGetScoped = true
+		for _, n := range names {
+			if s, _ := n.(string); strings.Contains(s, "keystore") {
+				t.Errorf("factory secrets get must not expose wallet keystore %q", s)
+			}
+		}
+	}
+	if !secretsGetScoped {
+		t.Error("factory ClusterRole missing a resourceName-restricted secrets 'get' rule")
+	}
+
 	// ── ClusterRoleBindings ─────────────────────────────────────────────
 	readCRB := findDocByName(docs, "ClusterRoleBinding", "openclaw-monetize-read-binding")
 	if readCRB == nil {

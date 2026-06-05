@@ -79,9 +79,25 @@ rules:
   - apiGroups: [""]
     resources: ["namespaces"]
     verbs: ["get", "list", "watch", "create", "patch"]
+  # Secrets: scoped so the mother agent CANNOT read other namespaces' wallet
+  # keystores (remote-signer-keystore / -password). Wallet keys are only ever
+  # served via the in-namespace remote-signer REST API, never read through the
+  # k8s secrets API by any agent flow, so this allow-list breaks nothing.
+  # get/patch are name-restricted to the secrets the agent/factory legitimately
+  # touches; create stays open (it cannot read or overwrite an existing wallet).
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "create", "patch"]
+    verbs: ["get", "patch"]
+    resourceNames:
+      - litellm-secrets
+      - x402-buyer-admin
+      - hermes-api-server
+      - hermes-profile-seed
+      - hermes-env
+      - ca-certificates
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create"]
   - apiGroups: ["obol.org"]
     resources: ["agents"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
