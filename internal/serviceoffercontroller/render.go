@@ -24,6 +24,8 @@ const (
 	skillCatalogConfigMapName = "obol-skill-md"
 	skillCatalogRouteName     = "obol-skill-md-route"
 	servicesJSONRouteName     = "obol-services-json-route"
+	openAPIRouteName          = "obol-openapi-route"
+	apiDocsRouteName          = "obol-api-docs-route"
 )
 
 // restrictedPodSecurityContext returns a Pod-level securityContext that
@@ -245,7 +247,7 @@ func agentIdentityLabels(identity *monetizeapi.AgentIdentity, appName string) ma
 	}
 }
 
-func buildSkillCatalogConfigMap(content, servicesJSON string) *unstructured.Unstructured {
+func buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
@@ -261,7 +263,9 @@ func buildSkillCatalogConfigMap(content, servicesJSON string) *unstructured.Unst
 			"data": map[string]any{
 				"skill.md":      content,
 				"services.json": servicesJSON,
-				"httpd.conf":    ".md:text/markdown\n.json:application/json\n",
+				"openapi.json":  openAPIJSON,
+				"api.html":      apiDocsHTML,
+				"httpd.conf":    ".md:text/markdown\n.json:application/json\n.html:text/html\n",
 			},
 		},
 	}
@@ -322,6 +326,12 @@ func buildSkillCatalogDeployment(contentHash string) *unstructured.Unstructured 
 									"items": []any{
 										map[string]any{"key": "skill.md", "path": "skill.md"},
 										map[string]any{"key": "services.json", "path": "api/services.json"},
+										map[string]any{"key": "openapi.json", "path": "openapi.json"},
+										// busybox httpd resolves /api/ → /api/index.html, so the
+										// Scalar shell sits at api/index.html. The /api Exact
+										// HTTPRoute also matches the trailing-slash variant so the
+										// resolver kicks in either way.
+										map[string]any{"key": "api.html", "path": "api/index.html"},
 									},
 								},
 							},
@@ -392,6 +402,119 @@ func buildSkillCatalogHTTPRoute() *unstructured.Unstructured {
 								"path": map[string]any{
 									"type":  "Exact",
 									"value": "/skill.md",
+								},
+							},
+						},
+						"backendRefs": []any{
+							map[string]any{
+								"name":      skillCatalogConfigMapName,
+								"namespace": skillCatalogNamespace,
+								"port":      int64(8080),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// buildOpenAPIHTTPRoute exposes the aggregate OpenAPI 3.1 document at the
+// stable public path /openapi.json. The route deliberately omits a
+// hostnames restriction so it's reachable both on the local cluster
+// (obol.stack:8080) AND through the public Cloudflare tunnel — the spec
+// is meant to be discoverable by any client. /openapi.json contains no
+// secret material (payment addresses + chain selectors are also published
+// on /skill.md and ERC-8004); future "tighten all public routes" cleanups
+// must NOT add a hostnames filter here.
+func buildOpenAPIHTTPRoute() *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "HTTPRoute",
+			"metadata": map[string]any{
+				"name":      openAPIRouteName,
+				"namespace": skillCatalogNamespace,
+				"labels": map[string]any{
+					"obol.org/managed-by": "serviceoffer-controller",
+				},
+			},
+			"spec": map[string]any{
+				"parentRefs": []any{
+					map[string]any{
+						"name":        "traefik-gateway",
+						"namespace":   "traefik",
+						"sectionName": "web",
+					},
+				},
+				"rules": []any{
+					map[string]any{
+						"matches": []any{
+							map[string]any{
+								"path": map[string]any{
+									"type":  "Exact",
+									"value": "/openapi.json",
+								},
+							},
+						},
+						"backendRefs": []any{
+							map[string]any{
+								"name":      skillCatalogConfigMapName,
+								"namespace": skillCatalogNamespace,
+								"port":      int64(8080),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// buildAPIDocsHTTPRoute exposes the Scalar UI shell at /api and /api/.
+// Two Exact rules are needed because Gateway API's Exact matcher does not
+// normalize trailing slashes; busybox httpd resolves /api/ to
+// api/index.html inside the mounted ConfigMap volume.
+//
+// /api/services.json (also Exact) is registered as its own HTTPRoute and
+// continues to win the path because Exact-vs-Exact is decided by literal
+// match — /api vs /api/services.json never overlap.
+//
+// Same hostnames posture as /openapi.json: explicitly tunnel-reachable.
+// Do not add a hostnames filter without rethinking the discovery story.
+func buildAPIDocsHTTPRoute() *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "HTTPRoute",
+			"metadata": map[string]any{
+				"name":      apiDocsRouteName,
+				"namespace": skillCatalogNamespace,
+				"labels": map[string]any{
+					"obol.org/managed-by": "serviceoffer-controller",
+				},
+			},
+			"spec": map[string]any{
+				"parentRefs": []any{
+					map[string]any{
+						"name":        "traefik-gateway",
+						"namespace":   "traefik",
+						"sectionName": "web",
+					},
+				},
+				"rules": []any{
+					map[string]any{
+						"matches": []any{
+							map[string]any{
+								"path": map[string]any{
+									"type":  "Exact",
+									"value": "/api",
+								},
+							},
+							map[string]any{
+								"path": map[string]any{
+									"type":  "Exact",
+									"value": "/api/",
 								},
 							},
 						},
@@ -912,6 +1035,24 @@ func offerOperationallyReady(offer *monetizeapi.ServiceOffer) bool {
 // ready but has its on-chain ERC-8004 registration still pending. Used to
 // flip ServiceCatalogEntry.RegistrationPending so storefront UIs can show
 // a "registration pending" badge alongside the usable offer.
+// isDemoOffer reports whether an offer should be rendered under the
+// storefront's "Demo services" group. The legacy demo path puts offers
+// directly in the "demo" namespace, but the agent-backed demo path
+// (`obol sell demo quant`) lands the offer in agent-<name> because the
+// controller's confused-deputy guard requires the ServiceOffer and the
+// referenced Agent CR to share a namespace. To keep both paths grouping
+// together on the storefront, the CLI sets obol.org/demo=true on
+// agent-backed demos and we honour either signal.
+func isDemoOffer(offer *monetizeapi.ServiceOffer) bool {
+	if offer == nil {
+		return false
+	}
+	if offer.Namespace == "demo" {
+		return true
+	}
+	return offer.Labels["obol.org/demo"] == "true"
+}
+
 func offerAwaitingRegistration(offer *monetizeapi.ServiceOffer) bool {
 	if offer == nil {
 		return false
@@ -978,6 +1119,17 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 			drainEndsAt = offer.DrainEndsAt().UTC().Format(time.RFC3339)
 		}
 
+		// Skills source matches the 402 renderer: for type=agent the
+		// resolved Agent allow-list wins (controller-populated), with a
+		// fallback to spec.registration.skills for non-agent offers
+		// that still want to surface skill tags on discovery.
+		var skills []string
+		if offer.IsAgent() && offer.Status.AgentResolution != nil && len(offer.Status.AgentResolution.Skills) > 0 {
+			skills = append([]string(nil), offer.Status.AgentResolution.Skills...)
+		} else if len(offer.Spec.Registration.Skills) > 0 {
+			skills = append([]string(nil), offer.Spec.Registration.Skills...)
+		}
+
 		svc := schemas.ServiceCatalogEntry{
 			Name:                offer.Name,
 			Namespace:           offer.Namespace,
@@ -988,7 +1140,8 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 			PayTo:               offer.Spec.Payment.PayTo,
 			Network:             offer.Spec.Payment.Network,
 			Description:         desc,
-			IsDemo:              offer.Namespace == "demo",
+			Skills:              skills,
+			IsDemo:              isDemoOffer(offer),
 			RegistrationPending: offerAwaitingRegistration(offer),
 			DrainEndsAt:         drainEndsAt,
 		}

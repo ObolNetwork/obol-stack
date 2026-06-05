@@ -1141,9 +1141,17 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 
 	content := buildSkillCatalogMarkdown(offers, baseURL)
 	servicesJSON := buildServiceCatalogJSON(offers, baseURL)
-	contentHash := fmt.Sprintf("%x", md5Sum(content+servicesJSON))[:8]
+	// buildOpenAPIDocument prefers the tunnel URL for the public `servers[0]`
+	// entry; baseURL is sourced from obol-stack-config.tunnelURL via
+	// registrationBaseURL, which is also what /skill.md and services.json
+	// use as their public-facing prefix, so the three surfaces stay in sync
+	// on tunnel restarts (the configMap informer re-enqueues every offer
+	// when tunnelURL changes — see enqueueDiscoveryRefresh).
+	openAPIJSON := buildOpenAPIDocument(offers, baseURL)
+	apiDocsHTML := scalarHTML()
+	contentHash := fmt.Sprintf("%x", md5Sum(content+servicesJSON+openAPIJSON+apiDocsHTML))[:8]
 
-	if err := c.applyObject(ctx, c.configMaps.Namespace(skillCatalogNamespace), buildSkillCatalogConfigMap(content, servicesJSON)); err != nil {
+	if err := c.applyObject(ctx, c.configMaps.Namespace(skillCatalogNamespace), buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML)); err != nil {
 		return err
 	}
 	if err := c.applyObject(ctx, c.deployments.Namespace(skillCatalogNamespace), buildSkillCatalogDeployment(contentHash)); err != nil {
@@ -1156,6 +1164,12 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 		return err
 	}
 	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildServicesJSONHTTPRoute()); err != nil {
+		return err
+	}
+	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildOpenAPIHTTPRoute()); err != nil {
+		return err
+	}
+	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildAPIDocsHTTPRoute()); err != nil {
 		return err
 	}
 	readyOffers := 0

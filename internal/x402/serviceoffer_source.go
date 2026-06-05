@@ -160,7 +160,8 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 	rule := RouteRule{
 		Pattern:                strings.TrimSuffix(offer.EffectivePath(), "/") + "/*",
 		Price:                  price,
-		Description:            fmt.Sprintf("ServiceOffer %s", offer.Name),
+		Description:            offer.Spec.Registration.Description,
+		OfferType:              offer.Spec.Type,
 		PayTo:                  offer.Spec.Payment.PayTo,
 		Network:                NormalizeNetworkID(offer.Spec.Payment.Network),
 		AssetAddress:           offer.Spec.Payment.Asset.Address,
@@ -184,6 +185,9 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 		rule.AgentModel = res.Model
 		rule.AgentSkills = append([]string(nil), res.Skills...)
 		rule.AgentRuntime = res.Runtime
+		rule.Model = res.Model
+	} else {
+		rule.Model = offer.Spec.Model.Name
 	}
 
 	return rule, nil

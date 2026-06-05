@@ -1,6 +1,7 @@
 package x402
 
 import (
+	"bufio"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -439,6 +440,208 @@ func TestVerifier_HandleProxy_UpstreamFailure_DoesNotSettle(t *testing.T) {
 	}
 	if w.Header().Get("X-PAYMENT-RESPONSE") != "" {
 		t.Fatal("did not expect X-PAYMENT-RESPONSE header on upstream failure")
+	}
+}
+
+// TestVerifier_HandleProxy_StreamsSSEChunks proves the seller-gateway path
+// (Traefik → x402-verifier → upstream) preserves Server-Sent Events streaming
+// end-to-end. This is what makes `obol sell agent` usable as an OpenAI-
+// compatible streaming backend for chat frontends.
+//
+// httptest.NewRecorder buffers writes, so it cannot catch a regression where
+// the settlementInterceptor swallows flushes or where httputil.ReverseProxy
+// fails to detect text/event-stream. We therefore stand up a real httptest
+// server, time when each SSE chunk reaches the client, and assert that
+// chunks arrive with the same pacing the upstream emitted them (which can
+// only happen if every layer in the chain flushes per write).
+func TestVerifier_HandleProxy_StreamsSSEChunks(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+
+	const chunkGap = 80 * time.Millisecond
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.WriteHeader(http.StatusOK)
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Errorf("upstream ResponseWriter does not implement http.Flusher")
+			return
+		}
+
+		// Three deltas + the terminating [DONE] marker. Hermes emits this
+		// exact shape; mirroring it here keeps the test honest.
+		chunks := []string{
+			`data: {"choices":[{"delta":{"content":"hello"}}]}` + "\n\n",
+			`data: {"choices":[{"delta":{"content":" world"}}]}` + "\n\n",
+			`data: {"choices":[{"delta":{"content":"!"}}]}` + "\n\n",
+			"data: [DONE]\n\n",
+		}
+		for i, c := range chunks {
+			if i > 0 {
+				// Pace the chunks so we can assert the client sees them
+				// arrive progressively rather than all at once.
+				time.Sleep(chunkGap)
+			}
+			if _, err := w.Write([]byte(c)); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}))
+	defer upstream.Close()
+
+	v := newTestVerifier(t, fac.URL, []RouteRule{{
+		Pattern:     "/services/demo/*",
+		Price:       "0.0001",
+		UpstreamURL: upstream.URL,
+		StripPrefix: "/services/demo",
+	}})
+
+	// Real HTTP server so Flush() actually reaches the wire. Recorder
+	// would swallow flushes and give us a false positive.
+	srv := httptest.NewServer(http.HandlerFunc(v.HandleProxy))
+	defer srv.Close()
+
+	reqBody := strings.NewReader(`{"model":"hermes-agent","stream":true,"messages":[]}`)
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/services/demo/v1/chat/completions", reqBody)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	start := time.Now()
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("Content-Type = %q, want text/event-stream*", ct)
+	}
+	if resp.Header.Get("X-PAYMENT-RESPONSE") == "" {
+		t.Fatal("expected X-PAYMENT-RESPONSE on a streaming success")
+	}
+
+	// Read each SSE event ("data: ...\n\n") and capture the elapsed time
+	// since the request started. If anything in the chain buffers the
+	// response, all four events will land in a single tight cluster at
+	// the end instead of being spread across the upstream's pacing.
+	reader := bufio.NewReader(resp.Body)
+	var got []string
+	var arrivals []time.Duration
+	for i := 0; i < 4; i++ {
+		dataLine, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read chunk %d data line: %v", i, err)
+		}
+		arrivals = append(arrivals, time.Since(start))
+		blank, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read chunk %d blank line: %v", i, err)
+		}
+		if strings.TrimSpace(blank) != "" {
+			t.Fatalf("chunk %d separator was %q, want empty line", i, blank)
+		}
+		got = append(got, strings.TrimRight(dataLine, "\n"))
+	}
+
+	want := []string{
+		`data: {"choices":[{"delta":{"content":"hello"}}]}`,
+		`data: {"choices":[{"delta":{"content":" world"}}]}`,
+		`data: {"choices":[{"delta":{"content":"!"}}]}`,
+		"data: [DONE]",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d chunks, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("chunk %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	// Streaming assertion: the last chunk must arrive at least
+	// 2 × chunkGap after the first. If the chain buffers, all chunks
+	// land together at the upstream's End-of-Body, and arrivals[3] -
+	// arrivals[0] is ≈ 0. Use 2× as the floor (out of 3 gaps) for
+	// scheduler jitter slack.
+	spread := arrivals[3] - arrivals[0]
+	if spread < 2*chunkGap {
+		t.Errorf("SSE chunks were buffered: arrivals[0]=%v arrivals[3]=%v spread=%v (want ≥ %v)\nfull timings=%v",
+			arrivals[0], arrivals[3], spread, 2*chunkGap, arrivals)
+	}
+
+	if fac.verifyCalls.Load() != 1 {
+		t.Fatalf("verify calls = %d, want 1", fac.verifyCalls.Load())
+	}
+	if fac.settleCalls.Load() != 1 {
+		t.Fatalf("settle calls = %d, want 1 (settle is one-shot per paid request, not per chunk)", fac.settleCalls.Load())
+	}
+}
+
+// TestVerifier_HandleProxy_NonStreamingResponse confirms the same gateway
+// path still handles the classic stream:false JSON response correctly —
+// i.e. the streaming fix didn't accidentally chunk-encode replies that the
+// upstream chose to deliver as a single buffered body.
+func TestVerifier_HandleProxy_NonStreamingResponse(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-x","choices":[{"message":{"role":"assistant","content":"hi"}}]}`))
+	}))
+	defer upstream.Close()
+
+	v := newTestVerifier(t, fac.URL, []RouteRule{{
+		Pattern:     "/services/demo/*",
+		Price:       "0.0001",
+		UpstreamURL: upstream.URL,
+		StripPrefix: "/services/demo",
+	}})
+
+	srv := httptest.NewServer(http.HandlerFunc(v.HandleProxy))
+	defer srv.Close()
+
+	reqBody := strings.NewReader(`{"model":"hermes-agent","messages":[]}`)
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/services/demo/v1/chat/completions", reqBody)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		t.Fatalf("Content-Type = %q, want application/json*", ct)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if !strings.Contains(string(body), `"content":"hi"`) {
+		t.Fatalf("body missing assistant content: %s", body)
+	}
+	if resp.Header.Get("X-PAYMENT-RESPONSE") == "" {
+		t.Fatal("expected X-PAYMENT-RESPONSE header on non-streaming success")
+	}
+	if fac.settleCalls.Load() != 1 {
+		t.Fatalf("settle calls = %d, want 1", fac.settleCalls.Load())
 	}
 }
 

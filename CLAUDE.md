@@ -1,148 +1,169 @@
-# CLAUDE.md
-
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 ## Project Overview
 
-Obol Stack: framework for AI agents to run decentralised infrastructure locally. k3d cluster with a Hermes default AI agent, optional OpenClaw instances, blockchain networks, payment-gated inference (x402), and Cloudflare tunnels. CLI: `github.com/urfave/cli/v3`.
+Obol Stack: AI agents running decentralised infra locally. k3d cluster + Hermes default agent + optional OpenClaw instances + blockchain networks + payment-gated inference (x402) + Cloudflare tunnels. CLI: `github.com/urfave/cli/v3`.
 
 ## Conventions
 
-- **Commits**: Conventional commits — `feat:`, `fix:`, `docs:`, `test:`, `chore:`, `security:` with optional scope
-- **Branches**: `feat/`, `fix/`, `research/`, `docs/`, `chore/` prefixes
-- **GitHub branch policy**: never push `codex/`-prefixed branches to GitHub from this repository; rename to `feat/`, `fix/`, `research/`, `docs/`, `chore/`, or another non-codex branch name before pushing
-- **Detailed architecture reference**: `@.claude/skills/obol-stack-dev/SKILL.md` (invoke with `/obol-stack-dev`)
-- **Review scope**: Avoid broad, vague review/delegation boundaries. State the exact files, invariants, and expected evidence before reviewing or spawning agents. Prefer concrete checks such as "controller cannot access signer/Secrets", "agent write RBAC is namespace-scoped", and "flow uses real obol CLI path" over generic "review architecture".
-- **Planning docs vs user docs**: Implementation plans, design notes, and feature retrospectives belong in `plans/` — they're useful to revisit when picking work back up later. Keep `docs/` for durable, user-facing documentation. Don't mix the two.
-- **Release descriptions**: Use `.github/release-template.md` for future GitHub releases. The release workflow creates a draft with generated notes; rewrite the narrative body from the template, keep generated `What's Changed`, `New Contributors`, and `Full Changelog` sections at the bottom, and never include private keys, seed phrases, passwords, hostnames, personal paths, or raw bearer tokens.
+- **Commits**: Conventional commits — `feat:`, `fix:`, `docs:`, `test:`, `chore:`, `security:` with optional scope.
+- **Branches**: `feat/`, `fix/`, `research/`, `docs/`, `chore/` prefixes.
+- **GitHub branch policy**: NEVER push `codex/`-prefixed branches to GitHub; rename to a non-codex prefix first.
+- **Architecture reference**: `@.claude/skills/obol-stack-dev/SKILL.md` (invoke via `/obol-stack-dev`).
+- **Review scope**: No broad/vague boundaries. State exact files, invariants, expected evidence. Prefer concrete checks ("controller cannot access signer/Secrets", "agent write RBAC is namespace-scoped", "flow uses real obol CLI path") over generic "review architecture".
+- **Planning vs user docs**: `plans/` -> implementation plans, design notes, retrospectives. `docs/` -> durable user-facing docs. Don't mix.
+- **Release descriptions**: Use `.github/release-template.md`. The release workflow creates a draft with generated notes; rewrite the narrative body from the template. Keep generated `What's Changed`, `New Contributors`, and `Full Changelog` sections at the bottom. NEVER include private keys, seed phrases, passwords, hostnames, personal paths, or raw bearer tokens.
 
 ## Build, Test, Run
 
 ```bash
-just build                                    # Build with version info
-go build -o .workspace/bin/obol ./cmd/obol    # Build to specific location
-go build ./...                                # Check compilation
-go test ./...                                 # All unit tests
-go test -v -run 'TestName' ./internal/pkg/    # Single test
+just build                                    # build with version info
+go build -o .workspace/bin/obol ./cmd/obol    # build to .workspace/bin/obol
+go build ./...                                # check compilation
+go test ./...                                 # all unit tests
+go test -v -run 'TestName' ./internal/pkg/    # single test
 
-# Integration tests under internal/openclaw/ (legacy local matrix — requires running cluster + host Ollama)
+# Integration tests (//go:build integration; skip when prerequisites missing)
+# Requires running cluster + host Ollama
 export OBOL_DEVELOPMENT=true OBOL_CONFIG_DIR=$(pwd)/.workspace/config OBOL_BIN_DIR=$(pwd)/.workspace/bin OBOL_DATA_DIR=$(pwd)/.workspace/data
 go build -o .workspace/bin/obol ./cmd/obol    # MUST rebuild after code changes
 go test -tags integration -v -timeout 15m ./internal/openclaw/
 
-# Validated paid-inference commerce loop (legacy local — requires host Ollama qwen3.5:9b)
-# Does NOT replace release-gate flows 11/13/14, which require OBOL_LLM_ENDPOINT (vLLM / llama.cpp).
-# If reusing a cluster from another worktree, point OBOL_CONFIG_DIR at that cluster's .workspace/config
+# Paid-inference commerce loop — needs host Ollama qwen3.5:9b
+# Does NOT replace release-gate flows 11/13/14 (those require OBOL_LLM_ENDPOINT → vLLM/llama.cpp)
+# Reuse worktree cluster: export OBOL_CONFIG_DIR=<worktree>/.workspace/config
 go test -tags integration -v -run TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance -timeout 30m ./internal/openclaw/
 
-# Release-gate seller/buyer smoke (requires OBOL_LLM_ENDPOINT pointing at OpenAI-compatible vLLM/llama.cpp)
+# Release-gate buyer/seller smoke — needs OBOL_LLM_ENDPOINT → OpenAI-compatible vLLM/llama.cpp
 RELEASE_SMOKE_INCLUDE_OBOL=true RELEASE_SMOKE_INCLUDE_OBOL_FORK=true \
   OBOL_LLM_ENDPOINT=http://127.0.0.1:8000/v1 OBOL_LLM_MODEL=qwen36-deep \
   bash flows/release-smoke.sh
 
-just up    # obol stack init + up
-just down  # obol stack down + purge
-just clean # Remove build artifacts
+just up    # obol stack init → up
+just down  # obol stack down → purge
+just clean # rm -rf bin/ .workspace/bin/
 
-OBOL_DEVELOPMENT=true ./obolup.sh  # One-time dev setup, uses .workspace/, go run wrapper
+OBOL_DEVELOPMENT=true ./obolup.sh  # one-time dev setup (uses .workspace/, go run wrapper)
 ```
 
-Integration tests use `//go:build integration` and skip gracefully when prerequisites are missing.
+Integration tests use `//go:build integration`; skip when prerequisites missing.
 
 ## Architecture
 
 **Two parts**: `obolup.sh` (bootstrap installer, pinned deps) + `obol` CLI (Go binary, all management).
 
-**Design**: Deployment-centric (unique namespaces via petnames), local-first (k3d), XDG-compliant, two-stage templating (CLI flags → Go templates → Helmfile → K8s).
+**Design**: Deployment-centric (unique namespaces via petnames), local-first (k3d), XDG-compliant, two-stage templating (CLI flags -> Go templates -> Helmfile -> K8s).
 
-**Routing**: Traefik + Kubernetes Gateway API. GatewayClass `traefik`, Gateway `traefik-gateway` in `traefik` ns. Local-only routes (restricted to `hostnames: ["obol.stack"]`): `/` → frontend, `/rpc` → eRPC. Public routes (accessible via tunnel, no hostname restriction): `/services/<name>/*` → x402 ForwardAuth → upstream, `/.well-known/agent-registration.json` → ERC-8004 httpd, `/skill.md` → service catalog. Tunnel hostname gets a storefront landing page at `/`. NEVER remove hostname restrictions from frontend or eRPC HTTPRoutes — exposing the frontend/RPC to the public internet is a critical security flaw.
+**Routing**: Traefik + Kubernetes Gateway API. GatewayClass `traefik`, Gateway `traefik-gateway` in `traefik` ns.
 
-**Config**: `Config{ConfigDir, DataDir, BinDir}`. Precedence: `OBOL_CONFIG_DIR` > `XDG_CONFIG_HOME/obol` > `~/.config/obol`. `OBOL_DEVELOPMENT=true` → `.workspace/` dirs. All K8s tools auto-set `KUBECONFIG=$OBOL_CONFIG_DIR/kubeconfig.yaml`.
+| Visibility | Hostnames | Route | Backend |
+|---|---|---|---|
+| Local only | `["obol.stack"]` | `/` | frontend (obol-frontend ns) |
+| Local only | `["obol.stack"]` | `/rpc` | eRPC (erpc ns) |
+| Public (tunnel) | none | `/services/<name>/*` | x402 ForwardAuth -> upstream |
+| Public (tunnel) | none | `/.well-known/agent-registration.json` | ERC-8004 httpd |
+| Public (tunnel) | none | `/skill.md` | service catalog |
+| Public (tunnel) | none | `/api/services.json` | service catalog JSON feed |
+| Public (tunnel) | tunnel hostname only | `/` | storefront landing page (Next.js) |
+
+**NEVER remove hostname restrictions from frontend or eRPC HTTPRoutes** — exposing the frontend/RPC to the public internet is a critical security flaw.
+
+**Config**: `Config{ConfigDir, BinDir, DataDir, StateDir}` (`internal/config/config.go:9`). Precedence: `OBOL_CONFIG_DIR` > dev mode (`.workspace/config`) > `XDG_CONFIG_HOME/obol` (falls back to `~/.config/obol`). `OBOL_DEVELOPMENT=true` -> `.workspace/` dirs. All K8s tools auto-set `KUBECONFIG=$OBOL_CONFIG_DIR/kubeconfig.yaml`.
+
 
 ## CLI Commands
 
 ```
 obol
 ├── stack           init, up, down, purge
-├── agent           init (deploys obol-agent singleton),
-│                   auth --runtime <runtime> obol-agent  (Bearer token — canonical)
-├── network         list, install, add, remove, status, sync, delete
-├── sell            inference, http, list, status, stop, delete, pricing, register
-├── hermes          onboard, setup, sync, list, delete, wallet, skills
-│                   token   (LEGACY — prefer `obol agent auth`; can print CLI usage text and poison Bearer)
-├── openclaw        onboard, setup, sync, list, delete, dashboard, cli, token, skills
-├── model           setup, setup custom, prefer, sync, list, remove, status
+├── agent           init, new, sync, setup, auth, list, delete, update
+│   └── wallet      address, list, backup, restore
+├── wallet          import
+├── network         install, sync, delete, list, add, remove, status
+├── sell            inference, http, agent, demo, list, status, test, stop, update, delete, pricing, register, identity, info
+├── buy             inference
+├── hermes          passthrough (SkipFlagParsing) → native hermes CLI
+│                   Token retrieval moved to `obol agent auth`
+├── openclaw        onboard, sync, token, list, delete, setup, dashboard, cli
+│   ├── wallet      backup, restore, address, list
+│   └── skills      add, remove, list
+├── model           setup (has sub: custom), status, token, sync, pull, list, prefer, discover, remove
 ├── app             install, sync, list, delete
-├── tunnel          status, login, provision, restart, logs
+├── tunnel          status, setup, login, provision, restart, stop, logs
+├── domain          search, check, register
 ├── kubectl/helm/helmfile/k9s   Passthrough (auto KUBECONFIG)
-├── update/upgrade
+├── update          Helm + CLI version check (--json)
+├── upgrade         Apply chart upgrades (--defaults-only, --pinned, --major)
 └── version
 ```
 
+- `agent auth` (alias `token`): `--runtime [hermes|openclaw|all]`, `--regenerate`; positional `[instance-name]` defaults to stack-managed agent. Replaces legacy `hermes token`.
+- `agent new` (alias `onboard`): CRD-declared sub-agent via `--model`, `--skills`, `--objective`, `--create-wallet`. Without positional name, falls back to legacy host-rendered Hermes/OpenClaw onboard.
+- `network install` has dynamic subcommands (one per supported chain; `--help` to list). `network sync [<network>/<id>]` with `--all`.
+- `sell info <name>` prints purchase instructions (URL, model, buy.py command).
+- `hermes` is passthrough to native hermes CLI via `hermes.CLI()` (cmd/obol/hermes.go:27). No Go-level subcommands registered.
+- `bootstrap` (cmd/obol/bootstrap.go) is a hidden command for installer use only — not user-facing.
+
 ## Infrastructure Stack
 
-Deployed on `obol stack up` from `internal/embed/infrastructure/`. Key templates in `base/templates/`: `llm.yaml` (LiteLLM + Ollama), `x402.yaml` (verifier + serviceoffer-controller), `obol-agent.yaml` (singleton), `serviceoffer-crd.yaml`, `registrationrequest-crd.yaml`, `obol-agent-monetize-rbac.yaml`, `local-path.yaml`. Plus `cloudflared/` chart and `values/` for eRPC, monitoring, frontend.
+Deployed by `obol stack up` from `internal/embed/infrastructure/`. Key templates (`base/templates/`): `llm.yaml` (LiteLLM + Ollama), `x402.yaml` (x402-verifier + serviceoffer-controller), `obol-agent.yaml` (singleton ns), `serviceoffer-crd.yaml`, `registrationrequest-crd.yaml`, `obol-agent-monetize-rbac.yaml`, `local-path.yaml`. Plus `cloudflared/` Helm chart, `values/*.yaml.gotmpl` (eRPC, monitoring, frontend).
 
-Components: eRPC (`erpc` ns), Frontend (`obol-frontend` ns), Cloudflared (`traefik` ns), Monitoring/Prometheus (`monitoring` ns), LiteLLM (`llm` ns), x402-verifier (`x402` ns), serviceoffer-controller (`x402` ns), default obol-agent (`hermes-obol-agent` ns), ServiceOffer + RegistrationRequest CRDs.
+Namespaces: eRPC -> `erpc`, Frontend -> `obol-frontend`, Cloudflared -> `traefik`, Monitoring/Prometheus -> `monitoring`, LiteLLM -> `llm`, x402-verifier + serviceoffer-controller -> `x402`, default obol-agent (Hermes) -> `hermes-obol-agent`. ServiceOffer + RegistrationRequest CRDs (cluster-scoped).
 
 ## Monetize Subsystem
 
-Payment-gated access to cluster services via x402 (HTTP 402 micropayments, Traefik ForwardAuth). Supports USDC (EIP-3009) and OBOL (Permit2) via `--token [USDC|OBOL]` flag; default is USDC on Base Mainnet. Token registry in `internal/x402/tokens.go`.
+Payment-gated access to cluster services via x402 (HTTP 402 micropayments, Traefik ForwardAuth). Supports USDC (EIP-3009) and OBOL (Permit2) via `--token [USDC|OBOL]`; default USDC on Base Mainnet. Token registry: `internal/x402/tokens.go`.
 
-**Sell-side flow**: `obol sell http` → creates ServiceOffer CR → serviceoffer-controller reconciles ModelReady → UpstreamHealthy → PaymentGateReady (x402 Middleware) → RoutePublished (HTTPRoute) → Registered (RegistrationRequest + optional ERC-8004 side effects) → Ready. Traefik routes `/services/<name>/*` through ForwardAuth to upstream.
+**Sell flow**: `obol sell http` -> ServiceOffer CR -> controller reconciles: ModelReady -> UpstreamHealthy -> PaymentGateReady (x402 Middleware) -> RoutePublished (HTTPRoute) -> Registered (RegistrationRequest + optional ERC-8004) -> Ready. Traefik routes `/services/<name>/*` through ForwardAuth to upstream.
 
-**Buy-side flow**: `buy.py probe` sees 402 pricing → `buy.py buy` validates the token contract exists on-chain → pre-signs payment auths (ERC-3009 for USDC, Permit2 for OBOL) into a `PurchaseRequest` CR in the agent namespace → serviceoffer-controller writes buyer config/auth files into `llm` and publishes `paid/<remote-model>` → the in-pod `x402-buyer` sidecar spends one auth per paid request. Agent-managed refill runs through `buy.py process --all`, not the controller.
+**Buy flow**: `buy.py probe` sees 402 pricing -> `buy.py buy` validates on-chain token contract -> pre-signs payment auths (ERC-3009 for USDC, Permit2 for OBOL) into `PurchaseRequest` CR in agent ns -> serviceoffer-controller writes buyer config/auth into `llm` ns, publishes `paid/<remote-model>` -> in-pod `x402-buyer` sidecar spends one auth per paid request. Agent-managed refill: `buy.py process --all`, NOT the controller.
 
-**buy.py** lives at `${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py` inside the agent pod (skill name: `buy-x402`, not `buy`). Commands:
+**buy.py** at `${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py` (skill: `buy-x402`, not `buy`):
 ```
-probe <endpoint-url> [--model <id>]          Probe x402 pricing from a 402 endpoint
-buy <name> --endpoint <url> --model <id>     Pre-sign ERC-3009 auths + create PurchaseRequest
-     [--budget <micro-units>] [--count <N>]
-     [--auto-refill] [--refill-threshold <N>] [--refill-count <N>]
-process <name> | --all                       Reconcile auto-refill policies against live sidecar state
-list                                         List purchased providers
-status <name>                                Check sidecar auth pool + spent count
-balance [--chain <network>]                  Print agent wallet address + USDC balance
-maintain                                     Compatibility alias for process --all
+probe  <endpoint-url> [--model <id>]                 Probe x402 pricing
+buy    <name> --endpoint <url> --model <id>          Pre-sign auths + create PurchaseRequest
+       [--budget <micro-units>] [--count <N>]
+       [--auto-refill] [--refill-threshold <N>] [--refill-count <N>]
+process <name> | --all                                Reconcile auto-refill against live sidecar state
+list                                                  List purchased providers
+status <name>                                         Sidecar auth pool + spent count
+balance [--chain <network>]                           Wallet address + USDC balance
+maintain                                              Alias for process --all
 ```
-To get the agent wallet address: `buy.py balance` prints `Wallet: 0x...` as its first line.
-There is no `wallet` subcommand.
+`buy.py balance` prints `Wallet: 0x...` as first line. No `wallet` subcommand.
 
-**Endpoint URL inside pods vs host**: `obol.stack:8080` only resolves on the Mac host (via the DNS resolver). From inside any pod (buy.py, kubectl exec, etc.) always use the Traefik cluster-internal address instead:
+**Endpoint URL: host vs pod**: `obol.stack:8080` resolves only on Mac host (DNS resolver). From any pod always use Traefik cluster-internal address:
 - Host:   `http://obol.stack:8080/services/<name>/...`
 - In-pod: `http://traefik.traefik.svc.cluster.local/services/<name>/...`
 
-**Direct HTTP buy (no LiteLLM / no x402-buyer)**: Not a supported production path through the Traefik `ForwardAuth` route. Keep `verifyOnly: true` on `x402-verifier`; that path verifies payment but does not settle, so raw direct `X-PAYMENT` requests sent through Traefik do not have correct payment semantics. If you need a direct buyer that sends raw `X-PAYMENT`, use `obol sell inference`, where the gateway performs x402 middleware in-process and can settle after upstream success.
+**Direct HTTP buy (no LiteLLM / no x402-buyer)**: NOT a supported production path through Traefik ForwardAuth. Keep `verifyOnly: true` on `x402-verifier` — verifies payment, skips settlement. Use `obol sell inference` for raw `X-PAYMENT` buyers (gateway settles in-process after upstream success).
 
-If you `kubectl port-forward` to `x402-verifier` and call `/verify` **directly**, you must set `X-Forwarded-Uri` (and usually `X-Forwarded-Host`) the same way Traefik does; otherwise the verifier returns **403** `forbidden: missing forwarded URI` (Traefik may surface that as an empty body to the client). That verifier endpoint is for ForwardAuth integration/debugging, not a complete paid request path.
-For endpoints backed by host Ollama (`sell http --upstream ollama`), requests with `Host: obol.stack` can be rejected upstream with **403**. For paid production flows, prefer the `x402-buyer` path; for direct raw `X-PAYMENT`, prefer `obol sell inference`.
+Port-forward to `x402-verifier` and calling `/verify` directly: MUST set `X-Forwarded-Uri` (and usually `X-Forwarded-Host`) as Traefik does; otherwise **403** `forbidden: missing forwarded URI`. Verifier endpoint is ForwardAuth integration/debugging only, not a full paid-request path.
+`sell http --upstream ollama`: requests with `Host: obol.stack` may be rejected upstream with **403**. Prefer `x402-buyer` for paid production; prefer `obol sell inference` for raw `X-PAYMENT`.
 
-**Standalone inference gateway (`obol sell inference`)**: separate from the LiteLLM+buyer path. With a live cluster + kubeconfig, `obol sell inference` disables the gateway’s built-in x402 (`NoPaymentGate`) and publishes a `ServiceOffer` so **Traefik + x402-verifier** gate traffic to the host listener; run the gateway on the host (`127.0.0.1:<port>`) so the in-cluster Service+Endpoints can reach it. For a fully standalone host (no cluster), the gateway uses its **own** x402 middleware (`verifyOnly` / settle behavior per config).
+**Standalone inference gateway** (`obol sell inference`): separate from LiteLLM+buyer path. With live cluster + kubeconfig: disables built-in x402 (`NoPaymentGate`), publishes `ServiceOffer` -> Traefik + x402-verifier gate traffic to host listener; run gateway on `0.0.0.0:<port>` so in-cluster Service+Endpoints reach it. Standalone host (no cluster): gateway uses own x402 middleware (`verifyOnly`/settle per config).
 
-Quick full-cycle smoke test (sell + buy):
-1. Unpaid gate check: POST seller route without `X-PAYMENT`, expect `402` + accepts requirements.
-2. Buy auths: run `buy.py buy <name> --endpoint <url> --model <id> --count N`, expect PurchaseRequest `Ready` and sidecar `/status` shows `remaining > 0`.
-3. Paid call: send LiteLLM request with model `paid/<remote-model>`, expect `200`.
-4. Spend proof: sidecar `/status` should move `remaining -1`, `spent +1` after one successful paid call.
-5. Auto-refill smoke test: create the purchase with `--auto-refill ...`, then run `buy.py process --all` and confirm the loop only signs when live `/status` is at or below threshold.
+**Quick full-cycle smoke test** (sell + buy):
+1. POST seller route without `X-PAYMENT`, expect `402` + accepts requirements
+2. `buy.py buy <name> --endpoint <url> --model <id> --count N`, expect PurchaseRequest `Ready` + sidecar `/status` `remaining > 0`
+3. Send LiteLLM request with model `paid/<remote-model>`, expect `200`
+4. Sidecar `/status` moves `remaining -1`, `spent +1` after one paid call
+5. Create purchase with `--auto-refill ...`, run `buy.py process --all`, confirm loop only signs when live `/status` at or below threshold
 
-PurchaseRequest status caveat:
-- `PurchaseRequest.status` (including `conditions[].message`, `remaining`, `spent`) is the controller's last reconciled snapshot, not a live per-request counter.
-- For real-time auth pool state, and for any refill decision, always check `x402-buyer` `GET /status` in the litellm pod.
+**PurchaseRequest status caveat**: `PurchaseRequest.status` (`conditions[].message`, `remaining`, `spent`) is controller's last reconciled snapshot, NOT live per-request counter. For real-time auth pool + refill decisions, always query `x402-buyer` `GET /status` in litellm pod.
 
-**CLI**: `obol sell pricing --wallet --chain`, `obol sell inference <name> --model --price|--per-mtok [--token USDC|OBOL]`, `obol sell http <name> --wallet --chain --price|--per-request|--per-mtok --upstream --port --namespace --health-path [--token USDC|OBOL]`, `obol sell list|status|stop|delete`, `obol sell register --name --private-key-file`.
+**CLI**: `obol sell pricing --pay-to --chain`, `obol sell inference <name> --model --pay-to --price|--per-mtok [--token USDC|OBOL]`, `obol sell http <name> --pay-to --chain --price|--per-request|--per-mtok --upstream --port --namespace --health-path [--token USDC|OBOL]`, `obol sell list|status|stop|delete`, `obol sell register --chain [--name]`.
 
-**`obol sell http` flag reference** (common mistakes: `--model`, `--pay-to`, `--network` do NOT exist on this command):
+**`obol sell http` flag reference** (common mistakes: `--model`, `--network` do NOT exist; `--wallet` is a deprecated alias for `--pay-to`):
 ```
---wallet      0x...          USDC recipient address (NOT --pay-to)
---chain       base-sepolia   Payment chain         (NOT --network)
+--pay-to      0x...          USDC recipient address (primary; --wallet deprecated alias)
+--chain       base-sepolia   Payment chain
+--token       USDC           Payment token (USDC, OBOL)            [default: USDC]
 --per-request 0.001          Price per request     (or --price, --per-mtok, --per-hour)
 --upstream    ollama         Upstream k8s service name
---port        11434          Upstream service port
---namespace   llm            Controls TWO things with the same value (default: "default"):
-                               1. The namespace where the ServiceOffer CR is created
-                               2. The namespace where the upstream k8s service lives
---health-path /api/tags      Health check path on the upstream
+--port        11434          Upstream service port                 [default: 8080]
+--namespace   llm            Controls TWO things with the same value [default: "default"]:
+                               1. ServiceOffer CR namespace
+                               2. upstream k8s service namespace
+--health-path /api/tags      Upstream health check path            [default: /health]
 ```
 **Critical**: `--namespace` sets BOTH the ServiceOffer namespace and the upstream service namespace to the same value. Always pass the same `-n <namespace>` to every follow-up command (`sell status`, `sell stop`, `sell delete`). The CLI itself prints the correct namespace after creation.
 
@@ -150,7 +171,7 @@ Example — expose Ollama (lives in `llm` ns) as a paid endpoint:
 ```bash
 obol sell http ollama-gated \
   --upstream ollama --port 11434 --namespace llm --health-path /api/tags \
-  --per-request "0.001" --chain "base-sepolia" --wallet "0x<wallet>"
+  --per-request "0.001" --chain "base-sepolia" --pay-to "0x<wallet>"
 # CLI prints: "Check status: obol sell status ollama-gated -n llm"
 
 obol sell status ollama-gated -n llm
@@ -158,133 +179,152 @@ obol sell stop   ollama-gated -n llm
 obol sell delete ollama-gated -n llm
 ```
 
-**ServiceOffer CRD** (`obol.org`): Source of truth for monetized service intent. Spec fields — `type` (inference|fine-tuning|http), `model{name,runtime}`, `upstream{service,namespace,port,healthPath}`, `payment{scheme,network,payTo,price{perRequest,perMTok,perHour}}`, `path`, `registration{enabled,name,description,image,skills,domains,supportedTrust}`.
+**ServiceOffer CRD** (`obol.org`): Source of truth for monetized service intent. Spec fields — `type` (inference|fine-tuning|http|agent), `model{name,runtime}`, `upstream{service,namespace,port,healthPath}`, `payment{scheme,network,payTo,asset,price{perRequest,perMTok,perHour,perEpoch},maxTimeoutSeconds}`, `path`, `registration{enabled,name,description,image,services,skills,domains,supportedTrust,metadata}`, `provenance`, `drainAt`, `drainGracePeriod`. Type `agent` resolves upstream from an Agent CR via `agent.ref`. Declared in `internal/monetizeapi/types.go`.
 
-**x402-verifier** (`x402` ns): ForwardAuth middleware only. No match → pass through. Match + no payment → 402. Match + payment → verify with facilitator. Keep `verifyOnly: true` for this path permanently. `x402-verifier` is not the final settlement point for the supported production flow; it exists to gate requests before they reach settlement-aware components such as `x402-buyer`. Static defaults still come from `x402-pricing`, but live per-offer routes are derived in-memory from published ServiceOffers.
+**x402-verifier** (`x402` ns): ForwardAuth middleware only. No match -> pass through. Match + no payment -> 402. Match + payment -> verify with facilitator. `verifyOnly: true` permanent (set in `internal/embed/infrastructure/base/templates/x402.yaml:35`). `x402-verifier` is NOT the final settlement point for the supported production flow; it gates requests before they reach settlement-aware components (`x402-buyer`). Static defaults from `x402-pricing` ConfigMap; live per-offer routes derived in-memory from published ServiceOffers.
 
-**serviceoffer-controller** (`internal/serviceoffercontroller/`): Watches ServiceOffers and RegistrationRequests, adds finalizers, creates Middleware + HTTPRoute, publishes registration resources, and drives tombstone cleanup on delete.
+**Agent-backed offers** (`obol sell agent <name>`): wrap an `Agent` CR (from `obol agent new`) in a `type=agent` ServiceOffer. Controller resolves `spec.agent.ref` -> agent's Hermes endpoint (port 8642), surfaces `agentModel`/`agentSkills`/`agentRuntime` in the 402 `extra`, gates `/services/<name>/*` via `x402-verifier.HandleProxy`. Hermes serves OpenAI-compatible `/v1/chat/completions` (streaming + non-streaming, same path).
 
-**ERC-8004**: Registration publication is isolated behind `RegistrationRequest`. The controller serves `/.well-known/agent-registration.json` from dedicated child resources and watches the chain selected by the offer's `payment.network` (`mainnet`, `base`, `base-sepolia`) for the matching registration tx — submitted by the operator via `obol sell register`, never by the controller. Per-chain RPC is routed through the in-cluster eRPC at `http://erpc.erpc.svc.cluster.local/rpc/<alias>` (override base via `ERC8004_RPC_BASE` env on the controller). The CLI `--chain` default is `mainnet`.
+**Streaming**: SSE chunks flush per-write end-to-end through `x402-verifier.HandleProxy` (seller gateway for `sell agent`/`sell http`). Prefer `stream: true` for any paid agent inference that may exceed Cloudflare quick-tunnel's ~100s idle window — non-streaming sends zero bytes until upstream is done, so the tunnel drops before the buffered body arrives. `statusRecorder.Flush` (`internal/x402/verifier.go`) MUST forward to the underlying `http.Flusher`; embedding the bare `http.ResponseWriter` hides the concrete Flusher and silently buffers the whole response. Regression: `internal/x402/verifier_test.go::TestVerifier_HandleProxy_StreamsSSEChunks`.
 
-**RBAC**: The controller owns child-resource and registration write access. The agent retains read access plus minimal ServiceOffer CRUD for compatibility commands only.
+**serviceoffer-controller** (`internal/serviceoffercontroller/`, binary `cmd/serviceoffer-controller/`): Watches ServiceOffers + RegistrationRequests, adds finalizers, creates Middleware + HTTPRoute, publishes registration resources, drives tombstone cleanup on delete.
+
+**ERC-8004**: Registration publication isolated behind `RegistrationRequest`. Controller serves `/.well-known/agent-registration.json` from dedicated child resources, watches the chain selected by the offer's `payment.network` (`mainnet`, `base`, `base-sepolia`) for the matching registration tx — submitted by the operator via `obol sell register`, never by the controller. Per-chain RPC routed through in-cluster eRPC at `http://erpc.erpc.svc.cluster.local/rpc/<alias>` (override via `ERC8004_RPC_BASE` env on controller; default `http://erpc.erpc.svc.cluster.local/rpc` in `internal/erc8004/abi.go:27`). `obol sell register --chain` defaults to `mainnet` (cmd/obol/sell.go:2752); `obol sell http --chain` defaults to `base` (cmd/obol/sell.go:538).
+
+**RBAC** (`internal/embed/infrastructure/base/templates/obol-agent-monetize-rbac.yaml`): Controller owns child-resource + registration write access. Agent (Hermes SA in `hermes-obol-agent`, OpenClaw SA in `openclaw-obol-agent`) gets read on `serviceoffers` + `serviceoffers/status`, full CRUD on `serviceoffers` + `purchaserequests` for compatibility commands, and agent-factory writes on `namespaces`, `secrets`, `agents` (hermes-only).
 
 ## RPC Gateway
 
-`obol network add|remove|status` manages remote RPCs via eRPC ConfigMap. Default: read-only (blocks `eth_sendRawTransaction`). `--allow-writes` enables write methods. `--endpoint` for custom RPCs. Key functions in `internal/network/rpc.go`: `AddPublicRPCs()` (ChainList), `AddCustomRPC()`, `ListRPCNetworks()`.
+`obol network add|remove|status` manages remote RPCs via eRPC ConfigMap. Default: read-only (blocks `eth_sendRawTransaction`, `eth_sendTransaction`). `--allow-writes` flips readOnly → route `eth_sendRawTransaction` to the user-chosen upstream via eRPC per-method selection policy. `--endpoint` adds a custom RPC directly (skips ChainList). Key functions in `internal/network/rpc.go`: `AddPublicRPCs()` (ChainList), `AddCustomRPC()`, `ListRPCNetworks()`.
 
 ## Network Management
 
-Two-stage templating: `values.yaml.gotmpl` with `@enum/@default/@description` annotations → CLI flags → rendered `values.yaml` (Stage 1), then `helmfile sync --state-values-file values.yaml --state-values-set id=<id>` (Stage 2). Unique namespaces: `<network>-<id>` where ID is petname or `--id <name>`. Local Ethereum nodes auto-registered as priority upstream in eRPC via `RegisterERPCUpstream()` (write methods blocked on local → routed to remote).
+Two-stage templating: `values.yaml.gotmpl` annotated with `@enum`/`@default`/`@description` → CLI flags (dynamic `--id`, `--mode`, `--since`, etc. generated by `internal/network/parser.go`) → rendered `values.yaml` (Stage 1), then `helmfile sync --state-values-file values.yaml --state-values-set id=<id>` (Stage 2). Unique namespaces: `<network>-<id>` where ID is petname or `--id <name>`. Local Ethereum nodes auto-registered as priority upstream in eRPC via `RegisterERPCUpstream()` (writes blocked on local → routed to remote).
 
-**Ethereum `--mode full|archive`** (default `full`): controls whether reth runs as a pruned full node (~500 GB mainnet / ~100 GB testnet) or an archive node retaining all historical state (~4 TB+ mainnet / ~300 GB testnet). Archive mode is for state replay (block explorers, historical `eth_call`, indexers); full mode is the right default for everything else. The mode flows through to (a) the reth `--full` arg in `internal/embed/networks/ethereum/helmfile.yaml.gotmpl`, (b) PVC sizing in `templates/pvc.yaml`, and (c) the `helmfile` `persistence.size` request. `obol network install ethereum` runs a disk-space preflight via `internal/network/preflight.go` — it warns when `cfg.DataDir` has less free disk than `(network, mode)` is expected to need, prompts the user, and auto-continues in non-interactive mode (no TTY / JSON output) so scripted installs don't deadlock. Other execution clients (geth, nethermind, besu, erigon) ignore the mode flag for now.
+**Ethereum `--mode full|archive`** (default `full`): reth pruned full node (~500GB exec / ~200GB cons mainnet, ~100GB / ~50GB testnet) vs archive node retaining all historical state (~4.5TB exec / ~500GB cons mainnet, ~300GB / ~100GB testnet). Archive mode for state replay (block explorers, historical `eth_call`, indexers); full mode is the right default. Mode flows through to: (a) reth `--full` arg in `internal/embed/networks/ethereum/helmfile.yaml.gotmpl`, (b) PVC sizing in `templates/pvc.yaml` via `executionStorageSize`/`consensusStorageSize`, (c) helmfile `persistence.size`. `obol network install ethereum` runs disk-space preflight via `internal/network/preflight.go` — warns when `cfg.DataDir` free disk < expected, prompts, auto-continues in non-interactive mode (no TTY / JSON output). Other execution clients (geth, nethermind, besu, erigon) ignore the mode flag.
 
-**Ethereum `--since` (partial archive)**: when `--mode=archive` would otherwise mean genesis-to-tip, `--since` bounds the archive at a known historical point and translates to reth's `--prune.account-history.{before,distance}` + `--prune.storage-history.{before,distance}` flags (plus `--prune.receipts.pre-merge` / `--prune.bodies.pre-merge` when the cutoff is at or before the merge). Accepted forms: EL hardfork names (`merge`, `shanghai`, `cancun`, `prague`, `osaka` — mainnet only, verified block numbers in `internal/network/hardforks.go`); durations (`365d`, `1y`, `6mo` — resolved against the post-merge 12s slot rate as a `--prune.*.distance` value); raw block numbers (`22500000`); or `genesis`/`all` (no extra args). Resolution happens in `resolveEthereumArchiveScope` in `internal/network/picker.go`: `--since` wins outright; if `--mode` is unset and a TTY is attached, a `full vs archive` picker runs; if `--mode=archive` is set without `--since` on a TTY, an `Archive scope` picker offers the hardfork presets + custom block + 365 days + genesis. Non-TTY defaults to `mode=full` (mode unset) or `since=genesis` (mode=archive). Resolved scope is appended to `values.yaml` as `pruneKind` / `pruneBlock` / `pruneDistance` and consumed by the helmfile. Partial archive is wired only for reth; geth/besu/erigon/nethermind emit a warning and run with chart defaults. Hardfork-name presets are rejected on testnets (mainnet block numbers don't apply).
+**Ethereum `--since` (partial archive)**: when `--mode=archive` would otherwise mean genesis-to-tip, `--since` bounds the archive at a known historical point → reth `--prune.{account-history,storage-history,receipts,bodies}.{before,distance}` flags. Accepted forms: EL hardfork names (`merge`, `shanghai`, `cancun`, `prague`, `osaka` — mainnet only, verified block numbers in `internal/network/hardforks.go`); durations (`365d`, `1y`, `6mo` — resolved against post-merge 12s slot rate → distance in blocks); raw block numbers (`22500000`); or `genesis`/`all` (full archive, no extra args). Resolution in `resolveEthereumArchiveScope` in `internal/network/picker.go`: `--since` wins outright; `--mode` unset + TTY → full vs archive picker; `--mode=archive` without `--since` + TTY → Archive scope picker (hardfork presets + custom block + 365 days + genesis). Non-TTY: mode unset → `full`; mode=archive → `since=genesis`. Resolved scope written to `values.yaml` as `pruneKind`/`pruneBlock`/`pruneDistance`, + storage profile `executionStorageSize`/`consensusStorageSize`/`diskRequirementGB`. Partial archive wired only for reth; geth/besu/erigon/nethermind emit warning, run with chart defaults. Hardfork-name presets rejected on testnets (mainnet block numbers don't apply).
 
 ## Stack Lifecycle
 
 | Command | Action |
 |---------|--------|
-| `obol stack init` | Generate cluster ID, resolve absolute paths, write k3d.yaml, copy infrastructure |
-| `obol stack up` | `k3d cluster create`, export kubeconfig, k3s auto-applies manifests, auto-configures LiteLLM with Ollama models (preserves Ollama's modified-time order; `:cloud` aliases demoted behind local chat models; warns + suggests `ollama pull qwen3.5:4b` when Ollama is empty or all-`:cloud`), deploys obol-agent, starts Cloudflare tunnel |
-| `obol stack down` | `k3d cluster delete` (preserves config + data) |
+| `obol stack init` | Generate cluster ID (petname), resolve absolute paths, write k3d.yaml, copy infrastructure |
+| `obol stack up` | `k3d cluster create`, export kubeconfig, k3s auto-applies manifests, auto-configures LiteLLM with Ollama models (preserves Ollama modified-time order; `:cloud` aliases demoted behind local chat models; embedding-only models last; warns + suggests `ollama pull qwen3.5:4b` when empty or all-`:cloud`), deploys default Hermes agent, applies agent capabilities, starts persistent Cloudflare tunnel |
+| `obol stack down` | `k3d cluster stop` (delete fallback; preserves config + data) |
 | `obol stack purge [-f]` | Delete config; `-f` also deletes root-owned PVCs |
 
-k3d: 1 server, ports 80:80 + 8080:80 + 443:443 + 8443:443, `rancher/k3s:v1.35.1-k3s1`.
+k3d: 1 server, ports `80:80` + `8080:80` + `443:443` + `8443:443`, image `rancher/k3s:v1.35.1-k3s1`.
 
-**Local access**: On macOS, port 80 is privileged and may not bind without root. Always use `http://obol.stack:8080/` (not `http://obol.stack/`) for local browser and curl access. Port 8080 maps to the same Traefik load balancer as port 80.
+**Local access**: macOS port 80 privileged — may not bind without root. Always use `http://obol.stack:8080/` (not `http://obol.stack/`). Port 8080 maps to same Traefik load balancer as port 80.
 
 ### Dev Registry Cache
 
-When `OBOL_DEVELOPMENT=true`, `obol stack up` creates pull-through k3d registry caches and a local push target, and wires new clusters to use them:
+`OBOL_DEVELOPMENT=true` -> `obol stack up` ensures pull-through k3d registry caches and a local push target; wires new clusters to use them:
 
 - `docker.io` -> `k3d-obol-docker-io.localhost:54100` (pull-through)
 - `ghcr.io` -> `k3d-obol-ghcr-io.localhost:54101` (pull-through)
 - `quay.io` -> `k3d-obol-quay-io.localhost:54102` (pull-through)
 - `localhost:54103` -> `k3d-obol-local.localhost:54103` (local push target, no upstream proxy)
 
-The generated k3d registry config is written to `$OBOL_CONFIG_DIR/registries.yaml`. Cache data is stored under `~/.local/state/obol/registry-cache/` by default, or under `OBOL_REGISTRY_CACHE_DIR` when set.
+Generated k3d registry config written to `$OBOL_CONFIG_DIR/registries.yaml`. Cache data under `~/.local/state/obol/registry-cache/` by default, or under `OBOL_REGISTRY_CACHE_DIR` when set.
 
-The local push target lets `just dev-frontend` swap layered diffs into the cluster via `docker push localhost:54103/...` (and a deployment image of `localhost:54103/...:dev`) — only changed layers transfer, vs. `k3d image import`'s full-tarball round-trip.
+Local push target: `just dev-frontend` swaps layered diffs into cluster via `docker push localhost:54103/...` (deployment image `localhost:54103/...:dev`) — only changed layers transfer, vs. `k3d image import`'s full-tarball round-trip.
 
-Important caveats:
-
-- The pull-through caches do not help local-build flows like `just dev-frontend` because `docker build` runs on the host daemon and `k3d image import` bypasses registries entirely. The local push target above is what speeds up local-build redeploys.
-- Registries are only set up during cluster creation. If `obol stack up` is just starting an existing k3d cluster, registry setup is skipped — recreate the cluster (`obol stack down && obol stack up`) once to pick up new registry entries.
+Caveats:
+- Pull-through caches don't help host `docker build` flows — `k3d image import` bypasses registries entirely. The local push target is what speeds up local-build redeploys.
+- Registry --registry-use wiring only happens during cluster creation. Recreate the cluster (`obol stack down && obol stack up`) to pick up new registry entries in an existing cluster.
 
 ## LLM Routing
 
-**Service access from the Mac host** — not every cluster service is reachable via `obol.stack:8080`. Only routes published through Traefik are externally accessible. Everything else is ClusterIP-only and requires `kubectl port-forward`:
+**Host reachability** — only Traefik-published routes accessible via `obol.stack:8080`. Everything else ClusterIP, needs `kubectl port-forward`:
 
 | Service | How to reach from Mac host |
 |---------|---------------------------|
 | Traefik ingress (frontend, eRPC, x402 routes) | `http://obol.stack:8080/...` |
-| LiteLLM (`llm` ns, port 4000) | `kubectl port-forward svc/litellm 14000:4000 -n llm` then `http://127.0.0.1:14000` |
-| x402-buyer sidecar (port 8402, no Service — pod only) | `kubectl port-forward -n llm <litellm-pod> 18402:8402` then `http://127.0.0.1:18402` |
+| LiteLLM (`llm` ns, port 4000) | `kubectl port-forward svc/litellm 14000:4000 -n llm` → `http://127.0.0.1:14000` |
+| x402-buyer sidecar (port 8402, no Service — pod only) | `kubectl port-forward -n llm <litellm-pod> 18402:8402` → `http://127.0.0.1:18402` |
 | OpenClaw instance | `kubectl port-forward -n openclaw-<id> svc/openclaw 18789:18789` |
 
-**Never call `http://obol.stack:8080/v1/...` expecting to hit LiteLLM** — that path hits Traefik which has no `/v1` route and returns the frontend 404 page.
+**Never call `http://obol.stack:8080/v1/...`** — Traefik has no `/v1` route, returns frontend 404.
 
-**x402-buyer sidecar is distroless** — no `wget`, `curl`, or shell inside the container. Use port-forward from the host, not `kubectl exec`.
+**x402-buyer sidecar is distroless** — no `wget`, `curl`, or shell. Use port-forward, not `kubectl exec`.
 
-**LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy routing to Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). Auto-configured with Ollama models during `obol stack up` (no manual `obol model setup` needed). `ConfigureLiteLLM()` patches config + Secret + restarts or hot-adds via the LiteLLM model API. Paid remote inference uses the Obol LiteLLM fork plus the `x402-buyer` sidecar, with a static `paid/* -> openai/* -> http://127.0.0.1:8402` route and explicit paid-model entries when needed. Hermes uses a custom OpenAI-compatible provider pointed at LiteLLM; optional OpenClaw instances use the OpenAI provider slot. `dangerouslyDisableDeviceAuth` is enabled for Traefik-proxied access.
+**LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy → Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). Auto-configured with Ollama models during `obol stack up` (no manual `obol model setup`). `ConfigureLiteLLM()` patches config + Secret + restarts or hot-adds via LiteLLM model API. Paid remote inference: Obol LiteLLM fork + `x402-buyer` sidecar, with static `paid/*` → `openai/*` → `http://127.0.0.1:8402` route (wildcard catch-all, requires >=1 concrete `paid/<model>` entry to be useful). Hermes uses provider `"custom"` pointed at `http://litellm.llm.svc.cluster.local:4000/v1`; optional OpenClaw instances reuse the `"openai"` provider slot (ollama slot disabled). Agent configs use `dangerouslyDisableDeviceAuth` for Traefik-proxied access.
 
-**Auto-configuration**: During `obol stack up`, `autoConfigureLLM()` detects host Ollama models and patches LiteLLM config so agent chat works immediately without manual `obol model setup`. During install, `obolup.sh` `check_agent_model_api_key()` reads `~/.openclaw/openclaw.json` agent model, resolves API key from environment (`ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` for Anthropic; `OPENAI_API_KEY` for OpenAI), and exports it for downstream tools.
+**Auto-configuration**: `obol stack up` → `autoConfigureLLM()` detects host Ollama models, patches LiteLLM config. `obolup.sh` → `check_agent_model_api_key()` reads `~/.openclaw/openclaw.json`, resolves API key from `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` (Anthropic) or `OPENAI_API_KEY` (OpenAI), exports for downstream.
 
-**Pointing the stack at an external OpenAI-compatible LLM** (vLLM / sglang / mlx-lm / a remote GPU box) — canonical user flow, no ConfigMap surgery:
+**External OpenAI-compatible LLM** (vLLM / sglang / mlx-lm / remote GPU) — canonical user flow, no ConfigMap surgery:
 
 ```bash
-obol stack up                                                  # cluster + base infra (auto-config picks up host Ollama if present)
+obol stack up       # cluster + base infra (auto-config picks up host Ollama if present)
 
-# Hermes picks the first chat-capable entry in LiteLLM's model_list as its
-# default (configured order is the source of truth — see internal/model/rank.go,
-# which only demotes embedding-only entries past chat-capable ones). Auto-detect
-# prepends host Ollama models to the list, so they win the default unless you
-# either (a) remove them, or (b) move your preferred entry to the head with
-# `obol model prefer`. Option (b) is the user-facing override the flow scripts
-# rely on.
+# Hermes picks first chat-capable entry in LiteLLM's model_list as default.
+# Order is source of truth — see internal/model/rank.go (Rank(): preserves
+# model_list order, only demotes embedding-only entries past chat-capable).
+# Auto-detect prepends host Ollama → they win unless (a) or (b).
 
-# (a) Drop the auto-detected Ollama entries so only the new endpoint remains:
+# (a) Drop auto-detected Ollama entries:
 obol model remove qwen3.5:9b
 obol model remove qwen3.5:4b
 
 obol model setup custom \
     --endpoint http://192.168.18.23:8000/v1 \
     --model qwen36-deep
-# `setup custom` validates the endpoint, patches LiteLLM, and internally calls
-# syncAgentModels → hermes.Sync → rewrites the default agent's deployment files
-# with the new primary model. No manual restart needed.
+# setup custom validates endpoint, patches LiteLLM, calls
+# syncAgentModels -> hermes.Sync -> rewrites agent deployment files.
+# No manual restart needed.
 
-# (b) OR keep Ollama and force-promote the custom entry to the head:
+# (b) Keep Ollama, promote custom entry to head:
 obol model prefer qwen36-deep
-obol model sync                                                # propagate to Hermes
+obol model sync
 
-obol model list                                                # confirm head of model_list
-obol model status                                              # show provider state
+obol model list       # confirm head of model_list
+obol model status     # show provider state
 ```
 
-The flow scripts (`flows/lib.sh:route_llm_via_obol_cli`) wrap this exact sequence behind `OBOL_LLM_ENDPOINT` / `OBOL_LLM_MODEL` / `OBOL_LLM_API_KEY` env vars, so smoke tests can target a GPU host without burning host CPU on local Ollama.
+Flow scripts (`flows/lib.sh:route_llm_via_obol_cli`) wrap this behind `OBOL_LLM_ENDPOINT` / `OBOL_LLM_MODEL` / `OBOL_LLM_API_KEY` env vars for smoke-test GPU targeting.
 
-**Per-instance overlay**: `buildLiteLLMRoutedOverlay()` reuses "ollama" provider slot pointing at `litellm.llm.svc:4000/v1` with `api: openai-completions`. App → litellm:4000 → routes by model name → actual API.
+**Per-instance overlay**: `buildLiteLLMRoutedOverlay()` uses `"openai"` provider slot (Name: "openai", ollama slot disabled) → `http://litellm.llm.svc.cluster.local:4000/v1`, `api: openai-completions`, `agentModel: "openai/<model>"`. App → litellm:4000 → routes by model_name → actual API.
 
 ## Standalone Inference Gateway
 
-`obol sell inference` — standalone OpenAI-compatible HTTP gateway with x402 payment gating, for bare metal / Secure Enclave. `--vm` flag runs Ollama in Apple Containerization Linux VM. Key code: `internal/inference/` (gateway, container, store) and `internal/enclave/` (Secure Enclave signing via CGo/Security.framework on Darwin, stub fallback elsewhere).
+`obol sell inference` — standalone OpenAI-compatible HTTP gateway with x402 payment gating, for bare metal / Secure Enclave.
+`--vm` runs Ollama in Apple Containerization Linux micro-VM (plus `--vm-image`, `--vm-cpus`, `--vm-memory`, `--vm-host-port`).
+Key code: `internal/inference/{gateway,container,store}.go`, `internal/enclave/{enclave,enclave_darwin,enclave_stub}.go` (Secure Enclave signing via CGo/Security.framework on Darwin, stub fallback elsewhere).
 
 ## Agent Runtimes & Skills
 
-Hermes is the stack-managed default runtime. Default instance state lives under `applications/hermes/obol-agent`, namespace `hermes-obol-agent`, service/deployment `hermes`, ConfigMap `hermes-config`, and PVC path `$DATA_DIR/hermes-obol-agent/hermes-data/.hermes`.
+**Hermes** — stack-managed default runtime.
 
-OpenClaw remains an optional manual runtime. OpenClaw instances live under `applications/openclaw/<id>`, namespace `openclaw-<id>`, service/deployment `openclaw`, and ConfigMap `openclaw-config`.
+| Item | Value |
+|------|-------|
+| State dir | `applications/hermes/obol-agent` |
+| Namespace | `hermes-obol-agent` |
+| Service / Deployment | `hermes` |
+| ConfigMap | `hermes-config` |
+| PVC host path | `$DATA_DIR/hermes-obol-agent/hermes-data/.hermes` |
+| Skills path (pod) | `/data/.hermes/obol-skills` (`OBOL_SKILLS_DIR` env, `skills.external_dirs`) |
 
-Obol skills = SKILL.md + optional scripts/references, embedded in `obol` binary (`internal/embed/skills/`). Hermes receives them via native `skills.external_dirs` at `/data/.hermes/obol-skills` with `OBOL_SKILLS_DIR` set to that path. OpenClaw receives them via PVC injection at `/data/.openclaw/skills`.
+**OpenClaw** — optional manual runtime.
 
-**Monetize skill** (`internal/embed/skills/monetize/`): thin compatibility wrapper around ServiceOffer CRUD, controller waiting, and `/skill.md` publication.
+| Item | Value |
+|------|-------|
+| State dir | `applications/openclaw/<id>` |
+| Namespace | `openclaw-<id>` |
+| Service / Deployment | `openclaw` |
+| ConfigMap | `openclaw-config` |
+| Skills path (pod) | `/data/.openclaw/skills` (PVC injection) |
 
-**Remote-signer wallet**: `GenerateWallet()` in `internal/openclaw/wallet.go`. secp256k1 → Web3 V3 keystore, remote-signer REST API at port 9000 in same ns.
+**Obol skills**: `SKILL.md` + optional scripts/references, embedded in `obol` binary (`internal/embed/skills/`).
+
+**Monetize skill** (`internal/embed/skills/monetize/`): thin compatibility wrapper around ServiceOffer CRUD, controller waiting, `/skill.md` publication.
+
+**Remote-signer wallet**: `GenerateWallet()` in `internal/openclaw/wallet.go`. secp256k1 → Web3 V3 keystore → remote-signer REST API at port 9000 in same ns.
 
 ## Buyer Sidecar
 
-`x402-buyer` — lean Go sidecar for buy-side x402 payments using pre-signed ERC-3009 authorizations. It runs as a second container in the `litellm` Deployment, not as a separate Service. Agent `buy.py` signs auths locally and creates a `PurchaseRequest`; the controller writes per-upstream buyer config/auth files into the buyer ConfigMaps and keeps LiteLLM routes in sync. The sidecar exposes `/status`, `/healthz`, `/metrics`, and `/admin/reload`; metrics are scraped via `PodMonitor`. Zero signer access, bounded spending (max loss = N × price).
+`x402-buyer` — lean Go sidecar for buy-side x402 payments using pre-signed ERC-3009 authorizations. Second container in `litellm` Deployment (no separate Service). Agent `buy.py` signs auths locally → `PurchaseRequest`; controller writes per-upstream buyer config/auth files into buyer ConfigMaps, keeps LiteLLM routes in sync. Endpoints: `/status`, `/healthz`, `/metrics`, `/admin/reload`; metrics scraped via `PodMonitor`. Zero signer access, bounded spending (max loss = N × price).
 
 Settlement lifecycle (cluster-routed paid flow):
 - Traefik/x402-verifier stays on the verify-only path (`verifyOnly: true`).
@@ -296,20 +336,20 @@ Supported paths:
 - For direct raw `X-PAYMENT` buyers, use `obol sell inference`.
 - Do not treat raw direct `X-PAYMENT` through Traefik ForwardAuth as a supported production payment path.
 
-Key code: `cmd/x402-buyer/`, `internal/x402/buyer/`, and `internal/x402/forwardauth.go`.
+Key code: `cmd/x402-buyer/`, `internal/x402/buyer/`, `internal/x402/forwardauth.go`.
 
 ## Development Constraints
 
 1. **Absolute paths required** — Docker volume mounts need absolute paths (resolved at `obol stack init`)
-2. **Two-stage templating** — Stage 1 (CLI flags) → Stage 2 (Helmfile) separation is critical
+2. **Two-stage templating** — Stage 1 (CLI flags) → Stage 2 (Helmfile); separation is critical
 3. **Unique namespaces** — each deployment must have unique namespace
-4. **`OBOL_DEVELOPMENT=true`** — required for `obol stack up` to auto-build local images (x402-verifier, serviceoffer-controller, x402-buyer, demo-server, obol-stack-public-storefront; `public-storefront` alias accepted). The build path reuses any locally-tagged image of the same name to keep warm runs fast; set `OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES` to control force-rebuilds: `true`/`all` rebuilds every image, a comma-separated list (e.g. `x402-verifier,serviceoffer-controller`) rebuilds only those images, and `false`/`0`/unset skips forced rebuilds. The "Local dev images ready" summary line surfaces this hint when nothing was rebuilt this run.
+4. **`OBOL_DEVELOPMENT=true`** — required for `obol stack up` to auto-build local images: `x402-verifier`, `serviceoffer-controller`, `x402-buyer`, `demo-server`, `obol-stack-public-storefront` (`public-storefront` alias accepted). Build path reuses same-name local tag for warm-run speed. `OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES` controls force-rebuilds: `true`/`all` = every image; comma-separated list (e.g. `x402-verifier,serviceoffer-controller`) = only those; `false`/`0`/unset = skip. "Local dev images ready" summary surfaces when nothing was rebuilt.
 5. **Root-owned PVCs** — `-f` flag required to remove in `obol stack purge`
-6. **Narrow review boundaries** — for controller/RBAC/payment changes, spell out exact security and user-journey invariants before editing or delegating; broad review prompts have previously produced noisy findings and missed test drift
+6. **Narrow review boundaries** — for controller/RBAC/payment changes, spell out exact security and user-journey invariants before editing or delegating; broad review prompts have previously missed test drift
 
 ### OpenClaw Version Management
 
-Three places pin the OpenClaw version — all must agree:
+Three places pin the version — all must agree:
 1. `internal/openclaw/OPENCLAW_VERSION` — source of truth (Renovate watches, CI reads)
 2. `internal/openclaw/openclaw.go` — `openclawImageTag` constant
 3. `obolup.sh` — `OPENCLAW_VERSION` shell constant for standalone installs
@@ -318,7 +358,7 @@ Three places pin the OpenClaw version — all must agree:
 
 ### Pitfalls
 
-**First diagnostic when release-smoke goes red**: confirm what's actually deployed before reading verifier code. A `503 Payment verification failed` from Traefik is almost never a real verifier bug — it's usually one of pitfalls 9–13 below.
+**First diagnostic when release-smoke goes red**: confirm what is actually deployed before reading verifier code. A `503 Payment verification failed` from Traefik is almost never a real verifier bug — it is usually one of pitfalls 9–13 below.
 
 ```bash
 kubectl get deploy -n x402 x402-verifier -o jsonpath='{.spec.template.spec.containers[*].image}'
@@ -331,19 +371,19 @@ A registry digest pin instead of `:latest` on the verifier means your dev rewrit
 1. **Kubeconfig port drift** — k3d API port can change between restarts. Fix: `k3d kubeconfig write <name> -o .workspace/config/kubeconfig.yaml --overwrite`
 2. **Agent RBAC binding empty** — `obol-agent-monetize-rbac` (Hermes default; legacy `openclaw-monetize-binding` for OpenClaw runs) may have empty subjects if `obol agent init` races with k3s manifest apply. Re-run `obol agent init`.
 3. **ConfigMap propagation** — ~60-120s for k3d file watcher; force restart for immediate effect
-4. **ExternalName services** — don't work with Traefik Gateway API, use ClusterIP + Endpoints
-5. **eRPC `eth_call` cache** — default TTL is 10s for unfinalized reads, so `buy.py balance` can lag behind an already-settled paid request for a few seconds
-6. **`/v1` required in `api_base` for `paid/*` route** — LiteLLM's OpenAI provider does NOT append `/v1` to a bare `api_base`. The buyer sidecar route must be `http://127.0.0.1:8402/v1`, not `http://127.0.0.1:8402`. Without `/v1`, LiteLLM calls `/chat/completions` on the buyer and the buyer's mux returns `404 page not found` (Go default), which LiteLLM surfaces as `OpenAIException - 404 page not found`.
-7. **LiteLLM restart is fallback, not the default buy path** — on this branch, the validated happy path is `buy.py buy`/`process --all`/same-name top-up without a manual LiteLLM restart. The controller hot-add/hot-delete path plus buyer reload is expected to make `paid/<model>` appear and disappear in place. If a paid alias still fails to show up after the controller has reconciled and the buyer sidecar is reporting the upstream, then restart LiteLLM as a fallback investigation step. Treat a mandatory restart after every buy as historical behavior, not a current invariant.
-8. **x402-verifier CA bundle missing → TLS failure** — The `x402-verifier` image is distroless and ships with no CA store. The `ca-certificates` ConfigMap in the `x402` namespace must be populated from the host's CA bundle or the verifier cannot TLS-verify calls to the facilitator (`https://x402.gcp.obol.tech`), causing all payments to fail with `x509: certificate signed by unknown authority`. **Fixed**: `obol stack up` now calls `x402verifier.PopulateCABundle` after infrastructure deployment, and `obol sell http` calls it before creating the ServiceOffer. If you encounter `Payment verification failed` errors, check the verifier logs for the x509 error and repopulate manually: `kubectl create configmap ca-certificates -n x402 --from-file=ca-certificates.crt=/etc/ssl/cert.pem --dry-run=client -o yaml | kubectl replace -f -`
-9. **`EnsureVerifier` overwrites helmfile's image pin under `OBOL_DEVELOPMENT=true`** — `internal/x402/setup.go` reads embedded `x402.yaml` (with hard-coded image pin) and `kubectl apply`s it. Without an in-memory rewrite this overwrites the helmfile-managed `:latest` deployment with the embedded pin → every source change to the verifier silently bypassed. Fix shipped in `5a10fb8` (rewrites pins in-memory before apply); regression test in `internal/x402/manifest_devmode_test.go`. **If you add a new component that the controller installs via `kubectl apply` of an embedded manifest**, give it the same dev-rewrite treatment.
+4. **ExternalName services** — do not work with Traefik Gateway API; use ClusterIP + Endpoints
+5. **eRPC `eth_call` cache** — default TTL is 10s for unfinalized reads; `buy.py balance` can lag behind an already-settled paid request for a few seconds
+6. **`/v1` required in `api_base` for `paid/*` route** — LiteLLM's OpenAI provider does NOT append `/v1` to a bare `api_base`. The buyer sidecar route must be `http://127.0.0.1:8402/v1`, not `http://127.0.0.1:8402`. Without `/v1`, LiteLLM calls `/chat/completions` on the buyer; the buyer's mux returns `404 page not found` (Go default), which LiteLLM surfaces as `OpenAIException - 404 page not found`.
+7. **LiteLLM restart is fallback, not the default buy path** — the validated happy path is `buy.py buy`/`process --all`/same-name top-up without a manual LiteLLM restart. Controller hot-add/hot-delete + buyer reload is expected to make `paid/<model>` appear and disappear in place. If a paid alias still fails after controller reconciliation and buyer sidecar reports the upstream, restart LiteLLM as a fallback investigation step. Treat mandatory restart after every buy as historical behavior, not a current invariant.
+8. **x402-verifier CA bundle missing → TLS failure** — The `x402-verifier` image is distroless (no CA store). The `ca-certificates` ConfigMap in `x402` namespace must be populated from the host CA bundle or the verifier cannot TLS-verify calls to the facilitator (`https://x402.gcp.obol.tech`), causing `x509: certificate signed by unknown authority` on every payment. **Fixed**: `obol stack up` calls `x402verifier.PopulateCABundle` after infrastructure deployment; `obol sell http` calls it before creating the ServiceOffer. If `Payment verification failed` errors still occur, check verifier logs for the x509 error and repopulate manually: `kubectl create configmap ca-certificates -n x402 --from-file=ca-certificates.crt=/etc/ssl/cert.pem --dry-run=client -o yaml | kubectl replace -f -`
+9. **`EnsureVerifier` overwrites helmfile's image pin under `OBOL_DEVELOPMENT=true`** — `internal/x402/setup.go` reads embedded `x402.yaml` (hard-coded image pin) and `kubectl apply`s it. Without an in-memory rewrite this overwrites the helmfile-managed `:latest` deployment with the embedded pin → every source change to the verifier silently bypassed. Fix shipped in `5a10fb8` (rewrites pins in-memory before apply); structural regression test: `internal/x402/setup_structure_test.go` (`TestEnsureVerifier_NoInlineRegex`). **If you add a new component installed via `kubectl apply` of an embedded manifest**, give it the same dev-rewrite treatment.
 10. **CAIP-2 vs legacy chain id form mismatch** — `RouteRule.Network` is normalized to CAIP-2 (`eip155:84532`) at one boundary, but `internal/x402/chains.go::ResolveChainInfo` must know both that form and the legacy alias (`base-sepolia`). If only one is registered, `matchPaidRouteFull` returns 404 silently on every paid request. When adding a new chain, register both the legacy alias and `CAIP2Network` in every `case` arm.
-11. **anvil `--prune-history` is enable-pruning, not retention** — passing it to anvil drops historical state needed by the local x402-rs facilitator's `eth_getStorageAt`, surfacing as `state at block #N is pruned` and a misleading `503 Payment verification failed` from the cluster. Never pass `--prune-history` to anvil. Also bind anvil with `--host 0.0.0.0` so in-cluster eRPC can reach it via `host.k3d.internal:8545` (loopback-only is the silent-503 case).
+11. **anvil `--prune-history` is enable-pruning, not retention** — passing it to anvil drops historical state needed by the local x402-rs facilitator's `eth_getStorageAt`, surfacing as `state at block #N is pruned` and a misleading `503 Payment verification failed`. Never pass `--prune-history` to anvil. Also bind anvil with `--host 0.0.0.0` so in-cluster eRPC can reach it via `host.k3d.internal:8545` (loopback-only is the silent-503 case).
 12. **Combo-form image-pin regex** — `internal/embed/infrastructure/...` may pin images as `<image>:<tag>@sha256:<digest>`. The dev-rewrite alternation in `internal/defaults/defaults.go` must list the longest form first (`:tag@sha256:digest` | `@sha256:digest` | `:tag`), or only the `:tag` portion gets rewritten, the `@sha256:` survives, and Docker honors the digest over the tag → local build silently bypassed. Test: `internal/defaults/defaults_test.go`.
-13. **Free-tier Base Sepolia RPC throttling** — `drpc.org`, `sepolia.base.org`, and similar free-tier endpoints return HTTP 408 under release-smoke load (multiple anvil forks + balance reads + receipt scans). Flow-11 step 8 / flow-13 facilitator-reachability / flow-14 balance reads all start failing intermittently. Set `BASE_SEPOLIA_RPC=https://lb.drpc.live/base-sepolia/<paid-token>` or `ALCHEMY_BASE_SEPOLIA_API_KEY=<key>` in `.env`. `flows/release-smoke.sh` runs `warn_unpaid_base_sepolia_rpc` preflight; `cmd/obol/network.go::redactRPCURL` and `flows/lib.sh::scrub_secrets` collapse paid-RPC URLs to `[REDACTED].<tld>/[REDACTED]` so logs only ever surface the provider.
-14. **First-request flake on freshly-deployed verifier** — the first request after `x402-verifier` becomes Ready can return an empty body / Bad Gateway from Traefik because the HTTPRoute is wired but the verifier's serviceoffer-source watcher hasn't loaded the route yet. `flows/flow-07-sell-verify.sh` and `flows/flow-08-buy.sh` wrap the 402-body fetch in a 12×5s retry loop. Don't extend retry loops elsewhere to mask intermittents — this one is a real first-request race.
+13. **Free-tier Base Sepolia RPC throttling** — `drpc.org`, `sepolia.base.org`, and similar free-tier endpoints return HTTP 408 under release-smoke load (multiple anvil forks + balance reads + receipt scans). Flow-11 step 8 / flow-13 facilitator-reachability / flow-14 balance reads all start failing intermittently. Set `BASE_SEPOLIA_RPC=https://lb.drpc.live/base-sepolia/<paid-token>` or `ALCHEMY_BASE_SEPOLIA_API_KEY=<key>` in `.env`. `flows/release-smoke.sh` runs `warn_unpaid_base_sepolia_rpc` preflight; `cmd/obol/network.go::redactRPCURL` and `flows/lib.sh::scrub_secrets` collapse paid-RPC URLs to `[REDACTED].<domain>/[REDACTED]` so logs only ever surface the provider.
+14. **First-request flake on freshly-deployed verifier** — the first request after `x402-verifier` becomes Ready can return an empty body / Bad Gateway from Traefik because the HTTPRoute is wired but the verifier's serviceoffer-source watcher has not loaded the route yet. `flows/flow-07-sell-verify.sh` and `flows/flow-08-buy.sh` wrap the 402-body fetch in a 12x5s retry loop. Do not extend retry loops elsewhere to mask intermittents — this one is a real first-request race.
 
-For a fuller debug catalog with symptom→fix mapping, see `.agents/skills/obol-stack-dev/references/release-smoke-debugging.md`.
+For a fuller debug catalog with symptom->fix mapping, see `.agents/skills/obol-stack-dev/references/release-smoke-debugging.md`.
 
 For observability architecture decisions (Prometheus retention vs. on-chain canonical record, counter-reset semantics, recording-rule naming, label conventions, CRD versioning stance, `clamp_min` epsilon), see `docs/observability.md` — read this before adding a new metric, recording rule, or proposing counter persistence.
 
@@ -384,13 +424,13 @@ The Cloudflare tunnel exposes the cluster to the public internet. Only x402-gate
 | `internal/enclave` | `enclave.go`, `enclave_darwin.go`, `enclave_stub.go` | Secure Enclave keys |
 | `internal/embed` | `embed.go` | Embedded assets (skills, infrastructure, networks) |
 
-**Embedded assets**: `internal/embed/infrastructure/` (K8s templates), `internal/embed/networks/` (ethereum, helios, aztec), `internal/embed/skills/` (23 skills).
+**Embedded assets**: `internal/embed/infrastructure/` (K8s templates), `internal/embed/networks/` (ethereum, aztec), `internal/embed/skills/` (21 skills).
 
 **Tests**: `cmd/obol/sell_test.go` (CLI flags), `internal/x402/*_test.go` (verifier, config, matcher, E2E), `internal/erc8004/*_test.go` (ABI, client), `internal/embed/embed_crd_test.go` (CRD+RBAC validation), `internal/openclaw/integration_test.go` (full-cluster inference), `internal/openclaw/overlay_test.go`, `internal/inference/gateway_test.go`, `internal/serviceoffercontroller/*_test.go` (controller, render).
 
 **Docs**: `docs/guides/monetize-inference.md` (E2E monetize walkthrough), `README.md`.
 
-**Deps**: Docker 20.10.0+, Go 1.25+. Installed by obolup.sh: kubectl 1.35.3, helm 3.20.1, k3d 5.8.3, helmfile 1.4.3, k9s 0.50.18, helm-diff 3.15.4, ollama 0.20.2. Key Go: `urfave/cli/v3`, `dustinkirkland/golang-petname`, `coinbase/x402/go` (v2 SDK, v1 wire format).
+**Deps**: Docker 20.10.0+, Go 1.25+. Installed by obolup.sh: kubectl 1.36.1, helm 3.21.0, k3d 5.8.3, helmfile 1.5.2, k9s 0.50.18, helm-diff 3.15.7, ollama 0.24.0. Key Go: `urfave/cli/v3`, `dustinkirkland/golang-petname`, `coinbase/x402/go` (v2 SDK, v1 wire format).
 
 ## Related Codebases
 
