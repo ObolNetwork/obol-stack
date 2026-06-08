@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math/big"
 	"reflect"
 	"strings"
 	"testing"
@@ -87,6 +88,8 @@ func TestBuildBuyPyArgv(t *testing.T) {
 				AutoRefill:      true,
 				RefillThreshold: 3,
 				RefillCount:     7,
+				CostCap:         big.NewInt(150000),
+				SetDefault:      true,
 				Force:           true,
 			},
 			want: []string{
@@ -97,7 +100,38 @@ func TestBuildBuyPyArgv(t *testing.T) {
 				"--auto-refill",
 				"--refill-threshold", "3",
 				"--refill-count", "7",
+				"--cost-cap", "150000",
+				"--set-default",
 				"--force",
+			},
+		},
+		{
+			name: "cost cap without auto-refill is still emitted (host owns intent)",
+			opts: buyPyOptions{
+				Name:        "demo",
+				Seller:      "https://s.example",
+				BudgetMicro: "1000000",
+				CostCap:     big.NewInt(42),
+			},
+			want: []string{
+				hermesPython, hermesBuyPyPath, "buy", "demo",
+				"--endpoint", "https://s.example",
+				"--budget", "1000000",
+				"--cost-cap", "42",
+			},
+		},
+		{
+			name: "cost cap of zero is suppressed",
+			opts: buyPyOptions{
+				Name:        "demo",
+				Seller:      "https://s.example",
+				BudgetMicro: "1000000",
+				CostCap:     big.NewInt(0),
+			},
+			want: []string{
+				hermesPython, hermesBuyPyPath, "buy", "demo",
+				"--endpoint", "https://s.example",
+				"--budget", "1000000",
 			},
 		},
 		{
@@ -235,5 +269,178 @@ func TestValidateTokenAgainstPricing(t *testing.T) {
 				t.Fatalf("ValidateTokenAgainstPricing(%q) err = %v, want substring %q", tc.token, err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// canonicalOfferURL splices the catalog endpoint onto a storefront base when
+// the user passed no /services/<name> segment. When they did pass one, we
+// trust it verbatim and don't re-derive from the catalog (so a deliberately
+// mismatched user URL still goes through to the seller).
+func TestCanonicalOfferURL(t *testing.T) {
+	t.Parallel()
+
+	asset := &buy.CatalogEntry{Name: "aeon", Endpoint: "/services/aeon/v1/chat/completions"}
+	tests := []struct {
+		name    string
+		user    string
+		entry   *buy.CatalogEntry
+		want    string
+		wantErr string
+	}{
+		{
+			name:  "storefront base + endpoint splice",
+			user:  "https://inference.v1337.org/",
+			entry: asset,
+			want:  "https://inference.v1337.org/services/aeon",
+		},
+		{
+			name:  "storefront base without trailing slash",
+			user:  "https://inference.v1337.org",
+			entry: asset,
+			want:  "https://inference.v1337.org/services/aeon",
+		},
+		{
+			name:  "service URL passed verbatim",
+			user:  "https://seller.example/services/foo",
+			entry: asset,
+			want:  "https://seller.example/services/foo",
+		},
+		{
+			name:  "service URL with trailing slash trimmed",
+			user:  "https://seller.example/services/foo/",
+			entry: asset,
+			want:  "https://seller.example/services/foo",
+		},
+		{
+			name:    "empty endpoint in catalog entry",
+			user:    "https://inference.v1337.org/",
+			entry:   &buy.CatalogEntry{Name: "x", Endpoint: ""},
+			wantErr: "empty endpoint",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := canonicalOfferURL(tc.user, tc.entry)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("canonicalOfferURL err = %v, want substring %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("canonicalOfferURL unexpected err: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("canonicalOfferURL = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// resolveBuyModel: flag wins when it matches, mismatch errors loudly,
+// catalog entry's model is used when flag is empty, empty-both errors.
+func TestResolveBuyModel(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		flag    string
+		entry   *buy.CatalogEntry
+		want    string
+		wantErr string
+	}{
+		{name: "flag matches catalog", flag: "aeon", entry: &buy.CatalogEntry{Name: "x", Model: "aeon"}, want: "aeon"},
+		{name: "flag case-insensitive", flag: "Aeon", entry: &buy.CatalogEntry{Name: "x", Model: "aeon"}, want: "Aeon"},
+		{name: "flag mismatch errors", flag: "other", entry: &buy.CatalogEntry{Name: "x", Model: "aeon"}, wantErr: "does not match"},
+		{name: "no flag uses catalog", flag: "", entry: &buy.CatalogEntry{Name: "x", Model: "aeon"}, want: "aeon"},
+		{name: "no flag + no catalog model errors", flag: "", entry: &buy.CatalogEntry{Name: "x"}, wantErr: "advertises no model"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := resolveBuyModel(tc.flag, tc.entry)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("resolveBuyModel err = %v, want substring %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveBuyModel unexpected err: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("resolveBuyModel = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// resolveCostCap: explicit flag wins (in atomic units OR human decimal),
+// otherwise we apply the costCapMarkupBps markup over price when
+// auto-refill is on. No auto-refill means no auto cap.
+func TestResolveCostCap(t *testing.T) {
+	t.Parallel()
+	price := big.NewInt(1000)
+	tests := []struct {
+		name       string
+		flag       string
+		token      string
+		price      *big.Int
+		autoRefill bool
+		wantNil    bool
+		want       *big.Int
+		wantErr    string
+	}{
+		{name: "no flag + no auto-refill = nil", autoRefill: false, price: price, wantNil: true},
+		{name: "no flag + auto-refill = 150% markup", autoRefill: true, price: price, want: big.NewInt(1500)},
+		{name: "atomic-unit flag wins", flag: "42", autoRefill: true, price: price, want: big.NewInt(42)},
+		{name: "human-decimal USDC fallback", flag: "0.001", token: "USDC", autoRefill: false, price: price, want: big.NewInt(1000)},
+		{name: "invalid flag errors", flag: "not-a-number", token: "USDC", autoRefill: false, price: price, wantErr: "not a valid number"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := resolveCostCap(tc.flag, tc.token, tc.price, tc.autoRefill)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("resolveCostCap err = %v, want substring %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveCostCap unexpected err: %v", err)
+			}
+			if tc.wantNil {
+				if got != nil {
+					t.Fatalf("resolveCostCap = %v, want nil", got)
+				}
+				return
+			}
+			if got == nil || got.Cmp(tc.want) != 0 {
+				t.Fatalf("resolveCostCap = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// looksLikeURL keeps the positional URL detection in sync with the error
+// message we surface when users pass a name-shaped positional.
+func TestLooksLikeURL(t *testing.T) {
+	t.Parallel()
+	cases := map[string]bool{
+		"https://example.com":        true,
+		"http://localhost:8080":      true,
+		"https://x.example/services": true,
+		"my-buy":                     false,
+		"":                           false,
+		"ftp://example.com":          false,
+	}
+	for in, want := range cases {
+		if got := looksLikeURL(in); got != want {
+			t.Errorf("looksLikeURL(%q) = %v, want %v", in, got, want)
+		}
 	}
 }

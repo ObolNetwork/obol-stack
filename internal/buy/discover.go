@@ -24,8 +24,13 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	internalx402 "github.com/ObolNetwork/obol-stack/internal/x402"
 )
+
+// CatalogEntry re-exports the wire schema so callers don't have to import
+// internal/schemas just to read a /api/services.json response.
+type CatalogEntry = schemas.ServiceCatalogEntry
 
 const (
 	// wellKnownPath is the canonical ERC-8004 registration document path.
@@ -164,6 +169,93 @@ func FetchSellerPricing(ctx context.Context, sellerURL, model string) (*PricingR
 		return nil, err
 	}
 	return &pricing, nil
+}
+
+// FetchServiceCatalog fetches the seller's /api/services.json feed and
+// returns the parsed catalog. sellerURL may be either the seller's base URL
+// (storefront hostname) or any /services/<name>/... URL — the path component
+// is replaced with /api/services.json.
+func FetchServiceCatalog(ctx context.Context, sellerURL string) ([]CatalogEntry, error) {
+	catalogURL, err := catalogURL(sellerURL)
+	if err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, registrationFetchTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, catalogURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build catalog request: %w", err)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", catalogURL, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("fetch %s: HTTP %d", catalogURL, resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read catalog body: %w", err)
+	}
+
+	var entries []CatalogEntry
+	if err := json.Unmarshal(body, &entries); err != nil {
+		return nil, fmt.Errorf("parse catalog JSON: %w", err)
+	}
+	return entries, nil
+}
+
+// PickCatalogEntry picks the entry whose endpoint matches sellerURL.
+// When sellerURL is a bare storefront base (no /services/<name>) and exactly
+// one inference entry is advertised, that entry is returned. Returns a
+// human-readable error listing the inference offers otherwise.
+func PickCatalogEntry(entries []CatalogEntry, sellerURL string) (*CatalogEntry, error) {
+	wantPath, err := servicePathFromURL(sellerURL)
+	if err != nil {
+		return nil, err
+	}
+
+	var inferenceOnly []CatalogEntry
+	for _, e := range entries {
+		if strings.EqualFold(strings.TrimSpace(e.Type), "inference") {
+			inferenceOnly = append(inferenceOnly, e)
+		}
+	}
+
+	// Exact-match a /services/<name> URL against the catalog.
+	if wantPath != "" {
+		for i, e := range entries {
+			if endpointPath(e.Endpoint) == wantPath {
+				if !strings.EqualFold(strings.TrimSpace(e.Type), "inference") {
+					return nil, fmt.Errorf("seller offer %q has type=%q; obol buy inference only supports type=inference", e.Name, e.Type)
+				}
+				return &entries[i], nil
+			}
+		}
+		return nil, fmt.Errorf("seller catalog has no entry for endpoint %s", wantPath)
+	}
+
+	switch len(inferenceOnly) {
+	case 0:
+		return nil, errors.New("seller advertises no inference offers (type=inference)")
+	case 1:
+		e := inferenceOnly[0]
+		return &e, nil
+	default:
+		names := make([]string, 0, len(inferenceOnly))
+		for _, e := range inferenceOnly {
+			names = append(names, e.Name)
+		}
+		return nil, fmt.Errorf("seller advertises multiple inference offers (%s); pass a service URL like <seller>%s",
+			strings.Join(names, ", "), inferenceOnly[0].Endpoint)
+	}
 }
 
 // VerifyAgentID returns nil iff at least one of reg.Registrations matches the
@@ -326,13 +418,13 @@ func verifyAgentID(reg *erc8004.AgentRegistration, expected int64, expectedRegis
 		return errors.New("nil registration")
 	}
 	if expected == 0 {
-		return errors.New("expected agentId is 0; default seller is not yet provisioned — pass --seller and --no-verify-identity to bypass, or set DefaultBuySellerAgentID")
+		return errors.New("expected agentId is 0; --expected-agent-id is opt-in and must be a real on-chain tokenId — drop the flag to skip identity verification, or pass the seller's actual agentId")
 	}
 	if len(reg.Registrations) == 0 {
 		return errors.New("seller didn't publish on-chain identity: agent-registration.json has no `registrations[]` field.\n" +
 			"This usually means: (a) the seller didn't run `obol sell register` on-chain, or\n" +
 			"(b) the seller is on an older obol-stack version that pre-dates the AgentIdentity CRD.\n" +
-			"Re-run with --no-verify-identity to buy without identity verification, or contact the seller to publish their agentId.")
+			"Drop --expected-agent-id to skip identity verification, or contact the seller to publish their agentId.")
 	}
 	for _, r := range reg.Registrations {
 		if r.AgentID != expected {
@@ -348,9 +440,9 @@ func verifyAgentID(reg *erc8004.AgentRegistration, expected int64, expectedRegis
 		got = append(got, fmt.Sprintf("%d@%s", r.AgentID, r.AgentRegistry))
 	}
 	if expectedRegistry == "" {
-		return fmt.Errorf("seller agentId mismatch: expected %d, got [%s] — re-run with --no-verify-identity to bypass if you trust the URL", expected, strings.Join(got, ", "))
+		return fmt.Errorf("seller agentId mismatch: expected %d, got [%s] — drop --expected-agent-id to skip the identity check, or pass the correct id", expected, strings.Join(got, ", "))
 	}
-	return fmt.Errorf("seller registration mismatch: expected agentId %d on %s, got [%s] — re-run with --no-verify-identity to bypass if you trust the URL", expected, expectedRegistry, strings.Join(got, ", "))
+	return fmt.Errorf("seller registration mismatch: expected agentId %d on %s, got [%s] — drop --expected-agent-id to skip the identity check, or pass the correct id", expected, expectedRegistry, strings.Join(got, ", "))
 }
 
 func firstPaymentOption(pricing *PricingResponse) (*PaymentOption, error) {
@@ -442,6 +534,79 @@ func pricingURL(sellerURL string) (string, error) {
 	u.RawQuery = ""
 	u.Fragment = ""
 	return u.String(), nil
+}
+
+// catalogURL replaces the path of sellerURL with /api/services.json. Any
+// /services/<name>/... suffix is stripped so callers can hand us either a
+// storefront base or a specific service URL.
+func catalogURL(sellerURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(sellerURL))
+	if err != nil {
+		return "", fmt.Errorf("parse seller URL: %w", err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("seller URL must include scheme and host: %q", sellerURL)
+	}
+	u.Path = "/api/services.json"
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String(), nil
+}
+
+// servicePathFromURL extracts a "/services/<name>" prefix from sellerURL. If
+// no such segment is present, returns "" (caller treats this as "storefront
+// base, pick from catalog").
+func servicePathFromURL(sellerURL string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(sellerURL))
+	if err != nil {
+		return "", fmt.Errorf("parse seller URL: %w", err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("seller URL must include scheme and host: %q", sellerURL)
+	}
+	path := strings.TrimRight(u.Path, "/")
+	if !strings.HasPrefix(path, "/services/") {
+		return "", nil
+	}
+	// Trim trailing /v1/chat/completions style suffixes so an endpoint and
+	// pricing URL pointing at the same offer normalize identically.
+	for _, suffix := range []string{"/v1/chat/completions", "/chat/completions"} {
+		path = strings.TrimSuffix(path, suffix)
+	}
+	parts := strings.SplitN(strings.TrimPrefix(path, "/services/"), "/", 2)
+	if len(parts) == 0 || parts[0] == "" {
+		return "", nil
+	}
+	return "/services/" + parts[0], nil
+}
+
+// endpointPath returns the "/services/<name>" prefix for a catalog endpoint
+// string. Catalog entries store this as a path-only value (e.g.
+// "/services/aeon"), so the implementation is intentionally minimal.
+func endpointPath(endpoint string) string {
+	e := strings.TrimRight(strings.TrimSpace(endpoint), "/")
+	for _, suffix := range []string{"/v1/chat/completions", "/chat/completions"} {
+		e = strings.TrimSuffix(e, suffix)
+	}
+	if e == "" {
+		return ""
+	}
+	if strings.HasPrefix(e, "/services/") {
+		parts := strings.SplitN(strings.TrimPrefix(e, "/services/"), "/", 2)
+		if len(parts) == 0 || parts[0] == "" {
+			return ""
+		}
+		return "/services/" + parts[0]
+	}
+	// Absolute URL form ("https://host/services/foo") — fall back to a
+	// parse to recover the path. Bail if the parse didn't actually
+	// re-shape the input (paths like "/something-else" or bare names),
+	// otherwise the recursive call loops forever.
+	u, err := url.Parse(e)
+	if err != nil || u.Path == "" || u.Path == e {
+		return ""
+	}
+	return endpointPath(u.Path)
 }
 
 func normalizedEndpointIdentity(raw string) (string, error) {
