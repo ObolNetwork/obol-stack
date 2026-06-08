@@ -128,6 +128,33 @@ type RouteRule struct {
 	// 402 page's primary Buy card so users can copy a fully-formed
 	// `obol buy inference --model ...` command.
 	Model string `yaml:"model,omitempty"`
+
+	// Card, when non-nil, marks this route as gated by the MPP credit-card
+	// method (Stripe stripe.charge) instead of x402 on-chain settlement.
+	// Mirrors ServiceOffer.spec.payment.card. SPIKE: the serviceoffer route
+	// source does not yet populate this from the CRD — see card.go.
+	Card *CardRoute `yaml:"card,omitempty"`
+}
+
+// CardRoute carries the per-route MPP credit-card (Stripe) terms used when
+// RouteRule.Card is non-nil. It is the card-method analog of the
+// PayTo/Network/Asset fields above.
+type CardRoute struct {
+	// Provider is the card payment provider (only "stripe" today).
+	Provider string `yaml:"provider,omitempty"`
+	// Account is the Stripe destination account id (acct_...) that receives
+	// settled funds — the card analog of PayTo.
+	Account string `yaml:"account,omitempty"`
+	// Currency is the ISO-4217 charge currency (e.g. "usd").
+	Currency string `yaml:"currency,omitempty"`
+	// Decimals is the currency's minor-unit precision (2 for usd/eur).
+	Decimals int `yaml:"decimals,omitempty"`
+	// NetworkID is the Stripe "machine payments" Business Network id,
+	// advertised in the 402 challenge so MPP clients can mint an SPT.
+	NetworkID string `yaml:"networkId,omitempty"`
+	// PaymentMethodTypes are the accepted Stripe payment-method types,
+	// advertised in the challenge (defaults to ["card"]).
+	PaymentMethodTypes []string `yaml:"paymentMethodTypes,omitempty"`
 }
 
 // LoadConfig reads and parses a pricing configuration YAML file.
