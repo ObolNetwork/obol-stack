@@ -271,11 +271,15 @@ fi
 poll_step_grep "Agent wallet funded on local Anvil" "^[1-9][0-9]{8,} " 24 5 agent_wallet_anvil_balance
 
 step "Ensure PurchaseRequest auth pool via obol buy inference"
-buy_out=$("$OBOL" buy inference "$PURCHASE_NAME" \
-    --seller "$PUBLIC_SELLER_URL" \
+# Positional arg is now the seller URL; PR name moved to --name. --yes
+# bypasses the interactive confirm (flow runs headless). Identity
+# verification is opt-in in the new CLI (default skips), so the historical
+# --no-verify-identity is no longer needed/present.
+buy_out=$("$OBOL" buy inference "$PUBLIC_SELLER_URL" \
+    --name "$PURCHASE_NAME" \
     --model "$FLOW_MODEL" \
     --budget "$BUY_BUDGET_USDC" \
-    --no-verify-identity \
+    --yes \
     --force 2>&1) || true
 if echo "$buy_out" | grep -q "Purchased upstream '$PURCHASE_NAME' configured via x402-buyer sidecar"; then
     pass "obol buy inference ensured PurchaseRequest $PURCHASE_NAME"
