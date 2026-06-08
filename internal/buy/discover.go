@@ -408,7 +408,7 @@ func ValidateBudgetAgainstPricing(budgetBase string, pricing *PricingResponse) e
 		return fmt.Errorf("pricing response has invalid amount %q", priceRaw)
 	}
 	if budget.Cmp(price) < 0 {
-		return fmt.Errorf("--budget %s is smaller than one request price %s on %s; raise the budget or buy.py will round up to one auth and exceed the requested cap", budget.String(), price.String(), payment.Network)
+		return fmt.Errorf("--budget %s is smaller than one request price %s on %s; raise the budget or buy.py will round up to one authorization and exceed the requested ceiling", budget.String(), price.String(), payment.Network)
 	}
 	return nil
 }
