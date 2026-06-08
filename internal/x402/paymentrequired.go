@@ -365,7 +365,7 @@ func normalizeOfferType(t string) string {
 }
 
 // inferenceCopy: primary CTA is `obol buy inference`, the CLI command that
-// pre-pays the seller and registers the model as `paid/<model>` in the
+// pre-authorizes the seller and registers the model as `paid/<model>` in the
 // local LiteLLM gateway. Secondary cards still expose the agent-prompt and
 // raw-JSON paths, but reframed so users understand they're buying remote
 // model time, not an agent with tools/memory.
@@ -379,7 +379,7 @@ func inferenceCopy(url string, d PaymentDisplay) typeCopy {
 	prompt := fmt.Sprintf(
 		"There's an Obol paid-inference service at %s offering the %s model. "+
 			"Explain to me how it works, then — if I'm interested — run "+
-			"`obol buy inference %s` from this host to pre-pay it and wire "+
+			"`obol buy inference %s` from this host to pre-authorize it and wire "+
 			"`paid/%s` into our local LiteLLM gateway. After it lands, switch "+
 			"yourself over to the new model and confirm.",
 		url, model, url, model,
@@ -388,7 +388,7 @@ func inferenceCopy(url string, d PaymentDisplay) typeCopy {
 	other := fmt.Sprintf(
 		"Read https://obol.org/llms.txt to learn how Obol's x402 micropayments work. "+
 			"I want to use the remote LLM at %s (model %s) as a paid OpenAI-compatible "+
-			"chat-completions endpoint. Pre-sign a budget of EIP-3009/Permit2 authorisations "+
+			"chat-completions endpoint. Pre-sign a budget of EIP-3009/Permit2 authorizations "+
 			"and POST chat-completions bodies with the X-PAYMENT header attached.",
 		url, model,
 	)
@@ -397,7 +397,7 @@ func inferenceCopy(url string, d PaymentDisplay) typeCopy {
 		Lede: template.HTML(
 			"This is a paid inference provider. Your Obol agent runs locally; the model itself runs " +
 				"on the remote operator's hardware and is gated by x402 micropayments. The CLI below " +
-				"pre-pays the provider through your agent's wallet and registers the model as " +
+				"pre-authorizes the provider through your agent's wallet and registers the model as " +
 				"<code>paid/&lt;model&gt;</code> in your local LiteLLM gateway, so every agent in your stack " +
 				"can call it like any other OpenAI-compatible model."),
 		ShowPrimary:    true,
@@ -447,7 +447,7 @@ X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
 		"Read https://obol.org/llms.txt to learn how Obol's x402 micropayments work. "+
 			"Help me call the Obol Agent at %s%s — it's an autonomous agent (tools + skills + memory), "+
 			"not a raw LLM. POST OpenAI-style chat-completions JSON with a real prompt in `messages`, "+
-			"attach a signed EIP-3009/Permit2 authorisation as `X-PAYMENT`, and report what the agent does.",
+			"attach a signed EIP-3009/Permit2 authorization as `X-PAYMENT`, and report what the agent does.",
 		url, modelLine,
 	)
 
@@ -494,16 +494,16 @@ func httpCopy(url string, d PaymentDisplay) typeCopy {
 	other := fmt.Sprintf(
 		"Read https://obol.org/llms.txt and skim https://github.com/ObolNetwork/skills "+
 			"to learn how Obol Agents pay for x402 services. Then help me buy access to %s "+
-			"for %s%s. Sign the EIP-3009 or Permit2 authorisation and call the endpoint "+
+			"for %s%s. Sign the EIP-3009 or Permit2 authorization and call the endpoint "+
 			"with the X-PAYMENT header.",
 		url, priceWord, onNet,
 	)
 
 	return typeCopy{
-		Lede:          template.HTML("This is a paid HTTP endpoint gated by x402 micropayments. Each call is a one-shot purchase — no subscription, no pre-payment, no LLM model behind it."),
+		Lede:          template.HTML("This is a paid HTTP endpoint gated by x402 micropayments. Each call is a one-shot purchase — no subscription, no pre-authorization, no LLM model behind it."),
 		ShowPrimary:   true,
 		PrimaryTitle:  "Pay with your Obol Agent",
-		PrimaryLede:   "Paste this into your Obol Agent — it has the `buy-x402` skill pre-loaded and will sign one authorisation per request.",
+		PrimaryLede:   "Paste this into your Obol Agent — it has the `buy-x402` skill pre-loaded and will sign one authorization per request.",
 		PrimaryIsCode: false,
 		// PrimaryPayload doubles as PromptObol for http; keep both
 		// populated so the template can stay symmetrical and the

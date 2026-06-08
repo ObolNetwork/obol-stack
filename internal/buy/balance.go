@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -24,19 +25,27 @@ type WalletInfo struct {
 	Decimals    int      // Decimals for the token, for display formatting.
 }
 
-// HumanBalance returns the balance as a fixed-point decimal string trimmed to
-// six fractional digits, matching `buy.py balance` output for parity with
-// what users see when they run the skill directly.
+// HumanBalance returns the balance with the minimum fractional digits
+// needed (whole numbers render as "12", dust as "0.001"). Matches the
+// host-side summary formatter (cmd/obol/buy.go::formatTokenAmount) so
+// balance lines and budget lines look consistent.
 func (w WalletInfo) HumanBalance() string {
 	if w.AtomicUnits == nil {
 		return "0"
 	}
-	if w.Decimals == 0 {
+	dec := w.Decimals
+	if dec <= 0 {
 		return w.AtomicUnits.String()
 	}
-	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(w.Decimals)), nil)
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(dec)), nil)
 	r := new(big.Rat).SetFrac(w.AtomicUnits, scale)
-	return r.FloatString(6)
+	s := r.FloatString(dec)
+	if !strings.Contains(s, ".") {
+		return s
+	}
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimSuffix(s, ".")
+	return s
 }
 
 // FetchWalletInfo execs `buy.py balance --chain <chain>` inside the named
@@ -70,7 +79,11 @@ func FetchWalletInfo(cfg *config.Config, runtime agentruntime.Runtime, id, token
 	kubectlArgs := agentruntime.BuildExecArgs(runtime, id, argv, false)
 
 	cmd := exec.Command(kubectlBin, kubectlArgs...)
-	cmd.Env = append(cmd.Env, "KUBECONFIG="+kubeconfig)
+	// Inherit the parent environment so kubectl can find $HOME for its
+	// discovery + HTTP cache (default $HOME/.kube/cache). Setting cmd.Env
+	// without os.Environ() leaves HOME unset and kubectl drops a .kube/
+	// folder in the current working directory on every invocation.
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr

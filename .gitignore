@@ -28,6 +28,11 @@ build/
 .cache/
 .workspace/
 .workspace-*/
+# kubectl discovery + HTTP cache (default $HOME/.kube/cache; some kubectl
+# invocations without HOME inherited drop it in cwd — the underlying bug
+# should be fixed at the caller, but ignoring it here keeps accidental
+# leakage out of git).
+.kube/
 
 # Go binaries
 /obol

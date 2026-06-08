@@ -1486,7 +1486,7 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
     else:
         n = DEFAULT_AUTH_COUNT
     if extra.get("assetTransferMethod", "eip3009") == "permit2" and n > PERMIT2_SAFE_AUTH_COUNT:
-        print(f"  Capping permit2 auth pool from {n} to {PERMIT2_SAFE_AUTH_COUNT} to stay within current ConfigMap storage limits")
+        print(f"  Capping permit2 pre-authorized budget from {n} to {PERMIT2_SAFE_AUTH_COUNT} authorizations to stay within current ConfigMap storage limits")
         n = PERMIT2_SAFE_AUTH_COUNT
     n = max(n, 1)
 
@@ -1781,7 +1781,7 @@ def _set_agent_default_model(model_id, auto_refill):
 def cmd_refill(name, count=None):
     """Refill is disabled until it is implemented via PurchaseRequest reconciliation."""
     print("refill is not available in the controller-based buy path.", file=sys.stderr)
-    print("Run the buy command again with the same purchase name to top up the active auth pool.", file=sys.stderr)
+    print("Run the buy command again with the same purchase name to top up the existing pre-authorized budget.", file=sys.stderr)
     sys.exit(1)
 
 
@@ -1949,8 +1949,8 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=Non
 
     Stateless. Does not create a PurchaseRequest, does not touch the buyer
     sidecar, and is bounded to one auth (max loss = price). Use this for
-    `type:http` services and any one-off purchase that doesn't need persistent
-    pre-payment. For long-running paid inference budgets, use `buy`.
+    `type:http` services and any one-off purchase that doesn't need a
+    persistent pre-authorized budget. For long-running paid inference, use `buy`.
 
     `network` is an optional safety guard: when set, the seller's advertised
     chain must match it or `pay` aborts before signing.

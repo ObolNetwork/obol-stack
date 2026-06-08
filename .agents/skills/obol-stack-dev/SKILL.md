@@ -87,6 +87,39 @@ OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=serviceoffer-controller,x402-buyer obol stac
 
 Values: `true`/`all` → all; comma-separated short names → those only; unset/`false`/`0` → reuse cached. Image set: `x402-verifier`, `serviceoffer-controller`, `x402-buyer`, `demo-server`, `obol-stack-public-storefront` (alias `public-storefront`). The "Local dev images ready" summary line surfaces this hint when nothing was rebuilt.
 
+## Rebuild Hints by Changed Path
+
+| Changed path | What it lands in | Needs CLI rebuild? | Needs image rebuild? | Skill PVC re-seed? |
+|---|---|---|---|---|
+| `cmd/obol/**`, `internal/{config,stack,agent,model,network,kubectl,monetizeapi,ui,validate,...}/*.go` | host CLI only | yes (`just build`) | no | no |
+| `cmd/x402-verifier/**`, `internal/x402/**` *(except `buyer/`)* | x402-verifier image + host CLI | yes | `x402-verifier` | no |
+| `cmd/serviceoffer-controller/**`, `internal/serviceoffercontroller/**`, `internal/schemas/service_catalog*` | controller image | no¹ | `serviceoffer-controller` | no |
+| `internal/x402/buyer/**`, `cmd/x402-buyer/**` | buyer sidecar image | no¹ | `x402-buyer` | no |
+| `internal/embed/skills/**` | host CLI (embedded) + agent PVC via `CopySkills` on `obol stack up` / `obol agent sync` | yes | no | yes (auto on `stack up`) |
+| `internal/embed/infrastructure/**` (templates/values) | host CLI (embedded helmfile) | yes | no | no |
+| `web/public-storefront/**`, `Dockerfile.public-storefront` | storefront image | no | `obol-stack-public-storefront` | no |
+| `flows/**`, `plans/**`, `docs/**`, `*.md`, `*_test.go` | nothing runtime | no | no | no |
+
+¹ Controller/buyer changes don't strictly need a CLI rebuild, but if your edit also touches a shared package (e.g. `internal/monetizeapi`, `internal/schemas`) the CLI needs to rebuild too — when in doubt, `just build` is cheap.
+
+Multiple categories at once → comma-join the image names: `OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=x402-verifier,serviceoffer-controller obol stack up`.
+
+## Turn-End Rebuild Command (REQUIRED when source changed)
+
+When a turn modifies any of the source paths in the table above, end the turn with the exact command the user needs to test the change. Format:
+
+```bash
+just build && OBOL_DEVELOPMENT=true OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=<csv> obol stack up
+```
+
+Pick `<csv>` by walking the diff against the table. Drop the env var entirely when nothing under an image-backed path changed (CLI-only or skill-only iterations). Drop `just build` when only image-backed Go source changed without CLI surface. Surface the command in a fenced block, not buried in prose — the user copy-pastes it directly.
+
+Examples:
+- Only `cmd/obol/*.go` edited → `just build`
+- Only `internal/x402/paymentrequired.go` edited → `just build && OBOL_DEVELOPMENT=true OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=x402-verifier obol stack up`
+- `internal/embed/skills/buy-x402/scripts/buy.py` + `internal/x402/setup.go` → `just build && OBOL_DEVELOPMENT=true obol stack up` (no image rebuild; CLI carries both the embedded script and the constant)
+- Tests/docs only → no rebuild command; say so.
+
 ## Pre-Push Local Checks
 
 ```bash

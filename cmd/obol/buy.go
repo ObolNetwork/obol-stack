@@ -14,6 +14,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/validate"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
@@ -29,11 +30,14 @@ const (
 	hermesBuyPyPath = "/data/.hermes/obol-skills/buy-x402/scripts/buy.py"
 	defaultBuyName  = "default-paid"
 
-	// defaultInteractiveCount is the count we propose when the user accepts
-	// the interactive default. Small enough to feel like a try-before-trust
-	// purchase on most providers, large enough to be useful for a quick
-	// chat session.
-	defaultInteractiveCount = 50
+	// defaultInteractivePerMTokCount is the default for perMTok offers:
+	// 5 million tokens is enough for a meaningful chat session without
+	// committing a large initial spend.
+	defaultInteractivePerMTokCount = 5
+
+	// defaultInteractivePerRequestCount is the default for perRequest
+	// offers — small but useful first-purchase footprint.
+	defaultInteractivePerRequestCount = 50
 
 	// costCapMarkupBps is the default headroom over the seller's quoted
 	// per-request price that we apply when --cost-cap is not set
@@ -57,7 +61,7 @@ func buyInferenceCommand(cfg *config.Config) *cli.Command {
 		Name:      "inference",
 		Usage:     "Buy paid inference from an x402-gated seller via the obol-agent",
 		ArgsUsage: "[<seller-url>]",
-		Description: `Pre-pays an x402-gated inference seller through an obol-agent's wallet.
+		Description: `Pre-authorizes an x402-gated inference seller through an obol-agent's wallet.
 
 Hand the command a seller URL — either a storefront base
 ("https://inference.v1337.org") or a specific offer
@@ -103,7 +107,7 @@ Examples:
 			},
 			&cli.IntFlag{
 				Name:  "count",
-				Usage: "How many requests (perRequest pricing) or million-tokens (perMTok pricing) of capacity to pre-pay. Required in non-interactive mode.",
+				Usage: "How many requests (perRequest pricing) or million-tokens (perMTok pricing) of capacity to pre-authorize. Required in non-interactive mode.",
 			},
 			&cli.IntFlag{
 				Name:  "expected-agent-id",
@@ -111,7 +115,7 @@ Examples:
 			},
 			&cli.BoolFlag{
 				Name:  "auto-refill",
-				Usage: "Enable agent-managed refill of the auth pool",
+				Usage: "Enable agent-managed top-up of the pre-authorized budget when it runs low",
 			},
 			&cli.IntFlag{
 				Name:  "refill-threshold",
@@ -136,7 +140,7 @@ Examples:
 			},
 			&cli.BoolFlag{
 				Name:  "replace",
-				Usage: "Delete any existing PurchaseRequest with the same name before creating a fresh one (default: top up the existing auth pool)",
+				Usage: "Delete any existing PurchaseRequest with the same name before creating a fresh one (default: top up the existing pre-authorized budget)",
 			},
 			&cli.BoolFlag{
 				Name:  "force",
@@ -155,6 +159,8 @@ Examples:
 // confirm → exec buy.py → optional model prefer + agent sync.
 func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) error {
 	u := getUI(cmd)
+
+	u.Info("Purchasing remote inference for running Obol Agents")
 
 	target, err := resolveBuyAgent(cfg, cmd)
 	if err != nil {
@@ -257,12 +263,13 @@ func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) 
 		return err
 	}
 
-	autoRefill, err := promptAutoRefill(u, cmd)
+	autoRefill, err := promptAutoRefill(u, cmd, priceUnit)
 	if err != nil {
 		return err
 	}
 
-	count, err := promptCount(u, cmd, priceUnit, autoRefill.enabled, existing != "")
+	tokenDecimalsForPrompt := resolveTokenDecimals(entry, token, paymentChainForDisplay(pricing))
+	count, err := promptCount(u, cmd, priceUnit, existing != "", token, priceAtomic, tokenDecimalsForPrompt)
 	if err != nil {
 		return err
 	}
@@ -281,7 +288,9 @@ func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) 
 	// final confirmation. The agent pod walks the signer + eRPC for us, so
 	// failures here are non-fatal (we still let the buy proceed if e.g.
 	// the chain alias isn't installed — buy.py re-checks balance itself).
-	walletInfo := fetchWalletInfoBestEffort(cfg, target, token, paymentChainForDisplay(pricing), u)
+	chainForDisplay := paymentChainForDisplay(pricing)
+	walletInfo := fetchWalletInfoBestEffort(cfg, target, token, chainForDisplay, u)
+	decimals := resolveTokenDecimals(entry, token, chainForDisplay)
 
 	summary := buySummary{
 		Agent:         target,
@@ -292,6 +301,7 @@ func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) 
 		PriceAtomic:   priceAtomic,
 		PriceUnit:     priceUnit,
 		Token:         token,
+		TokenDecimals: decimals,
 		BudgetAtomic:  budgetAtomic,
 		AutoRefill:    autoRefill,
 		CostCapAtomic: costCapAtomic,
@@ -300,20 +310,36 @@ func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) 
 	}
 	printBuySummary(u, summary)
 	if !confirmBuy(u, cmd) {
-		return errors.New("buy cancelled")
+		return errors.New("buy inference cancelled")
 	}
 
 	perAgent, global := resolveDefaultScopes(u, cmd, chosenModel, target)
 
+	// buy.py operates in per-auth wire units (each auth pays the per-request
+	// wire amount). For perMTok offers the user-facing natural unit is
+	// million-tokens, which maps to ApproxTokensPerRequest auths. Multiply
+	// count, refill threshold, and refill count once here so the buy.py
+	// argv stays in its native units.
+	multiplier := 1
+	if priceUnit == "perMTok" {
+		multiplier = schemas.ApproxTokensPerRequest
+	}
+	costCapForBuyPy := costCapAtomic
+	if costCapForBuyPy != nil && costCapForBuyPy.Sign() > 0 && priceUnit == "perMTok" {
+		// Cost cap is stored as per-MTok atomic; buy.py compares against
+		// per-request wire amounts, so divide before passing.
+		costCapForBuyPy = new(big.Int).Quo(costCapForBuyPy, big.NewInt(int64(schemas.ApproxTokensPerRequest)))
+	}
 	argv := buildBuyPyArgv(buyPyOptions{
 		Name:            prName,
 		Seller:          offerURL,
 		Model:           chosenModel,
 		BudgetMicro:     budgetAtomic.String(),
+		Count:           count * multiplier,
 		AutoRefill:      autoRefill.enabled,
-		RefillThreshold: autoRefill.threshold,
-		RefillCount:     autoRefill.count,
-		CostCap:         costCapAtomic,
+		RefillThreshold: autoRefill.threshold * multiplier,
+		RefillCount:     autoRefill.count * multiplier,
+		CostCap:         costCapForBuyPy,
 		Force:           cmd.Bool("force"),
 		// Per-agent default lives entirely in-pod: buy.py edits the agent's
 		// hermes-config to set model.default = paid/<model> for the agent
@@ -339,11 +365,16 @@ func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) 
 
 // buyPyOptions captures everything needed to invoke `buy.py buy` inside the
 // agent pod. Kept as a flat struct so buildBuyPyArgv stays trivially testable.
+//
+// All count fields (Count, RefillThreshold, RefillCount) are in buy.py's
+// native per-auth wire units. The host CLI converts from natural units
+// (requests | million-tokens) before populating these fields.
 type buyPyOptions struct {
 	Name            string
 	Seller          string
 	Model           string
 	BudgetMicro     string
+	Count           int // explicit auth count; 0 lets buy.py derive from budget
 	AutoRefill      bool
 	RefillThreshold int
 	RefillCount     int
@@ -358,6 +389,9 @@ func buildBuyPyArgv(opts buyPyOptions) []string {
 		hermesPython, hermesBuyPyPath, "buy", opts.Name,
 		"--endpoint", opts.Seller,
 		"--budget", opts.BudgetMicro,
+	}
+	if opts.Count > 0 {
+		argv = append(argv, "--count", fmt.Sprintf("%d", opts.Count))
 	}
 	if m := strings.TrimSpace(opts.Model); m != "" {
 		argv = append(argv, "--model", m)
@@ -441,11 +475,12 @@ type buySummary struct {
 	PRName        string
 	OfferURL      string
 	Model         string
-	Count         int
-	PriceAtomic   *big.Int
-	PriceUnit     string // "perRequest" | "perMTok"
+	Count         int      // in natural units (requests | million-tokens)
+	PriceAtomic   *big.Int // per natural unit
+	PriceUnit     string   // "perRequest" | "perMTok"
 	Token         string
-	BudgetAtomic  *big.Int
+	TokenDecimals int      // for human formatting; catalog wins, ResolveToken fallback
+	BudgetAtomic  *big.Int // count × PriceAtomic
 	AutoRefill    autoRefillPolicy
 	CostCapAtomic *big.Int
 	Wallet        *buy.WalletInfo
@@ -481,31 +516,40 @@ func looksLikeURL(s string) bool {
 }
 
 // canonicalOfferURL produces the /services/<name> URL we hand to buy.py.
-// When the user passes a storefront base, we splice the catalog endpoint;
-// when they pass a specific service URL, that URL wins (we still validated
-// it against the catalog before calling here).
+// Real-world catalogs (inference.v1337.org) store `endpoint` as an
+// absolute URL ("https://host/services/<name>"); older/local controllers
+// emit a path-only form ("/services/<name>"). Handle both so we don't end
+// up concatenating the storefront base onto a full URL.
 func canonicalOfferURL(userURL string, entry *buy.CatalogEntry) (string, error) {
 	if entry == nil {
 		return "", errors.New("catalog entry is nil")
 	}
-	// If the user URL already has a /services/<name> segment, just return
-	// it verbatim. This preserves any explicit base hostname they typed.
+	// If the user URL already has a /services/<name> segment, trust it.
+	// Preserves any explicit hostname they typed (useful for behind-tunnel
+	// dev hosts where the catalog still publishes the public hostname).
 	if strings.Contains(userURL, "/services/") {
 		return strings.TrimRight(userURL, "/"), nil
 	}
-	// Otherwise: storefront-only URL — splice the offer endpoint onto the
-	// same scheme/host.
-	base := strings.TrimRight(userURL, "/")
+
 	endpoint := strings.TrimSpace(entry.Endpoint)
 	if endpoint == "" {
 		return "", fmt.Errorf("catalog entry for %q has empty endpoint", entry.Name)
 	}
-	// endpoint is path-only (e.g. "/services/aeon") per the controller's
-	// render. Strip /v1/chat/completions if present so buy.py can re-add
-	// the conventional suffix itself.
+	// Strip /v1/chat/completions so buy.py / FetchSellerPricing can re-add
+	// the conventional suffix themselves.
 	for _, suffix := range []string{"/v1/chat/completions", "/chat/completions"} {
 		endpoint = strings.TrimSuffix(endpoint, suffix)
 	}
+	endpoint = strings.TrimRight(endpoint, "/")
+
+	// Absolute URL — use verbatim. Don't splice onto the user's base; the
+	// catalog's hostname is the seller's source of truth.
+	if looksLikeURL(endpoint) {
+		return endpoint, nil
+	}
+
+	// Path-only — splice onto the user's scheme+host.
+	base := strings.TrimRight(userURL, "/")
 	if !strings.HasPrefix(endpoint, "/") {
 		endpoint = "/" + endpoint
 	}
@@ -557,12 +601,25 @@ func resolveBuyToken(flag string, entry *buy.CatalogEntry, pricing *buy.PricingR
 	return "USDC", nil
 }
 
-// pricingPerUnit returns the atomic per-request price plus the human unit
-// label ("perRequest" or "perMTok") that the prompts/copy use.
+// pricingPerUnit returns the atomic per-NATURAL-unit price and the unit
+// label. Natural unit means: per-request for perRequest offers, per-MTok
+// for perMTok offers. The catalog's priceAtomicUnits is the authoritative
+// value (controller derives it from priceRaw × 10^decimals); we fall back
+// to deriving from the 402 wire amount when the catalog field is empty.
+//
+// Conversion to buy.py's per-auth wire units happens at argv-build time,
+// not here, so the rest of the flow can reason in natural units.
 func pricingPerUnit(entry *buy.CatalogEntry, pricing *buy.PricingResponse) (*big.Int, string, error) {
 	unit := "perRequest"
 	if entry != nil && strings.TrimSpace(entry.PriceUnit) != "" {
 		unit = entry.PriceUnit
+	}
+	// Catalog-derived atomic is the natural-unit price the seller renders
+	// at /api/services.json. Use it when present.
+	if entry != nil && strings.TrimSpace(entry.PriceAtomicUnits) != "" {
+		if p, ok := new(big.Int).SetString(strings.TrimSpace(entry.PriceAtomicUnits), 10); ok && p.Sign() > 0 {
+			return p, unit, nil
+		}
 	}
 	if pricing == nil || len(pricing.Accepts) == 0 {
 		return nil, unit, errors.New("pricing response has no payment options")
@@ -572,18 +629,25 @@ func pricingPerUnit(entry *buy.CatalogEntry, pricing *buy.PricingResponse) (*big
 	if strings.TrimSpace(raw) == "" {
 		raw = accept.MaxAmountRequired
 	}
-	price, ok := new(big.Int).SetString(strings.TrimSpace(raw), 10)
-	if !ok || price.Sign() <= 0 {
+	wire, ok := new(big.Int).SetString(strings.TrimSpace(raw), 10)
+	if !ok || wire.Sign() <= 0 {
 		return nil, unit, fmt.Errorf("invalid wire price %q", raw)
 	}
-	return price, unit, nil
+	// Wire is always per-request. For perMTok offers, multiply by ~1000
+	// tokens-per-request to recover the per-MTok ceiling.
+	if unit == "perMTok" {
+		wire = new(big.Int).Mul(wire, big.NewInt(int64(schemas.ApproxTokensPerRequest)))
+	}
+	return wire, unit, nil
 }
 
 // promptAutoRefill resolves --auto-refill / --refill-threshold /
 // --refill-count from flags, then interactively fills in the missing pieces
 // when in a TTY. In non-interactive mode the policy is exactly what the
-// flags described.
-func promptAutoRefill(u *ui.UI, cmd *cli.Command) (autoRefillPolicy, error) {
+// flags described. Threshold and count are in NATURAL units (requests for
+// perRequest offers, million-tokens for perMTok); the buy.py argv builder
+// converts to per-auth wire units when sending to the agent.
+func promptAutoRefill(u *ui.UI, cmd *cli.Command, priceUnit string) (autoRefillPolicy, error) {
 	enabled := cmd.Bool("auto-refill")
 	threshold := cmd.Int("refill-threshold")
 	count := cmd.Int("refill-count")
@@ -593,22 +657,21 @@ func promptAutoRefill(u *ui.UI, cmd *cli.Command) (autoRefillPolicy, error) {
 	}
 
 	if !enabled {
-		enabled = u.Confirm("Enable auto-refill? Tops up the auth pool from the agent's wallet when it runs low.", false)
+		enabled = u.Confirm("Enable auto-top-up? Adds more pre-authorized inference from the agent's wallet when it runs low.", false)
 	}
 	if !enabled {
 		return autoRefillPolicy{}, nil
 	}
-	// buy.py picks sensible defaults when these are 0; only prompt if the
-	// user wants to override.
+	unit := summaryUnit(priceUnit)
 	if threshold == 0 {
-		v, err := promptPositiveInt(u, "Refill when remaining auths fall below", 5)
+		v, err := promptPositiveInt(u, fmt.Sprintf("Top up when remaining %s drop below", unit), 5)
 		if err != nil {
 			return autoRefillPolicy{}, err
 		}
 		threshold = v
 	}
 	if count == 0 {
-		v, err := promptPositiveInt(u, "Auths to sign per refill", 25)
+		v, err := promptPositiveInt(u, fmt.Sprintf("%s to add per top-up", capitalize(unit)), 25)
 		if err != nil {
 			return autoRefillPolicy{}, err
 		}
@@ -617,39 +680,101 @@ func promptAutoRefill(u *ui.UI, cmd *cli.Command) (autoRefillPolicy, error) {
 	return autoRefillPolicy{enabled: true, threshold: threshold, count: count}, nil
 }
 
+func capitalize(s string) string {
+	if s == "" {
+		return s
+	}
+	return strings.ToUpper(s[:1]) + s[1:]
+}
+
 // promptCount drives the request-or-mtoks count prompt. In non-TTY mode
 // --count is mandatory unless --yes was set (in which case we fall back to
 // the interactive default — explicit consent suppresses the safety check).
-func promptCount(u *ui.UI, cmd *cli.Command, priceUnit string, _ bool, existing bool) (int, error) {
+//
+// The interactive default is unit-aware (5 million tokens for perMTok, 50
+// requests for perRequest) and the prompt surfaces the ceiling cost inline
+// after the default chip: "... [5] (5 OBOL):".
+func promptCount(u *ui.UI, cmd *cli.Command, priceUnit string, existing bool, token string, price *big.Int, decimals int) (int, error) {
 	if v := cmd.Int("count"); v > 0 {
 		return v, nil
 	}
+	def := defaultCountForUnit(priceUnit)
 	if !u.IsTTY() {
 		if cmd.Bool("yes") {
-			return defaultInteractiveCount, nil
+			return def, nil
 		}
 		return 0, errors.New("--count is required in non-interactive mode (pass --count <N>, or run from a TTY)")
 	}
-	label := "How many requests to pre-pay?"
+	label := "How many requests to pre-authorize?"
 	if priceUnit == "perMTok" {
-		label = "How many million tokens of inference to pre-pay?"
+		label = "How many million tokens of inference to pre-authorize?"
 	}
 	if existing {
-		label = "How many more " + countUnit(priceUnit) + " to add to the existing pool?"
+		label = "How many more " + summaryUnit(priceUnit) + " to add to the existing pool?"
 	}
-	return promptPositiveInt(u, label, defaultInteractiveCount)
+	suffix := ""
+	if cost := previewCost(def, price, decimals); cost != "" {
+		suffix = fmt.Sprintf("(%s %s)", cost, token)
+	}
+	return promptPositiveIntWithSuffix(u, label, suffix, def)
 }
 
-func countUnit(priceUnit string) string {
+func defaultCountForUnit(priceUnit string) int {
 	if priceUnit == "perMTok" {
-		return "million-token-batches"
+		return defaultInteractivePerMTokCount
+	}
+	return defaultInteractivePerRequestCount
+}
+
+// summaryUnit returns the user-facing label for the natural unit ("requests"
+// or "million tokens"). Singular/plural is intentionally collapsed —
+// summary copy reads the same whether the count is 1 or 50.
+func summaryUnit(priceUnit string) string {
+	if priceUnit == "perMTok" {
+		return "million tokens"
 	}
 	return "requests"
 }
 
+// previewCost returns the "≈ X TOKEN" string for `count` units at `price`
+// each, formatted with `decimals`. Empty string when price is unavailable.
+func previewCost(count int, price *big.Int, decimals int) string {
+	if count <= 0 || price == nil || price.Sign() <= 0 {
+		return ""
+	}
+	total := new(big.Int).Mul(price, big.NewInt(int64(count)))
+	return formatTokenAmount(total, decimals)
+}
+
+// formatTokenAmount renders an atomic-units value as a human decimal with
+// the minimum number of fractional digits needed: whole values show as
+// "1" / "5", dust keeps enough digits to stay non-zero ("0.001"), and
+// fractional balances stop at the last significant digit ("0.1", "12.34").
+func formatTokenAmount(v *big.Int, decimals int) string {
+	if v == nil {
+		return "?"
+	}
+	if decimals <= 0 {
+		decimals = 6
+	}
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil)
+	r := new(big.Rat).SetFrac(v, scale)
+	s := r.FloatString(decimals)
+	if !strings.Contains(s, ".") {
+		return s
+	}
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimSuffix(s, ".")
+	return s
+}
+
 func promptPositiveInt(u *ui.UI, label string, def int) (int, error) {
+	return promptPositiveIntWithSuffix(u, label, "", def)
+}
+
+func promptPositiveIntWithSuffix(u *ui.UI, label, suffix string, def int) (int, error) {
 	for attempt := 0; attempt < 3; attempt++ {
-		raw, err := u.Input(label, fmt.Sprintf("%d", def))
+		raw, err := u.InputWithSuffix(label, fmt.Sprintf("%d", def), suffix)
 		if err != nil {
 			return 0, err
 		}
@@ -731,6 +856,24 @@ func resolveCostCap(flag, token string, price *big.Int, autoRefill bool) (*big.I
 	return cap, nil
 }
 
+// resolveTokenDecimals picks the most reliable decimals source for the
+// chosen payment token. The catalog asset is authoritative when present;
+// otherwise we fall through to the in-binary token registry with the
+// payment chain explicit (avoids the empty-chain ResolveToken bug that
+// silently fell back to 6-decimal scaling).
+func resolveTokenDecimals(entry *buy.CatalogEntry, token, chain string) int {
+	if entry != nil && entry.Asset != nil && entry.Asset.Decimals > 0 {
+		return int(entry.Asset.Decimals)
+	}
+	if t, ok := x402verifier.ResolveToken(token, chain); ok && t.Decimals > 0 {
+		return t.Decimals
+	}
+	// Last resort: USDC-style 6 decimals. Logging the fallback at the call
+	// site is the caller's job — here we just return a deterministic value
+	// so the summary doesn't crash with a divide-by-zero scale.
+	return 6
+}
+
 func paymentChainForDisplay(pricing *buy.PricingResponse) string {
 	if pricing == nil || len(pricing.Accepts) == 0 {
 		return x402verifier.DefaultBuySellerChain
@@ -762,18 +905,8 @@ func fetchWalletInfoBestEffort(cfg *config.Config, target agentTarget, token, ch
 // printBuySummary mirrors the design-doc summary line so the user sees
 // exactly what they're signing before the confirmation.
 func printBuySummary(u *ui.UI, s buySummary) {
-	tokenInfo, _ := x402verifier.ResolveToken(s.Token, "")
 	human := func(v *big.Int) string {
-		if v == nil {
-			return "?"
-		}
-		dec := tokenInfo.Decimals
-		if dec == 0 {
-			dec = 6
-		}
-		scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(dec)), nil)
-		r := new(big.Rat).SetFrac(v, scale)
-		return r.FloatString(6)
+		return formatTokenAmount(v, s.TokenDecimals)
 	}
 
 	u.Print("")
@@ -782,27 +915,29 @@ func printBuySummary(u *ui.UI, s buySummary) {
 	u.Print(fmt.Sprintf("  Model:       %s", s.Model))
 	switch s.PriceUnit {
 	case "perMTok":
-		// perMTok offers price per million tokens. The wire-level atomic
-		// amount is the seller's "up to ~1000 tokens per request" charge —
-		// x402 settles at the actual usage so unused capacity is refunded.
-		u.Print(fmt.Sprintf("  Price:       up to %s %s per request (≤ ~1000 tokens; per-MTok offer)", human(s.PriceAtomic), s.Token))
-		u.Print(fmt.Sprintf("  Pre-paying:  up to %d requests (≈ %s %s ceiling)", s.Count, human(s.BudgetAtomic), s.Token))
-		u.Print("               x402 settles at actual usage — unused capacity isn't charged.")
+		// perMTok offers price per million tokens. x402 uses the up-to
+		// scheme: the facilitator settles each request at the actual
+		// metered usage, so unused capacity isn't charged.
+		u.Print(fmt.Sprintf("  Price:           up to %s %s per million tokens", human(s.PriceAtomic), s.Token))
+		u.Print(fmt.Sprintf("  Pre-authorizing: up to %d million tokens (≈ %s %s ceiling)", s.Count, human(s.BudgetAtomic), s.Token))
+		u.Print("                   Settled per-request after each successful response — unused capacity isn't charged.")
 	default:
-		u.Print(fmt.Sprintf("  Price:       %s %s per request", human(s.PriceAtomic), s.Token))
-		u.Print(fmt.Sprintf("  Count:       %d requests (≈ %s %s ceiling)", s.Count, human(s.BudgetAtomic), s.Token))
+		u.Print(fmt.Sprintf("  Price:           %s %s per request", human(s.PriceAtomic), s.Token))
+		u.Print(fmt.Sprintf("  Pre-authorizing: %d requests (≈ %s %s ceiling)", s.Count, human(s.BudgetAtomic), s.Token))
+		u.Print("                   Settled per-request after each successful response.")
 	}
 	if s.AutoRefill.enabled {
-		u.Print(fmt.Sprintf("  Auto-refill: yes (top up when remaining<%d, sign %d more each time)", s.AutoRefill.threshold, s.AutoRefill.count))
+		u.Print(fmt.Sprintf("  Auto-top-up: yes (top up when remaining < %d %s, add %d more each time)",
+			s.AutoRefill.threshold, summaryUnit(s.PriceUnit), s.AutoRefill.count))
 	} else {
-		u.Print("  Auto-refill: no")
+		u.Print("  Auto-top-up: no")
 	}
 	if s.CostCapAtomic != nil && s.CostCapAtomic.Sign() > 0 {
 		capUnit := "request"
 		if s.PriceUnit == "perMTok" {
-			capUnit = "request (~1000 tokens)"
+			capUnit = "million tokens"
 		}
-		u.Print(fmt.Sprintf("  Cost cap:    refills skipped above %s %s/%s", human(s.CostCapAtomic), s.Token, capUnit))
+		u.Print(fmt.Sprintf("  Cost cap:    auto-top-ups skipped above %s %s per %s", human(s.CostCapAtomic), s.Token, capUnit))
 	}
 	if s.Wallet != nil {
 		u.Print(fmt.Sprintf("  Paid from:   %s (balance %s %s on %s)", s.Wallet.Address, s.Wallet.HumanBalance(), s.Token, s.Wallet.Chain))
@@ -816,7 +951,7 @@ func printBuySummary(u *ui.UI, s buySummary) {
 	}
 	switch s.Mode {
 	case buyModeTopUp:
-		u.Print("  Existing PR: topping up the existing auth pool")
+		u.Print("  Existing PR: topping up the existing pre-authorized budget")
 	case buyModeReplace:
 		u.Print("  Existing PR: replacing the existing PurchaseRequest")
 	}
@@ -934,7 +1069,7 @@ func resolveBuyMode(u *ui.UI, cmd *cli.Command, existing string) (buyMode, error
 		return buyModeTopUp, nil
 	}
 	u.Infof("Found existing PurchaseRequest %s in agent namespace.", existing)
-	choices := []string{"Top up (sign more auths into the existing pool)", "Replace (delete and create fresh)", "Cancel"}
+	choices := []string{"Top up (add more pre-authorized capacity)", "Replace (delete and create fresh)", "Cancel"}
 	idx, err := u.Select("How would you like to proceed?", choices, 0)
 	if err != nil {
 		return buyModeFresh, err

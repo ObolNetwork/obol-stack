@@ -135,6 +135,21 @@ func TestBuildBuyPyArgv(t *testing.T) {
 			},
 		},
 		{
+			name: "explicit count emits --count",
+			opts: buyPyOptions{
+				Name:        "demo",
+				Seller:      "https://s.example",
+				BudgetMicro: "5000000000000000000",
+				Count:       5000,
+			},
+			want: []string{
+				hermesPython, hermesBuyPyPath, "buy", "demo",
+				"--endpoint", "https://s.example",
+				"--budget", "5000000000000000000",
+				"--count", "5000",
+			},
+		},
+		{
 			name: "auto-refill without explicit counts",
 			opts: buyPyOptions{
 				Name:        "demo",
@@ -279,7 +294,8 @@ func TestValidateTokenAgainstPricing(t *testing.T) {
 func TestCanonicalOfferURL(t *testing.T) {
 	t.Parallel()
 
-	asset := &buy.CatalogEntry{Name: "aeon", Endpoint: "/services/aeon/v1/chat/completions"}
+	pathOnly := &buy.CatalogEntry{Name: "aeon", Endpoint: "/services/aeon/v1/chat/completions"}
+	absolute := &buy.CatalogEntry{Name: "aeon7", Endpoint: "https://inference.v1337.org/services/aeon7"}
 	tests := []struct {
 		name    string
 		user    string
@@ -288,27 +304,39 @@ func TestCanonicalOfferURL(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name:  "storefront base + endpoint splice",
+			name:  "storefront base + path endpoint splice",
 			user:  "https://inference.v1337.org/",
-			entry: asset,
+			entry: pathOnly,
 			want:  "https://inference.v1337.org/services/aeon",
 		},
 		{
 			name:  "storefront base without trailing slash",
 			user:  "https://inference.v1337.org",
-			entry: asset,
+			entry: pathOnly,
 			want:  "https://inference.v1337.org/services/aeon",
+		},
+		{
+			name:  "absolute URL endpoint used verbatim (real v1337 case)",
+			user:  "https://inference.v1337.org/",
+			entry: absolute,
+			want:  "https://inference.v1337.org/services/aeon7",
+		},
+		{
+			name:  "absolute URL endpoint, mismatched user base — catalog wins",
+			user:  "https://other-base.example/",
+			entry: absolute,
+			want:  "https://inference.v1337.org/services/aeon7",
 		},
 		{
 			name:  "service URL passed verbatim",
 			user:  "https://seller.example/services/foo",
-			entry: asset,
+			entry: pathOnly,
 			want:  "https://seller.example/services/foo",
 		},
 		{
 			name:  "service URL with trailing slash trimmed",
 			user:  "https://seller.example/services/foo/",
-			entry: asset,
+			entry: pathOnly,
 			want:  "https://seller.example/services/foo",
 		},
 		{
