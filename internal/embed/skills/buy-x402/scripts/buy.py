@@ -379,10 +379,22 @@ def _resolve_auto_refill(opts, desired_count, existing_policy=None):
     auto_refill = _parse_boolish(opts.get("auto_refill"), "--auto-refill")
     threshold = _parse_positive_int(opts.get("refill_threshold"), "--refill-threshold", minimum=0)
     refill_count = _parse_positive_int(opts.get("refill_count"), "--refill-count", minimum=1)
+    # --cost-cap is a per-unit price ceiling (atomic units) the refill loop
+    # checks against the seller's current quote before re-signing. It does
+    # NOT bound the initial buy — the initial buy's protection is --budget.
+    cost_cap_raw = opts.get("cost_cap")
+    cost_cap = None
+    if cost_cap_raw is not None:
+        try:
+            cost_cap = int(str(cost_cap_raw))
+        except (TypeError, ValueError):
+            raise ValueError(f"--cost-cap must be an integer atomic-units value, got {cost_cap_raw!r}")
+        if cost_cap <= 0:
+            raise ValueError("--cost-cap must be > 0")
 
     has_policy_override = any(
         value is not None
-        for value in (auto_refill, threshold, refill_count)
+        for value in (auto_refill, threshold, refill_count, cost_cap)
     )
     if not has_policy_override:
         return existing_policy or None
@@ -390,7 +402,7 @@ def _resolve_auto_refill(opts, desired_count, existing_policy=None):
     enabled = auto_refill
     if enabled is None:
         enabled = bool(existing_policy.get("enabled")) or any(
-            value is not None for value in (threshold, refill_count)
+            value is not None for value in (threshold, refill_count, cost_cap)
         )
     if not enabled:
         return {"enabled": False}
@@ -416,6 +428,10 @@ def _resolve_auto_refill(opts, desired_count, existing_policy=None):
         "threshold": resolved_threshold,
         "count": resolved_count,
     }
+    if cost_cap is not None:
+        policy["maxUnitPrice"] = str(cost_cap)
+    elif existing_policy.get("maxUnitPrice"):
+        policy["maxUnitPrice"] = str(existing_policy["maxUnitPrice"])
     return policy
 
 
@@ -1195,6 +1211,47 @@ def _reconcile_purchase_autorefill(pr, live_status, signer_address):
     if not pay_to or not price:
         print(f"{name}: incomplete payment config; skipping")
         return False
+
+    # Re-probe the seller's current quote so a price hike doesn't silently
+    # burn the wallet on auto-refill. The CR's `payment.price` is the
+    # originally-purchased quote and gets stale; the seller's 402 response
+    # carries the live one. `_probe_endpoint` returns the parsed 402 body or
+    # None — we only update the price when we get an unambiguous fresh
+    # quote so a transient seller error never silently rewrites the cap.
+    endpoint = spec.get("endpoint") or ""
+    if endpoint:
+        try:
+            live = _probe_endpoint(_normalize_endpoint(endpoint), spec.get("model") or "")
+            if live and live.get("accepts"):
+                live_amount = str(
+                    live["accepts"][0].get("maxAmountRequired")
+                    or live["accepts"][0].get("amount")
+                    or ""
+                ).strip()
+                if live_amount and live_amount != str(price):
+                    print(
+                        f"{name}: seller price moved {price} → {live_amount} (atomic units); "
+                        "refilling at seller's quote",
+                    )
+                    price = live_amount
+        except Exception as exc:  # network blip, malformed 402 — keep old price
+            print(f"{name}: live price re-probe failed ({exc}); using stored price", file=sys.stderr)
+
+    max_unit_price = policy.get("maxUnitPrice")
+    if max_unit_price is not None:
+        try:
+            if int(price) > int(max_unit_price):
+                print(
+                    f"{name}: seller price {price} exceeds cost cap {max_unit_price} "
+                    f"({asset} on {chain}); skipping refill"
+                )
+                return False
+        except (TypeError, ValueError):
+            print(
+                f"{name}: invalid maxUnitPrice {max_unit_price!r}; skipping",
+                file=sys.stderr,
+            )
+            return False
 
     balance = int(_get_usdc_balance(signer_address, asset, chain))
     total_cost = refill_count * int(price)
@@ -2154,8 +2211,10 @@ def usage():
     print("  buy <name> --endpoint <url> --model <id>     Pre-sign + configure paid/<model>")
     print("       [--budget <micro-units>] [--count <N>]")
     print("       [--auto-refill[=true|false]] [--refill-threshold <N>]")
-    print("       [--refill-count <N>] [--auth-ttl <seconds|never>] [--set-default]")
+    print("       [--refill-count <N>] [--cost-cap <atomic-units>]")
+    print("       [--auth-ttl <seconds|never>] [--set-default]")
     print("       --auth-ttl     pool expiry: seconds, or 'never' (default 30d/1mo); env OBOL_X402_AUTH_TTL")
+    print("       --cost-cap     per-unit price ceiling (atomic units) for auto-refill — refills above this are skipped")
     print("       --set-default  inference only: adopt paid/<model> as the agent's primary model")
     print("  list                                         List purchased providers")
     print("  status <name>                                Check sidecar + auths")

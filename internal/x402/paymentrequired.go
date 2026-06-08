@@ -371,18 +371,18 @@ func normalizeOfferType(t string) string {
 // model time, not an agent with tools/memory.
 func inferenceCopy(url string, d PaymentDisplay) typeCopy {
 	model := sanitizeDisplayToken(d.Model, "<model-id>")
-	name := sanitizeDisplayToken(d.OfferName, "remote-inference")
 
-	cmd := fmt.Sprintf(
-		"obol buy inference %s \\\n  --seller %s \\\n  --model %s \\\n  --budget 1 \\\n  --no-verify-identity",
-		name, url, model,
-	)
+	// Positional seller URL, no required --model/--budget. Identity check
+	// is opt-in via --expected-agent-id, so the copy stays clean.
+	cmd := fmt.Sprintf("obol buy inference %s", url)
 
 	prompt := fmt.Sprintf(
-		"Use the buy-x402 skill's `buy` command to pre-pay %s for the %s model. "+
-			"This is remote inference — once the auths are signed, route requests "+
-			"through LiteLLM as `paid/%s` and report the response.",
-		url, model, model,
+		"There's an Obol paid-inference service at %s offering the %s model. "+
+			"Explain to me how it works, then — if I'm interested — run "+
+			"`obol buy inference %s` from this host to pre-pay it and wire "+
+			"`paid/%s` into our local LiteLLM gateway. After it lands, switch "+
+			"yourself over to the new model and confirm.",
+		url, model, url, model,
 	)
 
 	other := fmt.Sprintf(
@@ -394,12 +394,15 @@ func inferenceCopy(url string, d PaymentDisplay) typeCopy {
 	)
 
 	return typeCopy{
-		Lede: template.HTML("This is a paid inference endpoint — remote model time gated by x402 micropayments. " +
-			"The cleanest way to consume it is the Obol CLI, which loads the model into your local LiteLLM " +
-			"gateway as <code>paid/&lt;model&gt;</code> so your agent and tools can call it like any other OpenAI-compatible model."),
+		Lede: template.HTML(
+			"This is a paid inference provider. Your Obol agent runs locally; the model itself runs " +
+				"on the remote operator's hardware and is gated by x402 micropayments. The CLI below " +
+				"pre-pays the provider through your agent's wallet and registers the model as " +
+				"<code>paid/&lt;model&gt;</code> in your local LiteLLM gateway, so every agent in your stack " +
+				"can call it like any other OpenAI-compatible model."),
 		ShowPrimary:    true,
-		PrimaryTitle:   "Buy with the Obol CLI",
-		PrimaryLede:    "Pre-pays the seller through your obol-agent's wallet and exposes the model as `paid/" + model + "` in your local LiteLLM gateway. Adjust `--budget`, drop `--no-verify-identity` once the seller is registered on ERC-8004.",
+		PrimaryTitle:   "Use this service for your Obol Agent's model",
+		PrimaryLede:    "Run this from your obol-stack host. The CLI walks `/api/services.json`, prompts for auto-refill + a request count, and pre-signs the authorizations from your master agent's wallet. Pass `--yes --count <N>` for non-interactive runs.",
 		PrimaryIsCode:  true,
 		PrimaryPayload: cmd,
 		PromptObol:     prompt,
