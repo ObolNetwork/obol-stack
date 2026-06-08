@@ -238,13 +238,27 @@ def _asset_display_meta(asset, extra=None):
 
 
 def _format_amount(amount, asset, extra=None):
-    """Render an integer token amount with best-effort symbol/decimals."""
+    """Render an integer token amount with best-effort symbol/decimals.
+
+    Display: trim trailing zeros and drop the decimal point when the
+    scaled value is integral. Matches the Go-side `formatTokenAmount`
+    in `cmd/obol/buy.go` so the host CLI and the in-pod buy.py both
+    print "5 OBOL" / "0.001 USDC" rather than "5.000000" / "0.001000".
+    """
     symbol, decimals, units_label = _asset_display_meta(asset, extra)
     raw = int(amount)
     if decimals is None:
         return f"{raw} {units_label}"
-    scaled = raw / (10 ** decimals)
-    return f"{raw} {units_label} ({scaled:.6f} {symbol})"
+    # Use string division so we don't lose precision on large 18-decimal
+    # values when Python float-coerces the divisor.
+    scale = 10 ** decimals
+    whole, frac = divmod(raw, scale)
+    if frac == 0:
+        scaled_str = str(whole)
+    else:
+        frac_str = str(frac).zfill(decimals).rstrip("0")
+        scaled_str = f"{whole}.{frac_str}"
+    return f"{raw} {units_label} ({scaled_str} {symbol})"
 
 
 # ---------------------------------------------------------------------------
@@ -636,31 +650,53 @@ def _create_purchase_request(name, endpoint, model, count, network, pay_to, pric
 
 
 def _wait_for_purchase_ready(name, timeout=180):
-    """Wait for the PurchaseRequest to reach Ready=True."""
+    """Wait for the PurchaseRequest to reach Ready=True.
+
+    Output strategy: collapse identical consecutive messages into a single
+    line with an in-place tick counter, so a 60-second wait on the same
+    state prints once with periodic dots instead of 12 duplicate lines.
+    Fresh state transitions print on their own line so the user can see
+    progress through the controller's phases (Probed → AuthsLoaded →
+    Configured → Ready).
+    """
     token, _ = load_sa()
     ssl_ctx = make_ssl_context()
     ns = _get_agent_namespace()
     path = f"/apis/{PR_GROUP}/{PR_VERSION}/namespaces/{ns}/{PR_RESOURCE}/{name}"
 
     deadline = time.time() + timeout
+    last_msg = None
+    ticks = 0
+    is_tty = sys.stdout.isatty()
     while time.time() < deadline:
         try:
             pr = _kube_json("GET", path, token, ssl_ctx)
             ready, remaining, public_model, message = _purchase_ready(pr)
             if ready:
+                if last_msg is not None and is_tty:
+                    print()  # close the in-place line cleanly
                 print(f"  Ready: {remaining} auths, model={public_model}")
                 return True
-            if message:
-                print(f"  Not ready: {message}")
-            # Print latest condition for progress feedback.
-            conditions = pr.get("status", {}).get("conditions", [])
-            if conditions:
-                latest = conditions[-1]
-                print(f"  [{latest.get('type')}] {latest.get('message', '')}")
+            msg = message or "(no status yet)"
+            if msg != last_msg:
+                if last_msg is not None and is_tty:
+                    print()
+                print(f"  Waiting: {msg}", end="", flush=True)
+                last_msg = msg
+                ticks = 0
+            else:
+                ticks += 1
+                if is_tty:
+                    print(".", end="", flush=True)
         except Exception as e:
+            if last_msg is not None and is_tty:
+                print()
+                last_msg = None
             print(f"  Waiting... ({e})")
         time.sleep(5)
 
+    if last_msg is not None and is_tty:
+        print()
     return False
 
 
@@ -1615,7 +1651,11 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
         print(f"  Auto-refill: enabled (threshold={auto_refill['threshold']}, count={auto_refill['count']})")
     print()
     print(f"The model is now available as: paid/{model_id}")
-    print("Use 'process --all' from a heartbeat/cron loop to reconcile auto-refill policies.")
+    # Only mention the auto-top-up reconcile loop when auto-top-up is on —
+    # for CLI users without it, the line below is confusing noise.
+    if auto_refill and auto_refill.get("enabled"):
+        print("Auto-top-up is enabled. The agent runtime reconciles top-ups in the background;")
+        print("you don't need to do anything else to keep this provider funded.")
 
     if ready and opts.get("set_default"):
         print()
@@ -1730,18 +1770,24 @@ def _set_agent_default_model(model_id, auto_refill):
             file=sys.stderr,
         )
         return False
-    # Safety: a paid primary model bricks chat once the pre-signed pool empties.
+    # Safety: a paid primary model bricks chat once the pre-authorized
+    # budget is exhausted, since the agent will keep trying to route
+    # through paid/<model> with nothing left to spend.
     if not (auto_refill and auto_refill.get("enabled")):
         print(
-            "  WARNING: --set-default without --auto-refill. Once this is your primary",
+            "  Heads up: auto-top-up is not enabled for this provider. Once the",
             file=sys.stderr,
         )
         print(
-            "           model, every chat turn fails when the pre-signed pool empties.",
+            "  pre-authorized budget is used up, this agent will fail to chat until",
             file=sys.stderr,
         )
         print(
-            "           Re-run with --auto-refill, or run 'process --all' on a schedule.",
+            "  you re-run `obol buy inference` to top it up, OR re-run with",
+            file=sys.stderr,
+        )
+        print(
+            "  `--auto-refill` so the agent tops itself up automatically.",
             file=sys.stderr,
         )
     # Primary path: native Hermes writer (atomic; per-request re-read, no restart).
@@ -1836,11 +1882,51 @@ def cmd_process(name=None, process_all=False):
 # List
 # ---------------------------------------------------------------------------
 
-def cmd_list():
-    """List purchased providers, keyed by live PurchaseRequests."""
+def cmd_list(as_json=False):
+    """List purchased providers, keyed by live PurchaseRequests.
+
+    `as_json=True` (driven by --json) emits a structured array the host
+    CLI parses to render an `obol model status` section. Keep field names
+    stable; obol-stack's host code is the only consumer.
+    """
     token, _ = load_sa()
     ssl_ctx = make_ssl_context()
     purchases = _list_purchase_requests(token=token, ssl_ctx=ssl_ctx)
+    if as_json:
+        out = []
+        live_status = _buyer_status() or {}
+        for pr in purchases or []:
+            metadata = pr.get("metadata") or {}
+            spec = pr.get("spec") or {}
+            status = pr.get("status") or {}
+            payment = spec.get("payment") or {}
+            name = metadata.get("name", "")
+            live = live_status.get(name) or {}
+            symbol, decimals, _ = _asset_display_meta(
+                payment.get("asset", ""),
+                {
+                    "name": payment.get("eip712Name", ""),
+                    "version": payment.get("eip712Version", ""),
+                },
+            )
+            entry = {
+                "name": name,
+                "alias": live.get("public_model") or status.get("publicModel") or f"paid/{spec.get('model', name)}",
+                "model": spec.get("model", ""),
+                "remaining": int(live.get("remaining", status.get("remaining", 0)) or 0),
+                "spent": int(live.get("spent", status.get("spent", 0)) or 0),
+                "totalSigned": int(status.get("totalSigned", 0) or 0),
+                "expired": int(_expired_in_active_pool(spec, live) or 0),
+                "price": str(payment.get("price", "")),
+                "chain": live.get("network") or payment.get("network", ""),
+                "endpoint": spec.get("endpoint", ""),
+                "autoRefill": bool(((spec.get("autoRefill") or {}).get("enabled")) or False),
+                "assetSymbol": symbol or "",
+                "assetDecimals": int(decimals) if decimals is not None else 0,
+            }
+            out.append(entry)
+        print(json.dumps(out))
+        return
     if not purchases:
         print("No purchased x402 providers.")
         return
@@ -2297,7 +2383,8 @@ if __name__ == "__main__":
         cmd_refill(positional[0], opts.get("count"))
 
     elif cmd == "list":
-        cmd_list()
+        _, opts = parse_flags(rest)
+        cmd_list(as_json=bool(opts.get("json")))
 
     elif cmd == "process":
         positional, opts = parse_flags(rest)

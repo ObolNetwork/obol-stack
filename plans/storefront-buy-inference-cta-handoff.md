@@ -24,7 +24,7 @@ only. New copy:
 
 - **Lede**: "Your Obol agent runs locally; the model itself runs on the
   remote operator's hardware and is gated by x402 micropayments. The
-  CLI below pre-pays the provider through your agent's wallet and
+  CLI below pre-authorizes the provider through your agent's wallet and
   registers the model as `paid/<model>` in your local LiteLLM gateway."
 - **Primary CTA** ("Use this service for your Obol Agent's model"):
   copyable one-liner `obol buy inference <seller-url>`.
@@ -52,15 +52,18 @@ endpoint. For `type=inference` entries (`ServiceCatalogEntry.type ===
    prose as the 402 lede, suitable for an unauthenticated visitor. Keep
    it short (≤2 sentences).
 
-3. **"Pre-pays via your agent's wallet"** line with a small `(?)` that
-   links to the `buy-x402` skill in obol-docs for buyers who want the
-   deep-dive.
+3. **"Pre-authorizes via your agent's wallet"** line with a small `(?)`
+   that links to the `buy-x402` skill in obol-docs for buyers who want
+   the deep-dive.
 
 4. **Pricing display**: when `entry.priceUnit === "perMTok"`, show
-   "Up to $X per request (≈1k tokens)" instead of a flat per-request
-   number. x402 settles at actual usage, so unused capacity isn't
-   charged — call this out in a one-line note. Source of truth for the
-   per-unit display is `entry.price` + `entry.priceUnit`.
+   both the per-MTok headline AND the equivalent per-request charge
+   (e.g. "1 OBOL / million tokens (≈ 0.001 OBOL per request at ~1000
+   tokens/request)"). The Obol facilitator currently settles each
+   request at this flat estimate; token-metered settlement is on the
+   roadmap but NOT live, so don't claim "you only pay for what you
+   use". Source of truth for the per-unit display is `entry.price`
+   + `entry.priceUnit` + `entry.priceAtomicUnits`.
 
 5. **Type filter**: do not surface the inference CTA on `type=agent` or
    `type=http` cards. Those keep their existing prompts (agents need
