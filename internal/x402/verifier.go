@@ -234,10 +234,10 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// SPIKE: MPP credit-card offers gate through Stripe instead of the x402
-	// facilitator ForwardAuth path.
+	// MPP credit-card offers gate through Stripe (authorize -> capture/cancel)
+	// instead of the x402 facilitator ForwardAuth path.
 	if rule.IsCard() {
-		v.serveCardGated(w, r, rule, requirement, extensions, proxy, defaultCardSettler.settle)
+		v.serveCardGated(w, r, rule, requirement, extensions, proxy, defaultCardGateway, defaultSPTGuard)
 		return
 	}
 
@@ -320,8 +320,8 @@ func (v *Verifier) matchPaidRouteFull(cfg *PricingConfig, uri string) (*RouteRul
 		return nil, x402types.PaymentRequirements{}, nil, nil, ChainInfo{}, AssetInfo{}, false
 	}
 
-	// SPIKE: card routes settle off-chain via Stripe; skip chain/asset
-	// resolution and emit the MPP credit-card 402 option instead.
+	// Card routes settle off-chain via Stripe; skip chain/asset resolution
+	// and emit the MPP credit-card 402 option instead.
 	if rule.IsCard() {
 		return rule, buildCardRequirement(rule), nil, prometheusLabels(rule), ChainInfo{}, AssetInfo{}, true
 	}

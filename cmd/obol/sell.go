@@ -126,13 +126,20 @@ func resolveCardPayment(cmd *cli.Command, price map[string]any) (map[string]any,
 	if !currencyRe.MatchString(currency) {
 		return nil, fmt.Errorf("invalid --card-currency %q: expected a 3-letter ISO-4217 code like usd", currency)
 	}
+	card := map[string]any{
+		"provider": "stripe",
+		"account":  account,
+		"currency": currency,
+	}
+	// The Stripe "machine payments" network id is advertised in the 402
+	// challenge so MPP card clients can mint a Shared Payment Token. Defaults
+	// from the STRIPE_NETWORK_ID env var.
+	if networkID := strings.TrimSpace(cmd.String("stripe-network-id")); networkID != "" {
+		card["networkId"] = networkID
+	}
 	return map[string]any{
-		"method": payMethodCard,
-		"card": map[string]any{
-			"provider": "stripe",
-			"account":  account,
-			"currency": currency,
-		},
+		"method":            payMethodCard,
+		"card":              card,
 		"maxTimeoutSeconds": cmd.Int("max-timeout"),
 		"price":             price,
 	}, nil
@@ -646,6 +653,11 @@ Examples:
 				Name:  "card-currency",
 				Usage: "ISO-4217 currency for card charges",
 				Value: "usd",
+			},
+			&cli.StringFlag{
+				Name:    "stripe-network-id",
+				Usage:   "Stripe \"machine payments\" network id advertised in the 402 challenge (so MPP card clients can mint a Shared Payment Token)",
+				Sources: cli.EnvVars("STRIPE_NETWORK_ID"),
 			},
 			&cli.StringFlag{
 				Name:  "upstream",

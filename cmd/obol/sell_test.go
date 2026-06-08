@@ -262,7 +262,7 @@ func TestSellHTTP_Flags(t *testing.T) {
 		"namespace", "upstream", "port", "health-path", "path",
 		"max-timeout",
 		"register", "no-register", "register-name", "register-description", "register-image",
-		"pay-with", "stripe-account", "card-currency",
+		"pay-with", "stripe-account", "card-currency", "stripe-network-id",
 	)
 
 	assertStringDefault(t, flags, "chain", "base")
@@ -306,6 +306,7 @@ func runCardResolve(t *testing.T, args ...string) (map[string]any, error) {
 			&cli.StringFlag{Name: "pay-with", Value: payMethodCard},
 			&cli.StringFlag{Name: "stripe-account"},
 			&cli.StringFlag{Name: "card-currency", Value: "usd"},
+			&cli.StringFlag{Name: "stripe-network-id"},
 			&cli.IntFlag{Name: "max-timeout", Value: 300},
 		},
 		Action: func(_ context.Context, c *cli.Command) error {
@@ -320,7 +321,7 @@ func runCardResolve(t *testing.T, args ...string) (map[string]any, error) {
 }
 
 func TestResolveCardPayment_Valid(t *testing.T) {
-	out, err := runCardResolve(t, "--stripe-account", "acct_1A2b3C4d", "--card-currency", "eur")
+	out, err := runCardResolve(t, "--stripe-account", "acct_1A2b3C4d", "--card-currency", "eur", "--stripe-network-id", "stripenet_test")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -339,6 +340,9 @@ func TestResolveCardPayment_Valid(t *testing.T) {
 	}
 	if card["currency"] != "eur" {
 		t.Errorf("card.currency = %v, want eur", card["currency"])
+	}
+	if card["networkId"] != "stripenet_test" {
+		t.Errorf("card.networkId = %v, want stripenet_test", card["networkId"])
 	}
 	if _, ok := out["price"].(map[string]any); !ok {
 		t.Errorf("price block missing: %v", out["price"])

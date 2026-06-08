@@ -180,6 +180,30 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 		OfferName:              offer.Name,
 	}
 
+	// MPP credit-card offers carry off-chain Stripe settlement terms instead
+	// of the crypto payTo/network/asset. Populate the card route so the
+	// verifier gates this offer through serveCardGated (matchPaidRouteFull /
+	// HandleProxy dispatch on rule.IsCard()).
+	if strings.EqualFold(offer.Spec.Payment.Method, "card") && offer.Spec.Payment.Card != nil {
+		c := offer.Spec.Payment.Card
+		currency := strings.ToLower(strings.TrimSpace(c.Currency))
+		if currency == "" {
+			currency = defaultCardCurrency
+		}
+		provider := c.Provider
+		if provider == "" {
+			provider = cardNetworkStripe
+		}
+		rule.Card = &CardRoute{
+			Provider:           provider,
+			Account:            c.Account,
+			Currency:           currency,
+			Decimals:           currencyMinorUnits(currency),
+			NetworkID:          c.NetworkID,
+			PaymentMethodTypes: append([]string(nil), c.PaymentMethodTypes...),
+		}
+	}
+
 	if offer.IsAgent() && offer.Status.AgentResolution != nil {
 		res := offer.Status.AgentResolution
 		rule.AgentModel = res.Model
