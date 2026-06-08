@@ -87,7 +87,7 @@ Examples:
 			},
 			&cli.StringFlag{
 				Name:  "agent",
-				Usage: "Agent instance whose wallet pays for the purchase (default: the master/stack-managed agent)",
+				Usage: "Agent instance whose wallet pays for the purchase AND whose hermes config is switched to use paid/<model>. Default: the master/stack-managed agent (asked interactively in TTY).",
 			},
 			&cli.StringFlag{
 				Name:  "model",
@@ -132,7 +132,7 @@ Examples:
 			},
 			&cli.BoolFlag{
 				Name:  "set-default",
-				Usage: "After the buy lands, promote paid/<model> to the head of LiteLLM's model_list and sync every agent. Default: prompted in TTY, off otherwise unless --agent is set.",
+				Usage: "Promote paid/<model> to LiteLLM's head-of-list AND sync every agent in the stack to read it. Default: prompted in TTY, off in non-interactive runs. Independent of --agent: --agent only switches the paying agent's own config.",
 			},
 			&cli.BoolFlag{
 				Name:  "replace",
@@ -303,7 +303,7 @@ func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) 
 		return errors.New("buy cancelled")
 	}
 
-	setDefault := resolveSetDefault(u, cmd, chosenModel)
+	perAgent, global := resolveDefaultScopes(u, cmd, chosenModel, target)
 
 	argv := buildBuyPyArgv(buyPyOptions{
 		Name:            prName,
@@ -315,7 +315,12 @@ func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) 
 		RefillCount:     autoRefill.count,
 		CostCap:         costCapAtomic,
 		Force:           cmd.Bool("force"),
-		SetDefault:      false, // we do model prefer/agent sync from Go side
+		// Per-agent default lives entirely in-pod: buy.py edits the agent's
+		// hermes-config to set model.default = paid/<model> for the agent
+		// whose wallet just paid. No global LiteLLM reorder, no other
+		// agents touched. Global default is handled below via host-side
+		// model prefer + agent sync.
+		SetDefault: perAgent,
 	})
 
 	u.Infof("Dispatching to agent %s (instance=%s) …", target.Runtime, target.ID)
@@ -323,9 +328,9 @@ func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) 
 		return err
 	}
 
-	if setDefault {
+	if global {
 		if err := promoteAndSyncModel(cfg, u, chosenModel); err != nil {
-			u.Warnf("Set-default partially failed: %v", err)
+			u.Warnf("Set-default (global) partially failed: %v", err)
 			u.Dim("  The purchase landed; rerun `obol model prefer paid/" + chosenModel + " && obol agent sync` to retry.")
 		}
 	}
@@ -775,24 +780,39 @@ func printBuySummary(u *ui.UI, s buySummary) {
 	u.Print("─── Purchase summary ─────────────────────────────────────────")
 	u.Print(fmt.Sprintf("  Offer:       %s", s.OfferURL))
 	u.Print(fmt.Sprintf("  Model:       %s", s.Model))
-	unit := "request"
-	if s.PriceUnit == "perMTok" {
-		unit = "million tokens"
+	switch s.PriceUnit {
+	case "perMTok":
+		// perMTok offers price per million tokens. The wire-level atomic
+		// amount is the seller's "up to ~1000 tokens per request" charge —
+		// x402 settles at the actual usage so unused capacity is refunded.
+		u.Print(fmt.Sprintf("  Price:       up to %s %s per request (≤ ~1000 tokens; per-MTok offer)", human(s.PriceAtomic), s.Token))
+		u.Print(fmt.Sprintf("  Pre-paying:  up to %d requests (≈ %s %s ceiling)", s.Count, human(s.BudgetAtomic), s.Token))
+		u.Print("               x402 settles at actual usage — unused capacity isn't charged.")
+	default:
+		u.Print(fmt.Sprintf("  Price:       %s %s per request", human(s.PriceAtomic), s.Token))
+		u.Print(fmt.Sprintf("  Count:       %d requests (≈ %s %s ceiling)", s.Count, human(s.BudgetAtomic), s.Token))
 	}
-	u.Print(fmt.Sprintf("  Price:       %s %s per %s", human(s.PriceAtomic), s.Token, unit))
-	u.Print(fmt.Sprintf("  Count:       %d (≈ %s %s total)", s.Count, human(s.BudgetAtomic), s.Token))
 	if s.AutoRefill.enabled {
 		u.Print(fmt.Sprintf("  Auto-refill: yes (top up when remaining<%d, sign %d more each time)", s.AutoRefill.threshold, s.AutoRefill.count))
 	} else {
 		u.Print("  Auto-refill: no")
 	}
 	if s.CostCapAtomic != nil && s.CostCapAtomic.Sign() > 0 {
-		u.Print(fmt.Sprintf("  Cost cap:    refills skipped above %s %s/%s", human(s.CostCapAtomic), s.Token, unit))
+		capUnit := "request"
+		if s.PriceUnit == "perMTok" {
+			capUnit = "request (~1000 tokens)"
+		}
+		u.Print(fmt.Sprintf("  Cost cap:    refills skipped above %s %s/%s", human(s.CostCapAtomic), s.Token, capUnit))
 	}
 	if s.Wallet != nil {
 		u.Print(fmt.Sprintf("  Paid from:   %s (balance %s %s on %s)", s.Wallet.Address, s.Wallet.HumanBalance(), s.Token, s.Wallet.Chain))
 	} else {
 		u.Print(fmt.Sprintf("  Paid from:   agent wallet (instance %s/%s)", s.Agent.Runtime, s.Agent.ID))
+		u.Print("  (wallet balance preflight skipped — buy.py will re-check inside the pod)")
+	}
+	if s.Wallet != nil && s.BudgetAtomic != nil && s.Wallet.AtomicUnits != nil && s.Wallet.AtomicUnits.Cmp(s.BudgetAtomic) < 0 {
+		u.Warnf("  Wallet balance is below the requested budget — some auths will fail to settle on-chain.")
+		u.Print(fmt.Sprintf("  Top up the wallet (%s, %s on %s) before proceeding, or rerun with --force to sign anyway.", s.Wallet.Address, s.Token, s.Wallet.Chain))
 	}
 	switch s.Mode {
 	case buyModeTopUp:
@@ -815,17 +835,39 @@ func confirmBuy(u *ui.UI, cmd *cli.Command) bool {
 	return u.Confirm("Confirm purchase?", true)
 }
 
-func resolveSetDefault(u *ui.UI, cmd *cli.Command, model string) bool {
+// resolveDefaultScopes returns (perAgent, global) bools controlling the
+// post-buy "use this model" behavior:
+//
+//   - perAgent → invoke buy.py `--set-default`, which atomically edits the
+//     paying agent's hermes-config inside the pod. Other agents and the
+//     LiteLLM model_list head are untouched.
+//   - global → run `obol model prefer paid/<model>` + `obol agent sync`
+//     from the host. Reorders LiteLLM's model_list and rolls every agent
+//     so head-of-list pickers see the new primary.
+//
+// They're independent. --agent X implies perAgent (you asked for X to use
+// this) but never global. --set-default explicitly toggles global.
+// Interactive mode asks only the per-agent question (default Y) because
+// the global toggle has wider blast radius and surprised users in early
+// testing.
+func resolveDefaultScopes(u *ui.UI, cmd *cli.Command, model string, target agentTarget) (perAgent, global bool) {
 	if cmd.IsSet("set-default") {
-		return cmd.Bool("set-default")
+		global = cmd.Bool("set-default")
 	}
 	if cmd.IsSet("agent") {
-		return true
+		perAgent = true
+		return
 	}
-	if !u.IsTTY() {
-		return false
+	if cmd.Bool("yes") || !u.IsTTY() {
+		// Non-interactive default: do not touch any agent's config unless
+		// the operator was explicit (via --agent or --set-default).
+		return
 	}
-	return u.Confirm(fmt.Sprintf("Set paid/%s as the default inference model for all agents (model prefer + agent sync)?", model), true)
+	perAgent = u.Confirm(
+		fmt.Sprintf("Switch %s/%s to use paid/%s as its inference model?", target.Runtime, target.ID, model),
+		true,
+	)
+	return
 }
 
 func promoteAndSyncModel(cfg *config.Config, u *ui.UI, modelID string) error {
