@@ -128,12 +128,27 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		"secret-token",
 		"gpt-5.2",
 		[]byte("model:\n  default: gpt-5.2\n"),
+		[]byte("fake-skills-tar-gz"),
 	)
 
 	for _, needle := range []string{
 		"name: hermes",
 		"name: hermes-config",
+		"name: hermes-skills",
 		"name: hermes-data",
+		// Skills shipped as a binaryData ConfigMap (gzipped tarball), not
+		// host-written into the PVC.
+		"binaryData:",
+		"skills.tar.gz:",
+		// Config + skills are mounted read-only into init-hermes-data and
+		// extracted INTO the PVC as the container UID, so the host never
+		// writes the PVC. See the PVC-ownership regression history.
+		"mountPath: /etc/hermes/config",
+		"mountPath: /etc/hermes/skills",
+		"readOnly: true",
+		"cp /etc/hermes/config/config.yaml /data/.hermes/config.yaml",
+		"extractall('/data/.hermes/obol-skills', filter='data')",
+		"rm -f /data/.hermes/workspace/HEARTBEAT.md",
 		`API_SERVER_KEY: "secret-token"`,
 		`value: "https://agent.example.com"`,
 		"AGENT_NAMESPACE",

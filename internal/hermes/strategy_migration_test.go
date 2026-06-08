@@ -95,6 +95,7 @@ func TestGenerateValues_StrategyIsRecreateWithoutRollingUpdate(t *testing.T) {
 		"secret-token",
 		"gpt-5.2",
 		[]byte("model:\n  default: gpt-5.2\n"),
+		[]byte("fake-skills-tar-gz"),
 	)
 
 	// The values file is a bedag/raw chart: resources live under .resources.

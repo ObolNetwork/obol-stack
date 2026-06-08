@@ -1,6 +1,10 @@
 package embed
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -477,6 +481,62 @@ func TestDiscoverySkill_Commands(t *testing.T) {
 	} {
 		if !strings.Contains(content, constant) {
 			t.Errorf("discovery.py missing constant %q", constant)
+		}
+	}
+}
+
+func TestSkillsTarball_DeterministicFilteredAndExtractable(t *testing.T) {
+	first, err := SkillsTarball()
+	if err != nil {
+		t.Fatalf("SkillsTarball: %v", err)
+	}
+	if len(first) == 0 {
+		t.Fatal("SkillsTarball returned empty archive")
+	}
+
+	// Byte-stable across calls so the ConfigMap (and Deployment hash) only
+	// churns when the skills actually change.
+	second, err := SkillsTarball()
+	if err != nil {
+		t.Fatalf("SkillsTarball (second): %v", err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatal("SkillsTarball is not deterministic across calls")
+	}
+
+	gz, err := gzip.NewReader(bytes.NewReader(first))
+	if err != nil {
+		t.Fatalf("not a valid gzip stream: %v", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	names := make(map[string]bool)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("tar read: %v", err)
+		}
+		if strings.Contains(hdr.Name, "__pycache__") || strings.HasSuffix(hdr.Name, ".pyc") {
+			t.Errorf("pycache cruft leaked into tarball: %q", hdr.Name)
+		}
+		if strings.HasPrefix(hdr.Name, "skills/") || strings.HasPrefix(hdr.Name, "/") {
+			t.Errorf("tar path not relative to skills root: %q", hdr.Name)
+		}
+		names[hdr.Name] = true
+	}
+
+	// Spot-check a script and a SKILL.md survive the round-trip.
+	for _, want := range []string{
+		"buy-x402/scripts/buy.py",
+		"sell/scripts/monetize.py",
+		"obol-stack/SKILL.md",
+	} {
+		if !names[want] {
+			t.Errorf("tarball missing expected entry %q", want)
 		}
 	}
 }

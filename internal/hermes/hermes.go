@@ -696,15 +696,21 @@ func writeDeploymentFiles(cfg *config.Config, id, deploymentDir, agentBaseURL st
 		return err
 	}
 
-	if err := os.WriteFile(filepath.Join(deploymentDir, valuesFileName), []byte(generateValues(namespace, hostname, dashboardHost, agentBaseURL, token, primary, configData)), 0o600); err != nil {
+	// The agent config and Obol skills are shipped to the pod as ConfigMaps and
+	// extracted INTO the PVC by the init-hermes-data init container as the
+	// container UID — the host never writes the PVC, so there is no ownership to
+	// repair afterward (the failure mode that dogged the old syncRuntimeFiles
+	// path). Build the deterministic skills tarball once and embed it here.
+	skillsTarGz, err := obolembed.SkillsTarball()
+	if err != nil {
+		return fmt.Errorf("failed to build Obol skills tarball: %w", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(deploymentDir, valuesFileName), []byte(generateValues(namespace, hostname, dashboardHost, agentBaseURL, token, primary, configData, skillsTarGz)), 0o600); err != nil {
 		return fmt.Errorf("failed to write %s: %w", valuesFileName, err)
 	}
 	if err := os.WriteFile(filepath.Join(deploymentDir, helmfileFileName), []byte(generateHelmfile(namespace)), 0o600); err != nil {
 		return fmt.Errorf("failed to write %s: %w", helmfileFileName, err)
-	}
-
-	if err := syncRuntimeFiles(cfg, id, configData, u); err != nil {
-		return err
 	}
 
 	u.Successf("Prepared Hermes runtime config (%d model(s), default: %s)", len(models), primary)
@@ -742,7 +748,7 @@ func dashboardHostname(id string) string {
 	return agentruntime.DashboardHostname(agentruntime.Hermes, id)
 }
 
-func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token, primary string, configData []byte) string {
+func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token, primary string, configData, skillsTarGz []byte) string {
 	desc := agentruntime.Describe(agentruntime.Hermes)
 
 	var b strings.Builder
@@ -781,6 +787,18 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
       config.yaml: |
 `, desc.ServiceName, namespace, desc.ServiceName, namespace, desc.ServiceName, quoteYAML(token), desc.ConfigMapName, namespace, desc.ServiceName)
 	b.WriteString(indentBlock(string(configData), "        "))
+	fmt.Fprintf(&b, `
+  - apiVersion: v1
+    kind: ConfigMap
+    metadata:
+      name: hermes-skills
+      namespace: %s
+      labels:
+        app.kubernetes.io/name: %s
+        app.kubernetes.io/managed-by: obol
+    binaryData:
+      skills.tar.gz: %s
+`, namespace, desc.ServiceName, base64.StdEncoding.EncodeToString(skillsTarGz))
 	fmt.Fprintf(&b, `
   - apiVersion: v1
     kind: PersistentVolumeClaim
@@ -867,7 +885,7 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                 - sh
                 - -ec
                 - |
-                  mkdir -p /data/.hermes/home /data/.hermes/workspace /data/.hermes/logs
+                  mkdir -p /data/.hermes/home /data/.hermes/workspace /data/.hermes/logs /data/.hermes/obol-skills
                   if [ ! -x /opt/hermes/.venv/bin/hermes ]; then
                     echo "Hermes binary missing from image: /opt/hermes/.venv/bin/hermes" >&2
                     exit 1
@@ -876,6 +894,15 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                     echo "Hermes image is missing required extras: web,messaging,mcp,pty,cli,acp,google" >&2
                     exit 1
                   fi
+                  # Stage the agent config and Obol skills INTO the PVC from the
+                  # read-only hermes-config / hermes-skills ConfigMaps. This init
+                  # container inherits the pod securityContext (runAsUser 10000),
+                  # so everything written here is already container-owned and the
+                  # host never has to touch — or chown back — the PVC. See the
+                  # long PVC-ownership regression history for why that matters.
+                  cp /etc/hermes/config/config.yaml /data/.hermes/config.yaml
+                  /opt/hermes/.venv/bin/python3 -c "import tarfile; tarfile.open('/etc/hermes/skills/skills.tar.gz').extractall('/data/.hermes/obol-skills', filter='data')"
+                  rm -f /data/.hermes/workspace/HEARTBEAT.md
                   if [ -f /data/.hermes/state.db ]; then
                     if ! /opt/hermes/.venv/bin/python3 - <<'PY'
                   import sqlite3
@@ -896,6 +923,12 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
               volumeMounts:
                 - name: data
                   mountPath: /data
+                - name: hermes-config
+                  mountPath: /etc/hermes/config
+                  readOnly: true
+                - name: hermes-skills
+                  mountPath: /etc/hermes/skills
+                  readOnly: true
           containers:
             - name: %s
               image: %s
@@ -1015,6 +1048,12 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
             - name: data
               persistentVolumeClaim:
                 claimName: %s
+            - name: hermes-config
+              configMap:
+                name: hermes-config
+            - name: hermes-skills
+              configMap:
+                name: hermes-skills
 
   - apiVersion: v1
     kind: Service
@@ -1076,43 +1115,6 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
 		desc.ServiceName, namespace, quoteYAML(dashboardHostname), desc.ServiceName, dashboardPort)
 
 	return strings.ReplaceAll(b.String(), "\t", "")
-}
-
-func syncRuntimeFiles(cfg *config.Config, id string, configData []byte, u *ui.UI) error {
-	targetDir := agentruntime.HomePath(cfg, agentruntime.Hermes, id)
-	ensureVolumeWritable(cfg, targetDir, u)
-	if err := os.MkdirAll(targetDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create Hermes home %s: %w", targetDir, err)
-	}
-	if err := os.WriteFile(filepath.Join(targetDir, "config.yaml"), configData, 0o600); err != nil {
-		return fmt.Errorf("failed to write Hermes config: %w", err)
-	}
-	if err := syncObolSkills(cfg, id); err != nil {
-		return err
-	}
-	if err := removeLegacyHeartbeat(targetDir); err != nil {
-		return err
-	}
-	return nil
-}
-
-func removeLegacyHeartbeat(hermesHome string) error {
-	heartbeatPath := filepath.Join(hermesHome, "workspace", "HEARTBEAT.md")
-	if err := os.Remove(heartbeatPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("failed to remove legacy heartbeat: %w", err)
-	}
-	return nil
-}
-
-func syncObolSkills(cfg *config.Config, id string) error {
-	targetDir := filepath.Join(agentruntime.HomePath(cfg, agentruntime.Hermes, id), obolSkillsDirName)
-	if err := os.MkdirAll(targetDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create Obol skills directory: %w", err)
-	}
-	if err := obolembed.CopySkills(targetDir); err != nil {
-		return fmt.Errorf("failed to copy Obol skills: %w", err)
-	}
-	return nil
 }
 
 // configuredModels returns the agent-facing model list and the primary model
