@@ -191,29 +191,88 @@ type ServiceOfferUpstream struct {
 	HealthPath string `json:"healthPath,omitempty"`
 }
 
+// ServiceOfferPayment describes how buyers pay for the offer. Two methods
+// are supported, selected by Method:
+//
+//   - "crypto" (default): x402 on-chain stablecoin settlement. Network and
+//     PayTo are required and PayTo must be a 0x EVM address.
+//   - "card": an MPP credit-card method (Stripe stripe.charge). Card is
+//     required; funds settle off-chain into the configured Stripe account
+//     and Network/PayTo do not apply.
+//
+// The per-method required fields are enforced by the XValidation rules
+// below so the API server rejects malformed offers at admission time,
+// independent of the CLI. The CEL guards short-circuit on Method so the
+// 0x/account checks are only evaluated for the relevant method.
+//
+// +kubebuilder:validation:XValidation:rule="self.method != 'card' ? has(self.payTo) : true",message="payment.payTo is required when payment.method is crypto"
+// +kubebuilder:validation:XValidation:rule="self.method != 'card' ? (has(self.network) && size(self.network) > 0) : true",message="payment.network is required when payment.method is crypto"
+// +kubebuilder:validation:XValidation:rule="self.method == 'card' ? (has(self.card) && has(self.card.account)) : true",message="payment.card.account is required when payment.method is card"
 type ServiceOfferPayment struct {
-	// x402 payment scheme.
+	// Payment method. "crypto" gates with x402 on-chain stablecoin
+	// settlement (default; preserves existing behavior). "card" gates with
+	// an MPP credit-card method (Stripe) that settles off-chain into
+	// spec.payment.card.account.
+	// +kubebuilder:default="crypto"
+	// +kubebuilder:validation:Enum=crypto;card
+	Method string `json:"method,omitempty"`
+	// x402 payment scheme. Only meaningful when method=crypto.
 	// +kubebuilder:default="exact"
 	// +kubebuilder:validation:Enum=exact
 	Scheme string `json:"scheme,omitempty"`
 	// Chain identifier for payments (human-friendly). Reconciler resolves
-	// to CAIP-2 format (e.g., "base-sepolia" → "eip155:84532").
-	// +kubebuilder:validation:Required
-	Network string `json:"network"`
-	// USDC recipient wallet address (x402: payTo).
-	// +kubebuilder:validation:Required
+	// to CAIP-2 format (e.g., "base-sepolia" → "eip155:84532"). Required
+	// when method=crypto (enforced by the payment XValidation rules);
+	// unused for card payments.
+	Network string `json:"network,omitempty"`
+	// USDC recipient wallet address (x402: payTo). Required and 0x-format
+	// when method=crypto (enforced by the payment XValidation rules);
+	// unused for card payments.
 	// +kubebuilder:validation:Pattern=`^0x[0-9a-fA-F]{40}$`
-	PayTo string `json:"payTo"`
+	PayTo string `json:"payTo,omitempty"`
 	// Payment validity window in seconds (x402: maxTimeoutSeconds).
 	// +kubebuilder:default=300
 	MaxTimeoutSeconds int64 `json:"maxTimeoutSeconds,omitempty"`
 	// Optional token metadata override for x402 settlement. When omitted,
-	// the verifier uses the chain default asset.
+	// the verifier uses the chain default asset. Crypto only.
 	Asset ServiceOfferAsset `json:"asset,omitempty"`
-	// Pricing table with per-unit prices in USDC (human-readable decimals).
-	// Which fields are applicable depends on the workload type.
+	// Card payment terms. Required when method=card; ignored otherwise.
+	Card *ServiceOfferCardPayment `json:"card,omitempty"`
+	// Pricing table with per-unit prices (human-readable decimals). For
+	// crypto the unit is the settlement token (USDC by default); for card
+	// the unit is payment.card.currency. Which fields are applicable
+	// depends on the workload type.
 	// +kubebuilder:validation:Required
 	Price ServiceOfferPriceTable `json:"price"`
+}
+
+// ServiceOfferCardPayment holds the off-chain credit-card settlement terms
+// used when ServiceOfferPayment.Method == "card". It is the card-method
+// analog of Network/PayTo: instead of a chain plus a 0x recipient, funds
+// settle through a payment provider (Stripe today, via the MPP
+// stripe.charge method) into Account.
+type ServiceOfferCardPayment struct {
+	// Card payment provider. Only "stripe" is supported today (MPP
+	// stripe.charge via Shared Payment Tokens).
+	// +kubebuilder:default="stripe"
+	// +kubebuilder:validation:Enum=stripe
+	Provider string `json:"provider,omitempty"`
+	// Destination account that receives settled card funds. For Stripe this
+	// is the connected/destination account id (e.g. "acct_1A2b3C4d5E6f7G").
+	// +kubebuilder:validation:Pattern=`^acct_[A-Za-z0-9]+$`
+	Account string `json:"account,omitempty"`
+	// ISO-4217 currency the card is charged in. Default "usd".
+	// +kubebuilder:default="usd"
+	// +kubebuilder:validation:Pattern=`^[a-z]{3}$`
+	Currency string `json:"currency,omitempty"`
+	// Optional Stripe "machine payments" network id, surfaced in the 402
+	// challenge's extra block so MPP card clients know where to mint a
+	// Shared Payment Token.
+	NetworkID string `json:"networkId,omitempty"`
+	// Accepted payment-method types advertised to the client. Defaults to
+	// ["card"] at the gateway when empty.
+	// +kubebuilder:validation:MaxItems=16
+	PaymentMethodTypes []string `json:"paymentMethodTypes,omitempty"`
 }
 
 type ServiceOfferAsset struct {
@@ -723,8 +782,7 @@ type AgentIdentityList struct {
 	Items           []AgentIdentity `json:"items"`
 }
 
-type AgentIdentitySpec struct {
-}
+type AgentIdentitySpec struct{}
 
 type AgentIdentityStatus struct {
 	// Per-chain ERC-8004 registrations for this identity document.

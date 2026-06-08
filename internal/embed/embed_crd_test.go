@@ -241,6 +241,88 @@ func TestServiceOfferCRD_WalletValidation(t *testing.T) {
 	}
 }
 
+// TestServiceOfferCRD_CardPayment guards the MPP credit-card schema: the
+// method discriminator, the card block (Stripe account/provider), and the
+// per-method CEL validation rules that gate payTo/network/card.account.
+func TestServiceOfferCRD_CardPayment(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/serviceoffer-crd.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+
+	crd := findDoc(multiDoc(data), "CustomResourceDefinition")
+	if crd == nil {
+		t.Fatal("no CRD document found")
+	}
+
+	versions := nested(crd, "spec", "versions").([]any)
+	v0 := versions[0].(map[string]any)
+	payment := nested(v0, "schema", "openAPIV3Schema", "properties", "spec",
+		"properties", "payment").(map[string]any)
+	props := payment["properties"].(map[string]any)
+
+	// method discriminator: enum crypto;card, default crypto.
+	method, ok := props["method"].(map[string]any)
+	if !ok {
+		t.Fatal("payment.method property missing")
+	}
+	if method["default"] != "crypto" {
+		t.Errorf("payment.method.default = %v, want crypto", method["default"])
+	}
+	gotEnum := map[string]bool{}
+	for _, e := range method["enum"].([]any) {
+		gotEnum[e.(string)] = true
+	}
+	if !gotEnum["crypto"] || !gotEnum["card"] {
+		t.Errorf("payment.method.enum = %v, want crypto+card", method["enum"])
+	}
+
+	// card block: account pattern + provider enum.
+	card, ok := props["card"].(map[string]any)
+	if !ok {
+		t.Fatal("payment.card property missing")
+	}
+	cardProps := card["properties"].(map[string]any)
+	account := cardProps["account"].(map[string]any)
+	if account["pattern"] != "^acct_[A-Za-z0-9]+$" {
+		t.Errorf("payment.card.account.pattern = %v, want ^acct_[A-Za-z0-9]+$", account["pattern"])
+	}
+	provider := cardProps["provider"].(map[string]any)
+	provEnum := map[string]bool{}
+	for _, e := range provider["enum"].([]any) {
+		provEnum[e.(string)] = true
+	}
+	if !provEnum["stripe"] {
+		t.Errorf("payment.card.provider.enum = %v, want stripe", provider["enum"])
+	}
+
+	// payTo must no longer be unconditionally required (card offers omit it);
+	// the per-method requirement is enforced by CEL instead.
+	for _, r := range nested(payment, "required").([]any) {
+		if r.(string) == "payTo" || r.(string) == "network" {
+			t.Errorf("payment.required must not list %q (now CEL-gated by method)", r)
+		}
+	}
+
+	// Three CEL rules: payTo-when-crypto, network-when-crypto, card.account-when-card.
+	rules, ok := payment["x-kubernetes-validations"].([]any)
+	if !ok {
+		t.Fatal("payment.x-kubernetes-validations missing")
+	}
+	if len(rules) != 3 {
+		t.Fatalf("payment x-kubernetes-validations count = %d, want 3", len(rules))
+	}
+	joined := ""
+	for _, r := range rules {
+		joined += r.(map[string]any)["rule"].(string) + "\n"
+	}
+	for _, want := range []string{"self.payTo", "self.network", "self.card.account"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("CEL rules missing reference to %q; got:\n%s", want, joined)
+		}
+	}
+}
+
 func TestRegistrationRequestCRD_Parses(t *testing.T) {
 	data, err := ReadInfrastructureFile("base/templates/registrationrequest-crd.yaml")
 	if err != nil {

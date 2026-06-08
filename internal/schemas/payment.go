@@ -29,10 +29,23 @@ var (
 	approxMinutesPerRequestDecimal = decimal.NewFromInt(ApproxMinutesPerRequest)
 )
 
-// PaymentTerms defines x402 payment requirements for a ServiceOffer.
-// Field names align with x402 PaymentRequirements (V2).
+// PaymentMethodCrypto gates the offer with x402 on-chain stablecoin
+// settlement. It is the default when PaymentTerms.Method is empty.
+const PaymentMethodCrypto = "crypto"
+
+// PaymentMethodCard gates the offer with an MPP credit-card method
+// (Stripe stripe.charge), settled off-chain into PaymentTerms.Card.Account.
+const PaymentMethodCard = "card"
+
+// PaymentTerms defines payment requirements for a ServiceOffer. Field
+// names align with x402 PaymentRequirements (V2) for the crypto method;
+// the Card block carries the off-chain credit-card (MPP/Stripe) terms.
 type PaymentTerms struct {
-	// Scheme is the x402 payment scheme. Default: "exact".
+	// Method selects the payment method: "crypto" (x402 on-chain, default)
+	// or "card" (MPP Stripe). Empty is treated as "crypto".
+	Method string `json:"method,omitempty" yaml:"method,omitempty"`
+
+	// Scheme is the x402 payment scheme. Default: "exact". Crypto only.
 	Scheme string `json:"scheme,omitempty" yaml:"scheme,omitempty"`
 
 	// Network is the chain identifier (human-friendly, e.g., "base-sepolia").
@@ -47,10 +60,45 @@ type PaymentTerms struct {
 
 	// Asset defines the token metadata used for x402 settlement. When omitted,
 	// the verifier falls back to the chain default asset (currently USDC).
+	// Crypto only.
 	Asset AssetTerms `json:"asset,omitempty" yaml:"asset,omitempty"`
+
+	// Card holds off-chain credit-card settlement terms when Method=="card".
+	Card *CardTerms `json:"card,omitempty" yaml:"card,omitempty"`
 
 	// Price defines the pricing model (type-specific).
 	Price PriceTable `json:"price" yaml:"price"`
+}
+
+// EffectiveMethod returns the payment method, defaulting an empty value to
+// PaymentMethodCrypto so existing crypto offers keep working unchanged.
+func (p PaymentTerms) EffectiveMethod() string {
+	if p.Method == "" {
+		return PaymentMethodCrypto
+	}
+	return p.Method
+}
+
+// CardTerms defines off-chain credit-card settlement terms used when
+// PaymentTerms.Method == "card". It mirrors monetizeapi.ServiceOfferCardPayment.
+type CardTerms struct {
+	// Provider is the card payment provider (only "stripe" today).
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+
+	// Account is the destination account that receives settled card funds.
+	// For Stripe this is the connected/destination account id (acct_...).
+	Account string `json:"account,omitempty" yaml:"account,omitempty"`
+
+	// Currency is the ISO-4217 currency the card is charged in (e.g. "usd").
+	Currency string `json:"currency,omitempty" yaml:"currency,omitempty"`
+
+	// NetworkID is the optional Stripe "machine payments" network id,
+	// surfaced in the 402 challenge so MPP card clients can mint a token.
+	NetworkID string `json:"networkId,omitempty" yaml:"networkId,omitempty"`
+
+	// PaymentMethodTypes are the accepted payment-method types advertised to
+	// the client. Defaults to ["card"] at the gateway when empty.
+	PaymentMethodTypes []string `json:"paymentMethodTypes,omitempty" yaml:"paymentMethodTypes,omitempty"`
 }
 
 const (
