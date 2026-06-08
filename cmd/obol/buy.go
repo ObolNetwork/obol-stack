@@ -44,6 +44,13 @@ const (
 	// explicitly. 5000 basis points = 50% above current, matching the
 	// "default 50% more than current N" UX agreed in the design doc.
 	costCapMarkupBps = 5000
+
+	// permit2SafeAuthCount mirrors buy.py's PERMIT2_SAFE_AUTH_COUNT: the
+	// ConfigMap-backed exact-payment path can store ~537 auths before
+	// hitting Kubernetes' 1MiB size limit, so permit2 buys are capped at
+	// 500. Surfaced here so the host can warn users BEFORE confirmation
+	// (the in-pod cap message arrives after the spend is committed).
+	permit2SafeAuthCount = 500
 )
 
 func buyCommand(cfg *config.Config) *cli.Command {
@@ -292,12 +299,27 @@ func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) 
 	walletInfo := fetchWalletInfoBestEffort(cfg, target, token, chainForDisplay, u)
 	decimals := resolveTokenDecimals(entry, token, chainForDisplay)
 
+	// Detect the permit2 batch cap BEFORE the summary so users can see
+	// the actual ceiling they'll get instead of finding out post-buy.
+	multiplier := 1
+	if priceUnit == "perMTok" {
+		multiplier = schemas.ApproxTokensPerRequest
+	}
+	cappedCount, capped := applyPermit2CapToCount(entry, count, multiplier)
+	if capped {
+		// The budget ceiling tracks the actual auths we'll sign, not the
+		// notional ask, so the summary doesn't overstate the spend cap.
+		budgetAtomic = new(big.Int).Mul(priceAtomic, big.NewInt(int64(cappedCount)))
+	}
+
 	summary := buySummary{
 		Agent:         target,
 		PRName:        prName,
 		OfferURL:      offerURL,
 		Model:         chosenModel,
-		Count:         count,
+		Count:         cappedCount,
+		Requested:     count,
+		Capped:        capped,
 		PriceAtomic:   priceAtomic,
 		PriceUnit:     priceUnit,
 		Token:         token,
@@ -312,18 +334,14 @@ func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) 
 	if !confirmBuy(u, cmd) {
 		return errors.New("buy inference cancelled")
 	}
+	count = cappedCount
 
 	perAgent, global := resolveDefaultScopes(u, cmd, chosenModel, target)
 
 	// buy.py operates in per-auth wire units (each auth pays the per-request
-	// wire amount). For perMTok offers the user-facing natural unit is
-	// million-tokens, which maps to ApproxTokensPerRequest auths. Multiply
-	// count, refill threshold, and refill count once here so the buy.py
-	// argv stays in its native units.
-	multiplier := 1
-	if priceUnit == "perMTok" {
-		multiplier = schemas.ApproxTokensPerRequest
-	}
+	// wire amount). multiplier was set above when we computed the permit2
+	// cap. Refill threshold/count stay in natural units and get multiplied
+	// the same way.
 	costCapForBuyPy := costCapAtomic
 	if costCapForBuyPy != nil && costCapForBuyPy.Sign() > 0 && priceUnit == "perMTok" {
 		// Cost cap is stored as per-MTok atomic; buy.py compares against
@@ -359,6 +377,16 @@ func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) 
 			u.Warnf("Set-default (global) partially failed: %v", err)
 			u.Dim("  The purchase landed; rerun `obol model prefer paid/" + chosenModel + " && obol agent sync` to retry.")
 		}
+	} else if perAgent {
+		// Per-agent set-default lands inside the agent pod (buy.py edits
+		// hermes-config). It does NOT touch the global LiteLLM model_list
+		// ranking, so `obol model list` still shows the previous head —
+		// surface that explicitly so users aren't confused when the
+		// "ranking" doesn't budge.
+		u.Blank()
+		u.Infof("paid/%s is now the default model for %s/%s.", chosenModel, target.Runtime, target.ID)
+		u.Dim("  Other agents are unchanged. To make this the default for every agent in the stack:")
+		u.Dim(fmt.Sprintf("    obol model prefer paid/%s", chosenModel))
 	}
 	return nil
 }
@@ -475,12 +503,14 @@ type buySummary struct {
 	PRName        string
 	OfferURL      string
 	Model         string
-	Count         int      // in natural units (requests | million-tokens)
+	Count         int      // post-cap count in natural units we'll actually sign
+	Requested     int      // natural-unit count the user asked for (pre-cap)
+	Capped        bool     // true when the permit2 batch cap reduced the count
 	PriceAtomic   *big.Int // per natural unit
 	PriceUnit     string   // "perRequest" | "perMTok"
 	Token         string
 	TokenDecimals int      // for human formatting; catalog wins, ResolveToken fallback
-	BudgetAtomic  *big.Int // count × PriceAtomic
+	BudgetAtomic  *big.Int // Count × PriceAtomic (post-cap)
 	AutoRefill    autoRefillPolicy
 	CostCapAtomic *big.Int
 	Wallet        *buy.WalletInfo
@@ -746,6 +776,18 @@ func previewCost(count int, price *big.Int, decimals int) string {
 	return formatTokenAmount(total, decimals)
 }
 
+// perRequestEstimate divides a per-MTok atomic price by the temporary
+// tokens-per-request constant the controller uses today. Until the
+// facilitator implements usage-based settlement, this is the actual
+// flat per-call charge a buyer pays — surface it so users can compare
+// against perRequest offers without converting in their head.
+func perRequestEstimate(perMTokAtomic *big.Int) *big.Int {
+	if perMTokAtomic == nil {
+		return nil
+	}
+	return new(big.Int).Quo(perMTokAtomic, big.NewInt(int64(schemas.ApproxTokensPerRequest)))
+}
+
 // formatTokenAmount renders an atomic-units value as a human decimal with
 // the minimum number of fractional digits needed: whole values show as
 // "1" / "5", dust keeps enough digits to stay non-zero ("0.001"), and
@@ -856,6 +898,33 @@ func resolveCostCap(flag, token string, price *big.Int, autoRefill bool) (*big.I
 	return cap, nil
 }
 
+// applyPermit2CapToCount caps a natural-unit count down so the per-auth
+// translation stays within buy.py's PERMIT2_SAFE_AUTH_COUNT (~537 auths
+// is the ConfigMap-backed exact path's hard limit; we mirror buy.py's
+// 500 floor). Returns the post-cap natural-unit count + a bool flag
+// signalling we trimmed. EIP-3009 / non-permit2 paths are uncapped.
+func applyPermit2CapToCount(entry *buy.CatalogEntry, naturalCount, multiplier int) (int, bool) {
+	if entry == nil || entry.Asset == nil {
+		return naturalCount, false
+	}
+	if !strings.EqualFold(strings.TrimSpace(entry.Asset.TransferMethod), "permit2") {
+		return naturalCount, false
+	}
+	if multiplier <= 0 {
+		multiplier = 1
+	}
+	auths := naturalCount * multiplier
+	if auths <= permit2SafeAuthCount {
+		return naturalCount, false
+	}
+	// Floor-divide so the natural-unit count fits inside the auth cap.
+	cappedNatural := permit2SafeAuthCount / multiplier
+	if cappedNatural < 1 {
+		cappedNatural = 1
+	}
+	return cappedNatural, true
+}
+
 // resolveTokenDecimals picks the most reliable decimals source for the
 // chosen payment token. The catalog asset is authoritative when present;
 // otherwise we fall through to the in-binary token registry with the
@@ -915,16 +984,27 @@ func printBuySummary(u *ui.UI, s buySummary) {
 	u.Print(fmt.Sprintf("  Model:       %s", s.Model))
 	switch s.PriceUnit {
 	case "perMTok":
-		// perMTok offers price per million tokens. x402 uses the up-to
-		// scheme: the facilitator settles each request at the actual
-		// metered usage, so unused capacity isn't charged.
-		u.Print(fmt.Sprintf("  Price:           up to %s %s per million tokens", human(s.PriceAtomic), s.Token))
+		// Today both pricing units settle at a flat per-request charge
+		// (the perMTok value is divided by schemas.ApproxTokensPerRequest
+		// to derive a fixed wire amount). Token-metered settlement is
+		// part of the x402 spec but not implemented on the Obol
+		// facilitator yet — don't claim "unused capacity isn't charged"
+		// until it actually isn't.
+		u.Print(fmt.Sprintf("  Price:           %s %s per million tokens (≈ %s/request at ~1000 tokens/request)", human(s.PriceAtomic), s.Token, human(perRequestEstimate(s.PriceAtomic))))
 		u.Print(fmt.Sprintf("  Pre-authorizing: up to %d million tokens (≈ %s %s ceiling)", s.Count, human(s.BudgetAtomic), s.Token))
-		u.Print("                   Settled per-request after each successful response — unused capacity isn't charged.")
+		u.Print("                   Settled per-request at the seller's quoted estimate; token-metered settlement is on the roadmap.")
 	default:
 		u.Print(fmt.Sprintf("  Price:           %s %s per request", human(s.PriceAtomic), s.Token))
 		u.Print(fmt.Sprintf("  Pre-authorizing: %d requests (≈ %s %s ceiling)", s.Count, human(s.BudgetAtomic), s.Token))
 		u.Print("                   Settled per-request after each successful response.")
+	}
+	if s.Capped {
+		// The seller's settlement asset uses Permit2 and we're at the
+		// per-PurchaseRequest auth ceiling. Tell the user upfront that
+		// the ask was trimmed and what to do instead, before they confirm.
+		u.Warnf("  Pre-authorization capped: %d %s requested → %d %s allowed per buy (Permit2 storage limit).",
+			s.Requested, summaryUnit(s.PriceUnit), s.Count, summaryUnit(s.PriceUnit))
+		u.Dim("  To get the full ask: enable --auto-top-up and re-run with the original count, or run `obol buy inference` again after this buy lands.")
 	}
 	if s.AutoRefill.enabled {
 		u.Print(fmt.Sprintf("  Auto-top-up: yes (top up when remaining < %d %s, add %d more each time)",

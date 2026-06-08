@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
+	"github.com/ObolNetwork/obol-stack/internal/buy"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/model"
@@ -392,7 +395,7 @@ func modelStatusCommand(cfg *config.Config) *cli.Command {
 				return u.JSON(result)
 			}
 
-			u.Bold("LiteLLM gateway providers:")
+			u.Info("LiteLLM gateway providers:")
 			u.Blank()
 			u.Printf("  %-20s %-8s %-10s %-10s %s", "PROVIDER", "ENABLED", "API KEY", "MODELS", "ENV VAR")
 
@@ -416,9 +419,18 @@ func modelStatusCommand(cfg *config.Config) *cli.Command {
 				u.Printf("  %-20s %-8t %-10s %-10s %s", name, s.Enabled, key, modelCount, s.EnvVar)
 			}
 
-			if len(discovered) > 0 {
+			u.Blank()
+			if printModelRanking(u, cfg, "section") {
 				u.Blank()
-				u.Bold(fmt.Sprintf("Discovered local inference servers (%d):", len(discovered)))
+			}
+
+			if printPaidPurchases(u, cfg) {
+				u.Blank()
+			}
+
+			if len(discovered) > 0 {
+				u.Infof("Discovered local inference servers (%d):", len(discovered))
+				u.Blank()
 				for _, p := range discovered {
 					noun := "models"
 					if len(p.Entries) == 1 {
@@ -426,12 +438,13 @@ func modelStatusCommand(cfg *config.Config) *cli.Command {
 					}
 					u.Printf("  %-20s %s  (%d %s)", p.Label, p.HostEndpoint, len(p.Entries), noun)
 				}
+				u.Blank()
 				u.Dim("Run 'obol model discover' for the full model list.")
 			}
 
-			u.Blank()
 			u.Dim("Run 'obol model setup' to configure a provider.")
 			u.Dim("Run 'obol model setup custom' to add a custom endpoint.")
+			u.Dim("Run 'obol model prefer <name>' to promote a model to head-of-list.")
 
 			return nil
 		},
@@ -522,14 +535,14 @@ func modelListCommand(cfg *config.Config) *cli.Command {
 				return u.JSON(result)
 			}
 
-			// List local Ollama models
+			// Section 1: local Ollama models.
 			models, err := model.ListOllamaModels()
 			if err != nil {
 				u.Warnf("Local models (Ollama): not available (%s)", err)
 			} else if len(models) == 0 {
-				u.Info("Local models (Ollama): none pulled")
+				u.Info("Local models (Ollama):")
 				u.Blank()
-				u.Info("  Pull a model with: obol model pull")
+				u.Dim("  none pulled — obol model pull <name>")
 			} else {
 				u.Info("Local models (Ollama):")
 				u.Blank()
@@ -540,37 +553,41 @@ func modelListCommand(cfg *config.Config) *cli.Command {
 			}
 			u.Blank()
 
-			// Show LiteLLM configured models
+			// Section 2: LiteLLM gateway by provider.
 			providerStatus, err := model.GetProviderStatus(cfg)
 			if err != nil {
-				u.Info("LiteLLM gateway: cluster not running")
+				u.Info("LiteLLM gateway providers:")
 				u.Blank()
-				u.Info("  Run 'obol stack up' then 'obol model setup' to configure a provider.")
-			} else {
-				providers := make([]string, 0, len(providerStatus))
-				for name := range providerStatus {
-					providers = append(providers, name)
+				u.Dim("  cluster not running — run 'obol stack up' then 'obol model setup'")
+				return nil
+			}
+			providers := make([]string, 0, len(providerStatus))
+			for name := range providerStatus {
+				providers = append(providers, name)
+			}
+			sort.Strings(providers)
+
+			u.Info("LiteLLM gateway providers:")
+			u.Blank()
+			u.Printf("  %-20s %-10s %s", "PROVIDER", "STATUS", "MODELS")
+			for _, name := range providers {
+				s := providerStatus[name]
+				status := "disabled"
+				if s.Enabled {
+					status = "enabled"
 				}
+				modelList := strings.Join(s.Models, ", ")
+				if modelList == "" {
+					modelList = "-"
+				}
+				u.Printf("  %-20s %-10s %s", name, status, modelList)
+			}
+			u.Blank()
 
-				sort.Strings(providers)
-
-				u.Info("LiteLLM gateway models:")
+			// Section 3: ranking (same helper as `model status` / `model prefer`).
+			if printModelRanking(u, cfg, "section") {
 				u.Blank()
-				u.Printf("  %-20s %-10s %s", "PROVIDER", "STATUS", "MODELS")
-				for _, name := range providers {
-					s := providerStatus[name]
-
-					status := "disabled"
-					if s.Enabled {
-						status = "enabled"
-					}
-
-					modelList := strings.Join(s.Models, ", ")
-					if modelList == "" {
-						modelList = "-"
-					}
-					u.Printf("  %-20s %-10s %s", name, status, modelList)
-				}
+				u.Dim("Promote a model with: obol model prefer <name>")
 			}
 
 			return nil
@@ -581,8 +598,8 @@ func modelListCommand(cfg *config.Config) *cli.Command {
 func modelPreferCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "prefer",
-		Usage:     "Pull one or more models to the head of the LiteLLM model_list (the head becomes the agent's primary)",
-		ArgsUsage: "<model-name> [<model-name> ...]",
+		Usage:     "Pull one or more models to the preferred choices (agents use these in order)",
+		ArgsUsage: "[<model-name> ...]",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{Name: "no-sync", Usage: "Skip the agent model sync (batch with other model commands, then run `obol model sync` once)"},
 		},
@@ -591,7 +608,15 @@ func modelPreferCommand(cfg *config.Config) *cli.Command {
 
 			names := cmd.Args().Slice()
 			if len(names) == 0 {
-				return errors.New("at least one model name is required\n\nUsage: obol model prefer <model-name> [<model-name> ...]\n\nList configured models with: obol model list")
+				// No args: show the current ranking + usage hint (read
+				// view). Renders with the dedicated "prefer-empty" style
+				// so users discover usage without re-running `--help`.
+				if !printModelRanking(u, cfg, "prefer-empty") {
+					return errors.New("LiteLLM gateway not reachable — run 'obol stack up' first")
+				}
+				u.Blank()
+				u.Dim("Usage: obol model prefer <model-name> [<model-name> ...]")
+				return nil
 			}
 
 			if err := model.PreferModels(cfg, u, names); err != nil {
@@ -601,9 +626,196 @@ func modelPreferCommand(cfg *config.Config) *cli.Command {
 			if cmd.Bool("no-sync") {
 				return nil
 			}
-			return syncAgentModels(cfg, u)
+			if err := syncAgentModels(cfg, u); err != nil {
+				return err
+			}
+			// `syncAgentModels` only re-renders the master Hermes agent.
+			// Sub-agents keep their existing `model.default` until they're
+			// individually synced — surface that explicitly so callers
+			// aren't left wondering why a sub-agent stayed on the old model.
+			printSubAgentSyncHint(cfg, u)
+			return nil
 		},
 	}
+}
+
+// printPaidPurchases queries each agent for its pre-authorized inference
+// purchases and renders a "Paid models credit:" section showing the
+// remaining spendable balance per (agent, paid-model) pair. Returns
+// false when there's nothing to show so the caller can skip the
+// trailing blank.
+//
+// Credit framing: remaining × per-request price = atomic units still
+// available to spend. Formatted with the token's own decimals so OBOL
+// renders as "0.5 OBOL", USDC as "0.001 USDC". Drains show as "0 OBOL"
+// with a `drained` state so the operator knows to top up.
+func printPaidPurchases(u *ui.UI, cfg *config.Config) bool {
+	type rowKey struct {
+		runtime agentruntime.Runtime
+		id      string
+	}
+	rows := make(map[rowKey][]buy.PurchaseSummary)
+	var keys []rowKey
+
+	for _, runtime := range []agentruntime.Runtime{agentruntime.Hermes, agentruntime.OpenClaw} {
+		ids, err := agentruntime.ListInstanceIDs(cfg, runtime)
+		if err != nil {
+			continue
+		}
+		for _, id := range ids {
+			purchases, err := buy.ListPurchases(cfg, runtime, id)
+			if err != nil || len(purchases) == 0 {
+				continue
+			}
+			k := rowKey{runtime: runtime, id: id}
+			rows[k] = purchases
+			keys = append(keys, k)
+		}
+	}
+	if len(rows) == 0 {
+		return false
+	}
+
+	u.Info("Paid models credit:")
+	u.Blank()
+	u.Printf("  %-22s %-40s %-18s %s", "AGENT", "MODEL", "CREDIT", "STATE")
+	for _, k := range keys {
+		agent := fmt.Sprintf("%s/%s", k.runtime, k.id)
+		for _, p := range rows[k] {
+			credit := formatPaidCredit(p)
+			state := "ready"
+			if p.Remaining == 0 {
+				state = "drained"
+			}
+			if p.AutoRefill {
+				state += " (auto-top-up)"
+			}
+			u.Printf("  %-22s %-40s %-18s %s", agent, truncateAlias(p.Alias, 40), credit, state)
+		}
+	}
+	u.Blank()
+	u.Dim("Top up a drained model: obol buy inference <seller-url>")
+	u.Dim("  add --auto-refill to keep it funded automatically (top-ups draw from the agent's wallet).")
+	return true
+}
+
+// formatPaidCredit returns "remaining × price" as a human token amount
+// ("0.5 OBOL"). Falls back to "<remaining> auths" when price metadata
+// is missing (older PurchaseRequests didn't surface asset decimals).
+func formatPaidCredit(p buy.PurchaseSummary) string {
+	if p.Price == "" || p.AssetSymbol == "" || p.AssetDecimals <= 0 {
+		return fmt.Sprintf("%d auths", p.Remaining)
+	}
+	priceAtomic, ok := new(big.Int).SetString(strings.TrimSpace(p.Price), 10)
+	if !ok || priceAtomic.Sign() < 0 {
+		return fmt.Sprintf("%d auths", p.Remaining)
+	}
+	credit := new(big.Int).Mul(priceAtomic, big.NewInt(int64(p.Remaining)))
+	return fmt.Sprintf("%s %s", formatAtomicTrimmed(credit, p.AssetDecimals), p.AssetSymbol)
+}
+
+// formatAtomicTrimmed mirrors cmd/obol/buy.go::formatTokenAmount but
+// lives here so the model.go file stays import-light. Trims trailing
+// zeros, drops the decimal point when not needed.
+func formatAtomicTrimmed(v *big.Int, decimals int) string {
+	if v == nil {
+		return "?"
+	}
+	if decimals <= 0 {
+		decimals = 6
+	}
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil)
+	r := new(big.Rat).SetFrac(v, scale)
+	s := r.FloatString(decimals)
+	if !strings.Contains(s, ".") {
+		return s
+	}
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimSuffix(s, ".")
+	return s
+}
+
+func truncateAlias(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n-1] + "…"
+}
+
+// printSubAgentSyncHint emits a dimmed reminder when sub-agents exist
+// beyond the master Hermes instance. The master is already covered by
+// syncAgentModels; the others need an explicit `obol agent sync <name>`
+// to pick up the new head-of-list primary.
+func printSubAgentSyncHint(cfg *config.Config, u *ui.UI) {
+	hermesIDs, err := agentruntime.ListInstanceIDs(cfg, agentruntime.Hermes)
+	if err != nil {
+		return
+	}
+	openclawIDs, _ := agentruntime.ListInstanceIDs(cfg, agentruntime.OpenClaw)
+
+	var subs []string
+	for _, id := range hermesIDs {
+		if id == agentruntime.DefaultInstanceID {
+			continue
+		}
+		subs = append(subs, "hermes/"+id)
+	}
+	for _, id := range openclawIDs {
+		subs = append(subs, "openclaw/"+id)
+	}
+	if len(subs) == 0 {
+		return
+	}
+	u.Blank()
+	if len(subs) == 1 {
+		u.Dim(fmt.Sprintf("Sub-agent %s keeps its existing primary model. Run: obol agent sync %s",
+			subs[0], strings.SplitN(subs[0], "/", 2)[1]))
+		return
+	}
+	u.Dim("Sub-agents keep their existing primary model. Run, for each:")
+	for _, s := range subs {
+		u.Dim(fmt.Sprintf("  obol agent sync %s", strings.SplitN(s, "/", 2)[1]))
+	}
+}
+
+// printModelRanking renders the configured LiteLLM model_list ordering
+// with the head marked as primary. The caller picks the framing:
+//
+//   - "section" → green `==>` section header inline with the rest of
+//     `model list` / `model status` (their natural section style).
+//   - "prefer-empty" → the argless `obol model prefer` view: a top
+//     title line, a dimmed "Current order:" subtitle, the star list,
+//     and a usage hint footer. Cleaner for a read-only "show me the
+//     current state" call.
+//
+// Returns false when no models are configured (caller can fall through
+// to a "cluster not running" / "no models" message).
+func printModelRanking(u *ui.UI, cfg *config.Config, style string) bool {
+	models, err := model.GetConfiguredModels(cfg)
+	if err != nil || len(models) == 0 {
+		return false
+	}
+	primary, _ := model.Rank(models)
+
+	switch style {
+	case "prefer-empty":
+		u.Info("Model ranking (which model agents use):")
+		u.Blank()
+		u.Dim("Current order:")
+	default:
+		// "section" — used by list/status. Green `==>` arrow keeps the
+		// section header aligned with the rest of the command's output.
+		u.Info("Model order (which model agents use in order):")
+		u.Blank()
+	}
+	for i, name := range models {
+		marker := " "
+		if name == primary {
+			marker = "★"
+		}
+		u.Printf("  %s %2d. %s", marker, i+1, name)
+	}
+	return true
 }
 
 func modelRemoveCommand(cfg *config.Config) *cli.Command {
