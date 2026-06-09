@@ -406,6 +406,19 @@ def _resolve_auto_refill(opts, desired_count, existing_policy=None):
         if cost_cap <= 0:
             raise ValueError("--cost-cap must be > 0")
 
+    if cost_cap is not None and auto_refill is False:
+        raise ValueError("--cost-cap requires --auto-refill because it only applies to future auto-refill")
+
+    existing_enabled = bool(existing_policy.get("enabled"))
+    if (
+        cost_cap is not None
+        and auto_refill is None
+        and not existing_enabled
+        and threshold is None
+        and refill_count is None
+    ):
+        raise ValueError("--cost-cap requires --auto-refill because it only applies to future auto-refill")
+
     has_policy_override = any(
         value is not None
         for value in (auto_refill, threshold, refill_count, cost_cap)
@@ -415,8 +428,8 @@ def _resolve_auto_refill(opts, desired_count, existing_policy=None):
 
     enabled = auto_refill
     if enabled is None:
-        enabled = bool(existing_policy.get("enabled")) or any(
-            value is not None for value in (threshold, refill_count, cost_cap)
+        enabled = existing_enabled or any(
+            value is not None for value in (threshold, refill_count)
         )
     if not enabled:
         return {"enabled": False}
@@ -1525,6 +1538,15 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
         print(f"  Capping permit2 pre-authorized budget from {n} to {PERMIT2_SAFE_AUTH_COUNT} authorizations to stay within current ConfigMap storage limits")
         n = PERMIT2_SAFE_AUTH_COUNT
     n = max(n, 1)
+    if budget and price_int > 0:
+        total_cost_for_count = n * price_int
+        if total_cost_for_count > budget_val:
+            print(
+                f"Error: requested count costs {total_cost_for_count} atomic units, "
+                f"which exceeds --budget {budget_val}. Reduce --count or raise --budget.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     token, _ = load_sa()
     ssl_ctx = make_ssl_context()
