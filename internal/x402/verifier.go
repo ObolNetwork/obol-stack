@@ -331,7 +331,7 @@ func (v *Verifier) matchPaidRouteFull(cfg *PricingConfig, uri string) (*RouteRul
 	}
 
 	asset := ResolveAssetInfo(chain, rule)
-	requirement := BuildV2RequirementWithAsset(chain, asset, rule.Price, wallet)
+	requirement := BuildV2RequirementWithAsset(chain, asset, rule.Price, wallet, rule.MaxTimeoutSeconds)
 	mergeAgentExtras(&requirement, rule)
 	extensions := BuildExtensionsForAsset(asset)
 	return rule, requirement, extensions, prometheusLabels(rule), chain, asset, true

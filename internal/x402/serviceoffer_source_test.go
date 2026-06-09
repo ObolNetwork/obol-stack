@@ -200,6 +200,43 @@ func TestRouteRuleFromOffer_AgentResolutionAdvertisesRuntimeModelSkills(t *testi
 	}
 }
 
+// TestRouteRuleFromOffer_PlumbsMaxTimeoutSeconds pins the regression where
+// ServiceOffer.spec.payment.maxTimeoutSeconds was silently dropped on the
+// floor — the verifier hardcoded 60 in BuildV2RequirementWithAsset and
+// ignored the spec. Streaming agent flows that legitimately take minutes-to-
+// hours saw their auth signed against an undersized settle window. This test
+// fails the moment the field stops flowing offer → RouteRule.
+func TestRouteRuleFromOffer_PlumbsMaxTimeoutSeconds(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "slow-agent", Namespace: "agent-slow"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "agent",
+			Agent: monetizeapi.ServiceOfferAgent{
+				Ref: monetizeapi.ServiceOfferAgentRef{Name: "slow-agent", Namespace: "agent-slow"},
+			},
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network:           "ethereum",
+				PayTo:             "0x1111111111111111111111111111111111111111",
+				Price:             monetizeapi.ServiceOfferPriceTable{PerRequest: "10"},
+				MaxTimeoutSeconds: 1800,
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			AgentResolution: &monetizeapi.ServiceOfferAgentResolution{
+				Endpoint: "http://hermes.agent-slow.svc.cluster.local:8642",
+			},
+		},
+	}
+
+	route, err := routeRuleFromOffer(offer, "")
+	if err != nil {
+		t.Fatalf("routeRuleFromOffer: %v", err)
+	}
+	if route.MaxTimeoutSeconds != 1800 {
+		t.Fatalf("MaxTimeoutSeconds = %d, want 1800 (offer spec value must reach the rule verbatim)", route.MaxTimeoutSeconds)
+	}
+}
+
 func TestRoutesFromStore_AgentOfferInjectsHermesAPIKey(t *testing.T) {
 	items := []any{
 		mustOfferObject(t, monetizeapi.ServiceOffer{

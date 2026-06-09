@@ -9,6 +9,7 @@ metadata: { "openclaw": { "emoji": "\ud83d\uded2", "requires": { "bins": ["pytho
 Purchase access to remote x402-gated services. There are two flows, picked by usage shape:
 
 - **`pay <url>`** — single-shot. Probe the URL, sign **one** payment authorization, attach `X-PAYMENT`, send the request, return the response. Stateless. Use for `type:http` services and any one-off purchase. Max loss = price of one request; nothing settles on-chain until that one request succeeds.
+- **`pay-agent <url> --model <id>`** — single-shot paid **streaming** agent call. Same payment shape as `pay` (one auth, X-PAYMENT, max-loss = price), but POSTs to `<url>/v1/chat/completions` with `stream: true` and forwards every SSE event verbatim to stdout as it arrives. Use this for `type:agent` ServiceOffers when the calling agent wants to consume the response *itself* (memory, tool-call traces, partial results) instead of routing it through LiteLLM as a paid alias. Default HTTP read timeout is **1 hour** — agent calls can legitimately run for many minutes; override with `--timeout <seconds>`.
 - **`buy <name>`** — pre-authorize a budget. Sign **N** authorizations up front (the buyer pays nothing yet), declare them in a `PurchaseRequest` CR, let the `x402-buyer` sidecar redeem them transparently as the agent calls the model through LiteLLM at `paid/<remote-model>`. Use for long-running paid inference. Max loss = N × price (only as vouchers are spent); runtime path holds zero signer access.
 - **`buy <name> --model <id> --set-default`** — same as `buy` above, then adopt `paid/<remote-model>` as the agent's **own primary model**, in-pod, by itself: an atomic `hermes config set model.default` that Hermes re-reads per request (effective next chat turn, **no restart**, no host-side `obol model prefer`/`obol model sync`). Refuses if the model isn't selectable in LiteLLM. Pair with `--auto-refill` so the primary model doesn't brick when the pre-authorized budget runs out.
 
@@ -70,6 +71,14 @@ This is one tx, ~46k gas, valid forever (unless the user later revokes). EIP-300
   `type:http` endpoint — its pipeline is inference-shaped (creates a
   PurchaseRequest, expects a model name, publishes a `paid/<model>`
   route). Use `pay` instead.
+- **`pay-agent` vs `buy` for agents.** `buy` pushes a model behind LiteLLM
+  as `paid/<remote-model>` — great for inference, wrong for agents.
+  `type:agent` services return *first-class* responses (knowledge to save
+  to memory, tool-call traces, partial results to use mid-task), so the
+  calling agent wants to consume the stream itself. `pay-agent` streams
+  SSE events straight to stdout; the calling Hermes/OpenClaw re-emits
+  them through its normal user channel (telegram, `obol hermes chat`,
+  REST clients). No LiteLLM wire-up.
 - **Prefer `/api/services.json` over parsing markdown.** The seller's
   storefront publishes machine-readable metadata at
   `<base>/api/services.json` with full asset, EIP-712 signing domain,
@@ -91,6 +100,7 @@ This is one tx, ~46k gas, valid forever (unless the user later revokes). EIP-300
 
 - Probing an endpoint to check pricing before buying — `probe`
 - One-shot paid HTTP request (e.g. `demo-hello`, sponsored API endpoints) — `pay`
+- One-shot paid streaming agent call where the calling agent wants to consume the response itself — `pay-agent`
 - Long-running paid model access (pre-signed batch) — `buy`
 - Manually topping up an existing inference purchase by re-running `buy <same-name>`
 - Listing purchased providers and remaining auth counts — `list`
@@ -118,6 +128,17 @@ python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py pay h
 
 # One-shot paid POST with a JSON body
 python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py pay https://seller.example.com/services/echo --method POST --data '{"hello":"world"}'
+
+# One-shot paid STREAMING agent call (SSE events flushed to stdout as they arrive)
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py pay-agent \
+    https://seller.example.com/services/demo-quant \
+    --model qwen3.5:9b --message 'summarize the latest research on staking'
+
+# Pay-agent with a full OpenAI-compatible body (stream:true is forced on)
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py pay-agent \
+    https://seller.example.com/services/demo-quant \
+    --model qwen3.5:9b \
+    --data '{"messages":[{"role":"user","content":"hello"}]}'
 
 # Probe with the concrete remote model when the seller validates model IDs
 python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions --model qwen3.5:35b
@@ -162,8 +183,9 @@ python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py maint
 
 | Command | Description |
 |---------|-------------|
-| `probe <url> [--model <id>] [--type http\|inference] [--method GET\|POST]` | Send request without payment, parse 402 response for pricing |
+| `probe <url> [--model <id>] [--type http\|inference\|agent] [--method GET\|POST]` | Send request without payment, parse 402 response for pricing |
 | `pay <url> [--type http\|inference] [--method GET\|POST] [--data <body>]` | Single-shot paid request: sign 1 auth, attach X-PAYMENT, send |
+| `pay-agent <url> --model <id> [--message <text> \| --data <json>] [--timeout <s>]` | Single-shot paid streaming agent call: SSE events flush to stdout as they arrive (default timeout 1h) |
 | `buy <name> --endpoint <url> --model <id> [--budget N] [--count N]` | Pre-sign auths, create/update `PurchaseRequest`, expose `paid/<model>` |
 | `buy <name> --endpoint <url> --model <id> --set-default [--auto-refill]` | As above, then set `paid/<model>` as the agent's own primary model in-pod (no restart, no host CLI) |
 | `process <name> \| --all` | Reconcile `autoRefill` policies against live `x402-buyer` status |

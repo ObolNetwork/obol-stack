@@ -61,7 +61,7 @@ func TestChainUSDCAddresses(t *testing.T) {
 }
 
 func TestBuildV1Requirement(t *testing.T) {
-	req := BuildV1Requirement(ChainBaseSepolia, "0.001", "0xRecipient")
+	req := BuildV1Requirement(ChainBaseSepolia, "0.001", "0xRecipient", 0)
 
 	if req.Scheme != "exact" {
 		t.Errorf("Scheme = %q, want %q", req.Scheme, "exact")
@@ -170,6 +170,54 @@ func TestBuildExtensionsForAsset(t *testing.T) {
 	}
 }
 
+func TestClampMaxTimeoutSeconds(t *testing.T) {
+	cases := []struct {
+		name string
+		in   int64
+		want int64
+	}{
+		{"zero falls back to default", 0, DefaultMaxTimeoutSeconds},
+		{"negative falls back to default", -1, DefaultMaxTimeoutSeconds},
+		{"operator-set under cap honored verbatim", 1800, 1800},
+		{"operator-set at cap honored verbatim", MaxMaxTimeoutSeconds, MaxMaxTimeoutSeconds},
+		{"operator-set above cap clamps down", MaxMaxTimeoutSeconds + 1, MaxMaxTimeoutSeconds},
+		{"runaway value clamps to cap", 99999999, MaxMaxTimeoutSeconds},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ClampMaxTimeoutSeconds(tc.in); got != tc.want {
+				t.Errorf("ClampMaxTimeoutSeconds(%d) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestBuildV2RequirementWithAsset_HonorsMaxTimeoutSeconds(t *testing.T) {
+	asset := AssetInfo{
+		Address:        "0x0000000000000000000000000000000000000000",
+		Symbol:         "USDC",
+		Decimals:       6,
+		TransferMethod: "eip3009",
+		EIP712Name:     "USD Coin",
+		EIP712Version:  "2",
+	}
+
+	got := BuildV2RequirementWithAsset(ChainBaseSepolia, asset, "0.001", "0xRecipient", 0)
+	if got.MaxTimeoutSeconds != int(DefaultMaxTimeoutSeconds) {
+		t.Errorf("zero spec value should map to default %d, got %d", DefaultMaxTimeoutSeconds, got.MaxTimeoutSeconds)
+	}
+
+	got = BuildV2RequirementWithAsset(ChainBaseSepolia, asset, "0.001", "0xRecipient", 1800)
+	if got.MaxTimeoutSeconds != 1800 {
+		t.Errorf("operator-set 1800 should reach the 402 verbatim, got %d", got.MaxTimeoutSeconds)
+	}
+
+	got = BuildV2RequirementWithAsset(ChainBaseSepolia, asset, "0.001", "0xRecipient", MaxMaxTimeoutSeconds+1000)
+	if got.MaxTimeoutSeconds != int(MaxMaxTimeoutSeconds) {
+		t.Errorf("runaway value should clamp to cap %d, got %d", MaxMaxTimeoutSeconds, got.MaxTimeoutSeconds)
+	}
+}
+
 func TestBuildV2RequirementWithAsset(t *testing.T) {
 	req := BuildV2RequirementWithAsset(ChainEthereumMainnet, AssetInfo{
 		Address:        "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7",
@@ -178,7 +226,7 @@ func TestBuildV2RequirementWithAsset(t *testing.T) {
 		TransferMethod: "permit2",
 		EIP712Name:     "Obol Network",
 		EIP712Version:  "1",
-	}, "0.001", "0xRecipient")
+	}, "0.001", "0xRecipient", 0)
 
 	if req.Amount != "1000000000000000" {
 		t.Fatalf("Amount = %q, want 1000000000000000", req.Amount)

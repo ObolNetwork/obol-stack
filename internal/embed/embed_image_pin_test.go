@@ -230,16 +230,20 @@ func TestEmbeddedImages_X402ControllerAndBuyerUseFixPins(t *testing.T) {
 		ref  string
 	}{
 		{
-			// Repinned off the rc9 image (503016b) to b39bcaa (post-rc10 main):
-			// still carries the Secret-create-only reconciler change, and adds
-			// PR #590's actionable pending-registration status message.
-			// See TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix.
+			// Repinned to 04bebbc (current main HEAD as of rc13) to pick up:
+			//   - ab71481 fix(x402): suppress verifyOnly=false warning on the
+			//     in-process settle path — covers the per-request log spam
+			//     seen by sell-agent buyers on the prior pin.
+			//   - 86b8c9f fix(x402-buyer): drop expired pre-signed auths
+			//     before signing — affects long-running paid inference.
+			// Still carries the Secret-create-only reconciler change from
+			// b39bcaa. See TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix.
 			file: "base/templates/x402.yaml",
-			ref:  "ghcr.io/obolnetwork/serviceoffer-controller:b39bcaa@sha256:f5afbba041f83c52c1d48c61db443138da76a12afed0bd29ba719984fc73b189",
+			ref:  "ghcr.io/obolnetwork/serviceoffer-controller:04bebbc@sha256:286d07604c001006d54a5f89ef854210ab805859c072e7b8dd89fe0c6f130d7d",
 		},
 		{
 			file: "base/templates/llm.yaml",
-			ref:  "ghcr.io/obolnetwork/x402-buyer:f5d94fc@sha256:0c431eda44e9e2fe5dd50c82cf4885f9be5037e592478781c51e9c510171265c",
+			ref:  "ghcr.io/obolnetwork/x402-buyer:04bebbc@sha256:1c2bb19824bae2caf4b305a495b6686ff6e973b378c2b88fc89d73a06265aaf7",
 		},
 	}
 
