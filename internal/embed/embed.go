@@ -1,9 +1,6 @@
 package embed
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
 	"crypto/sha256"
 	"embed"
 	"encoding/hex"
@@ -11,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -204,75 +200,6 @@ func CopySkills(destDir string) error {
 
 		return nil
 	})
-}
-
-// SkillsTarball returns a deterministic gzip-compressed tar of the embedded
-// Obol skills tree, suitable for shipping inside a ConfigMap and extracting
-// in-pod (as the container UID) rather than writing the skills into an agent's
-// PVC from the host. Entries are emitted in sorted path order with a fixed mode
-// and zero mtime, so the bytes — and therefore the ConfigMap and the resulting
-// Deployment hash — change only when the skills themselves change.
-//
-// __pycache__ directories and .pyc files are excluded (see WriteSkillSubset for
-// the rationale). Tar paths are relative to the skills root, e.g.
-// "buy-x402/scripts/buy.py".
-func SkillsTarball() ([]byte, error) {
-	var paths []string
-	err := fs.WalkDir(skillsFS, "skills", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			if d.Name() == "__pycache__" {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if strings.HasSuffix(d.Name(), ".pyc") {
-			return nil
-		}
-		paths = append(paths, path)
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("walk embedded skills: %w", err)
-	}
-	sort.Strings(paths)
-
-	// BestCompression keeps the base64-inflated payload well under the ~1 MiB
-	// ConfigMap ceiling; SkillsTarball runs once per sync, so the extra CPU is moot.
-	var buf bytes.Buffer
-	gz, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
-	if err != nil {
-		return nil, err
-	}
-	tw := tar.NewWriter(gz)
-	for _, path := range paths {
-		data, err := skillsFS.ReadFile(path)
-		if err != nil {
-			return nil, fmt.Errorf("read embedded %s: %w", path, err)
-		}
-		name := strings.TrimPrefix(path, "skills/")
-		// Zero ModTime + fixed mode keep the archive byte-stable across builds.
-		hdr := &tar.Header{
-			Name: name,
-			Mode: 0o644,
-			Size: int64(len(data)),
-		}
-		if err := tw.WriteHeader(hdr); err != nil {
-			return nil, fmt.Errorf("write tar header %s: %w", name, err)
-		}
-		if _, err := tw.Write(data); err != nil {
-			return nil, fmt.Errorf("write tar data %s: %w", name, err)
-		}
-	}
-	if err := tw.Close(); err != nil {
-		return nil, fmt.Errorf("close tar: %w", err)
-	}
-	if err := gz.Close(); err != nil {
-		return nil, fmt.Errorf("close gzip: %w", err)
-	}
-	return buf.Bytes(), nil
 }
 
 // WriteSkillSubset copies the named embedded skills into dst, overwriting any

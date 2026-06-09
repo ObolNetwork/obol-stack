@@ -90,9 +90,13 @@ export USDC_ADDRESS="0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 export CHAIN="base-sepolia"
 export ANVIL_RPC="http://localhost:8545"
 
-# Legacy model used by older local-Ollama flows. Full seller/buyer QA flows
-# should set OBOL_LLM_ENDPOINT and OBOL_LLM_MODEL instead.
-export FLOW_MODEL="${FLOW_MODEL:-qwen3.5:9b}"
+# Legacy local-Ollama flows use qwen3.5:9b. Full seller/buyer QA flows route
+# through OBOL_LLM_ENDPOINT and should exercise the configured remote model.
+if [ -n "${OBOL_LLM_ENDPOINT:-}" ] && [ -z "${FLOW_MODEL:-}" ]; then
+    export FLOW_MODEL="${OBOL_LLM_MODEL:-qwen36-deep}"
+else
+    export FLOW_MODEL="${FLOW_MODEL:-qwen3.5:9b}"
+fi
 OBOL_INGRESS_URL_OVERRIDE="$OBOL_INGRESS_URL_CALLER_OVERRIDE"
 
 # macOS mDNS can be slow resolving .stack TLD from /etc/hosts.
@@ -463,6 +467,7 @@ reset_flow_workspace() {
     local archive_stale="${FLOW_ARCHIVE_STALE_WORKSPACES:-false}"
     local stale_root="$OBOL_ROOT/.tmp/stale-workspaces"
     local stack_id name obol_cmd archive_target
+    local force_purge="${FLOW_FORCE_PURGE_DATA:-${RELEASE_SMOKE_FORCE_PURGE_DATA:-false}}"
 
     if [ -f "$dir/config/.stack-id" ]; then
         stack_id="$(tr -d '[:space:]' < "$dir/config/.stack-id" 2>/dev/null || true)"
@@ -484,12 +489,14 @@ reset_flow_workspace() {
         OBOL_BIN_DIR="$dir/bin" \
         OBOL_DATA_DIR="$dir/data" \
             run_with_timeout 120 "$obol_cmd" stack down >/dev/null 2>&1 || true
-        OBOL_DEVELOPMENT=true \
-        OBOL_NONINTERACTIVE=true \
-        OBOL_CONFIG_DIR="$dir/config" \
-        OBOL_BIN_DIR="$dir/bin" \
-        OBOL_DATA_DIR="$dir/data" \
-            run_with_timeout 120 "$obol_cmd" stack purge --force >/dev/null 2>&1 || true
+        if [ "$force_purge" = "true" ]; then
+            OBOL_DEVELOPMENT=true \
+            OBOL_NONINTERACTIVE=true \
+            OBOL_CONFIG_DIR="$dir/config" \
+            OBOL_BIN_DIR="$dir/bin" \
+            OBOL_DATA_DIR="$dir/data" \
+                run_with_timeout 120 "$obol_cmd" stack purge --force --yes >/dev/null 2>&1 || true
+        fi
     fi
 
     if [ -n "$stack_id" ] && command -v k3d >/dev/null 2>&1; then

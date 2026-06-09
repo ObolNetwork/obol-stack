@@ -2,10 +2,10 @@ package serviceoffercontroller
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 
-	"github.com/ObolNetwork/obol-stack/internal/k8sperm"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -16,8 +16,8 @@ import (
 // controller can be steered at deploy time without a recompile, with a
 // safe production default if unset.
 const (
-	hermesContainerUID = 10000
-	hermesContainerGID = 10000
+	hermesContainerUID = 1000
+	hermesContainerGID = 1000
 	hermesPort         = 8642
 	hermesServiceName  = "hermes"
 	hermesConfigMap    = "hermes-config"
@@ -78,7 +78,7 @@ func agentManifests(agent *monetizeapi.Agent, litellmKey, apiKey string) ([]*uns
 		buildAgentDataPVC(agent),
 		buildAgentConfigMap(agent, configYAML),
 		buildAgentAPISecret(agent, apiKey),
-		buildAgentDeployment(agent),
+		buildAgentDeployment(agent, configYAML),
 		buildAgentService(agent),
 	}
 	return out, nil
@@ -204,8 +204,9 @@ func buildAgentAPISecret(agent *monetizeapi.Agent, apiKey string) *unstructured.
 	return u
 }
 
-func buildAgentDeployment(agent *monetizeapi.Agent) *unstructured.Unstructured {
+func buildAgentDeployment(agent *monetizeapi.Agent, configYAML string) *unstructured.Unstructured {
 	labels := agentLabels(agent.Name)
+	configChecksum := sha256.Sum256([]byte(configYAML))
 	u := &unstructured.Unstructured{}
 	u.SetUnstructuredContent(map[string]any{
 		"apiVersion": "apps/v1",
@@ -217,6 +218,9 @@ func buildAgentDeployment(agent *monetizeapi.Agent) *unstructured.Unstructured {
 		},
 		"spec": map[string]any{
 			"replicas": int64(1),
+			"strategy": map[string]any{
+				"type": "Recreate",
+			},
 			"selector": map[string]any{
 				"matchLabels": map[string]any{
 					"app.kubernetes.io/name":     labels["app.kubernetes.io/name"],
@@ -224,12 +228,34 @@ func buildAgentDeployment(agent *monetizeapi.Agent) *unstructured.Unstructured {
 				},
 			},
 			"template": map[string]any{
-				"metadata": map[string]any{"labels": asAnyMap(labels)},
-				"spec":     agentPodSpec(agent),
+				"metadata": map[string]any{
+					"labels": asAnyMap(labels),
+					"annotations": map[string]any{
+						"checksum/hermes-config": fmt.Sprintf("%x", configChecksum),
+					},
+				},
+				"spec": agentPodSpec(agent),
 			},
 		},
 	})
 	return u
+}
+
+func buildAgentConfigInitContainer() map[string]any {
+	return map[string]any{
+		"name":            "config-seed",
+		"image":           hermesImage(),
+		"imagePullPolicy": "IfNotPresent",
+		"command":         []any{"/bin/sh", "-ceu"},
+		"args": []any{`mkdir -p /data/.hermes
+cp /config-seed/config.yaml /data/.hermes/config.yaml
+chmod 600 /data/.hermes/config.yaml
+`},
+		"volumeMounts": []any{
+			map[string]any{"name": "data", "mountPath": "/data"},
+			map[string]any{"name": "config", "mountPath": "/config-seed"},
+		},
+	}
 }
 
 func buildAgentProfileInitContainer() map[string]any {
@@ -332,25 +358,14 @@ func agentPodSpec(agent *monetizeapi.Agent) map[string]any {
 		"serviceAccountName":           hermesServiceName,
 		"automountServiceAccountToken": true,
 		"securityContext": map[string]any{
+			"runAsNonRoot":        true,
 			"runAsUser":           int64(hermesContainerUID),
 			"runAsGroup":          int64(hermesContainerGID),
 			"fsGroup":             int64(hermesContainerGID),
-			"fsGroupChangePolicy": "OnRootMismatch",
+			"fsGroupChangePolicy": "Always",
 		},
 		"initContainers": []any{
-			// The agent's data PVC is a local-path (hostPath) volume the
-			// provisioner chowns to 1000:1000, but Hermes runs as 10000.
-			// fsGroup is a no-op on hostPath, so without a root chown first
-			// the non-root profile-seed init below hits "Permission denied"
-			// on its mkdir and the pod never starts — the demo-quant
-			// Provisioning hang. The master agent has the identical init
-			// (internal/hermes/hermes.go); the shared helper keeps the two
-			// paths from drifting. agent-* namespaces are not PSS-restricted,
-			// so a root init is admissible here. Must run before profile-seed.
-			k8sperm.RootChownInitContainer(
-				"init-perms", hermesImage(), hermesContainerUID, hermesContainerGID,
-				[]k8sperm.ChownMount{{Name: "data", MountPath: "/data"}},
-			),
+			buildAgentConfigInitContainer(),
 			buildAgentProfileInitContainer(),
 		},
 		"containers": []any{
@@ -377,12 +392,6 @@ func agentPodSpec(agent *monetizeapi.Agent) map[string]any {
 				"startupProbe":   startup,
 				"volumeMounts": []any{
 					map[string]any{"name": "data", "mountPath": "/data"},
-					map[string]any{
-						"name":      "config",
-						"mountPath": "/data/.hermes/config.yaml",
-						"subPath":   "config.yaml",
-						"readOnly":  true,
-					},
 				},
 			},
 		},

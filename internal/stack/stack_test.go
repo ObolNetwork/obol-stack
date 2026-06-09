@@ -491,6 +491,7 @@ func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
 		`name: buyer-http`,
 		`name: x402-buyer-config`,
 		`name: x402-buyer-auths`,
+		`configmap.reloader.stakater.com/reload: "litellm-config,x402-buyer-config,x402-buyer-auths"`,
 		`emptyDir:`,
 	} {
 		if !strings.Contains(out, want) {

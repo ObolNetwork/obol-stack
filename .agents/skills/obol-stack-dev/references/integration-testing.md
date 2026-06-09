@@ -61,7 +61,7 @@ go test -tags integration -v -run TestBDDIntegration -timeout 10m ./internal/x40
 |---|---|---|
 | `obol openclaw sync` (first deploy) | 5–15 s | 60 s |
 | `obol openclaw sync` (re-deploy, no changes) | 2–5 s | 60 s |
-| Pod startup | 10–60 s | 180 s (`kubectl wait`) |
+| Pod startup | 10–60 s | 180 s (`obol kubectl wait`) |
 | Port-forward ready | 1–10 s | 30 s |
 | Chat completion (Ollama) | 1–30 s | 90 s |
 | Chat completion (cloud) | 2–10 s | 90 s |

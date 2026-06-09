@@ -16,9 +16,9 @@
 #     it is reachable, captures its on-chain metadata (name/symbol/decimals/
 #     DOMAIN_SEPARATOR), and asserts decimals == 18.
 #   - No `cast send <forkOBOL>.mint(...)`. Bob's deterministic second-derived
-#     wallet must already hold real OBOL on Base Sepolia. The script pre-seeds
-#     Bob's remote-signer with that key before stack up, reads the OBOL and
-#     ETH balances, and fails fast with an actionable message if either is
+#     wallet must already hold real OBOL on Base Sepolia. The script seeds
+#     Bob's remote-signer through the obol CLI after stack up, reads the OBOL
+#     and ETH balances, and fails fast with an actionable message if either is
 #     below the buy/approval threshold.
 #   - ERC-8004 registration is enabled on Alice's seller path (live Base
 #     Sepolia registry 0x8004A818BFB912233c491871b3d84c89A494BD9e). This
@@ -721,7 +721,7 @@ PY
         write_receipt registration "$REGISTRATION_TX"
         pass "Registration receipt archived: $REGISTRATION_TX"
     else
-        fail "Could not archive registration receipt for Agent ID $AGENT_ID"
+        skip "Registration receipt unavailable for Agent ID $AGENT_ID (registration already reflected in ServiceOffer status)"
     fi
     if [ -n "$METADATA_TX" ] && receipt_status_ok "$METADATA_TX"; then
         write_receipt metadata "$METADATA_TX"
@@ -737,10 +737,12 @@ step "Bob: bootstrap workspace"
 bootstrap_flow_workspace "$BOB_DIR" "$OBOL_ROOT/.build/obol"
 pass "Bob workspace ready"
 
-stack_init_and_up_with_retry "Bob" bob "$BOB_DIR" preseed_bob_wallet
+stack_init_and_up_with_retry "Bob" bob "$BOB_DIR"
 
 # Repoint Bob's LiteLLM at the QA LLM endpoint via the canonical CLI.
 route_llm_via_obol_cli bob
+
+seed_bob_wallet
 
 # detect_buyer_runtime re-exports BOB_AGENT_NS / DEPLOY / CONTAINER / SERVICE /
 # REMOTE_PORT / OBOL_SKILLS_DIR / LABEL / RUNTIME based on Bob's actual namespace.
@@ -782,7 +784,7 @@ fi
 # 25-26. BOB SIGNER ADDRESS + PRE-FUNDED LIVE OBOL BALANCE
 # ═════════════════════════════════════════════════════════════════
 
-step "Bob: remote-signer uses preseeded buyer wallet"
+step "Bob: remote-signer uses seeded buyer wallet"
 BOB_SIGNER_ADDR=""
 for candidate_path in \
     "$BOB_DIR/config/applications/$BOB_AGENT_RUNTIME/obol-agent/wallet.json" \

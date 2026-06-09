@@ -1,6 +1,10 @@
 # Paid Flows (Live OBOL + Anvil Fork)
 
-Use this for `flow-11`, `flow-13`, `flow-14`, release-smoke OBOL gating, and demo validation.
+Use this for release-smoke OBOL gating, named flow regressions, and demo
+validation. For ordinary QA, prefer CLI-first checks with `obol sell`, `obol
+buy`, `obol model`, and `obol kubectl`. Use `flows/*.sh` only when the user asks
+for release-smoke/full-flow validation or the regression is specifically inside
+a named flow.
 
 ## Flow Selection
 
@@ -23,7 +27,7 @@ Keep these explicit in the run command. Don't hide live/fork behind one selector
 
 ## Wallet Invariant
 
-Both Alice (seller/register) and Bob (buyer) derive from a single `.env REMOTE_SIGNER_PRIVATE_KEY`. Bob is the deterministic 2nd-derived key. The flow pre-seeds Bob's remote-signer with this key **before** Bob's `stack up` and asserts `bobSigner == BOB_WALLET`.
+Both Alice (seller/register) and Bob (buyer) derive from a single `.env REMOTE_SIGNER_PRIVATE_KEY`. Bob is the deterministic 2nd-derived key. The flow seeds Bob's remote-signer with this key through `obol wallet import` after Bob's stack and LLM route are up, then asserts `bobSigner == BOB_WALLET`.
 
 **Do not** transfer funds to a generated signer to make the test pass. Keep live OBOL funding on the deterministic Bob address. Don't infer the canonical pair from balances on older duplicate token deployments.
 
@@ -85,15 +89,18 @@ Do **not** treat raw `X-PAYMENT` through Traefik ForwardAuth as a supported prod
 Fixed automatically: `obol stack up` calls `x402verifier.PopulateCABundle` after infra deploy; `obol sell http` calls it before creating the ServiceOffer. Manual repopulate:
 
 ```bash
-kubectl create configmap ca-certificates -n x402 \
+obol kubectl create configmap ca-certificates -n x402 \
   --from-file=ca-certificates.crt=/etc/ssl/cert.pem \
-  --dry-run=client -o yaml | kubectl replace -f -
+  --dry-run=client -o yaml | obol kubectl replace -f -
 ```
 
 ## Quick Full-Cycle Smoke
 
-1. **Unpaid gate**: POST seller route without `X-PAYMENT` → expect 402 + accepts requirements.
-2. **Buy auths**: `buy.py buy <name> --endpoint <url> --model <id> --count N` → expect PurchaseRequest `Ready` and sidecar `/status` shows `remaining > 0`.
-3. **Paid call**: LiteLLM request with model `paid/<remote-model>` → expect 200.
-4. **Spend proof**: sidecar `/status` shows `remaining −1`, `spent +1`.
-5. **Auto-refill**: create with `--auto-refill ...`, run `buy.py process --all`, confirm the loop only signs when live `/status` is at or below threshold.
+1. **Configure model**: `obol model setup custom --endpoint <url>/v1 --model <id>`; then `obol model prefer <id>` and `obol model sync`.
+2. **Sell**: use `obol sell inference` or `obol sell demo <type>`; wait for `obol sell status <name> -n <ns>` to show `Ready=True`.
+3. **Unpaid gate**: `obol sell test <name> -n <ns>`; expect HTTP 402 + accepts requirements.
+4. **Buy**: use `obol buy inference <seller-url> --yes --count <N>` when testing buyer flow through the CLI. Confirm `PurchaseRequest Ready=True` with `obol kubectl get purchaserequest -A`.
+5. **Paid call and spend proof**: call LiteLLM with `paid/<model>` and verify HTTP 200, sidecar `/status` spend counters, and on-chain balance deltas when the test is live-settlement gated.
+
+Direct `buy.py` execution is reserved for existing release flow internals or
+debugging a bug in that embedded skill itself.

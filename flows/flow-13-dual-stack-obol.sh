@@ -664,9 +664,11 @@ step "Bob: bootstrap workspace"
 bootstrap_flow_workspace "$BOB_DIR" "$OBOL_ROOT/.build/obol"
 pass "Bob workspace ready"
 
-stack_init_and_up_with_retry "Bob" bob "$BOB_DIR" preseed_bob_wallet
+stack_init_and_up_with_retry "Bob" bob "$BOB_DIR"
 
 route_llm_via_obol_cli bob
+
+seed_bob_wallet
 
 # detect_buyer_runtime re-exports BOB_AGENT_NS / DEPLOY / CONTAINER / SERVICE /
 # REMOTE_PORT / OBOL_SKILLS_DIR / LABEL / RUNTIME based on Bob's actual namespace.

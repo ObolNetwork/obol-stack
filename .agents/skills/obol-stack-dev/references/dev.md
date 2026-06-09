@@ -1,5 +1,13 @@
 # Dev Environment & CLI
 
+## Operating Mode
+
+Use the product surface first: `obol ...` commands for lifecycle and mutations,
+`obol kubectl ...` for Kubernetes evidence, and `curl` only for endpoint probes.
+Do not write custom `.sh` helpers for stack checks. Existing `flows/*.sh` are
+release-gate artifacts; reach for them only when the user asks for full
+release-smoke or a named flow regression.
+
 ## Bootstrap
 
 Dev mode uses `.workspace/` instead of XDG dirs. Without `OBOL_DEVELOPMENT=true`, `obolup.sh` downloads the released binary and your branch changes never run.
@@ -24,7 +32,7 @@ go build -o .workspace/bin/obol ./cmd/obol
 .workspace/bin/obol version
 ```
 
-**Always replace the wrapper before running flows.** `obolup.sh` with `OBOL_DEVELOPMENT=true` installs a `go run -a` wrapper at `.workspace/bin/obol`. It recompiles on every invocation; backgrounded port-forwards (e.g. `flow-06` step 15) false-FAIL because the listener isn't ready in 5–8 seconds.
+**Always replace the wrapper before long QA.** `obolup.sh` with `OBOL_DEVELOPMENT=true` installs a `go run -a` wrapper at `.workspace/bin/obol`. It recompiles on every invocation and can make repeated CLI calls or port-forwards look flaky.
 
 ```bash
 mv .workspace/bin/obol .workspace/bin/obol.wrapper
@@ -74,6 +82,9 @@ go build -o .workspace/bin/obol ./cmd/obol      # rebuild after every code chang
 | `tunnel` | `status` `login` `provision` `restart` `logs` |
 | passthrough | `kubectl` `helm` `helmfile` `k9s` |
 | meta | `update` `upgrade` `version` |
+
+Use passthrough tools through `obol` (`obol kubectl ...`, `obol helm ...`) so
+the active stack kubeconfig and dev paths are selected consistently.
 
 ## `obol sell http` — easy-to-misuse flag set
 
