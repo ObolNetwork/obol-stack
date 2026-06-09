@@ -27,7 +27,14 @@ import (
 // image-baked /opt/hermes/skills source on every boot, regardless of the
 // marker. v2026.6.5 (commit 2ed96372a, "blank-slate skills") added the marker
 // check to sync_skills() itself (tools/skills_sync.py:467), so the in-cluster
-// contract is honored end-to-end. This test closes that gap on a LIVE cluster:
+// contract is honored end-to-end. This test closes that gap on a LIVE cluster.
+//
+// CI coverage: flow-16-sell-agent.sh in release-smoke asserts the same
+// pod-side bundled-skills-empty + marker-present invariants in bash. The
+// two are belt-and-braces — flow-16 catches regressions in CI, this Go test
+// is the developer-runnable white-box version. A Hermes image bump should
+// re-run both before merging (the Renovate package rule for
+// nousresearch/hermes-agent in renovate.json reminds the reviewer):
 //
 //	(1) the .no-bundled-skills marker exists on the agent's host PVC path
 //	    (agentcrd.HostNoBundledSkillsMarkerPath), so Hermes' installer/sync

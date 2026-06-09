@@ -222,6 +222,13 @@ main() {
         "$SCRIPT_DIR/flow-10-anvil-facilitator.sh"
         "$SCRIPT_DIR/flow-08-buy.sh"
         "$SCRIPT_DIR/flow-09-lifecycle.sh"
+        # flow-16 declares a CRD sub-agent and gates it via `obol sell agent`,
+        # asserting (among other things) that the `.no-bundled-skills` marker
+        # is honored inside the Hermes pod — the contract that v2026.5.28
+        # silently broke (~100k tokens of bundled-skill bloat re-seeded on
+        # every launch, undetected because this flow wasn't in CI). Adding it
+        # here is follow-up #2 from the rc13 report PR.
+        "$SCRIPT_DIR/flow-16-sell-agent.sh"
     )
 
     for flow in "${flows[@]}"; do
