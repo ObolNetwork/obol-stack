@@ -32,6 +32,17 @@ data alone. Use `FLOW_FORCE_PURGE_DATA=true` or `RELEASE_SMOKE_FORCE_PURGE_DATA=
 only when the operator explicitly wants full persistent-data deletion and has an
 interactive sudo path.
 
+### Hermes/x402-buyer EACCES or crashloop after upgrading a pre-v0.10.0 cluster
+
+PVs provisioned before v0.10.0 are hostPath-typed — kubelet skips fsGroup
+ownership there, and the v0.10.0 pods (UID 1000, no root chown init) cannot
+read legacy data owned 10000:10000. Symptoms: Hermes gateway crashloops on
+state.db / config.yaml; x402-buyer exits `load state:` at startup, killing
+every `paid/<model>` route. Fix: recreate the cluster (`stack down` →
+`purge -f` → `init` → `up`; back up agent wallets first), or for k3d chown
+the PV backing dirs to 1000:1000 from inside the node and restart the pods.
+See plans/volume-permission-hardening.md "Upgrading from <= v0.10.0-rc12".
+
 ### k3d port 80 privileged on macOS
 
 Always use `http://obol.stack:8080/`, not `http://obol.stack/`. Port 8080 maps to the same Traefik LB.

@@ -49,6 +49,39 @@ For a fresh-stack PVC check, use only the CLI surface: create the stack, inspect
 the `local-path` StorageClass, then inspect every bound PV and confirm it has
 `.spec.local.path` and no `.spec.hostPath`.
 
+## Upgrading from <= v0.10.0-rc12 (breaking)
+
+The new model only governs PVs provisioned AFTER this change. PV specs are
+immutable: a cluster created on rc12 or earlier keeps hostPath-typed PVs,
+where the kubelet skips fsGroup ownership management entirely, and its
+hermes-data files are owned 10000:10000 (the old containerUID, chowned by the
+removed root init on every start). Running a v0.10.0 CLI `obol stack up`
+against such a cluster re-applies the new pod specs in place and the Hermes
+pod (now UID 1000, no chown init, no `fixHermesDataPVCK3dFallback`) loses
+read/write access to its own state.
+
+Supported upgrade path: **recreate the cluster**.
+
+```bash
+obol agent wallet backup            # if any agent wallet holds funds
+obol stack down && obol stack purge -f
+obol stack init && obol stack up
+obol agent wallet restore           # as needed
+```
+
+Escape hatch for clusters that must not be recreated (k3d): chown the legacy
+backing dirs to the new UID from inside the node, then restart the pods:
+
+```bash
+docker exec k3d-obol-stack-<id>-server-0 \
+  sh -c 'chown -R 1000:1000 /var/lib/rancher/k3s/storage/pvc-*hermes-data*'
+```
+
+The x402-buyer sidecar deliberately keeps container-level UID/GID 1000
+(llm.yaml) so the legacy `x402-buyer-state` PV — dir 1000:1000, consumed.json
+0600 — stays readable without any migration; do not remove that alignment
+until hostPath PVs are out of support.
+
 ## Remaining Debt
 
 OpenClaw and wallet provisioning still contain legacy host-side staging paths

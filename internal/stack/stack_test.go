@@ -491,12 +491,20 @@ func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
 		`name: buyer-http`,
 		`name: x402-buyer-config`,
 		`name: x402-buyer-auths`,
-		`configmap.reloader.stakater.com/reload: "litellm-config,x402-buyer-config,x402-buyer-auths"`,
+		// litellm-config ONLY: the buyer ConfigMaps must stay out of the
+		// Reloader annotation — x402-buyer hot-reloads them via /admin/reload
+		// and the Recreate strategy would otherwise bounce the whole gateway
+		// on every buy/refill (CLAUDE.md pitfall 7).
+		`configmap.reloader.stakater.com/reload: "litellm-config"`,
 		`emptyDir:`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("llm template missing %q:\n%s", want, out)
 		}
+	}
+
+	if strings.Contains(out, `configmap.reloader.stakater.com/reload: "litellm-config,`) {
+		t.Fatal("llm template reload annotation must list litellm-config only — buyer CM writes happen per purchase and would Recreate-bounce the gateway")
 	}
 
 	if strings.Contains(out, "custom_provider_map") {
