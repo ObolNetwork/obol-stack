@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	x402types "github.com/coinbase/x402/go/types"
+	x402types "github.com/x402-foundation/x402/go/types"
 )
 
 // mockFacilitator returns an httptest.Server that accepts /verify and /settle.
