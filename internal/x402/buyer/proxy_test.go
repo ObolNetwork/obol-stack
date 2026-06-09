@@ -582,6 +582,102 @@ func TestProxy_UpstreamErrorAfterPaymentDoesNotPersistConsume(t *testing.T) {
 	}
 }
 
+// TestProxy_UpstreamErrorWithTxHash_PersistsConsume is the buyer-side half
+// of the rc13-headline fix: when the seller responds with a 5xx and the
+// X-PAYMENT-RESPONSE header carries a tx hash, the buyer MUST mark the
+// auth as spent (the chain debited the wallet) instead of releasing it
+// back into the pool. The verifier-side companion test is
+// TestForwardAuth_SettleErrorPreservesTxHashInHeader. See plans/rc13report.md.
+func TestProxy_UpstreamErrorWithTxHash_PersistsConsume(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "consumed.json")
+
+	st, err := LoadStateStore(statePath)
+	if err != nil {
+		t.Fatalf("LoadStateStore: %v", err)
+	}
+
+	auth := makeAuth("0xupstream500-with-tx")
+
+	settleJSON, err := json.Marshal(SettlementResponse{
+		Success:     false,
+		ErrorReason: "unexpected_error",
+		Transaction: "0xb5122d818a058e8bf529380260fa2584ba3d50bfc800f1e906faca34d3932307",
+		Network:     "ethereum",
+		Payer:       "0xPayer",
+	})
+	if err != nil {
+		t.Fatalf("marshal SettlementResponse: %v", err)
+	}
+	settleHeader := base64.StdEncoding.EncodeToString(settleJSON)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Payment") == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusPaymentRequired)
+			fmt.Fprint(w, `{
+				"x402Version": 1,
+				"accepts": [{
+					"scheme": "exact",
+					"network": "base-sepolia",
+					"maxAmountRequired": "1000",
+					"asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+					"payTo": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+				}]
+			}`)
+			return
+		}
+		// The seller verifier (post-fix) surfaces the on-chain tx hash via
+		// X-PAYMENT-RESPONSE even when the facilitator 5xx'd after submit.
+		w.Header().Set("X-PAYMENT-RESPONSE", settleHeader)
+		http.Error(w, "Payment settlement failed", http.StatusServiceUnavailable)
+	}))
+	defer upstream.Close()
+
+	cfg := &Config{
+		Upstreams: map[string]UpstreamConfig{
+			"paid": {
+				URL:     upstream.URL,
+				Network: "base-sepolia",
+				PayTo:   "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+				Asset:   "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+				Price:   "1000",
+			},
+		},
+	}
+	auths := AuthsFile{"paid": {auth}}
+
+	proxy, err := NewProxy(cfg, auths, st)
+	if err != nil {
+		t.Fatalf("NewProxy: %v", err)
+	}
+
+	srv := httptest.NewServer(proxy)
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/upstream/paid/v1/chat/completions",
+		"application/json",
+		strings.NewReader(`{"model":"test","messages":[{"role":"user","content":"hi"}]}`),
+	)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 to pass through, got %d", resp.StatusCode)
+	}
+
+	raw, rerr := os.ReadFile(statePath)
+	if rerr != nil {
+		t.Fatalf("read state: %v", rerr)
+	}
+	if !strings.Contains(string(raw), auth.Nonce) {
+		t.Fatalf("nonce MUST be persisted when X-PAYMENT-RESPONSE carries a tx hash (auth was spent on-chain even though upstream errored); state=%q", string(raw))
+	}
+}
+
 func TestProxy_UnknownUpstream(t *testing.T) {
 	cfg := &Config{Upstreams: map[string]UpstreamConfig{}}
 	auths := AuthsFile{}

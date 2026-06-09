@@ -174,6 +174,21 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 					settleResp, err := facilitatorSettle(r.Context(), settleClient, cfg.FacilitatorURL, payloadBytes, matchedReq)
 					if err != nil {
 						log.Printf("x402: settlement failed: %v", err)
+						// Even on facilitator error, the on-chain submission
+						// may have succeeded — the rc13 mainnet OBOL incident
+						// burned 0.001 OBOL from a payer whose request 503'd
+						// because the facilitator returned 500 *after* the
+						// Permit2 settle tx had mined. If the parsed response
+						// carries a tx hash, surface it via X-PAYMENT-RESPONSE
+						// before erroring so the buyer (or operator) can
+						// reconcile against the chain. The header has to land
+						// before http.Error commits the status code.
+						if settleResp != nil && settleResp.Transaction != "" {
+							settleJSON, _ := json.Marshal(settleResp)
+							w.Header().Set("X-PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString(settleJSON))
+							log.Printf("x402: facilitator returned tx %s with the error — verify on-chain (network=%s payer=%s)",
+								settleResp.Transaction, settleResp.Network, settleResp.Payer)
+						}
 						http.Error(w, "Payment settlement failed", http.StatusServiceUnavailable)
 						return false
 					}
@@ -326,7 +341,12 @@ func facilitatorSettle(ctx context.Context, client *http.Client, facilitatorURL 
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("facilitator settle failed (%d): %s", resp.StatusCode, settleResp.ErrorReason)
+		// Forensic-friendly: the facilitator can submit the settle tx on-chain
+		// and then 5xx on the post-submit/receipt path. Return the parsed
+		// response alongside the error so the caller can surface
+		// settleResp.Transaction (the tx hash) to the buyer. Without this the
+		// chain debit goes unnoticed — see plans/rc13report.md headline.
+		return &settleResp, fmt.Errorf("facilitator settle failed (%d): %s", resp.StatusCode, settleResp.ErrorReason)
 	}
 
 	return &settleResp, nil

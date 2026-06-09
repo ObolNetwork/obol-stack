@@ -234,6 +234,16 @@ func PickCatalogEntry(entries []CatalogEntry, sellerURL string) (*CatalogEntry, 
 		for i, e := range entries {
 			if endpointPath(e.Endpoint) == wantPath {
 				if !strings.EqualFold(strings.TrimSpace(e.Type), "inference") {
+					if strings.EqualFold(strings.TrimSpace(e.Type), "agent") {
+						return nil, fmt.Errorf(
+							"seller offer %q has type=agent; `obol buy inference` only supports type=inference.\n"+
+								"For type=agent offers use the buy-x402 skill's `pay-agent` command instead — it streams the response\n"+
+								"directly to the calling agent (memory, tool-call traces, partial results) without pushing it behind\n"+
+								"LiteLLM as a paid alias:\n"+
+								"  python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py pay-agent %s --model <model> --message '<prompt>'",
+							e.Name, e.Endpoint,
+						)
+					}
 					return nil, fmt.Errorf("seller offer %q has type=%q; obol buy inference only supports type=inference", e.Name, e.Type)
 				}
 				return &entries[i], nil
