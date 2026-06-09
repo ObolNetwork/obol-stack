@@ -181,6 +181,77 @@ Prometheus to answer a lifetime question, you've picked the wrong tool.
 
 ---
 
+## Verify settlement against the chain, never the sidecar snapshot
+
+The same "chain is canonical, metrics are derived" rule applies to **live
+debugging**, not just lifetime aggregates. When a paid request returns 5xx and
+the buyer reports `remaining=N, spent=0`, that is **not** evidence that no
+money moved — it is evidence that the sidecar's local counter, the
+`PurchaseRequest.status` snapshot, and the verifier's logs all agree with each
+other. The on-chain transfer event can still tell you otherwise.
+
+**This is not theoretical.** rc13 mainnet OBOL self-test (`plans/rc13report.md`)
+recorded a 0.001 OBOL on-chain debit from a request that 503'd with
+`"Payment settlement failed"`, while the buyer sidecar reported `0 spent / 2
+remaining` and the verifier logged `facilitator settle failed (500)`. The
+failure happened in the facilitator's post-submit step — the Permit2 settle
+tx had already mined. By every signal the stack gave the operator, nothing
+happened. The chain disagreed.
+
+The defenses that landed (this PR):
+
+- **Verifier**: when `facilitatorSettle` returns non-200 with a parseable body
+  that includes a `transaction` field, the tx hash is surfaced via
+  `X-PAYMENT-RESPONSE` *before* the 503 is written. Without this the on-chain
+  hash is invisible to the buyer. See `internal/x402/forwardauth.go` and
+  `TestForwardAuth_SettleErrorPreservesTxHashInHeader`.
+- **Buyer sidecar**: a 5xx with `X-PAYMENT-RESPONSE` carrying a tx hash is
+  treated as "spent on-chain" — the held auth is `ConfirmSpend`-ed (not
+  released back to the pool), `OnPaymentUnsettled` fires, and the operator
+  warning logs the hash. See `internal/x402/buyer/proxy.go` and
+  `TestProxy_UpstreamErrorWithTxHash_PersistsConsume`.
+- **buy.py CLI**: `_print_paid_request_failure` decodes the settle header on
+  5xx and prints a loud `⚠️  SETTLEMENT MAY HAVE COMPLETED ON-CHAIN` warning
+  with the exact balance-check command.
+
+The defenses that are **deferred** (and worth flagging in any future debugging
+session):
+
+- Full receipt verification (verifier queries an RPC for the receipt status
+  before deciding 200 vs 503). The forensic fix surfaces enough for an
+  operator to reconcile manually; programmatic reconciliation is a bigger
+  plumbing change.
+- Settle idempotency on retry (today guarded only by Permit2 nonce reuse
+  reverting on-chain — that surfaces as cascading 503s, but burns gas).
+- Facilitator-side fix for the 500-after-on-chain-submit failure mode on
+  mainnet OBOL specifically. That's a hosted-service bug, not in this repo.
+
+**Debugging checklist**, when a buyer-reported "0 spent" disagrees with a
+suspected debit:
+
+```bash
+RPC=https://ethereum-rpc.publicnode.com
+blk=$(curl -s -X POST $RPC -H 'content-type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"eth_blockNumber","params":[]}' \
+  | python3 -c "import json,sys;print(int(json.load(sys.stdin)['result'],16))")
+from=$(printf '0x%x' $((blk-50000)))
+# Topic 0 = ERC-20 Transfer(address,address,uint256)
+# Topic 2 = recipient (32-byte left-padded)
+PAD=000000000000000000000000<RECIPIENT_HEX_NO_0x>
+curl -s -X POST $RPC -H 'content-type: application/json' -d "{
+  \"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"eth_getLogs\",\"params\":[{
+    \"fromBlock\":\"$from\",\"toBlock\":\"latest\",
+    \"address\":\"<TOKEN_CONTRACT>\",
+    \"topics\":[\"0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef\",null,\"0x$PAD\"]
+  }]}"
+```
+
+A `Transfer` to the expected recipient that exists while the buyer reports
+`0 spent` is the bug. Reference: rc13 mainnet OBOL tx
+[`0xb5122d818a058e8bf529380260fa2584ba3d50bfc800f1e906faca34d3932307`](https://etherscan.io/tx/0xb5122d818a058e8bf529380260fa2584ba3d50bfc800f1e906faca34d3932307).
+
+---
+
 ## Recording rule conventions
 
 Naming follows the standard Prometheus pattern:

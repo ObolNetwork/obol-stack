@@ -2398,6 +2398,31 @@ def _print_paid_request_failure(status, body, settle_header, signer_address, ass
     if body:
         print(f"Body: {body}", file=sys.stderr)
 
+    # Settled-but-failed: a 5xx that ALSO carries X-PAYMENT-RESPONSE with a
+    # tx hash means the facilitator submitted the settle on-chain and then
+    # errored on the post-submit/receipt path. The seller verifier was
+    # patched (forwardauth.go) to expose the tx hash on that path so buyers
+    # don't silently lose funds. This warning is the single most important
+    # signal from this function — promote it above all other hints.
+    if status >= 500 and settle_header:
+        tx_hash = None
+        try:
+            decoded = base64.b64decode(settle_header.encode(), validate=True).decode()
+            tx_hash = (json.loads(decoded) or {}).get("transaction")
+        except (ValueError, json.JSONDecodeError):
+            pass
+        if tx_hash:
+            print(
+                "\n⚠️  SETTLEMENT MAY HAVE COMPLETED ON-CHAIN.\n"
+                f"   The facilitator returned an error AFTER submitting tx {tx_hash}.\n"
+                f"   Your wallet ({signer_address}) may have been debited even though this request failed.\n"
+                "   Verify before retrying:\n"
+                f"     python3 scripts/buy.py balance --chain {chain}\n"
+                f"   On-chain receipt: check {tx_hash} on the {chain} explorer.\n"
+                "   See plans/rc13report.md for the mechanism.",
+                file=sys.stderr,
+            )
+
     detail = body or ""
     parsed_detail = ""
     if body:
