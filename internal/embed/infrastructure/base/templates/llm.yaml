@@ -176,6 +176,15 @@ spec:
       labels:
         app: litellm
       annotations:
+        # litellm-config only: model-list changes must roll the pod so paid
+        # routes pick up new entries. The buyer ConfigMaps are deliberately
+        # NOT listed — x402-buyer hot-reloads them via /admin/reload (driven
+        # by the serviceoffer-controller on every buy/refill), and this
+        # Deployment is strategy Recreate with one replica: reloading on
+        # x402-buyer-config/x402-buyer-auths would take the whole inference
+        # gateway down on every purchase event (CLAUDE.md pitfall 7: restart
+        # is the fallback, not the default buy path).
+        configmap.reloader.stakater.com/reload: "litellm-config"
         secret.reloader.stakater.com/reload: "litellm-secrets"
     spec:
       terminationGracePeriodSeconds: 60
@@ -188,6 +197,7 @@ spec:
         runAsUser: 65532
         runAsGroup: 65532
         fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       initContainers:
@@ -302,16 +312,16 @@ spec:
           # across flow-08/11/14/13. See internal/embed/embed_image_pin_test.go.
           image: ghcr.io/obolnetwork/x402-buyer:f5d94fc@sha256:0c431eda44e9e2fe5dd50c82cf4885f9be5037e592478781c51e9c510171265c
           imagePullPolicy: IfNotPresent
-          # PSS Restricted + writable PVC. This distroless:nonroot Go binary
-          # defaults to UID 65532, but its /state volume is the
-          # x402-buyer-state PVC, which local-path provisions owned 1000:1000.
-          # fsGroup is a no-op on hostPath-backed local-path volumes, and a
-          # root chown init is forbidden under restricted PSS, so the only
-          # restricted-safe way for the sidecar to write /state/consumed.json
-          # is to run as the same UID/GID the provisioner owns the volume with
-          # (1000). The binary is static (CGO disabled) and only reads its
-          # config/auths ConfigMaps (world-readable) and writes /state, so
-          # running as 1000 is safe. See plans/volume-permission-hardening.md.
+          # PSS Restricted + writable PVC. On fresh clusters the StorageClass
+          # asks local-path-provisioner for local PVs, so kubelet applies the
+          # pod-level fsGroup to /state on mount and any UID works. The
+          # explicit UID/GID 1000 below is for clusters UPGRADED in place
+          # from <= v0.10.0-rc12: their x402-buyer-state PV is hostPath-typed
+          # (kubelet ignores fsGroup there) and the old provisioner chowned
+          # the dir 1000:1000 with consumed.json written 0600 by UID 1000 —
+          # a 65532 sidecar cannot even read it and crashloops on startup
+          # (`load state` Fatalf), taking every paid/* route down. Keep 1000
+          # until hostPath PVs are out of support.
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000

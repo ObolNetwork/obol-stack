@@ -14,7 +14,7 @@ k3d kubeconfig write <name> -o .workspace/config/kubeconfig.yaml --overwrite
 
 ### `obol-monetize-binding` empty subjects
 
-If `obol agent init` races with k3s manifest apply, the RBAC binding lands with empty `subjects`. Re-run `obol agent init` (idempotent) or kubectl-patch the binding.
+If `obol agent init` races with k3s manifest apply, the RBAC binding lands with empty `subjects`. Re-run `obol agent init` (idempotent) or use `obol kubectl patch` only when there is no CLI repair path.
 
 ### ConfigMap propagation lag
 
@@ -24,9 +24,24 @@ k3d file watcher takes 60–120 s. For immediate effect after a ConfigMap edit, 
 
 Use `ClusterIP` + `Endpoints` instead.
 
-### Root-owned PVCs block `obol stack purge`
+### Root-owned PVCs block headless cleanup
 
-Pass `-f` to also remove root-owned PVCs. Without it, purge skips them and the next `stack up` reuses stale data.
+Release-smoke workspace reset must avoid `obol stack purge` by default: run
+`obol stack down`, remove reachable config/bin files, and leave root-owned PVC
+data alone. Use `FLOW_FORCE_PURGE_DATA=true` or `RELEASE_SMOKE_FORCE_PURGE_DATA=true`
+only when the operator explicitly wants full persistent-data deletion and has an
+interactive sudo path.
+
+### Hermes/x402-buyer EACCES or crashloop after upgrading a pre-v0.10.0 cluster
+
+PVs provisioned before v0.10.0 are hostPath-typed — kubelet skips fsGroup
+ownership there, and the v0.10.0 pods (UID 1000, no root chown init) cannot
+read legacy data owned 10000:10000. Symptoms: Hermes gateway crashloops on
+state.db / config.yaml; x402-buyer exits `load state:` at startup, killing
+every `paid/<model>` route. Fix: recreate the cluster (`stack down` →
+`purge -f` → `init` → `up`; back up agent wallets first), or for k3d chown
+the PV backing dirs to 1000:1000 from inside the node and restart the pods.
+See plans/volume-permission-hardening.md "Upgrading from <= v0.10.0-rc12".
 
 ### k3d port 80 privileged on macOS
 
@@ -39,9 +54,9 @@ Always use `http://obol.stack:8080/`, not `http://obol.stack/`. Port 8080 maps t
 `x402-verifier` is distroless — no CA store. The `ca-certificates` ConfigMap in the `x402` ns must be populated from the host's CA bundle. `obol stack up` and `obol sell http` now do this automatically. Manual repopulate:
 
 ```bash
-kubectl create configmap ca-certificates -n x402 \
+obol kubectl create configmap ca-certificates -n x402 \
   --from-file=ca-certificates.crt=/etc/ssl/cert.pem \
-  --dry-run=client -o yaml | kubectl replace -f -
+  --dry-run=client -o yaml | obol kubectl replace -f -
 ```
 
 ### `OpenAIException - 404 page not found` on `paid/<model>`
@@ -57,13 +72,13 @@ Default TTL is 10s for unfinalized reads. `buy.py balance` can lag a few seconds
 The serviceoffer-controller's `obol.org/purchase-finalizer` cleans up tombstones (per-PR keys in `x402-buyer-config` / `x402-buyer-auths`, sidecar signal). If the controller is unhealthy, deletion hangs. Manual cleanup:
 
 ```bash
-kubectl patch purchaserequest <name> -n <ns> --type=merge \
+obol kubectl patch purchaserequest <name> -n <ns> --type=merge \
   -p '{"metadata":{"finalizers":[]}}'
-kubectl patch cm x402-buyer-config -n llm --type=json \
+obol kubectl patch cm x402-buyer-config -n llm --type=json \
   -p='[{"op":"remove","path":"/data/<name>.json"}]'
-kubectl patch cm x402-buyer-auths  -n llm --type=json \
+obol kubectl patch cm x402-buyer-auths  -n llm --type=json \
   -p='[{"op":"remove","path":"/data/<name>.json"}]'
-kubectl rollout restart deployment/litellm -n llm
+obol kubectl rollout restart deployment/litellm -n llm
 ```
 
 Without the ConfigMap + restart, the sidecar continues to report the deleted PR in `/status` and the next run sees a polluted starting auth pool.
@@ -113,8 +128,8 @@ obol openclaw delete my-instance --force        # WRONG — --force is parsed as
 Helm sets `app.kubernetes.io/instance` to the **release name** (`openclaw`, `hermes`), not `<release>-<id>`. Namespace provides instance isolation.
 
 ```bash
-kubectl wait -n openclaw-test-ollama -l app.kubernetes.io/instance=openclaw       # CORRECT
-kubectl wait -n openclaw-test-ollama -l app.kubernetes.io/instance=openclaw-test  # WRONG
+obol kubectl wait -n openclaw-test-ollama -l app.kubernetes.io/instance=openclaw       # CORRECT
+obol kubectl wait -n openclaw-test-ollama -l app.kubernetes.io/instance=openclaw-test  # WRONG
 ```
 
 ### Port-forward EOF on first request
@@ -132,16 +147,16 @@ Not an error. The first is LiteLLM's translation of Anthropic's `stop_reason: "e
 obol kubectl cluster-info && obol kubectl get nodes
 
 # Verifier image (confirm what's actually running)
-kubectl get deploy -n x402 x402-verifier -o jsonpath='{.spec.template.spec.containers[*].image}'
+obol kubectl get deploy -n x402 x402-verifier -o jsonpath='{.spec.template.spec.containers[*].image}'
 
 # LiteLLM
-kubectl get pods -n llm
-kubectl logs -n llm deploy/litellm -c litellm --tail=200
-kubectl logs -n llm deploy/litellm -c x402-buyer --tail=200
-kubectl get cm  litellm-config -n llm -o yaml
-kubectl get cm  x402-buyer-config -n llm -o jsonpath='{.data}'
+obol kubectl get pods -n llm
+obol kubectl logs -n llm deploy/litellm -c litellm --tail=200
+obol kubectl logs -n llm deploy/litellm -c x402-buyer --tail=200
+obol kubectl get cm  litellm-config -n llm -o yaml
+obol kubectl get cm  x402-buyer-config -n llm -o jsonpath='{.data}'
 
 # Sidecar live status (port-forward — distroless, no exec)
-kubectl port-forward -n llm deploy/litellm 18402:8402 &
+obol kubectl port-forward -n llm deploy/litellm 18402:8402 &
 curl -s http://127.0.0.1:18402/status | jq .
 ```

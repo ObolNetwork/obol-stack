@@ -8,7 +8,7 @@
 #
 # What it does:
 #   1.  Source flows/lib.sh (helpers + .env auto-load) and lib-dual-stack.sh
-#       (only for run_with_timeout / preseed_bob_wallet helpers via bob()).
+#       (only for run_with_timeout / seed_bob_wallet helpers via bob()).
 #   2.  Derive Bob's deterministic buyer wallet from REMOTE_SIGNER_PRIVATE_KEY
 #       (Hardhat-style: keccak(abi.encode(signer_key, 2))) — same algorithm
 #       flow-15-live-obol-faucet-alice-bob.sh uses.
@@ -20,8 +20,8 @@
 #       because Alice is not provisioned.
 #   5.  Bring up a Bob-only k3d stack under .workspace-bob-external/ with stack
 #       ID "post490-buy-external-bob" (pinned by writing .stack-id before
-#       `obol stack init`), preseed Bob's deterministic key into the
-#       remote-signer, route LiteLLM at OBOL_LLM_ENDPOINT/MODEL.
+#       `obol stack init`), seed Bob's deterministic key into the
+#       remote-signer after stack up, route LiteLLM at OBOL_LLM_ENDPOINT/MODEL.
 #   6.  Invoke buy.py inside the agent pod via `obol kubectl exec` (no agent
 #       chat round-trip — the seller has no agentId in
 #       /.well-known/agent-registration.json so the LLM-driven discovery flow
@@ -412,7 +412,7 @@ fi
 pass "Bob has $BOB_BAL_BEFORE wei (>= required $EXTERNAL_PRICE)"
 
 # ─────────────────────────────────────────────────────────────────
-# STEP 4: Bring up single Bob k3d stack with pinned ID, preseed buyer wallet
+# STEP 4: Bring up single Bob k3d stack with pinned ID, seed buyer wallet
 # ─────────────────────────────────────────────────────────────────
 step "Bootstrap Bob workspace at $BOB_DIR"
 if [ ! -x "$OBOL_ROOT/.build/obol" ]; then
@@ -438,11 +438,7 @@ BOB_HTTPS_PORT="$(pick_free_port)"
 BOB_HTTPS_ALT_PORT="$(pick_free_port)"
 export BOB_HTTP_PORT BOB_HTTP_ALT_PORT BOB_HTTPS_PORT BOB_HTTPS_ALT_PORT
 
-stack_init_and_up_with_retry "Bob" bob "$BOB_DIR" preseed_bob_wallet
-
-# Make sure the runtime detection runs against the live cluster (sets
-# BOB_AGENT_NS / DEPLOY / CONTAINER / OBOL_SKILLS_DIR for buy.py exec).
-detect_buyer_runtime bob
+stack_init_and_up_with_retry "Bob" bob "$BOB_DIR"
 
 # ─────────────────────────────────────────────────────────────────
 # STEP 5: Repoint LiteLLM at OBOL_LLM_ENDPOINT and add the live RPC route
@@ -454,6 +450,12 @@ else
     fail "route_llm_via_obol_cli failed for $OBOL_LLM_ENDPOINT"
     emit_metrics; exit 1
 fi
+
+seed_bob_wallet
+
+# Make sure the runtime detection runs against the live cluster (sets
+# BOB_AGENT_NS / DEPLOY / CONTAINER / OBOL_SKILLS_DIR for buy.py exec).
+detect_buyer_runtime bob
 
 step "Bob: add $EXTERNAL_CHAIN route in eRPC (live RPC, writes allowed)"
 bob network add "$EXTERNAL_CHAIN" --endpoint "$BASE_SEPOLIA_RPC" --allow-writes \

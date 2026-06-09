@@ -27,11 +27,17 @@ cleanup_stacks() {
 trap cleanup_stacks EXIT
 
 write_report_header() {
+    local commit
+    commit="${RELEASE_SMOKE_COMMIT:-}"
+    if [ -z "$commit" ]; then
+        commit="$(git -C "$OBOL_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+    fi
+
     cat > "$REPORT" <<EOF
 # Obol Stack Release Smoke Report
 
 Date: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-Commit: $(git -C "$OBOL_ROOT" rev-parse HEAD)
+Commit: $commit
 Artifacts: $ARTIFACT_DIR
 
 | Flow | Result | FAIL lines | SKIP lines | Exit code |

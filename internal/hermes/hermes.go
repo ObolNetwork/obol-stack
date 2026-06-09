@@ -3,6 +3,7 @@ package hermes
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -39,8 +40,8 @@ const (
 	// are present so image regressions fail before the gateway starts.
 	hermesBinary = "/opt/hermes/.venv/bin/hermes"
 
-	containerUID  = 10000
-	containerGID  = 10000
+	containerUID  = 1000
+	containerGID  = 1000
 	dashboardPort = 9119
 )
 
@@ -251,8 +252,6 @@ func Sync(cfg *config.Config, id string, u *ui.UI) error {
 	}); err != nil {
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
-
-	fixHermesDataPVCK3dFallback(cfg, id, u)
 
 	// Publish wallet-metadata ConfigMap for the frontend (namespace now exists).
 	applyWalletMetadataConfigMap(cfg, id, deploymentDir)
@@ -696,21 +695,15 @@ func writeDeploymentFiles(cfg *config.Config, id, deploymentDir, agentBaseURL st
 		return err
 	}
 
-	// The agent config and Obol skills are shipped to the pod as ConfigMaps and
-	// extracted INTO the PVC by the init-hermes-data init container as the
-	// container UID — the host never writes the PVC, so there is no ownership to
-	// repair afterward (the failure mode that dogged the old syncRuntimeFiles
-	// path). Build the deterministic skills tarball once and embed it here.
-	skillsTarGz, err := obolembed.SkillsTarball()
-	if err != nil {
-		return fmt.Errorf("failed to build Obol skills tarball: %w", err)
-	}
-
-	if err := os.WriteFile(filepath.Join(deploymentDir, valuesFileName), []byte(generateValues(namespace, hostname, dashboardHost, agentBaseURL, token, primary, configData, skillsTarGz)), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(deploymentDir, valuesFileName), []byte(generateValues(namespace, hostname, dashboardHost, agentBaseURL, token, primary, configData)), 0o600); err != nil {
 		return fmt.Errorf("failed to write %s: %w", valuesFileName, err)
 	}
 	if err := os.WriteFile(filepath.Join(deploymentDir, helmfileFileName), []byte(generateHelmfile(namespace)), 0o600); err != nil {
 		return fmt.Errorf("failed to write %s: %w", helmfileFileName, err)
+	}
+
+	if err := syncRuntimeFiles(cfg, id, configData, u); err != nil {
+		return err
 	}
 
 	u.Successf("Prepared Hermes runtime config (%d model(s), default: %s)", len(models), primary)
@@ -748,8 +741,9 @@ func dashboardHostname(id string) string {
 	return agentruntime.DashboardHostname(agentruntime.Hermes, id)
 }
 
-func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token, primary string, configData, skillsTarGz []byte) string {
+func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token, primary string, configData []byte) string {
 	desc := agentruntime.Describe(agentruntime.Hermes)
+	configChecksum := sha256.Sum256(configData)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, `resources:
@@ -787,18 +781,6 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
       config.yaml: |
 `, desc.ServiceName, namespace, desc.ServiceName, namespace, desc.ServiceName, quoteYAML(token), desc.ConfigMapName, namespace, desc.ServiceName)
 	b.WriteString(indentBlock(string(configData), "        "))
-	fmt.Fprintf(&b, `
-  - apiVersion: v1
-    kind: ConfigMap
-    metadata:
-      name: hermes-skills
-      namespace: %s
-      labels:
-        app.kubernetes.io/name: %s
-        app.kubernetes.io/managed-by: obol
-    binaryData:
-      skills.tar.gz: %s
-`, namespace, desc.ServiceName, base64.StdEncoding.EncodeToString(skillsTarGz))
 	fmt.Fprintf(&b, `
   - apiVersion: v1
     kind: PersistentVolumeClaim
@@ -848,36 +830,18 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
           labels:
             app.kubernetes.io/name: %s
             app.kubernetes.io/managed-by: obol
+          annotations:
+            checksum/hermes-config: "%x"
         spec:
           serviceAccountName: %s
           automountServiceAccountToken: true
           securityContext:
+            runAsNonRoot: true
             runAsUser: %d
             runAsGroup: %d
             fsGroup: %d
-            fsGroupChangePolicy: OnRootMismatch
+            fsGroupChangePolicy: Always
           initContainers:
-            - name: init-hermes-perms
-              image: %s
-              imagePullPolicy: IfNotPresent
-              securityContext:
-                runAsUser: 0
-                runAsGroup: 0
-                runAsNonRoot: false
-              command:
-                - sh
-                - -ec
-                - |
-                  # Hermes runs as a non-root UID, but its data PVC is a
-                  # local-path/hostPath volume where Kubernetes fsGroup is a
-                  # no-op. Chown the volume root every start so the non-root
-                  # main container can always write it, on every backend and
-                  # volume type. Do NOT replace this with fsGroup alone (see
-                  # the regression history around PVC ownership).
-                  chown -R %d:%d /data
-              volumeMounts:
-                - name: data
-                  mountPath: /data
             - name: init-hermes-data
               image: %s
               imagePullPolicy: IfNotPresent
@@ -885,7 +849,7 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                 - sh
                 - -ec
                 - |
-                  mkdir -p /data/.hermes/home /data/.hermes/workspace /data/.hermes/logs /data/.hermes/obol-skills
+                  mkdir -p /data/.hermes/home /data/.hermes/workspace /data/.hermes/logs
                   if [ ! -x /opt/hermes/.venv/bin/hermes ]; then
                     echo "Hermes binary missing from image: /opt/hermes/.venv/bin/hermes" >&2
                     exit 1
@@ -894,15 +858,6 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                     echo "Hermes image is missing required extras: web,messaging,mcp,pty,cli,acp,google" >&2
                     exit 1
                   fi
-                  # Stage the agent config and Obol skills INTO the PVC from the
-                  # read-only hermes-config / hermes-skills ConfigMaps. This init
-                  # container inherits the pod securityContext (runAsUser 10000),
-                  # so everything written here is already container-owned and the
-                  # host never has to touch — or chown back — the PVC. See the
-                  # long PVC-ownership regression history for why that matters.
-                  cp /etc/hermes/config/config.yaml /data/.hermes/config.yaml
-                  /opt/hermes/.venv/bin/python3 -c "import tarfile; tarfile.open('/etc/hermes/skills/skills.tar.gz').extractall('/data/.hermes/obol-skills', filter='data')"
-                  rm -f /data/.hermes/workspace/HEARTBEAT.md
                   if [ -f /data/.hermes/state.db ]; then
                     if ! /opt/hermes/.venv/bin/python3 - <<'PY'
                   import sqlite3
@@ -923,12 +878,6 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
               volumeMounts:
                 - name: data
                   mountPath: /data
-                - name: hermes-config
-                  mountPath: /etc/hermes/config
-                  readOnly: true
-                - name: hermes-skills
-                  mountPath: /etc/hermes/skills
-                  readOnly: true
           containers:
             - name: %s
               image: %s
@@ -966,7 +915,7 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                   value: %s
                 - name: OBOL_SKILLS_DIR
                   value: /data/.hermes/%s
-	`, desc.DataPVCName, namespace, desc.ServiceName, desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.ServiceName, desc.ServiceName, containerUID, containerGID, containerGID, quoteYAML(image()), containerUID, containerGID, quoteYAML(image()), desc.ServiceName, quoteYAML(image()), quoteYAML(hermesBinary), desc.DefaultPort, desc.DefaultPort, quoteYAML(primary), quoteYAML(namespace), obolSkillsDirName)
+	`, desc.DataPVCName, namespace, desc.ServiceName, desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.ServiceName, configChecksum, desc.ServiceName, containerUID, containerGID, containerGID, quoteYAML(image()), desc.ServiceName, quoteYAML(image()), quoteYAML(hermesBinary), desc.DefaultPort, desc.DefaultPort, quoteYAML(primary), quoteYAML(namespace), obolSkillsDirName)
 
 	if agentBaseURL != "" {
 		fmt.Fprintf(&b, "                - name: AGENT_BASE_URL\n                  value: %s\n", quoteYAML(agentBaseURL))
@@ -1048,12 +997,6 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
             - name: data
               persistentVolumeClaim:
                 claimName: %s
-            - name: hermes-config
-              configMap:
-                name: hermes-config
-            - name: hermes-skills
-              configMap:
-                name: hermes-skills
 
   - apiVersion: v1
     kind: Service
@@ -1115,6 +1058,43 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
 		desc.ServiceName, namespace, quoteYAML(dashboardHostname), desc.ServiceName, dashboardPort)
 
 	return strings.ReplaceAll(b.String(), "\t", "")
+}
+
+func syncRuntimeFiles(cfg *config.Config, id string, configData []byte, u *ui.UI) error {
+	targetDir := agentruntime.HomePath(cfg, agentruntime.Hermes, id)
+	ensureVolumeWritable(cfg, targetDir, u)
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create Hermes home %s: %w", targetDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(targetDir, "config.yaml"), configData, 0o600); err != nil {
+		return fmt.Errorf("failed to write Hermes config: %w", err)
+	}
+	if err := syncObolSkills(cfg, id); err != nil {
+		return err
+	}
+	if err := removeLegacyHeartbeat(targetDir); err != nil {
+		return err
+	}
+	return nil
+}
+
+func removeLegacyHeartbeat(hermesHome string) error {
+	heartbeatPath := filepath.Join(hermesHome, "workspace", "HEARTBEAT.md")
+	if err := os.Remove(heartbeatPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to remove legacy heartbeat: %w", err)
+	}
+	return nil
+}
+
+func syncObolSkills(cfg *config.Config, id string) error {
+	targetDir := filepath.Join(agentruntime.HomePath(cfg, agentruntime.Hermes, id), obolSkillsDirName)
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create Obol skills directory: %w", err)
+	}
+	if err := obolembed.CopySkills(targetDir); err != nil {
+		return fmt.Errorf("failed to copy Obol skills: %w", err)
+	}
+	return nil
 }
 
 // configuredModels returns the agent-facing model list and the primary model
@@ -1392,55 +1372,4 @@ func fixRuntimeVolumeOwnership(cfg *config.Config, hostPath string, u *ui.UI) {
 	default:
 		_ = os.Chown(hostPath, containerUID, containerGID)
 	}
-}
-
-// fsGroup should own Hermes' data volume. This fallback only repairs legacy
-// k3d/userns clusters when the init container is already visibly stuck.
-func fixHermesDataPVCK3dFallback(cfg *config.Config, id string, u *ui.UI) {
-	backendName := "k3d"
-	if data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, ".stack-backend")); err == nil {
-		backendName = strings.TrimSpace(string(data))
-	}
-	if backendName != "k3d" {
-		return
-	}
-
-	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
-	if !hermesInitContainerStuck(cfg, namespace) {
-		return
-	}
-
-	hostPath := filepath.Join(cfg.DataDir, namespace, agentruntime.Describe(agentruntime.Hermes).DataPVCName)
-	fixRuntimeVolumeOwnership(cfg, hostPath, u)
-
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
-	deleteCmd := exec.Command(kubectlBin,
-		"-n", namespace, "delete", "pod",
-		"-l", "app.kubernetes.io/name=hermes",
-		"--ignore-not-found", "--wait=false")
-	deleteCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-	if err := deleteCmd.Run(); err == nil && u != nil {
-		u.Info("Restarted Hermes pod after best-effort k3d PVC ownership repair")
-	}
-}
-
-func hermesInitContainerStuck(cfg *config.Config, namespace string) bool {
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
-	cmd := exec.Command(kubectlBin,
-		"-n", namespace, "get", "pods",
-		"-l", "app.kubernetes.io/name=hermes",
-		"-o", "jsonpath={.items[*].status.initContainerStatuses[*].state.waiting.reason}")
-	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-	out, err := cmd.Output()
-	if err != nil {
-		return false
-	}
-	for _, reason := range strings.Fields(string(out)) {
-		if strings.Contains(reason, "CrashLoop") || strings.Contains(reason, "Error") {
-			return true
-		}
-	}
-	return false
 }

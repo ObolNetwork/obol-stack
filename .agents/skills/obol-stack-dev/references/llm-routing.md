@@ -18,14 +18,14 @@ LiteLLM lives in the `llm` namespace, port 4000. Agents and skills in other name
 
 ## Reaching Services from the Mac Host
 
-Only routes published through Traefik are reachable at `http://obol.stack:8080/`. Everything else needs `kubectl port-forward`:
+Only routes published through Traefik are reachable at `http://obol.stack:8080/`. Everything else needs `obol kubectl port-forward`:
 
 | Service | Access |
 |---|---|
 | Traefik ingress (frontend, eRPC, x402 routes) | `http://obol.stack:8080/...` |
-| LiteLLM | `kubectl port-forward svc/litellm 14000:4000 -n llm` then `http://127.0.0.1:14000` |
-| x402-buyer sidecar (no Service — pod only) | `kubectl port-forward -n llm <litellm-pod> 18402:8402` then `http://127.0.0.1:18402` |
-| OpenClaw instance | `kubectl port-forward -n openclaw-<id> svc/openclaw 18789:18789` |
+| LiteLLM | `obol kubectl port-forward svc/litellm 14000:4000 -n llm` then `http://127.0.0.1:14000` |
+| x402-buyer sidecar (no Service — pod only) | `obol kubectl port-forward -n llm <litellm-pod> 18402:8402` then `http://127.0.0.1:18402` |
+| OpenClaw instance | `obol kubectl port-forward -n openclaw-<id> svc/openclaw 18789:18789` |
 
 `http://obol.stack:8080/v1/...` does **not** hit LiteLLM — Traefik has no `/v1` route and returns the frontend 404. The `x402-buyer` sidecar is **distroless** — no `wget`/`curl`/shell. Always port-forward, never `kubectl exec`.
 
@@ -63,7 +63,9 @@ obol model list      # confirm the custom entry is the only local model
 obol model status    # provider state
 ```
 
-The flow scripts (`flows/lib.sh::route_llm_via_obol_cli`) wrap this exact sequence behind `OBOL_LLM_ENDPOINT` / `OBOL_LLM_MODEL` / `OBOL_LLM_API_KEY` env vars so smoke tests target a GPU host without burning host CPU on local Ollama.
+Release flow internals wrap this sequence behind `OBOL_LLM_ENDPOINT` /
+`OBOL_LLM_MODEL` / `OBOL_LLM_API_KEY`. For manual QA, run the `obol model ...`
+commands directly.
 
 ## Paid Routing (`paid/<remote-model>`)
 
@@ -97,7 +99,7 @@ maintain          # alias for `process --all`
 
 ### Endpoint URLs inside pods vs the Mac host
 
-`obol.stack:8080` only resolves on the Mac host (via the DNS resolver). From inside any pod (buy.py, kubectl exec, anything), use the Traefik cluster-internal address:
+`obol.stack:8080` only resolves on the Mac host (via the DNS resolver). From inside any pod (release flow internals, `obol kubectl exec`, anything), use the Traefik cluster-internal address:
 
 - Host:   `http://obol.stack:8080/services/<name>/...`
 - In-pod: `http://traefik.traefik.svc.cluster.local/services/<name>/...`
@@ -108,4 +110,4 @@ maintain          # alias for `process --all`
 
 ## When LiteLLM Restart is Needed (Fallback Only)
 
-The validated happy path is `buy.py buy` / `process --all` / same-name top-up **without** a manual LiteLLM restart. The hot-add/hot-delete plus buyer reload normally makes `paid/<model>` appear/disappear in place. Restart only as a fallback investigation step if the route doesn't appear after the controller reconciled and the buyer reports the upstream.
+The validated user path is `obol buy inference` / same-name top-up **without** a manual LiteLLM restart. The embedded `buy.py` path is for release flow internals or skill debugging. The hot-add/hot-delete plus buyer reload normally makes `paid/<model>` appear/disappear in place. Restart only as a fallback investigation step if the route doesn't appear after the controller reconciled and the buyer reports the upstream.

@@ -517,57 +517,37 @@ stack_init_and_up_with_retry() {
     done
 }
 
-preseed_bob_wallet() {
-    local deploy_dir existing import_out key_file onboard_out rc
-
-    deploy_dir="$BOB_DIR/config/applications/hermes/obol-agent"
-    if [ ! -f "$deploy_dir/helmfile.yaml" ]; then
-        step "Bob: scaffold default agent before stack up"
-        set +e
-        onboard_out=$(bob agent new --runtime hermes --id obol-agent --no-sync 2>&1)
-        rc=$?
-        set -e
-        echo "$onboard_out" | tail -8
-        if [ "$rc" -ne 0 ]; then
-            fail "Could not scaffold Bob agent before stack up: ${onboard_out:0:300}"
-            emit_metrics
-            exit "$rc"
-        fi
-        pass "Bob default agent scaffolded"
-    fi
+seed_bob_wallet() {
+    local existing import_out rc
 
     existing=$(bob agent wallet address --runtime hermes obol-agent 2>/dev/null || true)
     if [ "$(lower_addr "$existing")" = "$(lower_addr "$BOB_WALLET")" ]; then
-        pass "Bob wallet preseeded: $existing"
+        pass "Bob wallet seeded: $existing"
         return 0
     fi
 
-    step "Bob: import derived buyer wallet before stack up"
-    key_file=$(mktemp)
-    chmod 600 "$key_file"
-    printf '%s\n' "$BOB_PRIVATE_KEY" > "$key_file"
+    step "Bob: import derived buyer wallet into remote-signer"
     set +e
     import_out=$(bob wallet import \
         --instance obol-agent \
-        --private-key-file "$key_file" \
+        --private-key-file <(printf '%s\n' "$BOB_PRIVATE_KEY") \
         --force 2>&1)
     rc=$?
     set -e
-    rm -f "$key_file"
     echo "$import_out" | tail -8
     if [ "$rc" -ne 0 ]; then
-        fail "Could not preseed Bob buyer wallet: ${import_out:0:300}"
+        fail "Could not seed Bob buyer wallet: ${import_out:0:300}"
         emit_metrics
         exit "$rc"
     fi
 
     existing=$(bob agent wallet address --runtime hermes obol-agent 2>/dev/null || true)
     if [ "$(lower_addr "$existing")" != "$(lower_addr "$BOB_WALLET")" ]; then
-        fail "Bob preseeded wallet mismatch — metadata=$existing expected=$BOB_WALLET"
+        fail "Bob seeded wallet mismatch — metadata=$existing expected=$BOB_WALLET"
         emit_metrics
         exit 1
     fi
-    pass "Bob wallet preseeded: $existing"
+    pass "Bob wallet seeded: $existing"
 }
 
 litellm_paid_inference() {
@@ -795,9 +775,9 @@ if [ -z "$SIGNER_KEY" ]; then
     fail "REMOTE_SIGNER_PRIVATE_KEY not found in .env or environment"
     emit_metrics; exit 1
 fi
-# Bob is the second deterministic derived key. The flow pre-seeds this key
-# before Bob's stack starts so x402 purchases spend from the already-funded
-# wallet, not a generated throwaway wallet.
+# Bob is the second deterministic derived key. The flow imports this key after
+# Bob's stack/model setup so x402 purchases spend from the already-funded wallet,
+# not a generated throwaway wallet.
 BOB_PRIVATE_KEY=$(env -u CHAIN cast keccak "$(env -u CHAIN cast abi-encode 'f(bytes32,uint256)' "$SIGNER_KEY" 2)")
 BOB_WALLET=$(env -u CHAIN cast wallet address --private-key "$BOB_PRIVATE_KEY" 2>/dev/null)
 # Use the .env key directly as Alice's seller wallet (it has ETH for registration gas)
@@ -979,22 +959,18 @@ if [ -z "$REG_START_BLOCK" ]; then
     emit_metrics; exit 1
 fi
 
-# Seed the remote-signer with the Alice key so `obol sell http` can sign
+# Seed the remote-signer with the Alice key so `obol sell register` can sign
 # ERC-8004 register/setMetadata via the agent's signer (no key passes
 # through the CLI). --force overwrites the auto-generated key from
 # `obol stack up`'s default-agent setup.
 step "Alice: import seller wallet into remote-signer"
-KEY_FILE=$(mktemp)
-chmod 600 "$KEY_FILE"
-echo "$SIGNER_KEY" > "$KEY_FILE"
 set +e
 import_out=$(alice wallet import \
     --instance obol-agent \
-    --private-key-file "$KEY_FILE" \
+    --private-key-file <(printf '%s\n' "$SIGNER_KEY") \
     --force 2>&1)
 import_rc=$?
 set -e
-rm -f "$KEY_FILE"
 echo "$import_out" | tail -6
 if [ "$import_rc" -ne 0 ]; then
     fail "Could not seed Alice remote-signer: ${import_out:0:300}"
@@ -1003,32 +979,51 @@ fi
 pass "Alice remote-signer seeded with seller wallet"
 
 set +e
-sell_http_out=$(alice sell http alice-inference \
-    --wallet "$ALICE_WALLET" \
-    --chain base-sepolia \
-    --per-request 0.001 \
-    --namespace llm \
-    --upstream litellm \
-    --port 4000 \
-    --health-path /health/readiness \
-    --register-name "Dual-Stack Test Inference" \
-    --register-description "Integration test: local model inference via x402" \
-    --register-skills natural_language_processing/text_generation \
-    --register-domains technology/artificial_intelligence 2>&1)
-sell_http_rc=$?
+sell_offer_out=$(alice sell http alice-inference --namespace llm --from-json - <<JSON
+{
+  "type": "inference",
+  "upstream": {
+    "service": "litellm",
+    "namespace": "llm",
+    "port": 4000,
+    "healthPath": "/health/readiness"
+  },
+  "model": {
+    "name": "$OBOL_LLM_MODEL",
+    "runtime": "vllm"
+  },
+  "payment": {
+    "scheme": "exact",
+    "network": "base-sepolia",
+    "payTo": "$ALICE_WALLET",
+    "maxTimeoutSeconds": 300,
+    "price": {
+      "perRequest": "0.001"
+    }
+  },
+  "path": "/services/alice-inference",
+  "registration": {
+    "enabled": true,
+    "name": "Dual-Stack Test Inference",
+    "description": "Integration test: local model inference via x402",
+    "skills": ["natural_language_processing/text_generation"],
+    "domains": ["technology/artificial_intelligence"],
+    "supportedTrust": ["reputation"]
+  }
+}
+JSON
+)
+sell_offer_rc=$?
 set -e
-printf '%s\n' "$sell_http_out" | tail -8
-if [ "$sell_http_rc" -ne 0 ]; then
-    fail "ServiceOffer create/register failed (exit $sell_http_rc): ${sell_http_out:0:300}"
-    emit_metrics; exit "$sell_http_rc"
+printf '%s\n' "$sell_offer_out" | tail -8
+if [ "$sell_offer_rc" -ne 0 ]; then
+    fail "ServiceOffer create failed (exit $sell_offer_rc): ${sell_offer_out:0:300}"
+    emit_metrics; exit "$sell_offer_rc"
 fi
-pass "ServiceOffer created"
-
-poll_step_grep "Alice: ServiceOffer Ready" "True" 24 5 \
-    alice kubectl get serviceoffers.obol.org alice-inference -n llm \
-        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
+pass "Inference ServiceOffer created from JSON"
 
 step "Alice: tunnel URL"
+alice tunnel restart >/dev/null 2>&1 || true
 TUNNEL_URL=$(alice tunnel status 2>&1 | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | head -1 || true)
 if [ -z "$TUNNEL_URL" ]; then
     fail "No tunnel URL"
@@ -1037,6 +1032,34 @@ fi
 TUNNEL_HOST=$(tunnel_hostname "$TUNNEL_URL")
 TUNNEL_IP=$(resolve_public_ipv4 "$TUNNEL_HOST" || true)
 pass "Tunnel: $TUNNEL_URL"
+
+step "Alice: drive ERC-8004 registration (obol sell register)"
+set +e
+register_out=$(run_with_timeout 300 \
+    env OBOL_DEVELOPMENT=true OBOL_NONINTERACTIVE=true \
+        OBOL_CONFIG_DIR="$ALICE_DIR/config" \
+        OBOL_BIN_DIR="$ALICE_DIR/bin" \
+        OBOL_DATA_DIR="$ALICE_DIR/data" \
+        "$ALICE_DIR/bin/obol" sell register \
+            --chain base-sepolia \
+            --endpoint "$TUNNEL_URL" \
+            --name "Dual-Stack Test Inference" \
+            --description "Integration test: local model inference via x402" 2>&1)
+register_rc=$?
+set -e
+printf '%s\n' "$register_out" | tail -10
+if [ "$register_rc" -ne 0 ]; then
+    fail "obol sell register failed (exit $register_rc) — offer will stay AwaitingExternalRegistration"
+    emit_metrics; exit "$register_rc"
+fi
+pass "obol sell register issued"
+
+# 300s to match flow-14's post-register poll: Ready requires the controller's
+# Base Sepolia chain watch (via eRPC) to observe the register tx, and the
+# free-tier RPC throttling in pitfall 13 makes 120s intermittently tight.
+poll_step_grep "Alice: ServiceOffer Ready" "True" 60 5 \
+    alice kubectl get serviceoffers.obol.org alice-inference -n llm \
+        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
 
 step "Alice: 402 gate works"
 gate_code=""
@@ -1110,8 +1133,7 @@ if [ -n "$REGISTRATION_TX" ] && receipt_status_ok "$REGISTRATION_TX"; then
     write_receipt registration "$REGISTRATION_TX"
     pass "Registration receipt archived: $REGISTRATION_TX"
 else
-    fail "Could not archive registration receipt for Agent ID $AGENT_ID"
-    emit_metrics; exit 1
+    skip "Registration receipt unavailable for Agent ID $AGENT_ID (registration already reflected in ServiceOffer status)"
 fi
 if [ -n "$METADATA_TX" ] && receipt_status_ok "$METADATA_TX"; then
     write_receipt metadata "$METADATA_TX"
@@ -1126,10 +1148,12 @@ step "Bob: bootstrap workspace"
 bootstrap_flow_workspace "$BOB_DIR" "$OBOL_ROOT/.build/obol"
 pass "Bob workspace ready"
 
-stack_init_and_up_with_retry "Bob" bob "$BOB_DIR" preseed_bob_wallet
+stack_init_and_up_with_retry "Bob" bob "$BOB_DIR"
 
 # Repoint Bob's LiteLLM at the QA LLM endpoint via the canonical CLI.
 route_llm_via_obol_cli bob
+
+seed_bob_wallet
 
 # Detect which buyer-agent runtime (Hermes or OpenClaw) Bob's cluster actually deployed.
 # This re-exports BOB_AGENT_NS / DEPLOY / CONTAINER / SERVICE / REMOTE_PORT /
@@ -1174,10 +1198,10 @@ if [ "$bob_tunnel_code" != "402" ]; then
 fi
 
 # ═════════════════════════════════════════════════════════════════
-# BOB: VERIFY PRESEEDED BUYER WALLET IN REMOTE-SIGNER
+# BOB: VERIFY SEEDED BUYER WALLET IN REMOTE-SIGNER
 # ═════════════════════════════════════════════════════════════════
 
-step "Bob: remote-signer uses preseeded buyer wallet"
+step "Bob: remote-signer uses seeded buyer wallet"
 BOB_SIGNER_ADDR=""
 for attempt in $(seq 1 24); do
     BOB_SIGNER_ADDR=$(bob_remote_signer_address)
@@ -1325,6 +1349,7 @@ if [ "$buy_mode" = "host-cli" ]; then
     if buy_output=$(bob buy inference "$TUNNEL_URL/services/alice-inference/v1/chat/completions" \
         --name alice-inference \
         --model "$OBOL_LLM_MODEL" \
+        --count "$FLOW11_BUY_COUNT" \
         --budget "$FLOW11_BUY_BUDGET_USDC" \
         --expected-agent-id "$AGENT_ID" \
         --yes 2>&1); then

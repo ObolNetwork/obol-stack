@@ -7,7 +7,7 @@ Use this when asked to review or merge a set of obol-stack PRs, pin a frontend R
 - PR range and exclusions, for example "all PRs greater than #509 except #542".
 - Target base branch and whether the work should merge existing PRs, collapse them, or open fix PRs.
 - Release tag, frontend image tag, and whether the release is draft, prerelease, or ready.
-- Validation target: local unit tests, running cluster upgrade, live OBOL smoke, fork smoke, or full `flows/release-smoke.sh`.
+- Validation target: local unit tests, running cluster upgrade, CLI smoke, live OBOL smoke, fork smoke, or full `flows/release-smoke.sh` when explicitly release-gating.
 - Any required OpenAI-compatible QA LLM endpoint and model. Keep endpoint details in the shell environment or private notes, not in skill files, commit messages, PR text, or release text.
 
 ## Train Shape
@@ -117,7 +117,7 @@ A release candidate is not ready just because the GitHub release exists. Gate it
 1. Start the body from `.github/release-template.md`.
 2. Keep generated `What's Changed`, `New Contributors`, and `Full Changelog` at the bottom.
 3. Include warnings and operator directions for known upgrade issues only after validating the upgrade path or explicitly labeling the warning as unverified.
-4. Run the smoke set required by the release. For full RCs, use `flows/release-smoke.sh` with live and fork flags when credentials and RPC capacity are available.
+4. Run the smoke set required by the release. Prefer CLI smoke (`obol stack`, `obol model`, `obol sell`, `obol buy`, `obol kubectl`) for targeted fixes. For full RCs, use `flows/release-smoke.sh` with live and fork flags when credentials and RPC capacity are available.
 5. Fill the release body with the actual smoke report: command, artifact path, pass/fail table, failed flow names, and current blockers.
 6. Only make the RC non-draft when the release body and validation evidence are complete.
 
@@ -129,8 +129,8 @@ Before testing an upgrade against a live local cluster:
 
 ```bash
 k3d cluster list
-kubectl get pods -A
-kubectl get deploy -A -o wide
+obol kubectl get pods -A
+obol kubectl get deploy -A -o wide
 ```
 
 Identify the active stack ID, frontend image, backend component images, ports, and any parallel obol-stack clusters. Use tmux for long-running commands or shared sudo prompts. Clean up only stale stacks that are not the target and whose ownership is clear.
@@ -138,11 +138,11 @@ Identify the active stack ID, frontend image, backend component images, ports, a
 After the upgrade:
 
 ```bash
-kubectl get deploy -A -o wide
-kubectl get pods -A
+obol kubectl get deploy -A -o wide
+obol kubectl get pods -A
 ```
 
-Then run the targeted flow or full release smoke. Archive the log and artifact directory path in the PR or release description.
+Then run the targeted CLI smoke or full release smoke. Archive the command, log, and artifact directory path in the PR or release description.
 
 ## Final Report
 

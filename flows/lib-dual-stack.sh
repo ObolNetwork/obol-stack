@@ -158,32 +158,16 @@ stack_init_and_up_with_retry() {
     done
 }
 
-preseed_bob_wallet() {
-    local deploy_dir existing import_out onboard_out rc
-
-    deploy_dir="$BOB_DIR/config/applications/hermes/obol-agent"
-    if [ ! -f "$deploy_dir/helmfile.yaml" ]; then
-        step "Bob: scaffold default agent before stack up"
-        set +e
-        onboard_out=$(bob agent new --runtime hermes --id obol-agent --no-sync 2>&1)
-        rc=$?
-        set -e
-        echo "$onboard_out" | tail -8
-        if [ "$rc" -ne 0 ]; then
-            fail "Could not scaffold Bob agent before stack up: ${onboard_out:0:300}"
-            emit_metrics
-            exit "$rc"
-        fi
-        pass "Bob default agent scaffolded"
-    fi
+seed_bob_wallet() {
+    local existing import_out rc
 
     existing=$(bob agent wallet address --runtime hermes obol-agent 2>/dev/null || true)
     if [ "$(lower_addr "$existing")" = "$(lower_addr "$BOB_WALLET")" ]; then
-        pass "Bob wallet preseeded: $existing"
+        pass "Bob wallet seeded: $existing"
         return 0
     fi
 
-    step "Bob: import derived buyer wallet before stack up"
+    step "Bob: import derived buyer wallet into remote-signer"
     set +e
     import_out=$(bob wallet import \
         --instance obol-agent \
@@ -193,18 +177,18 @@ preseed_bob_wallet() {
     set -e
     echo "$import_out" | tail -8
     if [ "$rc" -ne 0 ]; then
-        fail "Could not preseed Bob buyer wallet: ${import_out:0:300}"
+        fail "Could not seed Bob buyer wallet: ${import_out:0:300}"
         emit_metrics
         exit "$rc"
     fi
 
     existing=$(bob agent wallet address --runtime hermes obol-agent 2>/dev/null || true)
     if [ "$(lower_addr "$existing")" != "$(lower_addr "$BOB_WALLET")" ]; then
-        fail "Bob preseeded wallet mismatch — metadata=$existing expected=$BOB_WALLET"
+        fail "Bob seeded wallet mismatch — metadata=$existing expected=$BOB_WALLET"
         emit_metrics
         exit 1
     fi
-    pass "Bob wallet preseeded: $existing"
+    pass "Bob wallet seeded: $existing"
 }
 
 tunnel_hostname() {
