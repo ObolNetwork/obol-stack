@@ -2197,6 +2197,192 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=Non
         sys.exit(1)
 
 
+def cmd_pay_agent(url, messages=None, model_id=None, network=None, timeout=None, body=None):
+    """Single-shot paid streaming agent call: probe -> sign one auth -> SSE-stream.
+
+    Sibling of `cmd_pay` for `type=agent` ServiceOffers. Differences from
+    `cmd_pay`:
+      - HTTP path is always POST <base>/v1/chat/completions (OpenAI-compatible).
+      - Body forces `stream: true` so the seller emits SSE chunks per-write.
+      - Response is read line-by-line and each SSE event is flushed to stdout
+        immediately, so a calling Hermes/OpenClaw agent can re-emit the
+        stream to its own user (telegram, `obol hermes chat`, REST clients).
+      - Default timeout is 1 hour (operator-overridable). Agent calls can
+        legitimately run for many minutes — the seller's MaxTimeoutSeconds
+        settle window covers that, but the buyer's HTTP read timeout has to
+        match.
+      - NO LiteLLM wire-up. Unlike `--type inference`, agent responses are
+        first-class data the calling agent wants to use directly (memory,
+        tool-call traces, partial results), not pushed behind a paid model
+        alias.
+
+    `body` is an optional JSON-encoded request body. When omitted, `messages`
+    + `model_id` are required and a `{model, messages, stream:true}` body is
+    synthesized. When provided, the body is parsed and `"stream": true` is
+    forced onto whatever the caller passed.
+    """
+    if timeout is None or float(timeout) <= 0:
+        timeout = 3600.0
+    else:
+        timeout = float(timeout)
+
+    # Build request body.
+    if body is not None:
+        try:
+            parsed_body = json.loads(body)
+        except (TypeError, ValueError) as exc:
+            print(f"Error: --data must be valid JSON, got: {exc}", file=sys.stderr)
+            sys.exit(1)
+        if not isinstance(parsed_body, dict):
+            print("Error: --data must be a JSON object.", file=sys.stderr)
+            sys.exit(1)
+        # Force streaming on. cmd_pay handles non-streaming; cmd_pay_agent
+        # exists precisely to stream.
+        parsed_body["stream"] = True
+        if model_id and not parsed_body.get("model"):
+            parsed_body["model"] = model_id
+    else:
+        if not messages:
+            print(
+                "Error: --message (or --data <json>) is required for `pay-agent`.\n"
+                "Example: pay-agent <url> --model qwen3.5:9b --message 'summarize the docs'",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if not model_id:
+            print("Error: --model is required when using --message.", file=sys.stderr)
+            sys.exit(1)
+        parsed_body = {
+            "model": model_id,
+            "messages": [{"role": "user", "content": messages}],
+            "stream": True,
+        }
+
+    print(f"Probing {url} ...")
+    pricing = _probe_endpoint(url, model_id=model_id or "test", kind="inference")
+    if not pricing:
+        print("Failed to get x402 pricing.", file=sys.stderr)
+        sys.exit(1)
+
+    accepts = pricing.get("accepts", [])
+    if not accepts:
+        print("No payment options in 402 response.", file=sys.stderr)
+        sys.exit(1)
+
+    payment = accepts[0]
+    pay_to = payment.get("payTo", "")
+    try:
+        chain = _normalize_chain_name(payment.get("network", DEFAULT_CHAIN))
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if network:
+        try:
+            requested = _resolve_chain(network)
+        except ValueError as exc:
+            print(f"Error: --network: {exc}", file=sys.stderr)
+            sys.exit(1)
+        if requested != chain:
+            print(
+                f"Error: seller is on {chain} but --network {network} was requested.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    price = str(payment.get("amount", payment.get("maxAmountRequired", "0")))
+    asset = payment.get("asset") or _canonical_usdc(chain)
+    if not pay_to:
+        print("Error: 402 response missing payTo.", file=sys.stderr)
+        sys.exit(1)
+    if not asset:
+        print(
+            f"Error: 402 response did not include payment.asset and no canonical "
+            f"USDC contract is configured for chain {chain}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    print("Getting agent wallet ...")
+    signer_address = _get_signer_address()
+    print(f"  Wallet: {signer_address}")
+    usdc_addr = asset
+    if not _validate_contract_exists(usdc_addr, chain):
+        print(f"Error: token contract {usdc_addr} not found on {chain}.", file=sys.stderr)
+        sys.exit(1)
+
+    extra = payment.get("extra", {}) or {}
+    balance = int(_get_usdc_balance(signer_address, usdc_addr, chain))
+    price_int = int(price)
+    if balance < price_int:
+        symbol, _, _ = _asset_display_meta(usdc_addr, extra)
+        print(
+            f"Error: wallet balance {balance} < price {price_int} for "
+            f"{symbol} ({usdc_addr}) on {chain}.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print(f"  Balance: {_format_amount(balance, usdc_addr, extra)}")
+
+    _ensure_permit2_allowance(
+        signer_address,
+        usdc_addr,
+        chain,
+        extra.get("assetTransferMethod", "eip3009"),
+        extensions=pricing.get("extensions", {}) or {},
+    )
+
+    print(f"Pre-signing 1 payment authorization for {price} on {chain} ...")
+    auths = _presign_auths(signer_address, pay_to, price, chain, usdc_addr, 1, payment=payment)
+    if not auths:
+        print("Failed to pre-sign payment.", file=sys.stderr)
+        sys.exit(1)
+
+    envelope = auths[0]["payment"]
+    x_payment_header = base64.b64encode(json.dumps(envelope).encode()).decode()
+
+    target_url = f"{_normalize_endpoint(url)}/v1/chat/completions"
+    request_data = json.dumps(parsed_body).encode()
+    headers = {
+        "X-PAYMENT": x_payment_header,
+        "User-Agent": USER_AGENT,
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    }
+    print(f"Sending paid POST {target_url} (streaming, timeout {timeout:.0f}s) ...")
+    req = urllib.request.Request(target_url, data=request_data, method="POST", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            print(f"HTTP {resp.status}")
+            settle = resp.headers.get("X-PAYMENT-RESPONSE")
+            if settle:
+                print(f"X-PAYMENT-RESPONSE: {settle}")
+            print()
+            # Stream events line-by-line and flush each one to stdout so a
+            # calling Hermes/OpenClaw agent can re-emit them as they arrive.
+            # SSE frames are delimited by blank lines; we forward each raw
+            # line verbatim and let the caller parse.
+            for raw_line in resp:
+                # resp iteration yields bytes; decode lossily so a malformed
+                # chunk never kills the stream.
+                line = raw_line.decode(errors="replace").rstrip("\r\n")
+                print(line, flush=True)
+            return 0
+    except urllib.error.HTTPError as e:
+        body_text = e.read().decode(errors="replace") if e.fp else ""
+        _print_paid_request_failure(
+            status=e.code,
+            body=body_text,
+            settle_header=e.headers.get("X-PAYMENT-RESPONSE") if e.headers else None,
+            signer_address=signer_address,
+            asset=usdc_addr,
+            chain=chain,
+            transfer_method=extra.get("assetTransferMethod", "eip3009"),
+        )
+        sys.exit(1)
+    except urllib.error.URLError as e:
+        print(f"Connection error: {e.reason}", file=sys.stderr)
+        sys.exit(1)
+
+
 def _print_paid_request_failure(status, body, settle_header, signer_address, asset, chain, transfer_method):
     """Emit a structured, actionable failure report for a non-2xx paid call.
 
@@ -2311,11 +2497,15 @@ def usage():
     print("Usage: python3 scripts/buy.py <command> [args]")
     print()
     print("Commands:")
-    print("  probe <endpoint-url> [--model <id>] [--type http|inference] [--method GET|POST]")
+    print("  probe <endpoint-url> [--model <id>] [--type http|inference|agent] [--method GET|POST]")
     print("                                               Probe x402 pricing (default --type inference)")
     print("  pay <url> [--type http|inference] [--method GET|POST] [--data '<body>'] [--network <name>] [--timeout <seconds>]")
     print("                                               Single-shot paid request (sign 1 auth, attach X-PAYMENT)")
     print("                                               --network is a guard: aborts if seller is on a different chain")
+    print("  pay-agent <url> --model <id> [--message '<text>' | --data '<json>'] [--network <name>] [--timeout <seconds>]")
+    print("                                               Single-shot paid streaming agent call (POST /v1/chat/completions,")
+    print("                                               stream: true). Each SSE event flushes to stdout so a calling")
+    print("                                               agent can re-emit the stream to its own user. Default timeout 1h.")
     print("  buy <name> --endpoint <url> --model <id>     Pre-sign + configure paid/<model>")
     print("       [--budget <micro-units>] [--count <N>]")
     print("       [--auto-refill[=true|false]] [--refill-threshold <N>]")
@@ -2345,13 +2535,17 @@ if __name__ == "__main__":
     if cmd == "probe":
         positional, opts = parse_flags(rest)
         if not positional:
-            print("Usage: probe <endpoint-url> [--model <id>] [--type http|inference]", file=sys.stderr)
+            print("Usage: probe <endpoint-url> [--model <id>] [--type http|inference|agent]", file=sys.stderr)
             sys.exit(1)
         kind = opts.get("type", "inference")
-        if kind not in ("http", "inference"):
-            print(f"Error: --type must be 'http' or 'inference', got '{kind}'", file=sys.stderr)
+        if kind not in ("http", "inference", "agent"):
+            print(f"Error: --type must be 'http', 'inference', or 'agent'; got '{kind}'", file=sys.stderr)
             sys.exit(1)
-        cmd_probe(positional[0], opts.get("model"), kind=kind, method=opts.get("method"))
+        # Agent endpoints expose the same OpenAI-compatible /v1/chat/completions
+        # contract as inference for the probe step. They only diverge on the
+        # response side (pay-agent streams; pay/buy do not).
+        probe_kind = "inference" if kind == "agent" else kind
+        cmd_probe(positional[0], opts.get("model"), kind=probe_kind, method=opts.get("method"))
 
     elif cmd == "pay":
         positional, opts = parse_flags(rest)
@@ -2378,6 +2572,33 @@ if __name__ == "__main__":
             kind=kind,
             network=opts.get("network"),
             timeout=timeout,
+        )
+
+    elif cmd == "pay-agent":
+        positional, opts = parse_flags(rest)
+        if not positional:
+            print(
+                "Usage: pay-agent <url> --model <id> [--message '<text>' | --data '<json>'] "
+                "[--network <name>] [--timeout <seconds>]",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        if opts.get("auth_ttl") is not None:
+            os.environ["OBOL_X402_AUTH_TTL"] = str(opts["auth_ttl"])
+        timeout = opts.get("timeout")
+        if timeout is not None:
+            try:
+                timeout = float(timeout)
+            except ValueError:
+                print(f"Error: --timeout must be a number of seconds, got '{timeout}'", file=sys.stderr)
+                sys.exit(1)
+        cmd_pay_agent(
+            positional[0],
+            messages=opts.get("message"),
+            model_id=opts.get("model"),
+            network=opts.get("network"),
+            timeout=timeout,
+            body=opts.get("data"),
         )
 
     elif cmd == "buy":

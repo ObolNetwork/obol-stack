@@ -292,9 +292,35 @@ func BuildExtensionsForAsset(asset AssetInfo) map[string]any {
 	}
 }
 
+// DefaultMaxTimeoutSeconds is the fallback settle window when neither the
+// ServiceOffer nor a static route specifies one. Wide enough for any
+// non-reasoning chat completion; reasoning models and long agent runs should
+// set ServiceOffer.spec.payment.maxTimeoutSeconds explicitly.
+const DefaultMaxTimeoutSeconds int64 = 600
+
+// MaxMaxTimeoutSeconds caps operator-set values at 24h. The auth signature is
+// nonce-bound to a single recipient + amount, so the replay surface doesn't
+// grow with the window — but a runaway value (typo, accidental ms→s) would
+// hand a facilitator an effectively unbounded settle window, so we clamp.
+const MaxMaxTimeoutSeconds int64 = 24 * 60 * 60
+
+// ClampMaxTimeoutSeconds resolves the effective settle window from a
+// possibly-zero spec value. Zero or negative → DefaultMaxTimeoutSeconds;
+// values above the 24h cap clamp down (the caller is expected to have logged
+// the operator-set value already).
+func ClampMaxTimeoutSeconds(n int64) int64 {
+	if n <= 0 {
+		return DefaultMaxTimeoutSeconds
+	}
+	if n > MaxMaxTimeoutSeconds {
+		return MaxMaxTimeoutSeconds
+	}
+	return n
+}
+
 // BuildV1Requirement creates a v1 PaymentRequirementsV1 for USDC payment on
 // the given chain. amount is the decimal USDC amount (e.g., "0.001" = $0.001).
-func BuildV1Requirement(chain ChainInfo, amount, recipientAddress string) x402types.PaymentRequirementsV1 {
+func BuildV1Requirement(chain ChainInfo, amount, recipientAddress string, maxTimeoutSeconds int64) x402types.PaymentRequirementsV1 {
 	asset := chain.DefaultAsset()
 	return x402types.PaymentRequirementsV1{
 		Scheme:            "exact",
@@ -302,26 +328,27 @@ func BuildV1Requirement(chain ChainInfo, amount, recipientAddress string) x402ty
 		MaxAmountRequired: decimalToAtomic(amount, asset.Decimals),
 		Asset:             asset.Address,
 		PayTo:             recipientAddress,
-		MaxTimeoutSeconds: 60,
+		MaxTimeoutSeconds: int(ClampMaxTimeoutSeconds(maxTimeoutSeconds)),
 	}
 }
 
 // BuildV2Requirement creates a v2 PaymentRequirements for USDC payment on the
 // given chain. amount is the decimal USDC amount (e.g. "0.001" = $0.001).
-func BuildV2Requirement(chain ChainInfo, amount, recipientAddress string) x402types.PaymentRequirements {
-	return BuildV2RequirementWithAsset(chain, chain.DefaultAsset(), amount, recipientAddress)
+func BuildV2Requirement(chain ChainInfo, amount, recipientAddress string, maxTimeoutSeconds int64) x402types.PaymentRequirements {
+	return BuildV2RequirementWithAsset(chain, chain.DefaultAsset(), amount, recipientAddress, maxTimeoutSeconds)
 }
 
 // BuildV2RequirementWithAsset creates a v2 PaymentRequirements for the given
-// chain and settlement asset.
-func BuildV2RequirementWithAsset(chain ChainInfo, asset AssetInfo, amount, recipientAddress string) x402types.PaymentRequirements {
+// chain and settlement asset. Pass maxTimeoutSeconds=0 to fall back to
+// DefaultMaxTimeoutSeconds; operator-set values are clamped to MaxMaxTimeoutSeconds.
+func BuildV2RequirementWithAsset(chain ChainInfo, asset AssetInfo, amount, recipientAddress string, maxTimeoutSeconds int64) x402types.PaymentRequirements {
 	return x402types.PaymentRequirements{
 		Scheme:            "exact",
 		Network:           chain.CAIP2Network,
 		Amount:            decimalToAtomic(amount, asset.Decimals),
 		Asset:             asset.Address,
 		PayTo:             recipientAddress,
-		MaxTimeoutSeconds: 60,
+		MaxTimeoutSeconds: int(ClampMaxTimeoutSeconds(maxTimeoutSeconds)),
 		Extra: map[string]interface{}{
 			"name":                asset.EIP712Name,
 			"version":             asset.EIP712Version,

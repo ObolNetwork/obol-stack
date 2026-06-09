@@ -79,7 +79,7 @@ func validPaymentHeader() string {
 
 func testRequirements() []x402types.PaymentRequirements {
 	return []x402types.PaymentRequirements{
-		BuildV2Requirement(ChainBaseSepolia, "0.001", "0xWallet"),
+		BuildV2Requirement(ChainBaseSepolia, "0.001", "0xWallet", 0),
 	}
 }
 

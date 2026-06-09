@@ -293,14 +293,14 @@ spec:
         - name: x402-buyer
           # Pinned by sha256 digest (multi-arch manifest list, amd64+arm64)
           # so the deployed sidecar is byte-for-byte identical across QA
-          # hosts. The :f5d94fc tag is preserved for human readability; the
+          # hosts. The :04bebbc tag is preserved for human readability; the
           # digest is authoritative.
           # Previous tag-only pin allowed the local-build path to silently
           # reuse a 5-day-old `:latest` image and ate the release-smoke 503
           # investigation: stale buyer serialized X-PAYMENT with empty
           # authorization fields → facilitator /verify 400 → 503 cascade
           # across flow-08/11/14/13. See internal/embed/embed_image_pin_test.go.
-          image: ghcr.io/obolnetwork/x402-buyer:f5d94fc@sha256:0c431eda44e9e2fe5dd50c82cf4885f9be5037e592478781c51e9c510171265c
+          image: ghcr.io/obolnetwork/x402-buyer:04bebbc@sha256:1c2bb19824bae2caf4b305a495b6686ff6e973b378c2b88fc89d73a06265aaf7
           imagePullPolicy: IfNotPresent
           # PSS Restricted + writable PVC. This distroless:nonroot Go binary
           # defaults to UID 65532, but its /state volume is the

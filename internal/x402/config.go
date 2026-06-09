@@ -128,6 +128,14 @@ type RouteRule struct {
 	// 402 page's primary Buy card so users can copy a fully-formed
 	// `obol buy inference --model ...` command.
 	Model string `yaml:"model,omitempty"`
+
+	// MaxTimeoutSeconds is the per-request settle window advertised to
+	// buyers (x402: maxTimeoutSeconds). Mirrors
+	// ServiceOffer.spec.payment.maxTimeoutSeconds; 0 = use the verifier
+	// default (DefaultMaxTimeoutSeconds). Streaming agent flows can need
+	// minutes-to-hours here — operator-set values up to
+	// MaxMaxTimeoutSeconds are honored verbatim.
+	MaxTimeoutSeconds int64 `yaml:"maxTimeoutSeconds,omitempty"`
 }
 
 // LoadConfig reads and parses a pricing configuration YAML file.

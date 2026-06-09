@@ -178,6 +178,7 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 		ApproxTokensPerRequest: approx,
 		OfferNamespace:         offer.Namespace,
 		OfferName:              offer.Name,
+		MaxTimeoutSeconds:      offer.Spec.Payment.MaxTimeoutSeconds,
 	}
 
 	if offer.IsAgent() && offer.Status.AgentResolution != nil {

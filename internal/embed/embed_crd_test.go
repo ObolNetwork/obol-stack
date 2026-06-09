@@ -819,7 +819,10 @@ func TestX402VerifierImage_CarriesAgentAuthFix(t *testing.T) {
 		t.Fatalf("ReadInfrastructureFile: %v", err)
 	}
 
-	const ref = "ghcr.io/obolnetwork/x402-verifier:46e63fd@sha256:a8cd7946884c9a702b5cfcfad28d1f5eac1037899303eb4e0157e3ffab7a572c"
+	// Bumped to 04bebbc (current main HEAD as of rc13) to also carry ab71481
+	// (suppress verifyOnly=false warning on the in-process settle path). The
+	// agent upstream auth fix from abfd55a remains in scope.
+	const ref = "ghcr.io/obolnetwork/x402-verifier:04bebbc@sha256:a80f72c89341a422724ad1b5d5d5da0c8cdd246b9dcabc6560e369b48ed5d775"
 	if !strings.Contains(string(data), "image: "+ref) {
 		t.Fatalf("x402-verifier image must carry agent upstream auth fix: %s", ref)
 	}
@@ -841,7 +844,7 @@ func TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix(t *testing.T) {
 		t.Fatalf("ReadInfrastructureFile: %v", err)
 	}
 
-	const ref = "ghcr.io/obolnetwork/serviceoffer-controller:b39bcaa@sha256:f5afbba041f83c52c1d48c61db443138da76a12afed0bd29ba719984fc73b189"
+	const ref = "ghcr.io/obolnetwork/serviceoffer-controller:04bebbc@sha256:286d07604c001006d54a5f89ef854210ab805859c072e7b8dd89fe0c6f130d7d"
 	if !strings.Contains(string(data), "image: "+ref) {
 		t.Fatalf("serviceoffer-controller image must carry the Secret-create-only reconciler fix "+
 			"(else per-agent provisioning 403s under the no-update/patch Secret RBAC): %s", ref)
