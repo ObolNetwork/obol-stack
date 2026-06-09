@@ -37,6 +37,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/validate"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
+	"github.com/ObolNetwork/obol-stack/internal/x402mcp"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/urfave/cli/v3"
 	"gopkg.in/yaml.v3"
@@ -49,6 +50,7 @@ func sellCommand(cfg *config.Config) *cli.Command {
 		Commands: []*cli.Command{
 			sellInferenceCommand(cfg),
 			sellHTTPCommand(cfg),
+			sellMCPCommand(cfg),
 			sellAgentCommand(cfg),
 			sellDemoCommand(cfg),
 			sellListCommand(cfg),
@@ -530,6 +532,131 @@ Examples:
 // ---------------------------------------------------------------------------
 // sell http — create a ServiceOffer CRD for any HTTP service
 // ---------------------------------------------------------------------------
+
+func sellMCPCommand(cfg *config.Config) *cli.Command {
+	_ = cfg
+	return &cli.Command{
+		Name:      "mcp",
+		Usage:     "Sell a paid MCP tool over x402 (in-band _meta payment)",
+		ArgsUsage: "[name]",
+		Description: `Runs a local x402-paid MCP (Model Context Protocol) server in the
+foreground. The paid tool forwards the buyer's JSON arguments to a backend HTTP
+service, injecting the seller's own credential (an API key the buyer never
+sees), so any credentialed real-world service can be resold to agents per call.
+Buyers (e.g. hermes-agent's pay_mcp plugin) settle in-band via the MCP request
+_meta["x402/payment"] field, per specs/transports-v2/mcp.md. The wrapper runs
+verify -> execute -> settle inside the tool call, so a caller is never charged
+for a failed tool. This is the application-layer counterpart to the HTTP-402
+ForwardAuth gate used by 'obol sell inference' / 'obol sell http'.
+
+Connect a buyer at http://localhost:<port>/mcp (streamable HTTP).
+
+Examples:
+  # Front a weather API as a paid MCP tool (the canonical x402 paid-MCP shape):
+  obol sell mcp weather --pay-to 0x... --price 0.001 --chain base-sepolia \
+      --tool-name get_weather \
+      --description 'Current weather for a city. Args: {city}' \
+      --upstream https://your-weather-service/current
+
+  # Any JSON HTTP service works the same way; pass the backend's auth header if
+  # it needs one (set server-side, never sent to buyers):
+  obol sell mcp my-tool --pay-to 0x... --price 0.005 --tool-name call \
+      --upstream https://api.example.com/do --upstream-header 'X-Api-Key: <key>'`,
+		Flags: []cli.Flag{
+			payToFlag("Payment recipient address"),
+			&cli.StringFlag{
+				Name:  "chain",
+				Usage: "Payment chain (base, base-sepolia, ethereum, polygon)",
+				Value: "base-sepolia",
+			},
+			&cli.StringFlag{
+				Name:  "price",
+				Usage: "Per-call price, USD-denominated (e.g. 0.001)",
+				Value: "0.001",
+			},
+			&cli.StringFlag{
+				Name:  "tool-name",
+				Usage: "Name of the paid MCP tool",
+				Value: "call",
+			},
+			&cli.StringFlag{
+				Name:  "description",
+				Usage: "Human-readable description of the paid tool",
+			},
+			&cli.IntFlag{
+				Name:  "port",
+				Usage: "Port to serve the MCP server on",
+				Value: 4022,
+			},
+			&cli.StringFlag{
+				Name:  "upstream",
+				Usage: "Backend HTTP service URL the paid tool POSTs the buyer's JSON args to (e.g. a weather/data API)",
+			},
+			&cli.StringSliceFlag{
+				Name:  "upstream-header",
+				Usage: "Optional auth header for the backend, set server-side and never sent to buyers (repeatable, \"Key: Value\", e.g. \"X-Api-Key: <key>\")",
+			},
+			&cli.StringFlag{
+				Name:  "facilitator",
+				Usage: "x402 facilitator URL (verify/settle)",
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+
+			payTo := cmd.String("pay-to")
+			if payTo == "" {
+				return errors.New("--pay-to is required")
+			}
+			name := cmd.Args().First()
+			if name == "" {
+				name = "obol-mcp"
+			}
+			facilitator := cmd.String("facilitator")
+			if facilitator == "" {
+				facilitator = x402verifier.DefaultFacilitatorURL
+			}
+
+			headers, err := parseUpstreamHeaders(cmd.StringSlice("upstream-header"))
+			if err != nil {
+				return err
+			}
+
+			u.Infof("Starting paid MCP server %q on port %d (Ctrl-C to stop)", name, cmd.Int("port"))
+			return x402mcp.Serve(ctx, x402mcp.Options{
+				Name:            name,
+				ToolName:        cmd.String("tool-name"),
+				Description:     cmd.String("description"),
+				Port:            cmd.Int("port"),
+				PayTo:           payTo,
+				Price:           cmd.String("price"),
+				Chain:           cmd.String("chain"),
+				FacilitatorURL:  facilitator,
+				Upstream:        cmd.String("upstream"),
+				UpstreamHeaders: headers,
+			})
+		},
+	}
+}
+
+// parseUpstreamHeaders turns repeatable "Key: Value" --upstream-header flags
+// into a header map injected on upstream calls (the seller's credential).
+func parseUpstreamHeaders(pairs []string) (map[string]string, error) {
+	if len(pairs) == 0 {
+		return nil, nil
+	}
+	headers := make(map[string]string, len(pairs))
+	for _, p := range pairs {
+		k, v, ok := strings.Cut(p, ":")
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if !ok || k == "" {
+			return nil, fmt.Errorf("invalid --upstream-header %q: want \"Key: Value\"", p)
+		}
+		headers[k] = v
+	}
+	return headers, nil
+}
 
 func sellHTTPCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
