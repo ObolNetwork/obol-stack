@@ -587,7 +587,8 @@ func TestProxy_UpstreamErrorAfterPaymentDoesNotPersistConsume(t *testing.T) {
 // X-PAYMENT-RESPONSE header carries a tx hash, the buyer MUST mark the
 // auth as spent (the chain debited the wallet) instead of releasing it
 // back into the pool. The verifier-side companion test is
-// TestForwardAuth_SettleErrorPreservesTxHashInHeader. See plans/rc13report.md.
+// TestForwardAuth_SettleErrorPreservesTxHashInHeader. See docs/observability.md
+// ("Verify settlement against the chain, never the sidecar snapshot").
 func TestProxy_UpstreamErrorWithTxHash_PersistsConsume(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "consumed.json")

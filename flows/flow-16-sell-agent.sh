@@ -54,7 +54,8 @@ fi
 # SeedHostFiles writes it; the cluster mounts HostHomePath into the pod via
 # the data PVC. Without the marker, Hermes' sync_skills() seeds ~24 stock
 # categories (~1 MB of SKILL.md text) into /data/.hermes/skills on every
-# launch — see plans/rc13report.md and internal/agentcrd/agent_contract_integration_test.go.
+# launch — see internal/agentcrd/agent_contract_integration_test.go for the
+# v2026.5.28 → v2026.6.5 root cause.
 step ".no-bundled-skills marker present on host PVC"
 marker_file="$host_root/.no-bundled-skills"
 if [ -f "$marker_file" ]; then
@@ -82,19 +83,21 @@ case "$phase" in
         ;;
 esac
 
-# §1.3: Hermes pod check
-step "Hermes pod running in $AGENT_NS"
-pod_phase=""
+# §1.3: Hermes pod check — gate on the Ready condition, not phase. Phase
+# flips to Running while containers are still booting; §1.3.1 execs into the
+# pod and would false-pass on an empty skills dir mid-boot.
+step "Hermes pod ready in $AGENT_NS"
+pod_ready=""
 for i in $(seq 1 30); do
-    pod_phase=$("$OBOL" kubectl get pods -n "$AGENT_NS" -l app.kubernetes.io/name=hermes \
-        -o jsonpath='{.items[0].status.phase}' 2>/dev/null || true)
-    [ "$pod_phase" = "Running" ] && break
+    pod_ready=$("$OBOL" kubectl get pods -n "$AGENT_NS" -l app.kubernetes.io/name=hermes \
+        -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+    [ "$pod_ready" = "True" ] && break
     sleep 4
 done
-if [ "$pod_phase" = "Running" ]; then
-    pass "Hermes pod Running"
+if [ "$pod_ready" = "True" ]; then
+    pass "Hermes pod Ready"
 else
-    fail "Hermes pod did not reach Running within 120s (phase=$pod_phase)"
+    fail "Hermes pod did not become Ready within 120s (ready=$pod_ready)"
 fi
 
 # §1.3.1: Bundled-skills contract — the marker on the host PVC was honored
@@ -243,4 +246,4 @@ if [ "${FLOW_CLEANUP:-0}" = "1" ]; then
     "$OBOL" agent delete --force "$AGENT_NAME" >/dev/null 2>&1 || true
 fi
 
-summary
+emit_metrics

@@ -345,7 +345,8 @@ func facilitatorSettle(ctx context.Context, client *http.Client, facilitatorURL 
 		// and then 5xx on the post-submit/receipt path. Return the parsed
 		// response alongside the error so the caller can surface
 		// settleResp.Transaction (the tx hash) to the buyer. Without this the
-		// chain debit goes unnoticed — see plans/rc13report.md headline.
+		// chain debit goes unnoticed — see docs/observability.md
+		// ("Verify settlement against the chain, never the sidecar snapshot").
 		return &settleResp, fmt.Errorf("facilitator settle failed (%d): %s", resp.StatusCode, settleResp.ErrorReason)
 	}
 

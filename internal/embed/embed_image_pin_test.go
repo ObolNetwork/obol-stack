@@ -238,6 +238,17 @@ func TestEmbeddedImages_X402ControllerAndBuyerUseFixPins(t *testing.T) {
 			//     before signing — affects long-running paid inference.
 			// Still carries the Secret-create-only reconciler change from
 			// b39bcaa. See TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix.
+			//
+			// FOLLOW-UP REQUIRED after this PR merges: 04bebbc is this PR's
+			// own merge base, so these images do NOT contain this PR's source
+			// changes — the controller still renders sub-agents with Hermes
+			// v2026.5.28 (compiled-in agent_render.go default), the verifier
+			// still hardcodes maxTimeoutSeconds=60 and drops the settle tx
+			// hash on facilitator errors, and the buyer lacks the
+			// settled-but-failed ConfirmSpend branch. Rebuild all three from
+			// the merge commit and repin (the rc11 pattern, cf. 8fb1553)
+			// before cutting v0.10.0 final. OBOL_DEVELOPMENT=true masks this
+			// locally because dev clusters rebuild from worktree source.
 			file: "base/templates/x402.yaml",
 			ref:  "ghcr.io/obolnetwork/serviceoffer-controller:04bebbc@sha256:286d07604c001006d54a5f89ef854210ab805859c072e7b8dd89fe0c6f130d7d",
 		},
