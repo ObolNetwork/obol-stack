@@ -488,7 +488,7 @@ reset_flow_workspace() {
         OBOL_CONFIG_DIR="$dir/config" \
         OBOL_BIN_DIR="$dir/bin" \
         OBOL_DATA_DIR="$dir/data" \
-            run_with_timeout 120 "$obol_cmd" stack down >/dev/null 2>&1 || true
+            run_with_timeout 120 "$obol_cmd" stack down --yes >/dev/null 2>&1 || true
         if [ "$force_purge" = "true" ]; then
             OBOL_DEVELOPMENT=true \
             OBOL_NONINTERACTIVE=true \

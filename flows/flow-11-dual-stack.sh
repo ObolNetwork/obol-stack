@@ -1054,7 +1054,10 @@ if [ "$register_rc" -ne 0 ]; then
 fi
 pass "obol sell register issued"
 
-poll_step_grep "Alice: ServiceOffer Ready" "True" 24 5 \
+# 300s to match flow-14's post-register poll: Ready requires the controller's
+# Base Sepolia chain watch (via eRPC) to observe the register tx, and the
+# free-tier RPC throttling in pitfall 13 makes 120s intermittently tight.
+poll_step_grep "Alice: ServiceOffer Ready" "True" 60 5 \
     alice kubectl get serviceoffers.obol.org alice-inference -n llm \
         -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'
 

@@ -92,9 +92,12 @@ func TestBuyerStatePVC(t *testing.T) {
 		t.Errorf("litellm pod fsGroupChangePolicy = %v, want OnRootMismatch", policy)
 	}
 
-	// x402-buyer should inherit the pod-level 65532 identity and rely on
-	// fsGroup-applied local PV ownership. A container-level UID/GID 1000 is
-	// the old hostPath workaround and should not come back.
+	// x402-buyer must keep container-level UID/GID 1000 while hostPath PVs
+	// from <= v0.10.0-rc12 clusters remain in support: those PVs ignore the
+	// pod fsGroup (kubelet skips ownership management on hostPath) and hold
+	// a consumed.json written 0600 by UID 1000 — a 65532 sidecar crashloops
+	// on `load state` and takes every paid/* route down. On fresh local-type
+	// PVs the explicit UID is harmless (fsGroup 65532 grants group access).
 	containers, ok := nested(dep, "spec", "template", "spec", "containers").([]any)
 	if !ok {
 		t.Fatal("litellm Deployment has no containers")
@@ -110,11 +113,11 @@ func TestBuyerStatePVC(t *testing.T) {
 	if buyer == nil {
 		t.Fatal("x402-buyer container missing from litellm Deployment")
 	}
-	if u := nested(buyer, "securityContext", "runAsUser"); u != nil {
-		t.Errorf("x402-buyer securityContext.runAsUser = %v, want unset (inherits pod UID 65532)", u)
+	if u := nested(buyer, "securityContext", "runAsUser"); u != 1000 {
+		t.Errorf("x402-buyer securityContext.runAsUser = %v, want 1000 (legacy hostPath-PV state compat)", u)
 	}
-	if g := nested(buyer, "securityContext", "runAsGroup"); g != nil {
-		t.Errorf("x402-buyer securityContext.runAsGroup = %v, want unset (inherits pod GID 65532)", g)
+	if g := nested(buyer, "securityContext", "runAsGroup"); g != 1000 {
+		t.Errorf("x402-buyer securityContext.runAsGroup = %v, want 1000 (legacy hostPath-PV state compat)", g)
 	}
 	if nr := nested(buyer, "securityContext", "runAsNonRoot"); nr != true {
 		t.Errorf("x402-buyer securityContext.runAsNonRoot = %v, want true (restricted PSS)", nr)
