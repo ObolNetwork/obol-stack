@@ -196,15 +196,18 @@ func TestHTMLAware_InferenceShowsCLIPrimaryAndDescription(t *testing.T) {
 	render(w, r, []x402types.PaymentRequirements{sampleRequirement()}, nil)
 
 	body := w.Body.String()
-	mustContain(t, body, "Buy with the Obol CLI")
-	mustContain(t, body, "obol buy inference aeon7")
-	mustContain(t, body, "--model AEON-7")
-	mustContain(t, body, "https://agent.example.tunnel.dev/services/agent-quant")
-	mustContain(t, body, "paid/AEON-7")
+	mustContain(t, body, "Use this service for your Obol Agent&#39;s model")
+	// Positional seller URL; no --model / --budget / --no-verify-identity
+	// in the simplified command.
+	mustContain(t, body, "obol buy inference https://agent.example.tunnel.dev/services/agent-quant")
 	// Operator description bubbles into Service card + OG.
 	mustContain(t, body, "Remote 35B reasoning model with 32k context.")
-	// Lede explains that you're paying for remote inference, not an agent.
-	mustContain(t, body, "remote model time")
+	// Lede explains that the agent stays local but the model runs upstream
+	// at the provider's infra.
+	// Lede is rendered as trusted HTML (template.HTML), so the apostrophe
+	// in "operator's hardware" appears raw, not entity-encoded.
+	mustContain(t, body, "agent runs locally")
+	mustContain(t, body, "remote operator's hardware")
 }
 
 // Agent offers should explain that the buyer is paying an autonomous
@@ -402,7 +405,10 @@ func TestSanitizeDisplayToken(t *testing.T) {
 }
 
 // A hostile ServiceOffer must never get its raw spec.model.name /
-// metadata.name reflected into the rendered copy-paste command.
+// metadata.name reflected into the rendered copy-paste command. The
+// simplified command does not interpolate Model or OfferName anymore — the
+// only dynamic input is the service URL — but Model is still interpolated
+// into PromptObol, so check both.
 func TestInferenceCopy_StripsShellMetacharsFromCommand(t *testing.T) {
 	d := PaymentDisplay{
 		OfferType: "inference",
@@ -414,8 +420,11 @@ func TestInferenceCopy_StripsShellMetacharsFromCommand(t *testing.T) {
 		if strings.Contains(c.PrimaryPayload, bad) {
 			t.Fatalf("hostile token leaked into command payload %q (contains %q)", c.PrimaryPayload, bad)
 		}
+		if strings.Contains(c.PromptObol, bad) {
+			t.Fatalf("hostile token leaked into prompt %q (contains %q)", c.PromptObol, bad)
+		}
 	}
-	// Falls back to the safe placeholders instead.
-	mustContain(t, c.PrimaryPayload, "--model <model-id>")
-	mustContain(t, c.PrimaryPayload, "obol buy inference remote-inference")
+	// Falls back to the safe placeholder for the model in the prompt.
+	mustContain(t, c.PromptObol, "<model-id>")
+	mustContain(t, c.PrimaryPayload, "obol buy inference https://agent.example.tunnel.dev/services/x")
 }

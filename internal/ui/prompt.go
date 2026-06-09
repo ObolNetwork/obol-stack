@@ -85,6 +85,15 @@ func (u *UI) Select(msg string, options []string, defaultIdx int) (int, error) {
 // Input reads a single line of text input with an optional default.
 // In non-interactive mode, returns the default or an error if no default is set.
 func (u *UI) Input(msg string, defaultVal string) (string, error) {
+	return u.InputWithSuffix(msg, defaultVal, "")
+}
+
+// InputWithSuffix reads input like Input but renders an extra dimmed suffix
+// between the default brace and the colon. Use this for hints that aren't
+// part of the question itself — e.g. "[5] (5 OBOL ceiling):". The suffix
+// is shown only when defaultVal is non-empty (so it stays adjacent to the
+// "[default]" chip).
+func (u *UI) InputWithSuffix(msg, defaultVal, suffix string) (string, error) {
 	if !u.isInteractive() {
 		if defaultVal != "" {
 			return defaultVal, nil
@@ -93,7 +102,11 @@ func (u *UI) Input(msg string, defaultVal string) (string, error) {
 	}
 
 	if defaultVal != "" {
-		fmt.Fprintf(u.stdout, "%s %s: ", msg, dimStyle.Render("["+defaultVal+"]"))
+		if strings.TrimSpace(suffix) != "" {
+			fmt.Fprintf(u.stdout, "%s %s %s: ", msg, dimStyle.Render("["+defaultVal+"]"), dimStyle.Render(suffix))
+		} else {
+			fmt.Fprintf(u.stdout, "%s %s: ", msg, dimStyle.Render("["+defaultVal+"]"))
+		}
 	} else {
 		fmt.Fprintf(u.stdout, "%s: ", msg)
 	}

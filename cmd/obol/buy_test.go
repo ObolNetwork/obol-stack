@@ -1,11 +1,14 @@
 package main
 
 import (
+	"math/big"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/buy"
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 )
 
 func TestBudgetToBaseUnits(t *testing.T) {
@@ -58,6 +61,61 @@ func TestBudgetToBaseUnits(t *testing.T) {
 	}
 }
 
+func TestResolveBudgetEnforcesExplicitCap(t *testing.T) {
+	t.Parallel()
+
+	pricePerAuth := big.NewInt(1000)
+	tests := []struct {
+		name      string
+		flag      string
+		authCount int
+		want      *big.Int
+		wantErr   string
+	}{
+		{
+			name:      "no explicit budget returns exact signed spend",
+			authCount: 5,
+			want:      big.NewInt(5000),
+		},
+		{
+			name:      "explicit budget equal to signed spend passes",
+			flag:      "0.005",
+			authCount: 5,
+			want:      big.NewInt(5000),
+		},
+		{
+			name:      "explicit budget above signed spend still returns exact signed spend",
+			flag:      "0.01",
+			authCount: 5,
+			want:      big.NewInt(5000),
+		},
+		{
+			name:      "explicit budget below count cost errors",
+			flag:      "0.004",
+			authCount: 5,
+			wantErr:   "below the requested pre-authorization cost",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := resolveBudget(tc.flag, "USDC", tc.authCount, pricePerAuth)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("resolveBudget err = %v, want substring %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveBudget unexpected err: %v", err)
+			}
+			if got.Cmp(tc.want) != 0 {
+				t.Fatalf("resolveBudget = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestBuildBuyPyArgv(t *testing.T) {
 	tests := []struct {
 		name string
@@ -71,15 +129,15 @@ func TestBuildBuyPyArgv(t *testing.T) {
 				Seller:      "https://demo.example/services/x",
 				BudgetMicro: "10000000",
 			},
-			want: []string{
-				hermesPython, hermesBuyPyPath, "buy", "default-paid",
+			want: append(buy.BuyPyCommand(agentruntime.Hermes, "buy", "default-paid"),
 				"--endpoint", "https://demo.example/services/x",
 				"--budget", "10000000",
-			},
+			),
 		},
 		{
 			name: "all optional flags",
 			opts: buyPyOptions{
+				Runtime:         agentruntime.Hermes,
 				Name:            "demo",
 				Seller:          "https://s.example",
 				Model:           "qwen3.5:9b",
@@ -87,18 +145,61 @@ func TestBuildBuyPyArgv(t *testing.T) {
 				AutoRefill:      true,
 				RefillThreshold: 3,
 				RefillCount:     7,
+				CostCap:         big.NewInt(150000),
+				SetDefault:      true,
 				Force:           true,
 			},
-			want: []string{
-				hermesPython, hermesBuyPyPath, "buy", "demo",
+			want: append(buy.BuyPyCommand(agentruntime.Hermes, "buy", "demo"),
 				"--endpoint", "https://s.example",
 				"--budget", "5000000",
 				"--model", "qwen3.5:9b",
 				"--auto-refill",
 				"--refill-threshold", "3",
 				"--refill-count", "7",
+				"--cost-cap", "150000",
+				"--set-default",
 				"--force",
+			),
+		},
+		{
+			name: "cost cap without auto-refill is suppressed",
+			opts: buyPyOptions{
+				Name:        "demo",
+				Seller:      "https://s.example",
+				BudgetMicro: "1000000",
+				CostCap:     big.NewInt(42),
 			},
+			want: append(buy.BuyPyCommand(agentruntime.Hermes, "buy", "demo"),
+				"--endpoint", "https://s.example",
+				"--budget", "1000000",
+			),
+		},
+		{
+			name: "cost cap of zero is suppressed",
+			opts: buyPyOptions{
+				Name:        "demo",
+				Seller:      "https://s.example",
+				BudgetMicro: "1000000",
+				CostCap:     big.NewInt(0),
+			},
+			want: append(buy.BuyPyCommand(agentruntime.Hermes, "buy", "demo"),
+				"--endpoint", "https://s.example",
+				"--budget", "1000000",
+			),
+		},
+		{
+			name: "explicit count emits --count",
+			opts: buyPyOptions{
+				Name:        "demo",
+				Seller:      "https://s.example",
+				BudgetMicro: "5000000000000000000",
+				Count:       5000,
+			},
+			want: append(buy.BuyPyCommand(agentruntime.Hermes, "buy", "demo"),
+				"--endpoint", "https://s.example",
+				"--budget", "5000000000000000000",
+				"--count", "5000",
+			),
 		},
 		{
 			name: "auto-refill without explicit counts",
@@ -108,12 +209,11 @@ func TestBuildBuyPyArgv(t *testing.T) {
 				BudgetMicro: "1000000",
 				AutoRefill:  true,
 			},
-			want: []string{
-				hermesPython, hermesBuyPyPath, "buy", "demo",
+			want: append(buy.BuyPyCommand(agentruntime.Hermes, "buy", "demo"),
 				"--endpoint", "https://s.example",
 				"--budget", "1000000",
 				"--auto-refill",
-			},
+			),
 		},
 		{
 			name: "auto-refill off does not emit refill flags",
@@ -125,11 +225,10 @@ func TestBuildBuyPyArgv(t *testing.T) {
 				RefillThreshold: 3,
 				RefillCount:     7,
 			},
-			want: []string{
-				hermesPython, hermesBuyPyPath, "buy", "demo",
+			want: append(buy.BuyPyCommand(agentruntime.Hermes, "buy", "demo"),
 				"--endpoint", "https://s.example",
 				"--budget", "1000000",
-			},
+			),
 		},
 		{
 			name: "model whitespace trimmed",
@@ -139,12 +238,24 @@ func TestBuildBuyPyArgv(t *testing.T) {
 				Model:       "  qwen3.5:9b  ",
 				BudgetMicro: "1000000",
 			},
-			want: []string{
-				hermesPython, hermesBuyPyPath, "buy", "demo",
+			want: append(buy.BuyPyCommand(agentruntime.Hermes, "buy", "demo"),
 				"--endpoint", "https://s.example",
 				"--budget", "1000000",
 				"--model", "qwen3.5:9b",
+			),
+		},
+		{
+			name: "openclaw runtime uses openclaw skill mount",
+			opts: buyPyOptions{
+				Runtime:     agentruntime.OpenClaw,
+				Name:        "demo",
+				Seller:      "https://s.example",
+				BudgetMicro: "1000000",
 			},
+			want: append(buy.BuyPyCommand(agentruntime.OpenClaw, "buy", "demo"),
+				"--endpoint", "https://s.example",
+				"--budget", "1000000",
+			),
 		},
 	}
 
@@ -235,5 +346,257 @@ func TestValidateTokenAgainstPricing(t *testing.T) {
 				t.Fatalf("ValidateTokenAgainstPricing(%q) err = %v, want substring %q", tc.token, err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// canonicalOfferURL splices the catalog endpoint onto a storefront base when
+// the user passed no /services/<name> segment. When they did pass one, we
+// trust it verbatim and don't re-derive from the catalog (so a deliberately
+// mismatched user URL still goes through to the seller).
+func TestCanonicalOfferURL(t *testing.T) {
+	t.Parallel()
+
+	pathOnly := &buy.CatalogEntry{Name: "aeon", Endpoint: "/services/aeon/v1/chat/completions"}
+	absolute := &buy.CatalogEntry{Name: "aeon7", Endpoint: "https://inference.v1337.org/services/aeon7"}
+	tests := []struct {
+		name    string
+		user    string
+		entry   *buy.CatalogEntry
+		want    string
+		wantErr string
+	}{
+		{
+			name:  "storefront base + path endpoint splice",
+			user:  "https://inference.v1337.org/",
+			entry: pathOnly,
+			want:  "https://inference.v1337.org/services/aeon",
+		},
+		{
+			name:  "storefront base without trailing slash",
+			user:  "https://inference.v1337.org",
+			entry: pathOnly,
+			want:  "https://inference.v1337.org/services/aeon",
+		},
+		{
+			name:  "absolute URL endpoint used verbatim (real v1337 case)",
+			user:  "https://inference.v1337.org/",
+			entry: absolute,
+			want:  "https://inference.v1337.org/services/aeon7",
+		},
+		{
+			name:  "absolute URL endpoint, mismatched user base — catalog wins",
+			user:  "https://other-base.example/",
+			entry: absolute,
+			want:  "https://inference.v1337.org/services/aeon7",
+		},
+		{
+			name:  "service URL passed verbatim",
+			user:  "https://seller.example/services/foo",
+			entry: pathOnly,
+			want:  "https://seller.example/services/foo",
+		},
+		{
+			name:  "service URL with trailing slash trimmed",
+			user:  "https://seller.example/services/foo/",
+			entry: pathOnly,
+			want:  "https://seller.example/services/foo",
+		},
+		{
+			name:    "empty endpoint in catalog entry",
+			user:    "https://inference.v1337.org/",
+			entry:   &buy.CatalogEntry{Name: "x", Endpoint: ""},
+			wantErr: "empty endpoint",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := canonicalOfferURL(tc.user, tc.entry)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("canonicalOfferURL err = %v, want substring %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("canonicalOfferURL unexpected err: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("canonicalOfferURL = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// resolveBuyModel: flag wins when it matches, mismatch errors loudly,
+// catalog entry's model is used when flag is empty, empty-both errors.
+func TestResolveBuyModel(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		flag    string
+		entry   *buy.CatalogEntry
+		want    string
+		wantErr string
+	}{
+		{name: "flag matches catalog", flag: "aeon", entry: &buy.CatalogEntry{Name: "x", Model: "aeon"}, want: "aeon"},
+		{name: "flag case-insensitive", flag: "Aeon", entry: &buy.CatalogEntry{Name: "x", Model: "aeon"}, want: "Aeon"},
+		{name: "flag mismatch errors", flag: "other", entry: &buy.CatalogEntry{Name: "x", Model: "aeon"}, wantErr: "does not match"},
+		{name: "no flag uses catalog", flag: "", entry: &buy.CatalogEntry{Name: "x", Model: "aeon"}, want: "aeon"},
+		{name: "no flag + no catalog model errors", flag: "", entry: &buy.CatalogEntry{Name: "x"}, wantErr: "advertises no model"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := resolveBuyModel(tc.flag, tc.entry)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("resolveBuyModel err = %v, want substring %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveBuyModel unexpected err: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("resolveBuyModel = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// resolveCostCap: explicit flag wins (in atomic units OR human decimal),
+// otherwise we apply the costCapMarkupBps markup over price when
+// auto-refill is on. Explicit --cost-cap without auto-refill is rejected so
+// it cannot accidentally create an in-pod auto-refill policy.
+func TestResolveCostCap(t *testing.T) {
+	t.Parallel()
+	price := big.NewInt(1000)
+	tests := []struct {
+		name       string
+		flag       string
+		token      string
+		price      *big.Int
+		autoRefill bool
+		wantNil    bool
+		want       *big.Int
+		wantErr    string
+	}{
+		{name: "no flag + no auto-refill = nil", autoRefill: false, price: price, wantNil: true},
+		{name: "no flag + auto-refill = 150% markup", autoRefill: true, price: price, want: big.NewInt(1500)},
+		{name: "atomic-unit flag wins", flag: "42", autoRefill: true, price: price, want: big.NewInt(42)},
+		{name: "human-decimal USDC fallback", flag: "0.001", token: "USDC", autoRefill: true, price: price, want: big.NewInt(1000)},
+		{name: "cost cap without auto-refill errors", flag: "42", token: "USDC", autoRefill: false, price: price, wantErr: "requires --auto-refill"},
+		{name: "invalid flag errors", flag: "not-a-number", token: "USDC", autoRefill: true, price: price, wantErr: "not a valid number"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := resolveCostCap(tc.flag, tc.token, tc.price, tc.autoRefill)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("resolveCostCap err = %v, want substring %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveCostCap unexpected err: %v", err)
+			}
+			if tc.wantNil {
+				if got != nil {
+					t.Fatalf("resolveCostCap = %v, want nil", got)
+				}
+				return
+			}
+			if got == nil || got.Cmp(tc.want) != 0 {
+				t.Fatalf("resolveCostCap = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAuthCapAndCapacityLabel(t *testing.T) {
+	t.Parallel()
+
+	permit2Entry := &buy.CatalogEntry{Asset: &schemas.ServiceCatalogAsset{TransferMethod: "permit2"}}
+	eip3009Entry := &buy.CatalogEntry{Asset: &schemas.ServiceCatalogAsset{TransferMethod: "eip3009"}}
+
+	tests := []struct {
+		name       string
+		entry      *buy.CatalogEntry
+		requested  int
+		wantAuths  int
+		wantCapped bool
+		wantReason string
+		wantLabel  string
+	}{
+		{
+			name:       "permit2 perMTok can cap below one natural unit",
+			entry:      permit2Entry,
+			requested:  defaultInteractivePerMTokCount * schemas.ApproxTokensPerRequest,
+			wantAuths:  permit2SafeAuthCount,
+			wantCapped: true,
+			wantReason: "Permit2 storage limit",
+			wantLabel:  "0.5 million tokens",
+		},
+		{
+			name:       "non-permit2 still mirrors buy.py max auth count",
+			entry:      eip3009Entry,
+			requested:  defaultInteractivePerMTokCount * schemas.ApproxTokensPerRequest,
+			wantAuths:  maxBuyPyAuthCount,
+			wantCapped: true,
+			wantReason: "buy.py signing limit",
+			wantLabel:  "1 million tokens",
+		},
+		{
+			name:       "small request is not capped",
+			entry:      permit2Entry,
+			requested:  25,
+			wantAuths:  25,
+			wantCapped: false,
+			wantLabel:  "25 requests",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, capped, reason := applyAuthCap(tc.entry, tc.requested)
+			if got != tc.wantAuths || capped != tc.wantCapped || reason != tc.wantReason {
+				t.Fatalf("applyAuthCap = (%d, %v, %q), want (%d, %v, %q)",
+					got, capped, reason, tc.wantAuths, tc.wantCapped, tc.wantReason)
+			}
+			unit := "perRequest"
+			multiplier := 1
+			if strings.Contains(tc.wantLabel, "million tokens") {
+				unit = "perMTok"
+				multiplier = schemas.ApproxTokensPerRequest
+			}
+			if label := capacityLabel(got, multiplier, unit); label != tc.wantLabel {
+				t.Fatalf("capacityLabel = %q, want %q", label, tc.wantLabel)
+			}
+		})
+	}
+}
+
+// looksLikeURL keeps the positional URL detection in sync with the error
+// message we surface when users pass a name-shaped positional.
+func TestLooksLikeURL(t *testing.T) {
+	t.Parallel()
+	cases := map[string]bool{
+		"https://example.com":        true,
+		"http://localhost:8080":      true,
+		"https://x.example/services": true,
+		"my-buy":                     false,
+		"":                           false,
+		"ftp://example.com":          false,
+	}
+	for in, want := range cases {
+		if got := looksLikeURL(in); got != want {
+			t.Errorf("looksLikeURL(%q) = %v, want %v", in, got, want)
+		}
 	}
 }

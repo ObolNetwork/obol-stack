@@ -238,13 +238,27 @@ def _asset_display_meta(asset, extra=None):
 
 
 def _format_amount(amount, asset, extra=None):
-    """Render an integer token amount with best-effort symbol/decimals."""
+    """Render an integer token amount with best-effort symbol/decimals.
+
+    Display: trim trailing zeros and drop the decimal point when the
+    scaled value is integral. Matches the Go-side `formatTokenAmount`
+    in `cmd/obol/buy.go` so the host CLI and the in-pod buy.py both
+    print "5 OBOL" / "0.001 USDC" rather than "5.000000" / "0.001000".
+    """
     symbol, decimals, units_label = _asset_display_meta(asset, extra)
     raw = int(amount)
     if decimals is None:
         return f"{raw} {units_label}"
-    scaled = raw / (10 ** decimals)
-    return f"{raw} {units_label} ({scaled:.6f} {symbol})"
+    # Use string division so we don't lose precision on large 18-decimal
+    # values when Python float-coerces the divisor.
+    scale = 10 ** decimals
+    whole, frac = divmod(raw, scale)
+    if frac == 0:
+        scaled_str = str(whole)
+    else:
+        frac_str = str(frac).zfill(decimals).rstrip("0")
+        scaled_str = f"{whole}.{frac_str}"
+    return f"{raw} {units_label} ({scaled_str} {symbol})"
 
 
 # ---------------------------------------------------------------------------
@@ -379,17 +393,42 @@ def _resolve_auto_refill(opts, desired_count, existing_policy=None):
     auto_refill = _parse_boolish(opts.get("auto_refill"), "--auto-refill")
     threshold = _parse_positive_int(opts.get("refill_threshold"), "--refill-threshold", minimum=0)
     refill_count = _parse_positive_int(opts.get("refill_count"), "--refill-count", minimum=1)
+    # --cost-cap is a per-unit price ceiling (atomic units) the refill loop
+    # checks against the seller's current quote before re-signing. It does
+    # NOT bound the initial buy — the initial buy's protection is --budget.
+    cost_cap_raw = opts.get("cost_cap")
+    cost_cap = None
+    if cost_cap_raw is not None:
+        try:
+            cost_cap = int(str(cost_cap_raw))
+        except (TypeError, ValueError):
+            raise ValueError(f"--cost-cap must be an integer atomic-units value, got {cost_cap_raw!r}")
+        if cost_cap <= 0:
+            raise ValueError("--cost-cap must be > 0")
+
+    if cost_cap is not None and auto_refill is False:
+        raise ValueError("--cost-cap requires --auto-refill because it only applies to future auto-refill")
+
+    existing_enabled = bool(existing_policy.get("enabled"))
+    if (
+        cost_cap is not None
+        and auto_refill is None
+        and not existing_enabled
+        and threshold is None
+        and refill_count is None
+    ):
+        raise ValueError("--cost-cap requires --auto-refill because it only applies to future auto-refill")
 
     has_policy_override = any(
         value is not None
-        for value in (auto_refill, threshold, refill_count)
+        for value in (auto_refill, threshold, refill_count, cost_cap)
     )
     if not has_policy_override:
         return existing_policy or None
 
     enabled = auto_refill
     if enabled is None:
-        enabled = bool(existing_policy.get("enabled")) or any(
+        enabled = existing_enabled or any(
             value is not None for value in (threshold, refill_count)
         )
     if not enabled:
@@ -416,6 +455,10 @@ def _resolve_auto_refill(opts, desired_count, existing_policy=None):
         "threshold": resolved_threshold,
         "count": resolved_count,
     }
+    if cost_cap is not None:
+        policy["maxUnitPrice"] = str(cost_cap)
+    elif existing_policy.get("maxUnitPrice"):
+        policy["maxUnitPrice"] = str(existing_policy["maxUnitPrice"])
     return policy
 
 
@@ -620,31 +663,53 @@ def _create_purchase_request(name, endpoint, model, count, network, pay_to, pric
 
 
 def _wait_for_purchase_ready(name, timeout=180):
-    """Wait for the PurchaseRequest to reach Ready=True."""
+    """Wait for the PurchaseRequest to reach Ready=True.
+
+    Output strategy: collapse identical consecutive messages into a single
+    line with an in-place tick counter, so a 60-second wait on the same
+    state prints once with periodic dots instead of 12 duplicate lines.
+    Fresh state transitions print on their own line so the user can see
+    progress through the controller's phases (Probed → AuthsLoaded →
+    Configured → Ready).
+    """
     token, _ = load_sa()
     ssl_ctx = make_ssl_context()
     ns = _get_agent_namespace()
     path = f"/apis/{PR_GROUP}/{PR_VERSION}/namespaces/{ns}/{PR_RESOURCE}/{name}"
 
     deadline = time.time() + timeout
+    last_msg = None
+    ticks = 0
+    is_tty = sys.stdout.isatty()
     while time.time() < deadline:
         try:
             pr = _kube_json("GET", path, token, ssl_ctx)
             ready, remaining, public_model, message = _purchase_ready(pr)
             if ready:
+                if last_msg is not None and is_tty:
+                    print()  # close the in-place line cleanly
                 print(f"  Ready: {remaining} auths, model={public_model}")
                 return True
-            if message:
-                print(f"  Not ready: {message}")
-            # Print latest condition for progress feedback.
-            conditions = pr.get("status", {}).get("conditions", [])
-            if conditions:
-                latest = conditions[-1]
-                print(f"  [{latest.get('type')}] {latest.get('message', '')}")
+            msg = message or "(no status yet)"
+            if msg != last_msg:
+                if last_msg is not None and is_tty:
+                    print()
+                print(f"  Waiting: {msg}", end="", flush=True)
+                last_msg = msg
+                ticks = 0
+            else:
+                ticks += 1
+                if is_tty:
+                    print(".", end="", flush=True)
         except Exception as e:
+            if last_msg is not None and is_tty:
+                print()
+                last_msg = None
             print(f"  Waiting... ({e})")
         time.sleep(5)
 
+    if last_msg is not None and is_tty:
+        print()
     return False
 
 
@@ -1196,6 +1261,47 @@ def _reconcile_purchase_autorefill(pr, live_status, signer_address):
         print(f"{name}: incomplete payment config; skipping")
         return False
 
+    # Re-probe the seller's current quote so a price hike doesn't silently
+    # burn the wallet on auto-refill. The CR's `payment.price` is the
+    # originally-purchased quote and gets stale; the seller's 402 response
+    # carries the live one. `_probe_endpoint` returns the parsed 402 body or
+    # None — we only update the price when we get an unambiguous fresh
+    # quote so a transient seller error never silently rewrites the cap.
+    endpoint = spec.get("endpoint") or ""
+    if endpoint:
+        try:
+            live = _probe_endpoint(_normalize_endpoint(endpoint), spec.get("model") or "")
+            if live and live.get("accepts"):
+                live_amount = str(
+                    live["accepts"][0].get("maxAmountRequired")
+                    or live["accepts"][0].get("amount")
+                    or ""
+                ).strip()
+                if live_amount and live_amount != str(price):
+                    print(
+                        f"{name}: seller price moved {price} → {live_amount} (atomic units); "
+                        "refilling at seller's quote",
+                    )
+                    price = live_amount
+        except Exception as exc:  # network blip, malformed 402 — keep old price
+            print(f"{name}: live price re-probe failed ({exc}); using stored price", file=sys.stderr)
+
+    max_unit_price = policy.get("maxUnitPrice")
+    if max_unit_price is not None:
+        try:
+            if int(price) > int(max_unit_price):
+                print(
+                    f"{name}: seller price {price} exceeds cost cap {max_unit_price} "
+                    f"({asset} on {chain}); skipping refill"
+                )
+                return False
+        except (TypeError, ValueError):
+            print(
+                f"{name}: invalid maxUnitPrice {max_unit_price!r}; skipping",
+                file=sys.stderr,
+            )
+            return False
+
     balance = int(_get_usdc_balance(signer_address, asset, chain))
     total_cost = refill_count * int(price)
     if balance < total_cost:
@@ -1429,9 +1535,18 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
     else:
         n = DEFAULT_AUTH_COUNT
     if extra.get("assetTransferMethod", "eip3009") == "permit2" and n > PERMIT2_SAFE_AUTH_COUNT:
-        print(f"  Capping permit2 auth pool from {n} to {PERMIT2_SAFE_AUTH_COUNT} to stay within current ConfigMap storage limits")
+        print(f"  Capping permit2 pre-authorized budget from {n} to {PERMIT2_SAFE_AUTH_COUNT} authorizations to stay within current ConfigMap storage limits")
         n = PERMIT2_SAFE_AUTH_COUNT
     n = max(n, 1)
+    if budget and price_int > 0:
+        total_cost_for_count = n * price_int
+        if total_cost_for_count > budget_val:
+            print(
+                f"Error: requested count costs {total_cost_for_count} atomic units, "
+                f"which exceeds --budget {budget_val}. Reduce --count or raise --budget.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
     token, _ = load_sa()
     ssl_ctx = make_ssl_context()
@@ -1558,7 +1673,11 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
         print(f"  Auto-refill: enabled (threshold={auto_refill['threshold']}, count={auto_refill['count']})")
     print()
     print(f"The model is now available as: paid/{model_id}")
-    print("Use 'process --all' from a heartbeat/cron loop to reconcile auto-refill policies.")
+    # Only mention the auto-top-up reconcile loop when auto-top-up is on —
+    # for CLI users without it, the line below is confusing noise.
+    if auto_refill and auto_refill.get("enabled"):
+        print("Auto-top-up is enabled. The agent runtime reconciles top-ups in the background;")
+        print("you don't need to do anything else to keep this provider funded.")
 
     if ready and opts.get("set_default"):
         print()
@@ -1673,18 +1792,24 @@ def _set_agent_default_model(model_id, auto_refill):
             file=sys.stderr,
         )
         return False
-    # Safety: a paid primary model bricks chat once the pre-signed pool empties.
+    # Safety: a paid primary model bricks chat once the pre-authorized
+    # budget is exhausted, since the agent will keep trying to route
+    # through paid/<model> with nothing left to spend.
     if not (auto_refill and auto_refill.get("enabled")):
         print(
-            "  WARNING: --set-default without --auto-refill. Once this is your primary",
+            "  Heads up: auto-top-up is not enabled for this provider. Once the",
             file=sys.stderr,
         )
         print(
-            "           model, every chat turn fails when the pre-signed pool empties.",
+            "  pre-authorized budget is used up, this agent will fail to chat until",
             file=sys.stderr,
         )
         print(
-            "           Re-run with --auto-refill, or run 'process --all' on a schedule.",
+            "  you re-run `obol buy inference` to top it up, OR re-run with",
+            file=sys.stderr,
+        )
+        print(
+            "  `--auto-refill` so the agent tops itself up automatically.",
             file=sys.stderr,
         )
     # Primary path: native Hermes writer (atomic; per-request re-read, no restart).
@@ -1724,7 +1849,7 @@ def _set_agent_default_model(model_id, auto_refill):
 def cmd_refill(name, count=None):
     """Refill is disabled until it is implemented via PurchaseRequest reconciliation."""
     print("refill is not available in the controller-based buy path.", file=sys.stderr)
-    print("Run the buy command again with the same purchase name to top up the active auth pool.", file=sys.stderr)
+    print("Run the buy command again with the same purchase name to top up the existing pre-authorized budget.", file=sys.stderr)
     sys.exit(1)
 
 
@@ -1779,11 +1904,51 @@ def cmd_process(name=None, process_all=False):
 # List
 # ---------------------------------------------------------------------------
 
-def cmd_list():
-    """List purchased providers, keyed by live PurchaseRequests."""
+def cmd_list(as_json=False):
+    """List purchased providers, keyed by live PurchaseRequests.
+
+    `as_json=True` (driven by --json) emits a structured array the host
+    CLI parses to render an `obol model status` section. Keep field names
+    stable; obol-stack's host code is the only consumer.
+    """
     token, _ = load_sa()
     ssl_ctx = make_ssl_context()
     purchases = _list_purchase_requests(token=token, ssl_ctx=ssl_ctx)
+    if as_json:
+        out = []
+        live_status = _buyer_status() or {}
+        for pr in purchases or []:
+            metadata = pr.get("metadata") or {}
+            spec = pr.get("spec") or {}
+            status = pr.get("status") or {}
+            payment = spec.get("payment") or {}
+            name = metadata.get("name", "")
+            live = live_status.get(name) or {}
+            symbol, decimals, _ = _asset_display_meta(
+                payment.get("asset", ""),
+                {
+                    "name": payment.get("eip712Name", ""),
+                    "version": payment.get("eip712Version", ""),
+                },
+            )
+            entry = {
+                "name": name,
+                "alias": live.get("public_model") or status.get("publicModel") or f"paid/{spec.get('model', name)}",
+                "model": spec.get("model", ""),
+                "remaining": int(live.get("remaining", status.get("remaining", 0)) or 0),
+                "spent": int(live.get("spent", status.get("spent", 0)) or 0),
+                "totalSigned": int(status.get("totalSigned", 0) or 0),
+                "expired": int(_expired_in_active_pool(spec, live) or 0),
+                "price": str(payment.get("price", "")),
+                "chain": live.get("network") or payment.get("network", ""),
+                "endpoint": spec.get("endpoint", ""),
+                "autoRefill": bool(((spec.get("autoRefill") or {}).get("enabled")) or False),
+                "assetSymbol": symbol or "",
+                "assetDecimals": int(decimals) if decimals is not None else 0,
+            }
+            out.append(entry)
+        print(json.dumps(out))
+        return
     if not purchases:
         print("No purchased x402 providers.")
         return
@@ -1892,8 +2057,8 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=Non
 
     Stateless. Does not create a PurchaseRequest, does not touch the buyer
     sidecar, and is bounded to one auth (max loss = price). Use this for
-    `type:http` services and any one-off purchase that doesn't need persistent
-    pre-payment. For long-running paid inference budgets, use `buy`.
+    `type:http` services and any one-off purchase that doesn't need a
+    persistent pre-authorized budget. For long-running paid inference, use `buy`.
 
     `network` is an optional safety guard: when set, the seller's advertised
     chain must match it or `pay` aborts before signing.
@@ -2154,8 +2319,10 @@ def usage():
     print("  buy <name> --endpoint <url> --model <id>     Pre-sign + configure paid/<model>")
     print("       [--budget <micro-units>] [--count <N>]")
     print("       [--auto-refill[=true|false]] [--refill-threshold <N>]")
-    print("       [--refill-count <N>] [--auth-ttl <seconds|never>] [--set-default]")
+    print("       [--refill-count <N>] [--cost-cap <atomic-units>]")
+    print("       [--auth-ttl <seconds|never>] [--set-default]")
     print("       --auth-ttl     pool expiry: seconds, or 'never' (default 30d/1mo); env OBOL_X402_AUTH_TTL")
+    print("       --cost-cap     per-unit price ceiling (atomic units) for auto-refill — refills above this are skipped")
     print("       --set-default  inference only: adopt paid/<model> as the agent's primary model")
     print("  list                                         List purchased providers")
     print("  status <name>                                Check sidecar + auths")
@@ -2238,7 +2405,8 @@ if __name__ == "__main__":
         cmd_refill(positional[0], opts.get("count"))
 
     elif cmd == "list":
-        cmd_list()
+        _, opts = parse_flags(rest)
+        cmd_list(as_json=bool(opts.get("json")))
 
     elif cmd == "process":
         positional, opts = parse_flags(rest)

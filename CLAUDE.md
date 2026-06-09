@@ -95,6 +95,7 @@ obol
 └── version
 ```
 
+- `buy inference [<seller-url>]`: positional seller URL (default `https://inference.v1337.org/`). Walks `/api/services.json`, auto-resolves model + token from the catalog asset, prompts in a TTY (auto-top-up Y/N → count with cost preview → confirm), and pre-signs via the agent's remote signer. `--agent X` pays from X AND switches X's hermes-config to `paid/<model>` in-pod (no global model_list reorder); `--set-default` promotes globally + syncs every agent. `--cost-cap` bounds future top-ups against price hikes (reconcile loop re-probes seller pricing). Identity verification is opt-in via `--expected-agent-id`.
 - `agent auth` (alias `token`): `--runtime [hermes|openclaw|all]`, `--regenerate`; positional `[instance-name]` defaults to stack-managed agent. Replaces legacy `hermes token`.
 - `agent new` (alias `onboard`): CRD-declared sub-agent via `--model`, `--skills`, `--objective`, `--create-wallet`. Without positional name, falls back to legacy host-rendered Hermes/OpenClaw onboard.
 - `network install` has dynamic subcommands (one per supported chain; `--help` to list). `network sync [<network>/<id>]` with `--all`.

@@ -151,7 +151,7 @@ func TestVerifyAgentIDForPricing(t *testing.T) {
 func TestVerifyAgentIDForPricing_EmptyRegistrations(t *testing.T) {
 	// Seller returned a valid registration document but with no registrations[]
 	// (e.g. they never ran `obol sell register`, or are on an older stack version).
-	// The error must explain the situation and hint at --no-verify-identity.
+	// The error must explain the situation and hint at the new opt-in flag.
 	reg := &erc8004.AgentRegistration{}
 	pricing := &PricingResponse{Accepts: []PaymentOption{{Network: "base-sepolia", Amount: "1000"}}}
 
@@ -160,7 +160,7 @@ func TestVerifyAgentIDForPricing_EmptyRegistrations(t *testing.T) {
 		t.Fatal("VerifyAgentIDForPricing(empty regs) = nil, want error")
 	}
 	msg := err.Error()
-	for _, want := range []string{"no `registrations[]` field", "--no-verify-identity"} {
+	for _, want := range []string{"no `registrations[]` field", "--expected-agent-id"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error %q missing expected substring %q", msg, want)
 		}

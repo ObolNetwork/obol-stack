@@ -39,21 +39,22 @@ const (
 	// verification and settlement. Supports Base Mainnet and Base Sepolia.
 	DefaultFacilitatorURL = "https://x402.gcp.obol.tech"
 
-	// DefaultBuySellerURL is the Obol-operated demo seller used by
-	// `obol buy inference` when no --seller is given.
-	// TODO(buy): replace with the live URL once the default seller is provisioned.
-	DefaultBuySellerURL = "https://demo-seller.obol.tech/services/default-paid"
+	// DefaultBuySellerURL is the public Obol-operated paid-inference
+	// storefront used by `obol buy inference` when no seller URL is given.
+	// The host CLI reads /api/services.json from this base URL and picks an
+	// offer; pass a /services/<name> URL to bypass the catalog walk.
+	DefaultBuySellerURL = "https://inference.v1337.org/"
 
 	// DefaultBuySellerAgentID is the ERC-8004 tokenId the buyer expects to
-	// see in the seller's /.well-known/agent-registration.json before signing.
-	// Hard-fails on mismatch unless --no-verify-identity is passed.
-	// TODO(buy): replace with the live agentId once the default seller is registered.
+	// see in the seller's /.well-known/agent-registration.json before
+	// signing. 0 means "no expected id" — identity verification is opt-in
+	// today via --expected-agent-id; the default flow trusts the URL.
 	DefaultBuySellerAgentID int64 = 0
 
 	// DefaultBuySellerChain is the chain the default seller settles on.
 	// Used only as a hint in error messages; the actual chain is taken
 	// from the seller's 402 response by buy.py.
-	DefaultBuySellerChain = "base-sepolia"
+	DefaultBuySellerChain = "base"
 
 	// baseReleaseName matches the helmfile release in
 	// internal/embed/infrastructure/helmfile.yaml whose `chart: ./base`

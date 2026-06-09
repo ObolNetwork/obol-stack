@@ -1320,11 +1320,14 @@ if [ "$buy_mode" = "host-cli" ] && [ "$BOB_AGENT_RUNTIME" != "hermes" ]; then
 fi
 
 if [ "$buy_mode" = "host-cli" ]; then
-    if buy_output=$(bob buy inference alice-inference \
-        --seller "$TUNNEL_URL/services/alice-inference/v1/chat/completions" \
+    # New CLI: positional is the seller URL; PR name → --name. --yes skips
+    # the interactive confirm in this headless flow.
+    if buy_output=$(bob buy inference "$TUNNEL_URL/services/alice-inference/v1/chat/completions" \
+        --name alice-inference \
         --model "$OBOL_LLM_MODEL" \
         --budget "$FLOW11_BUY_BUDGET_USDC" \
-        --expected-agent-id "$AGENT_ID" 2>&1); then
+        --expected-agent-id "$AGENT_ID" \
+        --yes 2>&1); then
         buy_ec=0
     else
         buy_ec=$?

@@ -1,6 +1,6 @@
 ---
 name: buy-x402
-description: "Buy from any x402-gated endpoint. Two flows: `pay` for one-shot HTTP services (single auth, no sidecar), and `buy` for long-running paid inference budgets (pre-signed batch via PurchaseRequest, exposed as `paid/<remote-model>`). Supports USDC (EIP-3009) and OBOL (Permit2). Zero signer access at runtime — spending is capped by design."
+description: "Buy from any x402-gated endpoint. Two flows: `pay` for one-shot HTTP services (single authorization, no sidecar), and `buy` for long-running paid inference (pre-authorized batch via PurchaseRequest, exposed as `paid/<remote-model>`). Supports USDC (EIP-3009) and OBOL (Permit2). Zero signer access at runtime — spending is capped by design and nothing moves on-chain until a voucher is spent."
 metadata: { "openclaw": { "emoji": "\ud83d\uded2", "requires": { "bins": ["python3"] } } }
 ---
 
@@ -8,9 +8,9 @@ metadata: { "openclaw": { "emoji": "\ud83d\uded2", "requires": { "bins": ["pytho
 
 Purchase access to remote x402-gated services. There are two flows, picked by usage shape:
 
-- **`pay <url>`** — single-shot. Probe the URL, sign **one** payment authorization, attach `X-PAYMENT`, send the request, return the response. Stateless. Use for `type:http` services and any one-off purchase. Max loss = price of one request.
-- **`buy <name>`** — pre-payment budget. Pre-sign **N** authorizations, declare them in a `PurchaseRequest` CR, let the `x402-buyer` sidecar spend them transparently as the agent calls the model through LiteLLM at `paid/<remote-model>`. Use for long-running paid inference. Max loss = N × price; runtime path holds zero signer access.
-- **`buy <name> --model <id> --set-default`** — same as `buy` above, then adopt `paid/<remote-model>` as the agent's **own primary model**, in-pod, by itself: an atomic `hermes config set model.default` that Hermes re-reads per request (effective next chat turn, **no restart**, no host-side `obol model prefer`/`obol model sync`). Refuses if the model isn't selectable in LiteLLM. Pair with `--auto-refill` so the primary model doesn't brick when the pre-signed pool empties.
+- **`pay <url>`** — single-shot. Probe the URL, sign **one** payment authorization, attach `X-PAYMENT`, send the request, return the response. Stateless. Use for `type:http` services and any one-off purchase. Max loss = price of one request; nothing settles on-chain until that one request succeeds.
+- **`buy <name>`** — pre-authorize a budget. Sign **N** authorizations up front (the buyer pays nothing yet), declare them in a `PurchaseRequest` CR, let the `x402-buyer` sidecar redeem them transparently as the agent calls the model through LiteLLM at `paid/<remote-model>`. Use for long-running paid inference. Max loss = N × price (only as vouchers are spent); runtime path holds zero signer access.
+- **`buy <name> --model <id> --set-default`** — same as `buy` above, then adopt `paid/<remote-model>` as the agent's **own primary model**, in-pod, by itself: an atomic `hermes config set model.default` that Hermes re-reads per request (effective next chat turn, **no restart**, no host-side `obol model prefer`/`obol model sync`). Refuses if the model isn't selectable in LiteLLM. Pair with `--auto-refill` so the primary model doesn't brick when the pre-authorized budget runs out.
 
 Both flows auto-detect the token + transfer method from the seller's 402 response. Currently supported: **USDC via EIP-3009** (Base Sepolia, Base Mainnet, Ethereum Mainnet) and **OBOL via Permit2** (Ethereum Mainnet).
 
@@ -293,9 +293,9 @@ flowchart LR
 2. **Pre-sign**: The agent signs N ERC-3009 `TransferWithAuthorization` vouchers via the remote-signer. Each voucher has a random nonce and is single-use (consumed on-chain when the facilitator settles).
 
 3. **Delete / drain behavior**: deleting a `PurchaseRequest` does not
-   immediately remove the paid route if there are still auths remaining. The
+   immediately remove the paid route if there are still authorizations remaining. The
    controller marks the purchase as draining, keeps `paid/<model>` live, and
-   only tears the route down after the remaining auth pool reaches zero. While
+   only tears the route down after the pre-authorized budget reaches zero. While
    draining:
    - `buy.py list` and `buy.py status <name>` still show the purchase
    - the purchase still owns `paid/<model>`
