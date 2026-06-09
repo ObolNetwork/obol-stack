@@ -4,7 +4,6 @@ go 1.25.1
 
 require (
 	github.com/charmbracelet/lipgloss v1.1.0
-	github.com/coinbase/x402/go v0.0.0-20260331075907-bff876de232a
 	github.com/cucumber/godog v0.15.1
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.0
 	github.com/dustinkirkland/golang-petname v0.0.0-20240428194347-eebcea082ee0
@@ -22,6 +21,7 @@ require (
 	github.com/shopspring/decimal v1.3.1
 	github.com/urfave/cli/v2 v2.27.5
 	github.com/urfave/cli/v3 v3.6.2
+	github.com/x402-foundation/x402/go v0.0.0-20260529172747-45d81d46e5bd
 	golang.org/x/crypto v0.46.0
 	golang.org/x/net v0.48.0
 	golang.org/x/sys v0.39.0

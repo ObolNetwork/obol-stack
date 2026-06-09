@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	x402types "github.com/coinbase/x402/go/types"
+	x402types "github.com/x402-foundation/x402/go/types"
 )
 
 // authExpirySafetyMarginSec is how far before its on-chain deadline an auth is
