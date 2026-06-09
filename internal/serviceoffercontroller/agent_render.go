@@ -26,6 +26,7 @@ const (
 	hermesProfileSeed  = "hermes-profile-seed"
 	hermesDataPVC      = "hermes-data"
 	hermesAPIPath      = "/health"
+	// renovate: datasource=docker depName=nousresearch/hermes-agent
 	defaultHermesImage = "nousresearch/hermes-agent:v2026.6.5"
 )
 
