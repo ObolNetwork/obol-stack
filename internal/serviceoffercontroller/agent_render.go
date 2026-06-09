@@ -26,7 +26,7 @@ const (
 	hermesProfileSeed  = "hermes-profile-seed"
 	hermesDataPVC      = "hermes-data"
 	hermesAPIPath      = "/health"
-	defaultHermesImage = "nousresearch/hermes-agent:v2026.5.28"
+	defaultHermesImage = "nousresearch/hermes-agent:v2026.6.5"
 )
 
 // agentLabels returns the standard label set we attach to every primitive
