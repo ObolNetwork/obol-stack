@@ -21,8 +21,13 @@ import (
 // The unit tests in agent_test.go and serviceoffercontroller/agent_render_test.go
 // only prove that we *render* the `.no-bundled-skills` marker and the capped
 // hermes-config keys. They do NOT prove the Hermes image
-// (nousresearch/hermes-agent:v2026.5.28) actually honors them. This test closes
-// that gap end-to-end against a LIVE cluster:
+// (nousresearch/hermes-agent:v2026.6.5) actually honors them. v2026.5.28
+// shipped the marker check on the install/CLI path only; the per-launch
+// sync_skills() call ignored it and re-seeded ~24 categories from the
+// image-baked /opt/hermes/skills source on every boot, regardless of the
+// marker. v2026.6.5 (commit 2ed96372a, "blank-slate skills") added the marker
+// check to sync_skills() itself (tools/skills_sync.py:467), so the in-cluster
+// contract is honored end-to-end. This test closes that gap on a LIVE cluster:
 //
 //	(1) the .no-bundled-skills marker exists on the agent's host PVC path
 //	    (agentcrd.HostNoBundledSkillsMarkerPath), so Hermes' installer/sync
