@@ -3,6 +3,49 @@
 # Tests: verify components, sell pricing, sell http, wait for controller reconcile.
 source "$(dirname "$0")/lib.sh"
 
+if [ -n "${OBOL_LLM_ENDPOINT:-}" ]; then
+    SELL_OFFER_TYPE="${SELL_OFFER_TYPE:-inference}"
+    SELL_UPSTREAM_SERVICE="${SELL_UPSTREAM_SERVICE:-litellm}"
+    SELL_UPSTREAM_PORT="${SELL_UPSTREAM_PORT:-4000}"
+    SELL_MODEL_RUNTIME="${SELL_MODEL_RUNTIME:-vllm}"
+else
+    SELL_OFFER_TYPE="${SELL_OFFER_TYPE:-http}"
+    SELL_UPSTREAM_SERVICE="${SELL_UPSTREAM_SERVICE:-ollama}"
+    SELL_UPSTREAM_PORT="${SELL_UPSTREAM_PORT:-11434}"
+    SELL_MODEL_RUNTIME="${SELL_MODEL_RUNTIME:-ollama}"
+fi
+
+apply_flow_qwen_inference_offer() {
+    "$OBOL" sell http flow-qwen --namespace llm --from-json - <<JSON
+{
+  "type": "inference",
+  "upstream": {
+    "service": "$SELL_UPSTREAM_SERVICE",
+    "namespace": "llm",
+    "port": $SELL_UPSTREAM_PORT,
+    "healthPath": "/health"
+  },
+  "model": {
+    "name": "$FLOW_MODEL",
+    "runtime": "$SELL_MODEL_RUNTIME"
+  },
+  "payment": {
+    "scheme": "exact",
+    "network": "$CHAIN",
+    "payTo": "$SELLER_WALLET",
+    "maxTimeoutSeconds": 300,
+    "price": {
+      "perRequest": "0.001"
+    }
+  },
+  "path": "/services/flow-qwen",
+  "registration": {
+    "enabled": false
+  }
+}
+JSON
+}
+
 # §1.1: Verify key components (getting-started §2 component table)
 run_step_grep "Cluster nodes ready" "Ready" "$OBOL" kubectl get nodes
 run_step_grep "serviceoffer-controller running" "Running" \
@@ -103,22 +146,31 @@ if echo "$buyer_health" | grep -q "ok"; then
 else
     fail "x402-buyer sidecar health check failed — ${buyer_health:0:100}"
 fi
-run_step_grep "Ollama reachable" "models" curl -sf http://localhost:11434/api/tags
+if [ "$SELL_UPSTREAM_SERVICE" = "ollama" ]; then
+    run_step_grep "Ollama reachable" "models" curl -sf http://localhost:11434/api/tags
+else
+    run_step_grep "LiteLLM has $FLOW_MODEL" "$FLOW_MODEL" "$OBOL" model list
+fi
 # Additional component table entries from getting-started §2
 run_step_grep "eRPC running" "Running" "$OBOL" kubectl get pods -n erpc --no-headers
 run_step_grep "Frontend running" "Running" "$OBOL" kubectl get pods -n obol-frontend --no-headers
 run_step_grep "Reloader running" "Running" "$OBOL" kubectl get pods -n reloader --no-headers
 
 # §1.2: Pull model (ensure it's available)
-step "Pull $FLOW_MODEL"
-if ollama pull "$FLOW_MODEL" 2>&1 | tail -1; then
-    pass "Model $FLOW_MODEL pulled"
-else
-    fail "Failed to pull $FLOW_MODEL"
-fi
+if [ "$SELL_UPSTREAM_SERVICE" = "ollama" ]; then
+    step "Pull $FLOW_MODEL"
+    if ollama pull "$FLOW_MODEL" 2>&1 | tail -1; then
+        pass "Model $FLOW_MODEL pulled"
+    else
+        fail "Failed to pull $FLOW_MODEL"
+    fi
 
-run_step_grep "Model in Ollama tags" "$FLOW_MODEL" \
-    curl -sf http://localhost:11434/api/tags
+    run_step_grep "Model in Ollama tags" "$FLOW_MODEL" \
+        curl -sf http://localhost:11434/api/tags
+else
+    run_step_grep "LiteLLM model endpoint has $FLOW_MODEL" "$FLOW_MODEL" \
+        "$OBOL" model list
+fi
 
 # §1.3: Set up payment
 run_step "sell pricing" "$OBOL" sell pricing \
@@ -152,28 +204,50 @@ fi
 "$OBOL" sell delete flow-qwen --namespace llm --force 2>/dev/null || true
 sleep 2
 
-run_step_grep "sell http flow-qwen" \
-    "ServiceOffer.*created|ServiceOffer.*updated|agent will reconcile" \
-    "$OBOL" sell http flow-qwen \
-    --wallet "$SELLER_WALLET" \
-    --chain "$CHAIN" \
-    --no-register \
-    --per-request 0.001 \
-    --namespace llm \
-    --upstream ollama \
-    --port 11434
+if [ "$SELL_OFFER_TYPE" = "inference" ]; then
+    step "sell inference flow-qwen via $SELL_UPSTREAM_SERVICE"
+    sell_out=$(apply_flow_qwen_inference_offer 2>&1) || true
+    if echo "$sell_out" | grep -q "ServiceOffer .*created from JSON"; then
+        pass "ServiceOffer flow-qwen created from inference JSON"
+    else
+        fail "sell inference JSON failed — ${sell_out:0:300}"
+    fi
 
-# §1.4 UX: re-running sell http on the same SO shows "updated" not "created"
-step "sell http idempotent: re-run shows 'updated' not 'created'"
-rerun_out=$("$OBOL" sell http flow-qwen \
-    --wallet "$SELLER_WALLET" --chain "$CHAIN" \
-    --no-register \
-    --per-request 0.001 --namespace llm \
-    --upstream ollama --port 11434 2>&1) || true
-if echo "$rerun_out" | grep -q "ServiceOffer.*updated"; then
-    pass "sell http idempotent: shows 'updated' on re-run"
+    step "sell inference spec idempotent: re-apply succeeds"
+    rerun_out=$(apply_flow_qwen_inference_offer 2>&1) || true
+    if echo "$rerun_out" | grep -q "ServiceOffer .*created from JSON"; then
+        pass "sell inference JSON re-apply succeeded"
+    else
+        fail "sell inference JSON re-apply failed — ${rerun_out:0:300}"
+    fi
+
+    "$OBOL" tunnel restart >/dev/null 2>&1 || true
+    poll_step_grep "Tunnel active for inference offer" "https://[a-z0-9-]+\\.trycloudflare\\.com" 12 5 \
+        "$OBOL" tunnel status
 else
-    fail "sell http re-run did not show 'updated' — ${rerun_out:0:200}"
+    run_step_grep "sell http flow-qwen" \
+        "ServiceOffer.*created|ServiceOffer.*updated|agent will reconcile" \
+        "$OBOL" sell http flow-qwen \
+        --wallet "$SELLER_WALLET" \
+        --chain "$CHAIN" \
+        --no-register \
+        --per-request 0.001 \
+        --namespace llm \
+        --upstream "$SELL_UPSTREAM_SERVICE" \
+        --port "$SELL_UPSTREAM_PORT"
+
+    # §1.4 UX: re-running sell http on the same SO shows "updated" not "created"
+    step "sell http idempotent: re-run shows 'updated' not 'created'"
+    rerun_out=$("$OBOL" sell http flow-qwen \
+        --wallet "$SELLER_WALLET" --chain "$CHAIN" \
+        --no-register \
+        --per-request 0.001 --namespace llm \
+        --upstream "$SELL_UPSTREAM_SERVICE" --port "$SELL_UPSTREAM_PORT" 2>&1) || true
+    if echo "$rerun_out" | grep -q "ServiceOffer.*updated"; then
+        pass "sell http idempotent: shows 'updated' on re-run"
+    else
+        fail "sell http re-run did not show 'updated' — ${rerun_out:0:200}"
+    fi
 fi
 
 # PR 299 uses serviceoffer-controller reconciliation instead of the obol-agent
@@ -189,24 +263,30 @@ run_step_grep "ServiceOffer exists" "flow-qwen" \
 # Verify ServiceOffer spec has correct upstream, payment, and pricing fields (monetize §1.4)
 step "ServiceOffer spec has upstream.service, payment.payTo, and price"
 so_yaml=$("$OBOL" kubectl get serviceoffer flow-qwen -n llm -o yaml 2>&1) || true
-if echo "$so_yaml" | grep -q "service: ollama" \
+if echo "$so_yaml" | grep -q "type: $SELL_OFFER_TYPE" \
+    && echo "$so_yaml" | grep -q "service: $SELL_UPSTREAM_SERVICE" \
     && echo "$so_yaml" | grep -q "payTo: 0x" \
     && echo "$so_yaml" | grep -q "perRequest:"; then
     payto=$(echo "$so_yaml" | grep "payTo:" | awk '{print $2}' | head -1)
     price=$(echo "$so_yaml" | grep "perRequest:" | awk '{print $2}' | head -1 | tr -d '"')
-    pass "ServiceOffer spec: upstream=ollama, payTo=$payto, perRequest=$price USDC"
+    pass "ServiceOffer spec: type=$SELL_OFFER_TYPE, upstream=$SELL_UPSTREAM_SERVICE, payTo=$payto, perRequest=$price USDC"
 else
     fail "ServiceOffer spec missing expected fields — ${so_yaml:0:200}"
 fi
 
-# Verify Ollama k8s service is on port 11434 (matches --port 11434 in sell http)
-step "Ollama service in llm namespace on port 11434"
-ollama_port=$("$OBOL" kubectl get svc ollama -n llm \
+if [ "$SELL_OFFER_TYPE" = "inference" ]; then
+    run_step_grep "ServiceOffer model is $FLOW_MODEL" "name: $FLOW_MODEL" \
+        "$OBOL" kubectl get serviceoffer flow-qwen -n llm -o yaml
+fi
+
+# Verify upstream service is on the port used by sell http.
+step "$SELL_UPSTREAM_SERVICE service in llm namespace on port $SELL_UPSTREAM_PORT"
+actual_upstream_port=$("$OBOL" kubectl get svc "$SELL_UPSTREAM_SERVICE" -n llm \
     -o jsonpath='{.spec.ports[0].port}' 2>&1) || true
-if [ "$ollama_port" = "11434" ]; then
-    pass "Ollama service port: 11434 (matches ServiceOffer upstream.port)"
+if [ "$actual_upstream_port" = "$SELL_UPSTREAM_PORT" ]; then
+    pass "$SELL_UPSTREAM_SERVICE service port: $SELL_UPSTREAM_PORT (matches ServiceOffer upstream.port)"
 else
-    fail "Ollama service port unexpected: $ollama_port (expected 11434)"
+    fail "$SELL_UPSTREAM_SERVICE service port unexpected: $actual_upstream_port (expected $SELL_UPSTREAM_PORT)"
 fi
 
 run_step_grep "HTTPRoute exists" "so-flow-qwen" \

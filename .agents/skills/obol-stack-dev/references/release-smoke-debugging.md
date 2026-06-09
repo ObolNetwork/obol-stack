@@ -7,9 +7,9 @@ Symptoms → root cause lookup. Each entry below cost multi-hour debug at least 
 1. **Confirm what's actually deployed**:
 
    ```bash
-   kubectl get deploy -n x402 x402-verifier -o jsonpath='{.spec.template.spec.containers[*].image}'
-   kubectl get deploy -n x402 serviceoffer-controller -o jsonpath='{.spec.template.spec.containers[*].image}'
-   kubectl get deploy -n llm litellm -o jsonpath='{.spec.template.spec.containers[*].image}'
+   obol kubectl get deploy -n x402 x402-verifier -o jsonpath='{.spec.template.spec.containers[*].image}'
+   obol kubectl get deploy -n x402 serviceoffer-controller -o jsonpath='{.spec.template.spec.containers[*].image}'
+   obol kubectl get deploy -n llm litellm -o jsonpath='{.spec.template.spec.containers[*].image}'
    ```
 
    If any image is a registry digest pin instead of `:latest`, your dev rewrite was bypassed → see "EnsureVerifier overwrites helmfile" below.
@@ -17,9 +17,9 @@ Symptoms → root cause lookup. Each entry below cost multi-hour debug at least 
 2. **Get the real failure**:
 
    ```bash
-   kubectl logs -n x402 deploy/x402-verifier --tail=200
-   kubectl logs -n x402 deploy/serviceoffer-controller --tail=200
-   kubectl logs -n llm deploy/litellm -c x402-buyer --tail=200
+   obol kubectl logs -n x402 deploy/x402-verifier --tail=200
+   obol kubectl logs -n x402 deploy/serviceoffer-controller --tail=200
+   obol kubectl logs -n llm deploy/litellm -c x402-buyer --tail=200
    ```
 
    A `Payment verification failed` 503 from Traefik is almost never a real verifier bug. It's usually one of: stale image, wrong chain id form, upstream unreachable, missing CA bundle.
@@ -27,7 +27,7 @@ Symptoms → root cause lookup. Each entry below cost multi-hour debug at least 
 3. **Check facilitator reachability** (live OBOL flow):
 
    ```bash
-   kubectl exec -n llm deploy/litellm -c litellm -- \
+   obol kubectl exec -n llm deploy/litellm -c litellm -- \
      wget -O- --timeout=5 https://x402.gcp.obol.tech/healthz || echo UNREACHABLE
    ```
 
@@ -37,7 +37,7 @@ Symptoms → root cause lookup. Each entry below cost multi-hour debug at least 
 
 `internal/x402/setup.go::EnsureVerifier` reads embedded `x402.yaml` (with hard-coded image pin) and `kubectl apply`s it. Under `OBOL_DEVELOPMENT=true` this overwrites the helmfile-managed `:latest` deployment with the embedded pin → **every source change to the verifier is silently bypassed**.
 
-- **Symptom**: source changes don't reach the pod even after rebuild + restart. `kubectl get deploy ...` shows a registry digest, not `:latest`.
+- **Symptom**: source changes don't reach the pod even after rebuild + restart. `obol kubectl get deploy ...` shows a registry digest, not `:latest`.
 - **Fix in repo**: `5a10fb8` rewrites image pins in-memory before apply. Test: `internal/x402/manifest_devmode_test.go`.
 - **If you see this again**: check whether a *new* component installed via `kubectl apply` of an embedded manifest needs the same dev-rewrite treatment.
 
@@ -127,4 +127,4 @@ The buyer sidecar's `/status` (and `PurchaseRequest.status`, and verifier logs) 
 - **Don't confuse 503 with "verifier broken"** — almost always one of #1, #2, #5, #6, or a missing CA bundle (`paid-flows.md`).
 - **Don't confuse 404 from `paid/<model>`** with "buyer broken" — usually #4 (image pin not rewritten) or #2 (chain id mismatch).
 - **Don't extend retry loops to mask intermittents** — #8 was a real first-request race; longer retries elsewhere usually mask a real bug.
-- **Always confirm the running image first** before reading verifier code. The `kubectl get deploy ... -o jsonpath='{...image}'` one-liner is the fastest way.
+- **Always confirm the running image first** before reading verifier code. The `obol kubectl get deploy ... -o jsonpath='{...image}'` one-liner is the fastest way.

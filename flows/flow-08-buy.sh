@@ -2,7 +2,7 @@
 # Flow 08: Buy — monetize-inference.md §2.1-2.5.
 # Requires: flow-06 (ServiceOffer Ready) + flow-10 (Anvil + facilitator running).
 #
-# Buyer-wallet invariant: the default obol-agent must be pre-seeded with the
+# Buyer-wallet invariant: the default obol-agent may be seeded with the
 # deterministic "Bob" key derived from .env REMOTE_SIGNER_PRIVATE_KEY so
 # funding here lands on a reproducible address. flow-08 asserts the match
 # below and fails fast if obol-agent generated a random wallet (which would
@@ -74,6 +74,15 @@ try:
         print('%s: remaining=%d spent=%d model=%s' % (name, info['remaining'], info['spent'], info['public_model']))
 except Exception as e:
     print('error: %s' % e)
+	" 2>&1 || true
+}
+
+litellm_readiness() {
+    "$OBOL" kubectl exec -n llm deployment/litellm -c litellm -- \
+        python3 -c "
+import urllib.request
+urllib.request.urlopen('http://localhost:4000/health/readiness', timeout=5).read()
+print('ready')
 " 2>&1 || true
 }
 
@@ -251,7 +260,7 @@ if [ -z "$AGENT_WALLET" ]; then
 elif [ -n "$BOB_WALLET" ] && [ "$(printf '%s' "$AGENT_WALLET" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$BOB_WALLET" | tr '[:upper:]' '[:lower:]')" ]; then
     pass "Agent wallet matches deterministic Bob: $AGENT_WALLET"
 else
-    # Single-stack flow-08 doesn't pre-seed Bob (that's flow-11/13/14's
+    # Single-stack flow-08 doesn't seed Bob (that's flow-11/13/14's
     # invariant). Whichever wallet `obol agent init` generated is fine —
     # all downstream funding/signing uses $AGENT_WALLET directly.
     pass "Agent wallet (generated, single-stack): $AGENT_WALLET"
@@ -272,23 +281,43 @@ poll_step_grep "Agent wallet funded on local Anvil" "^[1-9][0-9]{8,} " 24 5 agen
 
 step "Ensure PurchaseRequest auth pool via obol buy inference"
 # Positional arg is now the seller URL; PR name moved to --name. --yes
-# bypasses the interactive confirm (flow runs headless). Identity
-# verification is opt-in in the new CLI (default skips), so the historical
-# --no-verify-identity is no longer needed/present.
-buy_out=$("$OBOL" buy inference "$PUBLIC_SELLER_URL" \
-    --name "$PURCHASE_NAME" \
-    --model "$FLOW_MODEL" \
-    --budget "$BUY_BUDGET_USDC" \
-    --yes \
-    --force 2>&1) || true
-if echo "$buy_out" | grep -q "Purchased upstream '$PURCHASE_NAME' configured via x402-buyer sidecar"; then
+# bypasses the interactive confirm (flow runs headless). Keep --count aligned
+# with EXPECTED_AUTHS so the explicit budget covers the requested pre-auths.
+# Identity verification is opt-in in the new CLI (default skips), so the
+# historical --no-verify-identity is no longer needed/present.
+buy_out=""
+buy_rc=1
+for attempt in 1 2 3; do
+    set +e
+    buy_out=$("$OBOL" buy inference "$PUBLIC_SELLER_URL" \
+        --name "$PURCHASE_NAME" \
+        --model "$FLOW_MODEL" \
+        --count "$EXPECTED_AUTHS" \
+        --budget "$BUY_BUDGET_USDC" \
+        --yes \
+        --force 2>&1)
+    buy_rc=$?
+    set -e
+    if [ "$buy_rc" -eq 0 ]; then
+        break
+    fi
+    if [ "$attempt" -lt 3 ]; then
+        echo "  obol buy inference attempt $attempt failed; retrying"
+        sleep 10
+    fi
+done
+if [ "$buy_rc" -eq 0 ]; then
     pass "obol buy inference ensured PurchaseRequest $PURCHASE_NAME"
 else
-    fail "obol buy inference failed — ${buy_out:0:500}"
+    buy_tail=$(printf '%s\n' "$buy_out" | tail -20)
+    fail "obol buy inference failed — $buy_tail"
 fi
 
 poll_step_grep "PurchaseRequest Ready" "True" 36 5 purchase_request_ready
 poll_step_grep "x402-buyer has exactly $EXPECTED_AUTHS auths" "$PURCHASE_NAME: remaining=$EXPECTED_AUTHS " 36 5 buyer_sidecar_status
+run_step "LiteLLM rollout settled after PurchaseRequest" \
+    "$OBOL" kubectl rollout status deployment/litellm -n llm --timeout=120s
+poll_step_grep "LiteLLM API ready for paid route" "ready" 24 5 litellm_readiness
 
 buyer_status=$(buyer_sidecar_status)
 PAID_MODEL=$(echo "$buyer_status" | grep "^$PURCHASE_NAME:" | grep -oE 'model=[^ ]+' | head -1 | cut -d= -f2)

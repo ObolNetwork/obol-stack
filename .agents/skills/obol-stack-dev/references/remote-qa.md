@@ -1,6 +1,8 @@
 # Remote QA Worktrees
 
-Use this reference when running flows on the two remote QA machines with sudo access.
+Use this reference when running remote QA on the two QA machines with sudo
+access. Default to direct `obol` CLI commands. Use repo flow scripts only for
+explicit release-smoke/full-flow gates or named flow regressions.
 
 ## Rules
 
@@ -10,6 +12,8 @@ Use this reference when running flows on the two remote QA machines with sudo ac
 - Never run broad host cleanup such as global Docker/k3d purges.
 - Delete only stacks whose stack IDs are recorded in the QA worktree.
 - Do not record hostnames, personal paths, or secrets in the skill.
+- Do not create custom shell scripts. Use `tmux` to run the exact CLI command
+  sequence when a long run needs to continue unattended.
 
 ## Create Worktree
 
@@ -51,7 +55,29 @@ test -s "$QA/.env" || cp "$BASE/.env" "$QA/.env"
 chmod 600 "$QA/.env"
 ```
 
-## Launch Live OBOL Smoke
+## CLI-First QA Session
+
+Use this shape for ordinary remote validation:
+
+```bash
+cd "$QA"
+export PATH="$QA/.workspace/bin:$FOUNDRY_BIN:$TOOL_ROOT:$PATH"
+export OBOL_DEVELOPMENT=true
+export OBOL_NONINTERACTIVE=true
+go build -o .workspace/bin/obol ./cmd/obol
+obol stack init --force
+obol stack up
+obol model setup custom --endpoint "$OBOL_LLM_ENDPOINT" --model "$OBOL_LLM_MODEL"
+obol model prefer "$OBOL_LLM_MODEL"
+obol model sync
+obol sell list
+obol kubectl get pods -A
+```
+
+For long direct CLI runs, start tmux with the command sequence inline. Keep logs
+under `$QA/.tmp/` and avoid writing a wrapper script.
+
+## Launch Release-Gate Flow
 
 Full seller/buyer QA needs an OpenAI-compatible endpoint on the QA machine.
 Set `OBOL_LLM_MODEL` to an id returned by `/models`.
