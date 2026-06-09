@@ -620,7 +620,8 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 		// updated. Without this branch the auth gets released back into the
 		// pool, then either (a) replayed against a now-spent nonce and 503s
 		// forever, or (b) double-debits attempted (Permit2 nonce reuse
-		// reverts on-chain but burns gas). See plans/rc13report.md.
+		// reverts on-chain but burns gas). See docs/observability.md
+		// ("Verify settlement against the chain, never the sidecar snapshot").
 		errSettlement, _ := DecodeSettlement(respRetry.Header.Get("X-PAYMENT-RESPONSE"))
 		if errSettlement.Transaction != "" {
 			log.Printf("x402-buyer: WARN upstream %d but X-PAYMENT-RESPONSE includes tx %s — auth spent on-chain, marking consumed (network=%s payer=%s)",
@@ -628,7 +629,30 @@ func (t *replayableX402Transport) RoundTrip(req *http.Request) (*http.Response, 
 			if len(t.Signers) == 1 {
 				if ps, ok := t.Signers[0].(*PreSignedSigner); ok && heldAuth != nil {
 					if confirmErr := ps.ConfirmSpend(heldAuth); confirmErr != nil {
+						// A failed persist here is the worst case for this
+						// branch: the chain debited the wallet but consumed.json
+						// missed the nonce, so a restart re-admits the spent
+						// auth. Fire the same persistence-failure signal as the
+						// 2xx path so confirm_spend_failure_total alerts.
 						log.Printf("x402-buyer: confirm spend on settled-but-failed: %v", confirmErr)
+						if t.OnConfirmSpendFailure != nil {
+							event := PaymentEvent{
+								Type:      PaymentEventFailure,
+								Timestamp: time.Now(),
+								Method:    "HTTP",
+								URL:       req.URL.String(),
+								Error:     confirmErr,
+								Duration:  duration,
+							}
+							if selectedRequirement != nil {
+								event.Network = selectedRequirement.Network
+								event.Scheme = selectedRequirement.Scheme
+								event.Amount = selectedRequirement.Amount
+								event.Asset = selectedRequirement.Asset
+								event.Recipient = selectedRequirement.PayTo
+							}
+							t.OnConfirmSpendFailure(event)
+						}
 					}
 				}
 			}

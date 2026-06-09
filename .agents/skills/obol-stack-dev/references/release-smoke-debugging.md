@@ -109,12 +109,12 @@ When buying from external x402 sellers (sellers running outside our k3d cluster 
 
 ### 11. "0 spent / N remaining" from the sidecar is NOT proof no debit happened
 
-The buyer sidecar's `/status` (and `PurchaseRequest.status`, and verifier logs) all report the **same local view** — they will agree with each other even when the chain disagrees with all three. rc13 mainnet OBOL self-test (`plans/rc13report.md`) caught a 0.001 OBOL on-chain debit from a request that returned `HTTP 503 "Payment settlement failed"` while every signal the stack produced said "nothing was paid." The facilitator submitted the Permit2 settle tx, it mined successfully (`0xb5122d818a058e8bf529380260fa2584ba3d50bfc800f1e906faca34d3932307`), and **then** the facilitator's post-submit step returned 500.
+The buyer sidecar's `/status` (and `PurchaseRequest.status`, and verifier logs) all report the **same local view** — they will agree with each other even when the chain disagrees with all three. rc13 mainnet OBOL self-test (2026-06-09) caught a 0.001 OBOL on-chain debit from a request that returned `HTTP 503 "Payment settlement failed"` while every signal the stack produced said "nothing was paid." The facilitator submitted the Permit2 settle tx, it mined successfully (`0xb5122d818a058e8bf529380260fa2584ba3d50bfc800f1e906faca34d3932307`), and **then** the facilitator's post-submit step returned 500.
 
 - **Fix in repo (this branch)**:
-  - Verifier preserves the facilitator's `transaction` field via `X-PAYMENT-RESPONSE` even on a 5xx `/settle` (`internal/x402/forwardauth.go` + `TestForwardAuth_SettleErrorPreservesTxHashInHeader`).
-  - Buyer sidecar treats a 5xx with `X-PAYMENT-RESPONSE.transaction != ""` as **spent on-chain**: `ConfirmSpend` the held auth, fire `OnPaymentUnsettled`, log the hash (`internal/x402/buyer/proxy.go` + `TestProxy_UpstreamErrorWithTxHash_PersistsConsume`).
-  - `buy.py` `_print_paid_request_failure` prints `⚠️  SETTLEMENT MAY HAVE COMPLETED ON-CHAIN` with the tx hash + the exact `balance --chain <X>` command when a paid call 5xx's with a settle header.
+  - Verifier preserves the facilitator's `transaction` field via `X-PAYMENT-RESPONSE` even on a non-200 `/settle` (`internal/x402/forwardauth.go` + `TestForwardAuth_SettleErrorPreservesTxHashInHeader`).
+  - Buyer sidecar treats any error response (>= 400) with `X-PAYMENT-RESPONSE.transaction != ""` as **spent on-chain**: `ConfirmSpend` the held auth, fire `OnPaymentUnsettled`, log the hash (`internal/x402/buyer/proxy.go` + `TestProxy_UpstreamErrorWithTxHash_PersistsConsume`).
+  - `buy.py` `_print_paid_request_failure` prints `⚠️  SETTLEMENT MAY HAVE COMPLETED ON-CHAIN` with the tx hash + the exact `balance --chain <X>` command when a paid call fails (>= 400) with a settle header.
 - **Not yet fixed (follow-up PRs)**:
   - Verifier doing a receipt lookup against eRPC before returning 200 vs 5xx (would let the verifier serve the upstream response if settle landed on-chain).
   - Settle idempotency on retry (today guarded only by Permit2 nonce reuse reverting on-chain, which burns gas).

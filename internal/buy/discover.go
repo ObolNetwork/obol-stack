@@ -222,10 +222,13 @@ func PickCatalogEntry(entries []CatalogEntry, sellerURL string) (*CatalogEntry, 
 		return nil, err
 	}
 
-	var inferenceOnly []CatalogEntry
+	var inferenceOnly, agentOnly []CatalogEntry
 	for _, e := range entries {
-		if strings.EqualFold(strings.TrimSpace(e.Type), "inference") {
+		switch {
+		case strings.EqualFold(strings.TrimSpace(e.Type), "inference"):
 			inferenceOnly = append(inferenceOnly, e)
+		case strings.EqualFold(strings.TrimSpace(e.Type), "agent"):
+			agentOnly = append(agentOnly, e)
 		}
 	}
 
@@ -236,12 +239,8 @@ func PickCatalogEntry(entries []CatalogEntry, sellerURL string) (*CatalogEntry, 
 				if !strings.EqualFold(strings.TrimSpace(e.Type), "inference") {
 					if strings.EqualFold(strings.TrimSpace(e.Type), "agent") {
 						return nil, fmt.Errorf(
-							"seller offer %q has type=agent; `obol buy inference` only supports type=inference.\n"+
-								"For type=agent offers use the buy-x402 skill's `pay-agent` command instead — it streams the response\n"+
-								"directly to the calling agent (memory, tool-call traces, partial results) without pushing it behind\n"+
-								"LiteLLM as a paid alias:\n"+
-								"  python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py pay-agent %s --model <model> --message '<prompt>'",
-							e.Name, e.Endpoint,
+							"seller offer %q has type=agent; `obol buy inference` only supports type=inference.\n%s",
+							e.Name, payAgentHint(e.Endpoint),
 						)
 					}
 					return nil, fmt.Errorf("seller offer %q has type=%q; obol buy inference only supports type=inference", e.Name, e.Type)
@@ -254,6 +253,18 @@ func PickCatalogEntry(entries []CatalogEntry, sellerURL string) (*CatalogEntry, 
 
 	switch len(inferenceOnly) {
 	case 0:
+		// Storefront-base probe of an agent-only seller: point at pay-agent
+		// instead of the bare type=inference refusal.
+		if len(agentOnly) > 0 {
+			names := make([]string, 0, len(agentOnly))
+			for _, e := range agentOnly {
+				names = append(names, e.Name)
+			}
+			return nil, fmt.Errorf(
+				"seller advertises no inference offers (type=inference), only type=agent offers (%s).\n%s",
+				strings.Join(names, ", "), payAgentHint(agentOnly[0].Endpoint),
+			)
+		}
 		return nil, errors.New("seller advertises no inference offers (type=inference)")
 	case 1:
 		e := inferenceOnly[0]
@@ -266,6 +277,20 @@ func PickCatalogEntry(entries []CatalogEntry, sellerURL string) (*CatalogEntry, 
 		return nil, fmt.Errorf("seller advertises multiple inference offers (%s); pass a service URL like <seller>%s",
 			strings.Join(names, ", "), inferenceOnly[0].Endpoint)
 	}
+}
+
+// payAgentHint renders the canonical pointer for type=agent offers: they are
+// bought with the buy-x402 skill's `pay-agent` command, which streams the
+// response directly to the calling agent (memory, tool-call traces, partial
+// results) instead of pushing it behind LiteLLM as a paid alias.
+func payAgentHint(endpoint string) string {
+	return fmt.Sprintf(
+		"For type=agent offers use the buy-x402 skill's `pay-agent` command instead — it streams the response\n"+
+			"directly to the calling agent (memory, tool-call traces, partial results) without pushing it behind\n"+
+			"LiteLLM as a paid alias:\n"+
+			"  python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py pay-agent %s --model <model> --message '<prompt>'",
+		endpoint,
+	)
 }
 
 // VerifyAgentID returns nil iff at least one of reg.Registrations matches the

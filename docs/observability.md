@@ -184,13 +184,13 @@ Prometheus to answer a lifetime question, you've picked the wrong tool.
 ## Verify settlement against the chain, never the sidecar snapshot
 
 The same "chain is canonical, metrics are derived" rule applies to **live
-debugging**, not just lifetime aggregates. When a paid request returns 5xx and
+debugging**, not just lifetime aggregates. When a paid request errors and
 the buyer reports `remaining=N, spent=0`, that is **not** evidence that no
 money moved — it is evidence that the sidecar's local counter, the
 `PurchaseRequest.status` snapshot, and the verifier's logs all agree with each
 other. The on-chain transfer event can still tell you otherwise.
 
-**This is not theoretical.** rc13 mainnet OBOL self-test (`plans/rc13report.md`)
+**This is not theoretical.** The rc13 mainnet OBOL self-test (2026-06-09)
 recorded a 0.001 OBOL on-chain debit from a request that 503'd with
 `"Payment settlement failed"`, while the buyer sidecar reported `0 spent / 2
 remaining` and the verifier logged `facilitator settle failed (500)`. The
@@ -205,13 +205,13 @@ The defenses that landed (this PR):
   `X-PAYMENT-RESPONSE` *before* the 503 is written. Without this the on-chain
   hash is invisible to the buyer. See `internal/x402/forwardauth.go` and
   `TestForwardAuth_SettleErrorPreservesTxHashInHeader`.
-- **Buyer sidecar**: a 5xx with `X-PAYMENT-RESPONSE` carrying a tx hash is
+- **Buyer sidecar**: any error response (>= 400) with `X-PAYMENT-RESPONSE` carrying a tx hash is
   treated as "spent on-chain" — the held auth is `ConfirmSpend`-ed (not
   released back to the pool), `OnPaymentUnsettled` fires, and the operator
   warning logs the hash. See `internal/x402/buyer/proxy.go` and
   `TestProxy_UpstreamErrorWithTxHash_PersistsConsume`.
 - **buy.py CLI**: `_print_paid_request_failure` decodes the settle header on
-  5xx and prints a loud `⚠️  SETTLEMENT MAY HAVE COMPLETED ON-CHAIN` warning
+  any failed paid call (>= 400) and prints a loud `⚠️  SETTLEMENT MAY HAVE COMPLETED ON-CHAIN` warning
   with the exact balance-check command.
 
 The defenses that are **deferred** (and worth flagging in any future debugging

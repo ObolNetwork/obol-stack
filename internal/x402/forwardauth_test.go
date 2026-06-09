@@ -506,7 +506,7 @@ func TestForwardAuth_VerifyOnlyTrue_NoStartupWarning(t *testing.T) {
 // facilitator response on the floor when StatusCode != 200, the buyer
 // released the held auth back into the pool, and 0.001 OBOL moved on
 // mainnet with the user seeing only HTTP 503 "Payment settlement failed".
-// See plans/rc13report.md.
+// See docs/observability.md ("Verify settlement against the chain").
 func TestForwardAuth_SettleErrorPreservesTxHashInHeader(t *testing.T) {
 	var verifyCalled, settleCalled atomic.Int32
 	fac := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -519,7 +519,7 @@ func TestForwardAuth_SettleErrorPreservesTxHashInHeader(t *testing.T) {
 			settleCalled.Add(1)
 			// Facilitator returns 500 — but the on-chain submission already
 			// landed and the response carries the tx hash. This is the
-			// mainnet OBOL scenario from rc13report.md.
+			// rc13 mainnet OBOL incident (docs/observability.md).
 			w.WriteHeader(http.StatusInternalServerError)
 			_ = json.NewEncoder(w).Encode(facilitatorSettleResponse{
 				Success:     false,

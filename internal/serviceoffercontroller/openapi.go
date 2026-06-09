@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	"github.com/ObolNetwork/obol-stack/internal/x402"
 )
 
 // openAPISpecVersion is the OpenAPI specification version we emit. 3.1.0
@@ -333,7 +334,10 @@ func offerPaymentExtension(offer *monetizeapi.ServiceOffer) map[string]any {
 		"payTo":   offer.Spec.Payment.PayTo,
 	}
 	if offer.Spec.Payment.MaxTimeoutSeconds > 0 {
-		ext["maxTimeoutSeconds"] = offer.Spec.Payment.MaxTimeoutSeconds
+		// Advertise the value the 402 wire will enforce — the verifier clamps
+		// over-cap spec values (x402.ClampMaxTimeoutSeconds), so the catalog
+		// must not promise a larger settle window than buyers actually get.
+		ext["maxTimeoutSeconds"] = x402.ClampMaxTimeoutSeconds(offer.Spec.Payment.MaxTimeoutSeconds)
 	}
 
 	if asset := offerAssetJSON(offer); asset != nil {

@@ -29,6 +29,7 @@ Commands:
 """
 
 import base64
+import http.client
 import json
 import os
 import secrets
@@ -73,6 +74,25 @@ USER_AGENT = os.environ.get(
     "OBOL_BUYER_USER_AGENT",
     "obol-buy-x402/1.0 (+https://github.com/ObolNetwork/obol-stack)",
 )
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuse to follow redirects on requests that carry a signed X-PAYMENT.
+
+    urllib's default handler converts a redirected POST into a body-less GET
+    and re-sends every request header — including the signed payment
+    authorization — to the Location target, handing the voucher to an
+    arbitrary host. A seller that redirects a paid call gets a hard error
+    (the 3xx surfaces as HTTPError) instead of a silent cross-host replay.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+# Opener for all paid (X-PAYMENT-carrying) requests. Unpaid probes may follow
+# redirects; paid requests never should.
+_PAID_OPENER = urllib.request.build_opener(_NoRedirectHandler)
 
 # Canonical chain names match eRPC project aliases (see
 # internal/embed/infrastructure/values/erpc.yaml.gotmpl). Any other label
@@ -915,17 +935,21 @@ def _auth_expiry():
 
     Controlled by OBOL_X402_AUTH_TTL:
       - unset             -> now + 30 days (1 month; the default)
-      - <seconds>         -> now + max(seconds, 300)   (floor = one settle window)
+      - <seconds>         -> now + max(seconds, 600)   (floor = the verifier's
+                             default settle window, x402.DefaultMaxTimeoutSeconds)
       - 0 / never / none  -> MAX_SAFE_DEADLINE          (no expiry, ~year 2106)
 
     This is the pool's spendability lifetime — a separate concept from the
-    per-request settle window (payment.maxTimeoutSeconds).
+    per-request settle window (payment.maxTimeoutSeconds). The floor keeps an
+    auth spendable for at least one default settle window so it cannot expire
+    between request acceptance and on-chain settlement; offers with a larger
+    operator-set window need a correspondingly larger TTL.
     """
     raw = os.environ.get("OBOL_X402_AUTH_TTL", "").strip().lower()
     if raw in ("0", "never", "none", "-1"):
         return MAX_SAFE_DEADLINE
     try:
-        ttl = max(int(raw), 300)
+        ttl = max(int(raw), 600)
     except (TypeError, ValueError):
         ttl = DEFAULT_AUTH_TTL_SECONDS
     return int(time.time()) + ttl
@@ -2171,7 +2195,7 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=Non
     print(f"Sending paid {method} {target_url} ...")
     req = urllib.request.Request(target_url, data=request_data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _PAID_OPENER.open(req, timeout=timeout) as resp:
             body = resp.read().decode(errors="replace")
             print(f"HTTP {resp.status}")
             settle = resp.headers.get("X-PAYMENT-RESPONSE")
@@ -2350,7 +2374,7 @@ def cmd_pay_agent(url, messages=None, model_id=None, network=None, timeout=None,
     print(f"Sending paid POST {target_url} (streaming, timeout {timeout:.0f}s) ...")
     req = urllib.request.Request(target_url, data=request_data, method="POST", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with _PAID_OPENER.open(req, timeout=timeout) as resp:
             print(f"HTTP {resp.status}")
             settle = resp.headers.get("X-PAYMENT-RESPONSE")
             if settle:
@@ -2360,11 +2384,25 @@ def cmd_pay_agent(url, messages=None, model_id=None, network=None, timeout=None,
             # calling Hermes/OpenClaw agent can re-emit them as they arrive.
             # SSE frames are delimited by blank lines; we forward each raw
             # line verbatim and let the caller parse.
-            for raw_line in resp:
-                # resp iteration yields bytes; decode lossily so a malformed
-                # chunk never kills the stream.
-                line = raw_line.decode(errors="replace").rstrip("\r\n")
-                print(line, flush=True)
+            try:
+                for raw_line in resp:
+                    # resp iteration yields bytes; decode lossily so a malformed
+                    # chunk never kills the stream.
+                    line = raw_line.decode(errors="replace").rstrip("\r\n")
+                    print(line, flush=True)
+            except (TimeoutError, OSError, http.client.HTTPException) as exc:
+                # Read timeout / connection drop AFTER the paid response
+                # started. The seller already accepted the payment — a blind
+                # retry would sign and spend a second auth. Surface a clean
+                # actionable error instead of a traceback.
+                print(
+                    f"\nStream interrupted mid-response: {exc}\n"
+                    "The payment for this request was already accepted by the seller;\n"
+                    "the partial output above is what arrived before the drop.\n"
+                    f"Verify before retrying: python3 scripts/buy.py balance --chain {chain}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
             return 0
     except urllib.error.HTTPError as e:
         body_text = e.read().decode(errors="replace") if e.fp else ""
@@ -2398,17 +2436,22 @@ def _print_paid_request_failure(status, body, settle_header, signer_address, ass
     if body:
         print(f"Body: {body}", file=sys.stderr)
 
-    # Settled-but-failed: a 5xx that ALSO carries X-PAYMENT-RESPONSE with a
-    # tx hash means the facilitator submitted the settle on-chain and then
-    # errored on the post-submit/receipt path. The seller verifier was
-    # patched (forwardauth.go) to expose the tx hash on that path so buyers
-    # don't silently lose funds. This warning is the single most important
-    # signal from this function — promote it above all other hints.
-    if status >= 500 and settle_header:
+    # Settled-but-failed: an error response that ALSO carries
+    # X-PAYMENT-RESPONSE with a tx hash means the facilitator submitted the
+    # settle on-chain and then the request still failed. The seller verifier
+    # was patched (forwardauth.go) to expose the tx hash on that path so
+    # buyers don't silently lose funds. Gate on any >= 400 — the Go buyer
+    # sidecar (internal/x402/buyer/proxy.go) honors the same condition; the
+    # status class of the failure doesn't change whether the chain debited.
+    # This warning is the single most important signal from this function —
+    # promote it above all other hints.
+    if status >= 400 and settle_header:
         tx_hash = None
         try:
             decoded = base64.b64decode(settle_header.encode(), validate=True).decode()
-            tx_hash = (json.loads(decoded) or {}).get("transaction")
+            parsed_settle = json.loads(decoded)
+            if isinstance(parsed_settle, dict):
+                tx_hash = parsed_settle.get("transaction")
         except (ValueError, json.JSONDecodeError):
             pass
         if tx_hash:
@@ -2419,7 +2462,7 @@ def _print_paid_request_failure(status, body, settle_header, signer_address, ass
                 "   Verify before retrying:\n"
                 f"     python3 scripts/buy.py balance --chain {chain}\n"
                 f"   On-chain receipt: check {tx_hash} on the {chain} explorer.\n"
-                "   See plans/rc13report.md for the mechanism.",
+                "   See docs/observability.md (\"Verify settlement against the chain\") for the mechanism.",
                 file=sys.stderr,
             )
 
