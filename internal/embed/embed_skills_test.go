@@ -244,6 +244,53 @@ func TestMonetizePy_Syntax(t *testing.T) {
 	}
 }
 
+func TestBuyPyAutoRefillCostCapRequiresAutoRefill(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not installed")
+	}
+
+	destDir := t.TempDir()
+	if err := CopySkills(destDir); err != nil {
+		t.Fatalf("CopySkills: %v", err)
+	}
+
+	buyPy := filepath.Join(destDir, "buy-x402", "scripts", "buy.py")
+	script := `
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("buy", sys.argv[1])
+buy = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(buy)
+
+def expect_error(opts, message):
+    try:
+        buy._resolve_auto_refill(opts, 100, {})
+    except ValueError as exc:
+        if message not in str(exc):
+            raise SystemExit(f"wrong error {exc!r}, wanted {message!r}")
+        return
+    raise SystemExit(f"expected ValueError for {opts!r}")
+
+expect_error({"cost_cap": "42"}, "requires --auto-refill")
+expect_error({"cost_cap": "42", "auto_refill": "false"}, "requires --auto-refill")
+
+policy = buy._resolve_auto_refill({"cost_cap": "42", "auto_refill": "true"}, 100, {})
+if not policy.get("enabled") or policy.get("maxUnitPrice") != "42":
+    raise SystemExit(f"cost cap with auto-refill did not persist: {policy!r}")
+
+existing = {"enabled": True, "threshold": 10, "count": 20}
+policy = buy._resolve_auto_refill({"cost_cap": "43"}, 100, existing)
+if not policy.get("enabled") or policy.get("maxUnitPrice") != "43":
+    raise SystemExit(f"cost cap update on existing policy failed: {policy!r}")
+`
+	cmd := exec.Command("python3", "-c", script, buyPy)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("buy.py auto-refill policy regression failed:\n%s\n%v", output, err)
+	}
+}
+
 func TestAgentFactoryPy_Syntax(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not installed")

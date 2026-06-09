@@ -45,12 +45,7 @@ func ListPurchases(cfg *config.Config, runtime agentruntime.Runtime, id string) 
 	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
-	argv := []string{
-		"/opt/hermes/.venv/bin/python3",
-		"/data/.hermes/obol-skills/buy-x402/scripts/buy.py",
-		"list",
-		"--json",
-	}
+	argv := BuyPyCommand(runtime, "list", "--json")
 	kubectlArgs := agentruntime.BuildExecArgs(runtime, id, argv, false)
 
 	cmd := exec.Command(kubectlBin, kubectlArgs...)

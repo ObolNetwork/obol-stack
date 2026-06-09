@@ -70,12 +70,7 @@ func FetchWalletInfo(cfg *config.Config, runtime agentruntime.Runtime, id, token
 	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
-	argv := []string{
-		"/opt/hermes/.venv/bin/python3",
-		"/data/.hermes/obol-skills/buy-x402/scripts/buy.py",
-		"balance",
-		"--chain", chain,
-	}
+	argv := BuyPyCommand(runtime, "balance", "--chain", chain)
 	kubectlArgs := agentruntime.BuildExecArgs(runtime, id, argv, false)
 
 	cmd := exec.Command(kubectlBin, kubectlArgs...)

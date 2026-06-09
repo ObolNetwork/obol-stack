@@ -21,14 +21,8 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-// In-pod paths used by `obol buy inference`. Hermes always has python3 in
-// the venv and skills mounted at $OBOL_SKILLS_DIR (see
-// internal/hermes/hermes.go where the env is wired). We reference the
-// literal paths so we don't depend on shell expansion through `kubectl exec`.
 const (
-	hermesPython    = "/opt/hermes/.venv/bin/python3"
-	hermesBuyPyPath = "/data/.hermes/obol-skills/buy-x402/scripts/buy.py"
-	defaultBuyName  = "default-paid"
+	defaultBuyName = "default-paid"
 
 	// defaultInteractivePerMTokCount is the default for perMTok offers:
 	// 5 million tokens is enough for a meaningful chat session without
@@ -44,6 +38,12 @@ const (
 	// explicitly. 5000 basis points = 50% above current, matching the
 	// "default 50% more than current N" UX agreed in the design doc.
 	costCapMarkupBps = 5000
+
+	// maxBuyPyAuthCount mirrors buy.py's MAX_AUTH_COUNT. The host converts
+	// user-facing counts (requests or million-tokens) into the exact auths
+	// buy.py signs, so it must apply the same cap before presenting the
+	// confirmation summary.
+	maxBuyPyAuthCount = 1000
 
 	// permit2SafeAuthCount mirrors buy.py's PERMIT2_SAFE_AUTH_COUNT: the
 	// ConfigMap-backed exact-payment path can store ~537 auths before
@@ -281,7 +281,15 @@ func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) 
 		return err
 	}
 
-	budgetAtomic, err := resolveBudget(cmd.String("budget"), token, count, priceAtomic)
+	multiplier := authMultiplier(priceUnit)
+	requestedAuths := count * multiplier
+	auths, capped, capReason := applyAuthCap(entry, requestedAuths)
+	pricePerAuthAtomic, err := pricePerAuth(priceAtomic, multiplier)
+	if err != nil {
+		return err
+	}
+
+	budgetAtomic, err := resolveBudget(cmd.String("budget"), token, auths, pricePerAuthAtomic)
 	if err != nil {
 		return err
 	}
@@ -299,42 +307,37 @@ func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) 
 	walletInfo := fetchWalletInfoBestEffort(cfg, target, token, chainForDisplay, u)
 	decimals := resolveTokenDecimals(entry, token, chainForDisplay)
 
-	// Detect the permit2 batch cap BEFORE the summary so users can see
-	// the actual ceiling they'll get instead of finding out post-buy.
-	multiplier := 1
-	if priceUnit == "perMTok" {
-		multiplier = schemas.ApproxTokensPerRequest
-	}
-	cappedCount, capped := applyPermit2CapToCount(entry, count, multiplier)
-	if capped {
-		// The budget ceiling tracks the actual auths we'll sign, not the
-		// notional ask, so the summary doesn't overstate the spend cap.
-		budgetAtomic = new(big.Int).Mul(priceAtomic, big.NewInt(int64(cappedCount)))
-	}
+	autoRefillThresholdAuths, autoRefillCountAuths, autoRefillCapped, autoRefillCapReason := effectiveAutoRefillAuths(autoRefill, entry, multiplier)
 
 	summary := buySummary{
-		Agent:         target,
-		PRName:        prName,
-		OfferURL:      offerURL,
-		Model:         chosenModel,
-		Count:         cappedCount,
-		Requested:     count,
-		Capped:        capped,
-		PriceAtomic:   priceAtomic,
-		PriceUnit:     priceUnit,
-		Token:         token,
-		TokenDecimals: decimals,
-		BudgetAtomic:  budgetAtomic,
-		AutoRefill:    autoRefill,
-		CostCapAtomic: costCapAtomic,
-		Wallet:        walletInfo,
-		Mode:          mode,
+		Agent:               target,
+		PRName:              prName,
+		OfferURL:            offerURL,
+		Model:               chosenModel,
+		RequestedAuths:      requestedAuths,
+		Auths:               auths,
+		Multiplier:          multiplier,
+		Capped:              capped,
+		CapReason:           capReason,
+		PriceAtomic:         priceAtomic,
+		PricePerAuthAtomic:  pricePerAuthAtomic,
+		PriceUnit:           priceUnit,
+		Token:               token,
+		TokenDecimals:       decimals,
+		BudgetAtomic:        budgetAtomic,
+		AutoRefill:          autoRefill,
+		AutoRefillThreshold: autoRefillThresholdAuths,
+		AutoRefillCount:     autoRefillCountAuths,
+		AutoRefillCapped:    autoRefillCapped,
+		AutoRefillCapReason: autoRefillCapReason,
+		CostCapAtomic:       costCapAtomic,
+		Wallet:              walletInfo,
+		Mode:                mode,
 	}
 	printBuySummary(u, summary)
 	if !confirmBuy(u, cmd) {
 		return errors.New("buy inference cancelled")
 	}
-	count = cappedCount
 
 	perAgent, global := resolveDefaultScopes(u, cmd, chosenModel, target)
 
@@ -349,14 +352,15 @@ func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) 
 		costCapForBuyPy = new(big.Int).Quo(costCapForBuyPy, big.NewInt(int64(schemas.ApproxTokensPerRequest)))
 	}
 	argv := buildBuyPyArgv(buyPyOptions{
+		Runtime:         target.Runtime,
 		Name:            prName,
 		Seller:          offerURL,
 		Model:           chosenModel,
 		BudgetMicro:     budgetAtomic.String(),
-		Count:           count * multiplier,
+		Count:           auths,
 		AutoRefill:      autoRefill.enabled,
-		RefillThreshold: autoRefill.threshold * multiplier,
-		RefillCount:     autoRefill.count * multiplier,
+		RefillThreshold: autoRefillThresholdAuths,
+		RefillCount:     autoRefillCountAuths,
 		CostCap:         costCapForBuyPy,
 		Force:           cmd.Bool("force"),
 		// Per-agent default lives entirely in-pod: buy.py edits the agent's
@@ -398,6 +402,7 @@ func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) 
 // native per-auth wire units. The host CLI converts from natural units
 // (requests | million-tokens) before populating these fields.
 type buyPyOptions struct {
+	Runtime         agentruntime.Runtime
 	Name            string
 	Seller          string
 	Model           string
@@ -406,18 +411,17 @@ type buyPyOptions struct {
 	AutoRefill      bool
 	RefillThreshold int
 	RefillCount     int
-	CostCap         *big.Int // when non-nil, sets --cost-cap on the buy.py call
+	CostCap         *big.Int // emitted only with AutoRefill; caps future top-up prices
 	Force           bool
 	SetDefault      bool
 }
 
 // buildBuyPyArgv composes the argv for `python3 buy.py buy <name> ...`.
 func buildBuyPyArgv(opts buyPyOptions) []string {
-	argv := []string{
-		hermesPython, hermesBuyPyPath, "buy", opts.Name,
+	argv := buy.BuyPyCommand(opts.Runtime, "buy", opts.Name,
 		"--endpoint", opts.Seller,
 		"--budget", opts.BudgetMicro,
-	}
+	)
 	if opts.Count > 0 {
 		argv = append(argv, "--count", fmt.Sprintf("%d", opts.Count))
 	}
@@ -433,7 +437,7 @@ func buildBuyPyArgv(opts buyPyOptions) []string {
 			argv = append(argv, "--refill-count", fmt.Sprintf("%d", opts.RefillCount))
 		}
 	}
-	if opts.CostCap != nil && opts.CostCap.Sign() > 0 {
+	if opts.AutoRefill && opts.CostCap != nil && opts.CostCap.Sign() > 0 {
 		argv = append(argv, "--cost-cap", opts.CostCap.String())
 	}
 	if opts.SetDefault {
@@ -499,22 +503,29 @@ type autoRefillPolicy struct {
 }
 
 type buySummary struct {
-	Agent         agentTarget
-	PRName        string
-	OfferURL      string
-	Model         string
-	Count         int      // post-cap count in natural units we'll actually sign
-	Requested     int      // natural-unit count the user asked for (pre-cap)
-	Capped        bool     // true when the permit2 batch cap reduced the count
-	PriceAtomic   *big.Int // per natural unit
-	PriceUnit     string   // "perRequest" | "perMTok"
-	Token         string
-	TokenDecimals int      // for human formatting; catalog wins, ResolveToken fallback
-	BudgetAtomic  *big.Int // Count × PriceAtomic (post-cap)
-	AutoRefill    autoRefillPolicy
-	CostCapAtomic *big.Int
-	Wallet        *buy.WalletInfo
-	Mode          buyMode
+	Agent               agentTarget
+	PRName              string
+	OfferURL            string
+	Model               string
+	RequestedAuths      int      // pre-cap auths implied by the user's natural-unit count
+	Auths               int      // post-cap auths buy.py will actually sign
+	Multiplier          int      // auths per natural unit: 1 for perRequest, ~1000 for perMTok
+	Capped              bool     // true when the auth cap reduced the request
+	CapReason           string   // e.g. "Permit2 storage limit" or "buy.py signing limit"
+	PriceAtomic         *big.Int // per natural unit
+	PricePerAuthAtomic  *big.Int // per buy.py auth / settled request
+	PriceUnit           string   // "perRequest" | "perMTok"
+	Token               string
+	TokenDecimals       int // for human formatting; catalog wins, ResolveToken fallback
+	BudgetAtomic        *big.Int
+	AutoRefill          autoRefillPolicy
+	AutoRefillThreshold int
+	AutoRefillCount     int
+	AutoRefillCapped    bool
+	AutoRefillCapReason string
+	CostCapAtomic       *big.Int
+	Wallet              *buy.WalletInfo
+	Mode                buyMode
 }
 
 // resolveBuyAgent picks the agent instance whose wallet pays the bill. When
@@ -776,6 +787,13 @@ func previewCost(count int, price *big.Int, decimals int) string {
 	return formatTokenAmount(total, decimals)
 }
 
+func authMultiplier(priceUnit string) int {
+	if priceUnit == "perMTok" {
+		return schemas.ApproxTokensPerRequest
+	}
+	return 1
+}
+
 // perRequestEstimate divides a per-MTok atomic price by the temporary
 // tokens-per-request constant the controller uses today. Until the
 // facilitator implements usage-based settlement, this is the actual
@@ -786,6 +804,20 @@ func perRequestEstimate(perMTokAtomic *big.Int) *big.Int {
 		return nil
 	}
 	return new(big.Int).Quo(perMTokAtomic, big.NewInt(int64(schemas.ApproxTokensPerRequest)))
+}
+
+func pricePerAuth(price *big.Int, multiplier int) (*big.Int, error) {
+	if price == nil || price.Sign() <= 0 {
+		return nil, errors.New("internal: price is non-positive")
+	}
+	if multiplier <= 1 {
+		return new(big.Int).Set(price), nil
+	}
+	perAuth := new(big.Int).Quo(price, big.NewInt(int64(multiplier)))
+	if perAuth.Sign() <= 0 {
+		return nil, fmt.Errorf("price %s divided by auth multiplier %d rounds to zero", price, multiplier)
+	}
+	return perAuth, nil
 }
 
 // formatTokenAmount renders an atomic-units value as a human decimal with
@@ -808,6 +840,23 @@ func formatTokenAmount(v *big.Int, decimals int) string {
 	s = strings.TrimRight(s, "0")
 	s = strings.TrimSuffix(s, ".")
 	return s
+}
+
+func capacityLabel(auths, multiplier int, priceUnit string) string {
+	if auths < 0 {
+		auths = 0
+	}
+	if multiplier <= 1 || priceUnit != "perMTok" {
+		return fmt.Sprintf("%d requests", auths)
+	}
+	r := new(big.Rat).SetFrac(big.NewInt(int64(auths)), big.NewInt(int64(multiplier)))
+	s := r.FloatString(6)
+	s = strings.TrimRight(s, "0")
+	s = strings.TrimSuffix(s, ".")
+	if s == "" {
+		s = "0"
+	}
+	return s + " million tokens"
 }
 
 func promptPositiveInt(u *ui.UI, label string, def int) (int, error) {
@@ -847,11 +896,15 @@ func parsePositiveInt(s string) (int, error) {
 	return v, nil
 }
 
-// resolveBudget computes a budget cap in atomic units. Explicit --budget
-// wins; otherwise we compute count × price and add 0 headroom — buy.py
-// rounds-up at the per-auth boundary, and a tight cap is exactly what users
-// asked for when they didn't set one explicitly.
-func resolveBudget(flag, token string, count int, price *big.Int) (*big.Int, error) {
+// resolveBudget computes the actual atomic spend represented by authCount ×
+// per-auth price. Explicit --budget remains a user cap: it must cover the
+// auths we are about to ask buy.py to sign, but it does not inflate the
+// displayed or passed budget above the exact signed total.
+func resolveBudget(flag, token string, authCount int, perAuthPrice *big.Int) (*big.Int, error) {
+	if authCount <= 0 || perAuthPrice == nil || perAuthPrice.Sign() <= 0 {
+		return nil, errors.New("internal: auth count or price is non-positive")
+	}
+	required := new(big.Int).Mul(perAuthPrice, big.NewInt(int64(authCount)))
 	if flag = strings.TrimSpace(flag); flag != "" {
 		s, err := budgetToBaseUnits(flag, token)
 		if err != nil {
@@ -861,18 +914,20 @@ func resolveBudget(flag, token string, count int, price *big.Int) (*big.Int, err
 		if !ok {
 			return nil, fmt.Errorf("internal: budgetToBaseUnits returned non-numeric %q", s)
 		}
-		return v, nil
+		if v.Cmp(required) < 0 {
+			return nil, fmt.Errorf("--budget %s is below the requested pre-authorization cost %s base units; reduce --count or raise --budget", v.String(), required.String())
+		}
 	}
-	if count <= 0 || price == nil || price.Sign() <= 0 {
-		return nil, errors.New("internal: count or price is non-positive")
-	}
-	return new(big.Int).Mul(price, big.NewInt(int64(count))), nil
+	return required, nil
 }
 
 // resolveCostCap parses --cost-cap into atomic units, or computes a default
 // of price × (1 + costCapMarkupBps/10000) when auto-refill is enabled.
 func resolveCostCap(flag, token string, price *big.Int, autoRefill bool) (*big.Int, error) {
 	if flag = strings.TrimSpace(flag); flag != "" {
+		if !autoRefill {
+			return nil, errors.New("--cost-cap requires --auto-refill because it only applies to future auto-top-ups")
+		}
 		// --cost-cap is in atomic units (matches buy.py convention).
 		v, ok := new(big.Int).SetString(flag, 10)
 		if !ok || v.Sign() <= 0 {
@@ -898,31 +953,49 @@ func resolveCostCap(flag, token string, price *big.Int, autoRefill bool) (*big.I
 	return cap, nil
 }
 
-// applyPermit2CapToCount caps a natural-unit count down so the per-auth
-// translation stays within buy.py's PERMIT2_SAFE_AUTH_COUNT (~537 auths
-// is the ConfigMap-backed exact path's hard limit; we mirror buy.py's
-// 500 floor). Returns the post-cap natural-unit count + a bool flag
-// signalling we trimmed. EIP-3009 / non-permit2 paths are uncapped.
-func applyPermit2CapToCount(entry *buy.CatalogEntry, naturalCount, multiplier int) (int, bool) {
+func authCapForEntry(entry *buy.CatalogEntry) (int, string) {
 	if entry == nil || entry.Asset == nil {
-		return naturalCount, false
+		return maxBuyPyAuthCount, "buy.py signing limit"
 	}
-	if !strings.EqualFold(strings.TrimSpace(entry.Asset.TransferMethod), "permit2") {
-		return naturalCount, false
+	if strings.EqualFold(strings.TrimSpace(entry.Asset.TransferMethod), "permit2") {
+		return permit2SafeAuthCount, "Permit2 storage limit"
+	}
+	return maxBuyPyAuthCount, "buy.py signing limit"
+}
+
+func applyAuthCap(entry *buy.CatalogEntry, requestedAuths int) (int, bool, string) {
+	limit, reason := authCapForEntry(entry)
+	if requestedAuths <= limit {
+		return requestedAuths, false, ""
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	return limit, true, reason
+}
+
+func effectiveAutoRefillAuths(policy autoRefillPolicy, entry *buy.CatalogEntry, multiplier int) (thresholdAuths, countAuths int, capped bool, reason string) {
+	if !policy.enabled {
+		return 0, 0, false, ""
 	}
 	if multiplier <= 0 {
 		multiplier = 1
 	}
-	auths := naturalCount * multiplier
-	if auths <= permit2SafeAuthCount {
-		return naturalCount, false
+	thresholdAuths = policy.threshold * multiplier
+	countAuths = policy.count * multiplier
+	limit, reason := authCapForEntry(entry)
+	if thresholdAuths > limit {
+		thresholdAuths = limit
+		capped = true
 	}
-	// Floor-divide so the natural-unit count fits inside the auth cap.
-	cappedNatural := permit2SafeAuthCount / multiplier
-	if cappedNatural < 1 {
-		cappedNatural = 1
+	if countAuths > limit {
+		countAuths = limit
+		capped = true
 	}
-	return cappedNatural, true
+	if !capped {
+		reason = ""
+	}
+	return thresholdAuths, countAuths, capped, reason
 }
 
 // resolveTokenDecimals picks the most reliable decimals source for the
@@ -990,25 +1063,34 @@ func printBuySummary(u *ui.UI, s buySummary) {
 		// part of the x402 spec but not implemented on the Obol
 		// facilitator yet — don't claim "unused capacity isn't charged"
 		// until it actually isn't.
-		u.Print(fmt.Sprintf("  Price:           %s %s per million tokens (≈ %s/request at ~1000 tokens/request)", human(s.PriceAtomic), s.Token, human(perRequestEstimate(s.PriceAtomic))))
-		u.Print(fmt.Sprintf("  Pre-authorizing: up to %d million tokens (≈ %s %s ceiling)", s.Count, human(s.BudgetAtomic), s.Token))
+		u.Print(fmt.Sprintf("  Price:           %s %s per million tokens (≈ %s/request at ~1000 tokens/request)", human(s.PriceAtomic), s.Token, human(s.PricePerAuthAtomic)))
+		u.Print(fmt.Sprintf("  Pre-authorizing: up to %s (≈ %s %s ceiling)", capacityLabel(s.Auths, s.Multiplier, s.PriceUnit), human(s.BudgetAtomic), s.Token))
 		u.Print("                   Settled per-request at the seller's quoted estimate; token-metered settlement is on the roadmap.")
 	default:
 		u.Print(fmt.Sprintf("  Price:           %s %s per request", human(s.PriceAtomic), s.Token))
-		u.Print(fmt.Sprintf("  Pre-authorizing: %d requests (≈ %s %s ceiling)", s.Count, human(s.BudgetAtomic), s.Token))
+		u.Print(fmt.Sprintf("  Pre-authorizing: %s (≈ %s %s ceiling)", capacityLabel(s.Auths, s.Multiplier, s.PriceUnit), human(s.BudgetAtomic), s.Token))
 		u.Print("                   Settled per-request after each successful response.")
 	}
 	if s.Capped {
-		// The seller's settlement asset uses Permit2 and we're at the
-		// per-PurchaseRequest auth ceiling. Tell the user upfront that
-		// the ask was trimmed and what to do instead, before they confirm.
-		u.Warnf("  Pre-authorization capped: %d %s requested → %d %s allowed per buy (Permit2 storage limit).",
-			s.Requested, summaryUnit(s.PriceUnit), s.Count, summaryUnit(s.PriceUnit))
+		// Tell the user upfront when the exact auth count was trimmed before
+		// dispatch, so the summary cannot overstate the spend cap.
+		u.Warnf("  Pre-authorization capped: %s requested → %s allowed per buy (%s).",
+			capacityLabel(s.RequestedAuths, s.Multiplier, s.PriceUnit),
+			capacityLabel(s.Auths, s.Multiplier, s.PriceUnit),
+			s.CapReason)
 		u.Dim("  To get the full ask: enable --auto-top-up and re-run with the original count, or run `obol buy inference` again after this buy lands.")
 	}
 	if s.AutoRefill.enabled {
-		u.Print(fmt.Sprintf("  Auto-top-up: yes (top up when remaining < %d %s, add %d more each time)",
-			s.AutoRefill.threshold, summaryUnit(s.PriceUnit), s.AutoRefill.count))
+		if s.AutoRefillThreshold > 0 || s.AutoRefillCount > 0 {
+			u.Print(fmt.Sprintf("  Auto-top-up: yes (top up when remaining < %s, add %s each time)",
+				capacityLabel(s.AutoRefillThreshold, s.Multiplier, s.PriceUnit),
+				capacityLabel(s.AutoRefillCount, s.Multiplier, s.PriceUnit)))
+		} else {
+			u.Print("  Auto-top-up: yes (agent defaults)")
+		}
+		if s.AutoRefillCapped {
+			u.Warnf("  Auto-top-up policy capped to fit %s.", s.AutoRefillCapReason)
+		}
 	} else {
 		u.Print("  Auto-top-up: no")
 	}
