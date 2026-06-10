@@ -418,9 +418,9 @@ contributors: if you write a guarded division, the epsilon is `1e-9`.
 
 ### Reports
 
-- The OBOL parity integration test report — see `plans/` for the most recent
-  `release-smoke-hardening-*.md` and `post-490-integration-*.md` entries that
-  reference the metric audits behind PRs #527 / #530 / #531.
+- The OBOL parity integration test reports (metric audits behind PRs #527 /
+  #530 / #531) lived in `plans/release-smoke-hardening-*.md` and
+  `plans/post-490-integration-*.md`; retrieve them from git history.
 
 ---
 

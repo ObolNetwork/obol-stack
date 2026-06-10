@@ -531,8 +531,8 @@ bootstrap_flow_workspace() {
     # Pick the freshest of the caller-supplied binary and the workspace binary.
     # During iteration on embedded skill content (e.g. buy-x402/scripts/buy.py)
     # it is easy to rebuild one and forget the other; copying the stale one
-    # silently bakes pre-fix files into the cluster PVC. See pitfall in
-    # plans/inference-v1337-buy-report-20260514.md (v1337 attempt 5).
+    # silently bakes pre-fix files into the cluster PVC (root-caused during
+    # the 2026-05-14 v1337 live-buy QA session).
     if [ -f "$obol_bin" ] && [ -f "$workspace_bin" ] && [ "$obol_bin" != "$workspace_bin" ]; then
         picked_mtime=$(stat -c %Y "$obol_bin" 2>/dev/null || stat -f %m "$obol_bin" 2>/dev/null || echo 0)
         other_mtime=$(stat -c %Y "$workspace_bin" 2>/dev/null || stat -f %m "$workspace_bin" 2>/dev/null || echo 0)

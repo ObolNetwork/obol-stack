@@ -426,8 +426,9 @@ func runAgentBackedDemo(
 			// "demo" from offer.namespace alone. The obol.org/demo
 			// label is the explicit signal — keep it set here so quant
 			// and friends show up under "Demo services" on the
-			// storefront. Drop this once we relax the cross-namespace
-			// guard (see plans/openapi-402-followups.md).
+			// storefront. Drop this once the catalog renderer's
+			// cross-namespace guard is relaxed to infer demo offers
+			// from their namespace.
 			"labels": map[string]any{"obol.org/demo": "true"},
 		},
 		"spec": specMap,

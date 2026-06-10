@@ -41,7 +41,7 @@ state.db / config.yaml; x402-buyer exits `load state:` at startup, killing
 every `paid/<model>` route. Fix: recreate the cluster (`stack down` →
 `purge -f` → `init` → `up`; back up agent wallets first), or for k3d chown
 the PV backing dirs to 1000:1000 from inside the node and restart the pods.
-See plans/volume-permission-hardening.md "Upgrading from <= v0.10.0-rc12".
+Full steps: v0.10.0 release notes, "Breaking changes".
 
 ### k3d port 80 privileged on macOS
 
