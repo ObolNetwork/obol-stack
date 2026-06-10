@@ -389,7 +389,7 @@ A registry digest pin instead of `:latest` on the verifier means your dev rewrit
 14. **First-request flake on freshly-deployed verifier** — the first request after `x402-verifier` becomes Ready can return an empty body / Bad Gateway from Traefik because the HTTPRoute is wired but the verifier's serviceoffer-source watcher has not loaded the route yet. `flows/flow-07-sell-verify.sh` and `flows/flow-08-buy.sh` wrap the 402-body fetch in a 12x5s retry loop. Do not extend retry loops elsewhere to mask intermittents — this one is a real first-request race.
 
 15. **"0 spent" is not proof no money moved** — an error response (>= 400) carrying `X-PAYMENT-RESPONSE` with a tx hash means the facilitator settled on-chain and THEN failed; the buyer marks that auth consumed, buy.py prints a settled-on-chain warning. Chain is canonical; see `docs/observability.md` ("Verify settlement against the chain").
-16. **Clusters created on <= v0.10.0-rc12 keep hostPath-typed PVs** — kubelet ignores `fsGroup` there, and v0.10.0's non-root pods (UID 1000, no chown inits) cannot read the legacy 10000-owned data. Supported path: recreate the cluster (wallet backup/restore). See `plans/volume-permission-hardening.md` "Upgrading from <= v0.10.0-rc12".
+16. **Clusters created on <= v0.10.0-rc12 keep hostPath-typed PVs** — kubelet ignores `fsGroup` there, and v0.10.0's non-root pods (UID 1000, no chown inits) cannot read the legacy 10000-owned data. Supported path: recreate the cluster (wallet backup/restore); full steps in the v0.10.0 release notes (Breaking changes).
 
 For a fuller debug catalog with symptom->fix mapping, see `.agents/skills/obol-stack-dev/references/release-smoke-debugging.md`.
 

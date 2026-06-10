@@ -270,9 +270,9 @@ func containsListItem(yamlBody, item string) bool {
 // skills" / "no-bundled-skills" line: that string is owned by the external
 // nousresearch/hermes-agent image, is not referenced anywhere in this repo, and
 // could change wording or log level across image bumps without our knowledge —
-// grepping for it would be a brittle, unverifiable contract. The plan
-// (plans/sell-agent-perf.md, Verification) only ever treated the log line as an
-// eyeball aid, not an assertion.
+// grepping for it would be a brittle, unverifiable contract. Earlier
+// verification notes only ever treated the log line as an eyeball aid, not
+// an assertion.
 //
 // The reliable, image-version-independent signal is the pod's on-disk skills
 // layout: when the marker is honored, Hermes seeds NONE of its ~80 bundled
