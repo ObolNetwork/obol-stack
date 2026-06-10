@@ -78,7 +78,7 @@ obol
 │   └── wallet      address, list, backup, restore
 ├── wallet          import
 ├── network         install, sync, delete, list, add, remove, status
-├── sell            inference, http, agent, demo, list, status, test, stop, update, delete, pricing, register, identity, info
+├── sell            inference, http, agent, mcp, demo, list, status, test, stop, update, delete, pricing, register, identity, info
 ├── buy             inference
 ├── hermes          passthrough (SkipFlagParsing) → native hermes CLI
 │                   Token retrieval moved to `obol agent auth`
@@ -100,6 +100,7 @@ obol
 - `agent new` (alias `onboard`): CRD-declared sub-agent via `--model`, `--skills`, `--objective`, `--create-wallet`. Without positional name, falls back to legacy host-rendered Hermes/OpenClaw onboard.
 - `network install` has dynamic subcommands (one per supported chain; `--help` to list). `network sync [<network>/<id>]` with `--all`.
 - `sell info <name>` prints purchase instructions (URL, model, buy.py command).
+- `sell mcp [name]` runs a foreground x402-paid MCP server: forwards buyer JSON args to a backend HTTP service, injecting the seller's own API key (buyer never sees it). Payment rides MCP `_meta` (`internal/x402mcp`).
 - `hermes` is passthrough to native hermes CLI via `hermes.CLI()` (cmd/obol/hermes.go:27). No Go-level subcommands registered.
 - `bootstrap` (cmd/obol/bootstrap.go) is a hidden command for installer use only — not user-facing.
 
@@ -119,7 +120,10 @@ Payment-gated access to cluster services via x402 (HTTP 402 micropayments, Traef
 
 **buy.py** at `${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py` (skill: `buy-x402`, not `buy`):
 ```
-probe  <endpoint-url> [--model <id>]                 Probe x402 pricing
+probe  <endpoint-url> [--model <id>]                 Probe x402 pricing (--type http|inference|agent)
+pay    <url> [--data <json>] [--timeout <s>]         One-shot paid request (1 auth, X-PAYMENT; no sidecar)
+pay-agent <url> --model <id> --message '<text>'      One-shot paid STREAMING agent call: POSTs
+       [--data <json>] [--timeout <s>]               /v1/chat/completions stream:true, SSE → stdout (1h default timeout)
 buy    <name> --endpoint <url> --model <id>          Pre-sign auths + create PurchaseRequest
        [--budget <micro-units>] [--count <N>]
        [--auto-refill] [--refill-threshold <N>] [--refill-count <N>]
@@ -375,7 +379,7 @@ A registry digest pin instead of `:latest` on the verifier means your dev rewrit
 4. **ExternalName services** — do not work with Traefik Gateway API; use ClusterIP + Endpoints
 5. **eRPC `eth_call` cache** — default TTL is 10s for unfinalized reads; `buy.py balance` can lag behind an already-settled paid request for a few seconds
 6. **`/v1` required in `api_base` for `paid/*` route** — LiteLLM's OpenAI provider does NOT append `/v1` to a bare `api_base`. The buyer sidecar route must be `http://127.0.0.1:8402/v1`, not `http://127.0.0.1:8402`. Without `/v1`, LiteLLM calls `/chat/completions` on the buyer; the buyer's mux returns `404 page not found` (Go default), which LiteLLM surfaces as `OpenAIException - 404 page not found`.
-7. **LiteLLM restart is fallback, not the default buy path** — the validated happy path is `buy.py buy`/`process --all`/same-name top-up without a manual LiteLLM restart. Controller hot-add/hot-delete + buyer reload is expected to make `paid/<model>` appear and disappear in place. If a paid alias still fails after controller reconciliation and buyer sidecar reports the upstream, restart LiteLLM as a fallback investigation step. Treat mandatory restart after every buy as historical behavior, not a current invariant.
+7. **LiteLLM restart is fallback, not the default buy path** — the validated happy path is `buy.py buy`/`process --all`/same-name top-up without a manual LiteLLM restart. Controller hot-add/hot-delete + buyer reload is expected to make `paid/<model>` appear and disappear in place. If a paid alias still fails after controller reconciliation and buyer sidecar reports the upstream, restart LiteLLM as a fallback investigation step. Since rc14, Reloader auto-restarts LiteLLM on `litellm-config` changes (e.g. a buy that adds a NEW provider); buyer CM writes (top-ups/refills) hot-reload via `/admin/reload` with no restart — do not add the buyer CMs to the Reloader annotation.
 8. **x402-verifier CA bundle missing → TLS failure** — The `x402-verifier` image is distroless (no CA store). The `ca-certificates` ConfigMap in `x402` namespace must be populated from the host CA bundle or the verifier cannot TLS-verify calls to the facilitator (`https://x402.gcp.obol.tech`), causing `x509: certificate signed by unknown authority` on every payment. **Fixed**: `obol stack up` calls `x402verifier.PopulateCABundle` after infrastructure deployment; `obol sell http` calls it before creating the ServiceOffer. If `Payment verification failed` errors still occur, check verifier logs for the x509 error and repopulate manually: `kubectl create configmap ca-certificates -n x402 --from-file=ca-certificates.crt=/etc/ssl/cert.pem --dry-run=client -o yaml | kubectl replace -f -`
 9. **`EnsureVerifier` overwrites helmfile's image pin under `OBOL_DEVELOPMENT=true`** — `internal/x402/setup.go` reads embedded `x402.yaml` (hard-coded image pin) and `kubectl apply`s it. Without an in-memory rewrite this overwrites the helmfile-managed `:latest` deployment with the embedded pin → every source change to the verifier silently bypassed. Fix shipped in `5a10fb8` (rewrites pins in-memory before apply); structural regression test: `internal/x402/setup_structure_test.go` (`TestEnsureVerifier_NoInlineRegex`). **If you add a new component installed via `kubectl apply` of an embedded manifest**, give it the same dev-rewrite treatment.
 10. **CAIP-2 vs legacy chain id form mismatch** — `RouteRule.Network` is normalized to CAIP-2 (`eip155:84532`) at one boundary, but `internal/x402/chains.go::ResolveChainInfo` must know both that form and the legacy alias (`base-sepolia`). If only one is registered, `matchPaidRouteFull` returns 404 silently on every paid request. When adding a new chain, register both the legacy alias and `CAIP2Network` in every `case` arm.
@@ -383,6 +387,9 @@ A registry digest pin instead of `:latest` on the verifier means your dev rewrit
 12. **Combo-form image-pin regex** — `internal/embed/infrastructure/...` may pin images as `<image>:<tag>@sha256:<digest>`. The dev-rewrite alternation in `internal/defaults/defaults.go` must list the longest form first (`:tag@sha256:digest` | `@sha256:digest` | `:tag`), or only the `:tag` portion gets rewritten, the `@sha256:` survives, and Docker honors the digest over the tag → local build silently bypassed. Test: `internal/defaults/defaults_test.go`.
 13. **Free-tier Base Sepolia RPC throttling** — `drpc.org`, `sepolia.base.org`, and similar free-tier endpoints return HTTP 408 under release-smoke load (multiple anvil forks + balance reads + receipt scans). Flow-11 step 8 / flow-13 facilitator-reachability / flow-14 balance reads all start failing intermittently. Set `BASE_SEPOLIA_RPC=https://lb.drpc.live/base-sepolia/<paid-token>` or `ALCHEMY_BASE_SEPOLIA_API_KEY=<key>` in `.env`. `flows/release-smoke.sh` runs `warn_unpaid_base_sepolia_rpc` preflight; `cmd/obol/network.go::redactRPCURL` and `flows/lib.sh::scrub_secrets` collapse paid-RPC URLs to `[REDACTED].<domain>/[REDACTED]` so logs only ever surface the provider.
 14. **First-request flake on freshly-deployed verifier** — the first request after `x402-verifier` becomes Ready can return an empty body / Bad Gateway from Traefik because the HTTPRoute is wired but the verifier's serviceoffer-source watcher has not loaded the route yet. `flows/flow-07-sell-verify.sh` and `flows/flow-08-buy.sh` wrap the 402-body fetch in a 12x5s retry loop. Do not extend retry loops elsewhere to mask intermittents — this one is a real first-request race.
+
+15. **"0 spent" is not proof no money moved** — an error response (>= 400) carrying `X-PAYMENT-RESPONSE` with a tx hash means the facilitator settled on-chain and THEN failed; the buyer marks that auth consumed, buy.py prints a settled-on-chain warning. Chain is canonical; see `docs/observability.md` ("Verify settlement against the chain").
+16. **Clusters created on <= v0.10.0-rc12 keep hostPath-typed PVs** — kubelet ignores `fsGroup` there, and v0.10.0's non-root pods (UID 1000, no chown inits) cannot read the legacy 10000-owned data. Supported path: recreate the cluster (wallet backup/restore). See `plans/volume-permission-hardening.md` "Upgrading from <= v0.10.0-rc12".
 
 For a fuller debug catalog with symptom->fix mapping, see `.agents/skills/obol-stack-dev/references/release-smoke-debugging.md`.
 
