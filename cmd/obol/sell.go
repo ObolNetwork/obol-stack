@@ -305,12 +305,12 @@ Examples:
 			// requests fall through to the buyer sidecar with a 404 (see
 			// CLAUDE.md and the obol-agent's recent buy report). Reject
 			// up-front and suggest a `--` separator that survives the route.
-			if strings.Contains(modelFlag, "/") {
-				return fmt.Errorf(
-					"--model %q contains '/', which breaks LiteLLM's `paid/*` wildcard on the buyer side; "+
-						"use `--` (or another non-slash separator) — e.g. `%s` instead of `%s`",
-					modelFlag, strings.ReplaceAll(modelFlag, "/", "--"), modelFlag,
-				)
+			// Resume replays of descriptors persisted before this rule
+			// existed are tolerated with a warning instead.
+			if warn, vErr := validateSellInferenceModelName(modelFlag, os.Getenv(resumeReplayEnv) == "1"); vErr != nil {
+				return vErr
+			} else if warn != "" {
+				u.Warnf("%s", warn)
 			}
 
 			teeType := cmd.String("tee")
@@ -4043,14 +4043,9 @@ func startDetachedInferenceGateway(cfg *config.Config, u *ui.UI, d *inference.De
 		return nil
 	}
 
-	obolBin := filepath.Join(cfg.BinDir, "obol")
-	if _, statErr := os.Stat(obolBin); statErr != nil {
-		// Fall back to whatever obol the parent process is running as.
-		exe, exeErr := os.Executable()
-		if exeErr != nil {
-			return fmt.Errorf("locate obol binary: %w", exeErr)
-		}
-		obolBin = exe
+	obolBin, err := resumeGatewayBinary(cfg)
+	if err != nil {
+		return err
 	}
 
 	args := buildResumeGatewayArgs(d)
@@ -4064,7 +4059,7 @@ func startDetachedInferenceGateway(cfg *config.Config, u *ui.UI, d *inference.De
 	cmd.Stdout = logF
 	cmd.Stderr = logF
 	cmd.SysProcAttr = detachedSysProcAttr()
-	cmd.Env = os.Environ()
+	cmd.Env = resumeGatewayEnviron()
 
 	if err := cmd.Start(); err != nil {
 		_ = logF.Close()
@@ -4085,6 +4080,62 @@ func startDetachedInferenceGateway(cfg *config.Config, u *ui.UI, d *inference.De
 	}
 	u.Successf("Gateway started in background (pid %d, log %s)", gatewayPID, logFile)
 	return nil
+}
+
+// resumeReplayEnv marks a spawned gateway process as a resume replay of
+// a previously-persisted offer. Validation that only exists to guard
+// *new* offer creation (e.g. the slash-in-model LiteLLM rule, added
+// after descriptors with slashed names were already on disk) downgrades
+// to a warning when this is set — tightening CLI validation must never
+// permanently strand an offer that was legal when it was created.
+const resumeReplayEnv = "OBOL_SELL_RESUME_REPLAY"
+
+// resumeGatewayEnviron is the environment for the relaunched gateway:
+// the parent's environment plus the resume-replay marker.
+func resumeGatewayEnviron() []string {
+	return append(os.Environ(), resumeReplayEnv+"=1")
+}
+
+// resumeGatewayBinary picks the obol binary used to relaunch a gateway.
+// It must be the binary running THIS process: buildResumeGatewayArgs
+// encodes the current version's flag surface, and handing those args to
+// a different (typically older, installed) obol re-parses them against
+// a different flag set. Live-debugged on the spark reboot test: the
+// installed rc11 predates the --description spelling and the relaunched
+// gateway died instantly with "flag provided but not defined". The
+// BinDir copy is only a fallback for the degenerate case where the
+// running executable's path cannot be resolved.
+func resumeGatewayBinary(cfg *config.Config) (string, error) {
+	if exe, err := os.Executable(); err == nil {
+		return exe, nil
+	}
+	obolBin := filepath.Join(cfg.BinDir, "obol")
+	if _, err := os.Stat(obolBin); err != nil {
+		return "", fmt.Errorf("locate obol binary: %w", err)
+	}
+	return obolBin, nil
+}
+
+// validateSellInferenceModelName enforces the no-slash model-name rule
+// for new offers, and relaxes it to a warning for resume replays of
+// descriptors that predate the rule. Returns a non-empty warning string
+// (for the caller to surface) when the name is tolerated on replay.
+func validateSellInferenceModelName(model string, resumeReplay bool) (string, error) {
+	if !strings.Contains(model, "/") {
+		return "", nil
+	}
+	suggestion := strings.ReplaceAll(model, "/", "--")
+	if resumeReplay {
+		return fmt.Sprintf(
+			"model %q contains '/' — tolerated because this is a resume replay of an existing offer, but LiteLLM `paid/*` buyers will see 404s; recreate the offer with a non-slash name (e.g. %q) when convenient",
+			model, suggestion,
+		), nil
+	}
+	return "", fmt.Errorf(
+		"--model %q contains '/', which breaks LiteLLM's `paid/*` wildcard on the buyer side; "+
+			"use `--` (or another non-slash separator) — e.g. `%s` instead of `%s`",
+		model, suggestion, model,
+	)
 }
 
 // buildResumeGatewayArgs reconstructs the `obol sell inference` flag set
@@ -4132,7 +4183,12 @@ func buildResumeGatewayArgs(d *inference.Deployment) []string {
 			args = append(args, "--register-name", v)
 		}
 		if v, _ := d.Registration["description"].(string); v != "" {
-			args = append(args, "--description", v)
+			// --register-description, not --description: it is the one
+			// spelling every released CLI parses (primary name through
+			// rc11, kept alias since the rc12 rename), so a replayed
+			// descriptor survives being parsed by an older installed
+			// binary on the BinDir fallback path.
+			args = append(args, "--register-description", v)
 		}
 		if v, _ := d.Registration["image"].(string); v != "" {
 			args = append(args, "--register-image", v)

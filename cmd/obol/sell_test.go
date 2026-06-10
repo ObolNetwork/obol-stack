@@ -1419,7 +1419,7 @@ func TestBuildResumeGatewayArgs(t *testing.T) {
 				"--per-mtok", "23",
 				"--facilitator", "https://x402.gcp.obol.tech",
 				"--register-name", "Qwen3.6-27B AEON Ultimate",
-				"--description", "Uncensored Qwen3.6-27B abliteration",
+				"--register-description", "Uncensored Qwen3.6-27B abliteration",
 				"--register-skills", "llm/inference",
 				"--register-skills", "llm/uncensored",
 				"--register-domains", "inference.v1337.org",
@@ -1427,6 +1427,9 @@ func TestBuildResumeGatewayArgs(t *testing.T) {
 			wantNoSub: []string{
 				"--price", // perMTok set, perRequest must not also be passed
 				"--no-register",
+				// the rc12+ spelling — replay must emit the spelling
+				// every released CLI parses (--register-description)
+				"--description",
 			},
 		},
 		{
@@ -1496,6 +1499,86 @@ func TestBuildResumeGatewayArgs(t *testing.T) {
 			}
 			if nameIdx < 0 || firstFlagIdx < 0 || nameIdx > firstFlagIdx {
 				t.Errorf("name positional must come before flags; got %v", joined)
+			}
+		})
+	}
+}
+
+// TestResumeGatewayBinaryPrefersRunningExecutable pins the binary-skew
+// fix from the spark2 reboot test: buildResumeGatewayArgs encodes the
+// running version's flag surface, so the relaunch must spawn the running
+// executable — even when an installed (possibly older) obol exists at
+// BinDir. Spawning the BinDir copy is how the live relaunch died with
+// "flag provided but not defined: -description" against rc11.
+func TestResumeGatewayBinaryPrefersRunningExecutable(t *testing.T) {
+	binDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(binDir, "obol"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatalf("write fake installed obol: %v", err)
+	}
+	cfg := &config.Config{BinDir: binDir}
+
+	got, err := resumeGatewayBinary(cfg)
+	if err != nil {
+		t.Fatalf("resumeGatewayBinary: %v", err)
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	if got != exe {
+		t.Errorf("resumeGatewayBinary = %q; want running executable %q (BinDir copy must not win)", got, exe)
+	}
+}
+
+// TestResumeGatewayEnviron pins the replay marker on the spawned gateway
+// environment. Without it, validation added after a descriptor was
+// persisted (the slash-in-model rule) rejects the replayed flags and the
+// offer can never resume — the second failure mode from the spark2
+// reboot test.
+func TestResumeGatewayEnviron(t *testing.T) {
+	want := resumeReplayEnv + "=1"
+	for _, kv := range resumeGatewayEnviron() {
+		if kv == want {
+			return
+		}
+	}
+	t.Errorf("resumeGatewayEnviron() missing %q", want)
+}
+
+// TestValidateSellInferenceModelName pins the two-mode behavior of the
+// slash-in-model rule: hard error for new offers, warning-only for
+// resume replays of descriptors that predate the rule.
+func TestValidateSellInferenceModelName(t *testing.T) {
+	tests := []struct {
+		name       string
+		model      string
+		replay     bool
+		wantErr    bool
+		wantWarn   bool
+		wantInText string
+	}{
+		{"clean name, new offer", "aeon-ultimate", false, false, false, ""},
+		{"clean name, replay", "aeon-ultimate", true, false, false, ""},
+		{"slash, new offer rejected", "AEON-7/Qwen3.6", false, true, false, "AEON-7--Qwen3.6"},
+		{"slash, replay tolerated with warning", "AEON-7/Qwen3.6", true, false, true, "resume replay"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			warn, err := validateSellInferenceModelName(tc.model, tc.replay)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v; wantErr = %v", err, tc.wantErr)
+			}
+			if (warn != "") != tc.wantWarn {
+				t.Fatalf("warn = %q; wantWarn = %v", warn, tc.wantWarn)
+			}
+			if tc.wantInText != "" {
+				combined := warn
+				if err != nil {
+					combined += err.Error()
+				}
+				if !strings.Contains(combined, tc.wantInText) {
+					t.Errorf("output %q missing %q", combined, tc.wantInText)
+				}
 			}
 		})
 	}
