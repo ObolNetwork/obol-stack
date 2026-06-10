@@ -2154,12 +2154,20 @@ func TestRemovePersistedServiceOffersInNamespace(t *testing.T) {
 	if n, err := removePersistedServiceOffersInNamespace(cfg, ""); n != 0 || err != nil {
 		t.Errorf("empty ns: n=%d err=%v", n, err)
 	}
+	if n, err := removePersistedServiceOffersInNamespace(nil, "agent-quant"); n != 0 || err != nil {
+		t.Errorf("nil cfg: n=%d err=%v", n, err)
+	}
 }
 
 // TestDeleteCRDAgent_CleansPersistedOffers is the source-level guard
-// that `obol agent delete` removes the agent's persisted sell offers —
-// the namespace deletion already took the CRs, so a survivor ledger
-// file would make every later resume replay a ghost offer.
+// that `obol agent delete` (a) deletes the agent's ServiceOffer CRs
+// in-cluster — nothing else does: the agent finalizer leaves the
+// namespace and offers, and a surviving offer would reconcile back to
+// Ready (paying the DELETED agent's wallet) if the name is ever reused
+// — and (b) withdraws their ledger entries so resume doesn't replay
+// ghosts. The ledger sweep must live in the cluster-reachable branch:
+// when the cluster is unreachable the CRs survive and the ledger must
+// keep covering them.
 func TestDeleteCRDAgent_CleansPersistedOffers(t *testing.T) {
 	src, err := os.ReadFile("agent.go")
 	if err != nil {
@@ -2175,8 +2183,16 @@ func TestDeleteCRDAgent_CleansPersistedOffers(t *testing.T) {
 		t.Fatal("could not delimit deleteCRDAgent body")
 	}
 	scope := body[start : start+1+end]
+	if !strings.Contains(scope, `"delete", "serviceoffers.obol.org", "--all", "-n", ns`) {
+		t.Fatal("deleteCRDAgent must delete the namespace's ServiceOffer CRs — the agent finalizer doesn't, and survivors resurrect against a recreated agent")
+	}
 	if !strings.Contains(scope, "removePersistedServiceOffersInNamespace(") {
 		t.Fatal("deleteCRDAgent must call removePersistedServiceOffersInNamespace — otherwise resume replays offers for deleted agents forever")
+	}
+	unreachable := strings.Index(scope, "Cluster unreachable")
+	sweep := strings.Index(scope, "removePersistedServiceOffersInNamespace(")
+	if unreachable >= 0 && sweep > unreachable {
+		t.Fatal("ledger sweep must run in the cluster-reachable branch only — when the cluster is unreachable the CRs survive and the ledger must keep covering them")
 	}
 }
 
@@ -2264,5 +2280,113 @@ func TestSellUpdateCommand_RefreshesLedger(t *testing.T) {
 	scope := body[start : start+1+end]
 	if !strings.Contains(scope, "refreshPersistedServiceOffer(") {
 		t.Fatal("sellUpdateCommand must call refreshPersistedServiceOffer after the patch — else resume reverts updated payment terms")
+	}
+}
+
+// TestSellStopCommand_RefreshesLedger mirrors the sell-update guard for
+// the drain path: without a ledger refresh, an etcd-wiping
+// stack-down/up replays the pre-drain manifest and a deliberately
+// stopped offer comes back fully live.
+func TestSellStopCommand_RefreshesLedger(t *testing.T) {
+	src, err := os.ReadFile("sell.go")
+	if err != nil {
+		t.Fatalf("read sell.go: %v", err)
+	}
+	body := string(src)
+	start := strings.Index(body, "func sellStopCommand(")
+	if start < 0 {
+		t.Fatal("sellStopCommand not found")
+	}
+	end := strings.Index(body[start+1:], "\nfunc ")
+	if end < 0 {
+		t.Fatal("could not delimit sellStopCommand body")
+	}
+	scope := body[start : start+1+end]
+	if !strings.Contains(scope, "refreshPersistedServiceOffer(") {
+		t.Fatal("sellStopCommand must refresh the ledger after the drain patch — else resume resurrects a stopped offer fully live")
+	}
+}
+
+// TestSellDeleteCommand_TombstonesInference is the source-level guard
+// for the inference half of delete⇒no-resume: the descriptor survives
+// for list/status history, so without a tombstone the resume loop
+// rebuilds the offer and relaunches the host gateway the operator just
+// deleted.
+func TestSellDeleteCommand_TombstonesInference(t *testing.T) {
+	src, err := os.ReadFile("sell.go")
+	if err != nil {
+		t.Fatalf("read sell.go: %v", err)
+	}
+	body := string(src)
+	start := strings.Index(body, "func sellDeleteCommand(")
+	if start < 0 {
+		t.Fatal("sellDeleteCommand not found")
+	}
+	end := strings.Index(body[start+1:], "\nfunc ")
+	if end < 0 {
+		t.Fatal("could not delimit sellDeleteCommand body")
+	}
+	scope := body[start : start+1+end]
+	if !strings.Contains(scope, "DeletedAt") {
+		t.Fatal("sellDeleteCommand must tombstone the inference descriptor (DeletedAt) — else resume undoes the delete")
+	}
+}
+
+// TestActiveInferenceDeployments pins the resume-side tombstone filter.
+func TestActiveInferenceDeployments(t *testing.T) {
+	live := &inference.Deployment{Name: "live"}
+	dead := &inference.Deployment{Name: "dead", DeletedAt: "2026-06-10T00:00:00Z"}
+	got := activeInferenceDeployments([]*inference.Deployment{live, dead, nil})
+	if len(got) != 1 || got[0].Name != "live" {
+		t.Fatalf("activeInferenceDeployments = %v, want [live]", got)
+	}
+}
+
+// TestAgentOfferBundle_RoundTrip pins the agent persist shape: a v1
+// List carrying the agent NAMESPACE (so replay after stack recreation
+// can land at all) plus the offer — and explicitly NOT an Agent CR
+// (replaying one would mint a fresh wallet). The ledger loader must key
+// it by List metadata and label it from the inner offer's type.
+func TestAgentOfferBundle_RoundTrip(t *testing.T) {
+	offer := map[string]any{
+		"apiVersion": "obol.org/v1alpha1", "kind": "ServiceOffer",
+		"metadata": map[string]any{"name": "quant", "namespace": "agent-quant"},
+		"spec":     map[string]any{"type": "agent"},
+	}
+	bundle := agentOfferBundle("agent-quant", "quant", offer)
+
+	items, _ := bundle["items"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("bundle has %d items, want 2 (Namespace + ServiceOffer)", len(items))
+	}
+	nsItem := items[0].(map[string]any)
+	nsMeta, _ := nsItem["metadata"].(map[string]any)
+	if nsItem["kind"] != "Namespace" || nsMeta["name"] != "agent-quant" {
+		t.Errorf("first item must be the agent namespace, got %v", nsItem)
+	}
+	labels, _ := nsMeta["labels"].(map[string]any)
+	if labels["obol.org/agent-namespace"] != "true" {
+		t.Error("namespace must carry the obol.org/agent-namespace label")
+	}
+	for _, it := range items {
+		if it.(map[string]any)["kind"] == "Agent" {
+			t.Fatal("bundle must NOT contain an Agent CR — replaying one mints a fresh wallet")
+		}
+	}
+
+	cfg := newTestConfig(t)
+	if err := persistServiceOffer(cfg, "agent-quant", "quant", bundle); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	offers, err := loadPersistedServiceOffers(sellOfferStoreDir(cfg), ui.New(false))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(offers) != 1 {
+		t.Fatalf("got %d offers, want 1", len(offers))
+	}
+	o := offers[0]
+	if o.Namespace != "agent-quant" || o.Name != "quant" || o.label() != "sell-agent" {
+		t.Errorf("got %s/%s label=%s, want agent-quant/quant label=sell-agent", o.Namespace, o.Name, o.label())
 	}
 }

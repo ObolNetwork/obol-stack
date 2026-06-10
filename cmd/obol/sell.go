@@ -2617,6 +2617,17 @@ Flags:
 				return fmt.Errorf("failed to drain serviceoffer: %w", err)
 			}
 
+			// Refresh the resume ledger so an etcd-wiping stack-down/up
+			// replays the offer in its drained state (an elapsed drainAt
+			// reconciles straight to torn-down) instead of resurrecting a
+			// deliberately stopped offer fully live. Reboot-resume was
+			// already safe — client-side apply leaves drainAt alone because
+			// it never owned the field — but the ledger replay IS the
+			// last-applied state after a recreation.
+			if err := refreshPersistedServiceOffer(cfg, ns, name); err != nil {
+				u.Warnf("could not refresh persisted offer for resume: %v", err)
+			}
+
 			if grace == 0 {
 				u.Successf("ServiceOffer %s/%s draining; route will be removed on the next reconcile (--force).", ns, name)
 			} else {
@@ -2796,15 +2807,35 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 				return err
 			}
 
-			// Drop the on-disk sell-http manifest so the next `obol stack
-			// up` doesn't replay an offer the operator just deleted. The
-			// inference path doesn't need this hook — `obol sell delete`
-			// doesn't currently remove the inference.Store descriptor
-			// either, by design (the descriptor is what `obol sell
-			// inference list/status` reads). For HTTP we keep no such
-			// post-delete state, so removing the file is the right shape.
+			// Drop the offer's manifest from the resume ledger so the next
+			// `obol stack up` / `obol sell resume` doesn't replay an offer
+			// the operator just deleted. Covers every ledger-persisted type
+			// (http, agent, demo bundles).
 			if removeErr := removePersistedServiceOffer(cfg, ns, name); removeErr != nil {
-				u.Warnf("could not remove persisted sell-http offer at %s/%s: %v", ns, name, removeErr)
+				u.Warnf("could not remove persisted sell offer manifest at %s/%s: %v", ns, name, removeErr)
+			}
+
+			// Tombstone the inference descriptor when this was a
+			// sell-inference offer: the descriptor is kept on disk for
+			// `sell inference list/status` history, but without a marker
+			// the resume loop would rebuild the offer and relaunch its
+			// host gateway — undoing the delete. Re-running
+			// `obol sell inference <name>` rewrites the descriptor and
+			// clears the tombstone. Namespace-guarded so deleting an
+			// unrelated same-name offer elsewhere can't tombstone it.
+			if store := inference.NewStore(cfg.ConfigDir); store != nil {
+				if d, getErr := store.Get(name); getErr == nil && d != nil && d.DeletedAt == "" {
+					dNS := d.ServiceNamespace
+					if dNS == "" {
+						dNS = "llm"
+					}
+					if dNS == ns {
+						d.DeletedAt = time.Now().UTC().Format(time.RFC3339)
+						if updErr := store.Update(d); updErr != nil {
+							u.Warnf("could not tombstone inference descriptor for %s: %v", name, updErr)
+						}
+					}
+				}
 			}
 
 			// Clean up demo backend resources if this is a demo service.
@@ -3990,12 +4021,15 @@ func resumeSellOffers(ctx context.Context, cfg *config.Config, u *ui.UI) error {
 
 	// 1. Inference offers: the only type with a host-side process. Each
 	//    descriptor re-applies its cluster artifacts AND relaunches the
-	//    detached x402 gateway.
+	//    detached x402 gateway. Tombstoned descriptors (offer deleted via
+	//    `obol sell delete`; kept on disk for list/status history) are
+	//    excluded — replaying one would undo the delete.
 	store := inference.NewStore(cfg.ConfigDir)
-	deployments, err := store.List()
+	all, err := store.List()
 	if err != nil {
 		return fmt.Errorf("list inference deployments: %w", err)
 	}
+	deployments := activeInferenceDeployments(all)
 
 	if len(deployments) > 0 {
 		u.Blank()
@@ -4026,6 +4060,20 @@ func resumeSellOffers(ctx context.Context, cfg *config.Config, u *ui.UI) error {
 	}
 
 	return nil
+}
+
+// activeInferenceDeployments filters out tombstoned descriptors —
+// offers removed by `obol sell delete` whose on-disk state survives for
+// `sell inference list/status`. Pure so the resume exclusion is
+// testable on its own.
+func activeInferenceDeployments(ds []*inference.Deployment) []*inference.Deployment {
+	var active []*inference.Deployment
+	for _, d := range ds {
+		if d != nil && d.DeletedAt == "" {
+			active = append(active, d)
+		}
+	}
+	return active
 }
 
 // resumeOneInferenceOffer re-creates the cluster-side artifacts that
@@ -4605,10 +4653,11 @@ func refreshPersistedServiceOffer(cfg *config.Config, ns, name string) error {
 }
 
 // removePersistedServiceOffersInNamespace drops every ledger manifest
-// whose metadata.namespace matches ns. Used by `obol agent delete`: the
-// namespace deletion takes the agent's ServiceOffers with it, so their
-// persisted manifests must go too or resume replays ghosts. Returns the
-// number of files removed.
+// whose metadata.namespace matches ns. Used by `obol agent delete`
+// alongside its in-cluster ServiceOffer deletion (the agent finalizer
+// tears down the agent's children but leaves the namespace and offers):
+// once the CRs are deleted there, the ledger entries must go too or
+// resume replays ghosts. Returns the number of files removed.
 func removePersistedServiceOffersInNamespace(cfg *config.Config, ns string) (int, error) {
 	if cfg == nil || ns == "" {
 		return 0, nil
@@ -4639,8 +4688,11 @@ func removePersistedServiceOffersInNamespace(cfg *config.Config, ns string) (int
 //
 // A replayed type=agent offer needs its Agent CR to exist before it can
 // reach Ready. After a reboot the CR is still in etcd; after a full
-// stack recreation the controller reports the missing agent on the
-// offer's conditions until the operator recreates it (`obol agent new`).
+// stack recreation the replayed bundle re-creates the agent NAMESPACE
+// (see agentOfferBundle) so the offer lands and the controller reports
+// the missing agent on its conditions until the operator recreates it
+// (`obol agent new`). The Agent CR itself is never replayed — that
+// would mint a fresh wallet.
 //
 // Skipped silently when the store dir is missing (no offers ever
 // persisted) or when no kubeconfig is present (stack up hasn't reached
