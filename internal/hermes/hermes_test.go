@@ -143,10 +143,12 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		"/data/.hermes/logs",
 		"containerPort: 8642",
 		"containerPort: 9119",
-		"fsGroupChangePolicy: OnRootMismatch",
-		"init-hermes-perms",
-		"chown -R 10000:10000 /data",
-		"runAsUser: 0",
+		"runAsNonRoot: true",
+		"runAsUser: 1000",
+		"runAsGroup: 1000",
+		"fsGroup: 1000",
+		"fsGroupChangePolicy: Always",
+		"checksum/hermes-config:",
 		"init-hermes-data",
 		"type: Recreate",
 		`Hermes binary missing from image: /opt/hermes/.venv/bin/hermes`,
@@ -170,6 +172,13 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		"git clone",
 		"uv pip install",
 		"/data/.hermes/hermes-agent",
+		"init-hermes-perms",
+		"chown -R 1000:1000 /data",
+		"runAsUser: 0",
+		"checksum/hermes-skills",
+		"name: hermes-skills",
+		"skills.tar.gz",
+		"mountPath: /etc/hermes/skills",
 	} {
 		if strings.Contains(values, banned) {
 			t.Fatalf("generateValues() contains banned fragment %q:\n%s", banned, values)
@@ -179,6 +188,36 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 	var parsed any
 	if err := yaml.Unmarshal([]byte(values), &parsed); err != nil {
 		t.Fatalf("generateValues() produced invalid YAML: %v\n%s", err, values)
+	}
+}
+
+func TestGenerateValues_ConfigChecksumChangesWithConfig(t *testing.T) {
+	first := generateValues(
+		"hermes-obol-agent",
+		"hermes-obol-agent.obol.stack",
+		"obol-agent.obol.stack",
+		"https://agent.example.com",
+		"secret-token",
+		"gpt-5.2",
+		[]byte("model:\n  default: gpt-5.2\n"),
+	)
+	second := generateValues(
+		"hermes-obol-agent",
+		"hermes-obol-agent.obol.stack",
+		"obol-agent.obol.stack",
+		"https://agent.example.com",
+		"secret-token",
+		"gpt-5.2",
+		[]byte("model:\n  default: gpt-5.3\n"),
+	)
+
+	a := extractChecksumAnnotation(t, first, "checksum/hermes-config")
+	b := extractChecksumAnnotation(t, second, "checksum/hermes-config")
+	if a == "" || b == "" {
+		t.Fatalf("missing checksum annotation(s): first=%q second=%q", a, b)
+	}
+	if a == b {
+		t.Fatalf("checksum/hermes-config did not change when config changed: %s", a)
 	}
 }
 
@@ -204,6 +243,29 @@ func TestDashboardHostname_UsesDefaultAgentHostAndHermesUIHostForNamedInstances(
 			}
 		})
 	}
+}
+
+func extractChecksumAnnotation(t *testing.T, values, key string) string {
+	t.Helper()
+	var doc struct {
+		Resources []map[string]any `yaml:"resources"`
+	}
+	if err := yaml.Unmarshal([]byte(values), &doc); err != nil {
+		t.Fatalf("generateValues produced invalid YAML: %v\n%s", err, values)
+	}
+	for _, res := range doc.Resources {
+		if res["kind"] != "Deployment" {
+			continue
+		}
+		spec, _ := res["spec"].(map[string]any)
+		template, _ := spec["template"].(map[string]any)
+		metadata, _ := template["metadata"].(map[string]any)
+		annotations, _ := metadata["annotations"].(map[string]any)
+		if got, _ := annotations[key].(string); got != "" {
+			return got
+		}
+	}
+	return ""
 }
 
 func TestHermesExecArgs_UsesNativeHermesBinary(t *testing.T) {

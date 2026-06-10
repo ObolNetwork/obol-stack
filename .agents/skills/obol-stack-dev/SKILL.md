@@ -1,6 +1,6 @@
 ---
 name: obol-stack-dev
-description: Obol Stack development and QA runbook. Use when working on obol-stack flows, x402 seller/buyer tests, live Base Sepolia OBOL smoke, Anvil fork regressions, ERC-8004 registration, LiteLLM paid routing, release-smoke, cloudflared, Renovate image bumps, or remote QA worktrees.
+description: CLI-first Obol Stack development and QA runbook. Use when working on obol-stack lifecycle, obol CLI surfaces, x402 seller/buyer tests, live Base Sepolia OBOL smoke, Anvil fork regressions, ERC-8004 registration, LiteLLM paid routing, release-smoke, cloudflared, Renovate image bumps, or remote QA worktrees.
 metadata:
   version: "3.1.0"
   domain: infrastructure
@@ -11,6 +11,19 @@ metadata:
 # Obol Stack Dev
 
 Operational router. Load only the reference for the task. **Do not delegate understanding** — read the relevant reference yourself; subagents lose context the next reference would have given them.
+
+## CLI-First Rule
+
+Prefer the supported `obol` CLI surface for every stack operation: `obol stack`,
+`obol model`, `obol agent`, `obol sell`, `obol buy`, `obol network`, `obol
+tunnel`, and `obol kubectl` for inspection. Do not create ad-hoc shell scripts
+or verifier scripts. Do not bypass CLI behavior with direct script execution,
+raw `kubectl` mutation, or ConfigMap surgery when an `obol` command exists.
+
+Existing repository flow scripts are release-gate artifacts, not the default QA
+interface. Use them only when the user explicitly asks for release-smoke/full
+flow validation or when no CLI equivalent exists; otherwise decompose checks
+into CLI commands plus `obol kubectl` evidence.
 
 ## Reference Router
 
@@ -28,11 +41,11 @@ Operational router. Load only the reference for the task. **Do not delegate unde
 ## First Actions on Any Task
 
 1. Read existing files before changing anything.
-2. Use repo flows/helpers; don't invent ad-hoc scripts.
+2. Use `obol` CLI and `obol kubectl` first; do not invent or run ad-hoc scripts.
 3. New worktree per remote QA run.
 4. Never write hostnames, personal paths, passwords, private keys, or raw tokens into skill files, PR text, or commit messages.
 5. Validate with the narrowest command set that covers the change.
-6. On a dev branch (anything not at the latest release tag), set `OBOL_DEVELOPMENT=true` for `obolup.sh` and `obol stack up`. Without it, `obolup.sh` downloads the released binary and your branch changes never run. Replace the `go run` wrapper with a real binary before running flows (`go build -o .workspace/bin/obol ./cmd/obol`) — backgrounded port-forwards in flows false-FAIL if the wrapper is recompiling.
+6. On a dev branch (anything not at the latest release tag), set `OBOL_DEVELOPMENT=true` for `obolup.sh` and `obol stack up`. Without it, `obolup.sh` downloads the released binary and your branch changes never run. Replace the `go run` wrapper with a real binary before long QA (`go build -o .workspace/bin/obol ./cmd/obol`) so every CLI call uses the same branch build.
 
 ## Critical Invariants
 
@@ -42,11 +55,11 @@ OBOL_TOKEN_BASE_SEPOLIA=0x0a09371a8b011d5110656ceBCc70603e53FD2c78
 # Source of truth: ObolNetwork/obol-stack#447
 ```
 
-**Buyer wallet (Bob)**: deterministic 2nd-derived key from `.env REMOTE_SIGNER_PRIVATE_KEY`. Flows 11/13/14 must pre-seed Bob's remote-signer before Bob's `stack up`, then assert `bobSigner == BOB_WALLET`. **Do not** transfer funds to a generated signer to make the test pass.
+**Buyer wallet (Bob)**: deterministic 2nd-derived key from `.env REMOTE_SIGNER_PRIVATE_KEY`. Flows 11/13/14 must seed Bob's remote-signer through `obol wallet import` after Bob's stack and LLM route are up, then assert `bobSigner == BOB_WALLET`. **Do not** transfer funds to a generated signer to make the test pass.
 
 **Token/auth**: use `obol agent auth --runtime <runtime> obol-agent`. **Never** `obol hermes token obol-agent` — it can print CLI usage text and poison the Bearer token.
 
-**Payment assertion**: don't bypass the agent buy step with a direct script exec. If the agent times out, diagnose Hermes/LiteLLM/model routing — don't relax the assertion. Required evidence: `PurchaseRequest Ready=True` + paid HTTP 200 + on-chain `Transfer` + exact balance deltas.
+**Payment assertion**: don't bypass the CLI/agent buy path with direct script exec. Prefer `obol buy inference`, `obol sell ...`, `obol agent ...`, and `obol kubectl` status checks. If the agent times out, diagnose Hermes/LiteLLM/model routing — don't relax the assertion. Required evidence: `PurchaseRequest Ready=True` + paid HTTP 200 + on-chain `Transfer` + exact balance deltas.
 
 **QA LLM**: full seller/buyer QA must route Alice and Bob through `OBOL_LLM_ENDPOINT` (OpenAI-compatible vLLM or llama.cpp on the QA host). Default `OBOL_LLM_MODEL=qwen36-deep` (27B-class). The smaller `qwen36-fast` (~4B) was the previous default but flakes on the long single-shot agent-buy prompt at flow-13/14 step 46 — see the retry-wrapper rationale in `flows/lib-dual-stack.sh::agent_buy_with_retry`. Sequence: `obol model setup custom` → `obol model prefer` → one `obol model sync`. Local Ollama and cloud-fallback are **not** acceptable green substitutes for full-flow QA.
 
@@ -70,7 +83,7 @@ When the smoke gate goes red, check these first — each was a multi-hour debug:
 | First request after fresh verifier deploy returns empty body | Traefik HTTPRoute is wired but verifier's serviceoffer-source watcher hasn't loaded the route yet. | `flows/flow-07-sell-verify.sh` + `flows/flow-08-buy.sh` — wrap 402-body fetch in 12×5s retry loop. |
 | facilitator arm64 image runs amd64 binary | Was an `ObolNetwork/x402-rs` prom-overlay arm64 manifest packaging bug. | **Fixed upstream**: `ObolNetwork/x402-rs#3` (merged 2026-05-13, `668b7bb`) dropped the redundant `--platform=$BUILDPLATFORM` pin from the prom-overlay builder stage. Registry image republished; arm64 manifest now ships an aarch64 ELF (digest `sha256:b209345c…`). The `X402_FACILITATOR_SKIP_PULL` knob has been removed from `flows/lib.sh`. |
 
-**Diagnosis pattern**: a 503 from the verifier or 404 from a paid route almost never means the verifier is bad — it usually means the deployed image isn't what you think it is, the chain id form mismatched, or the upstream wasn't reachable. Confirm the running image first (`kubectl get deploy -n x402 x402-verifier -o jsonpath='{.spec.template.spec.containers[*].image}'`) before diving into x402 logic.
+**Diagnosis pattern**: a 503 from the verifier or 404 from a paid route almost never means the verifier is bad — it usually means the deployed image isn't what you think it is, the chain id form mismatched, or the upstream wasn't reachable. Confirm the running image first (`obol kubectl get deploy -n x402 x402-verifier -o jsonpath='{.spec.template.spec.containers[*].image}'`) before diving into x402 logic.
 
 ## Force a Fresh Local Image Build
 
@@ -123,7 +136,7 @@ Examples:
 ## Pre-Push Local Checks
 
 ```bash
-bash -n flows/*.sh                                                    # shell syntax
+bash -n flows/*.sh                                                    # only when flow scripts changed
 git diff --check                                                      # whitespace/conflict markers
 jq empty renovate.json                                                # JSON valid
 helm lint internal/embed/infrastructure/cloudflared
@@ -135,6 +148,6 @@ go test ./cmd/obol ./internal/x402/... ./internal/defaults/... -count=1   # touc
 
 ## Editing This Skill
 
-Do: keep `SKILL.md` short and operational; one fact lives in one place; references one hop from `SKILL.md`. Inline shell snippets directly in the markdown — don't ship parallel implementations of logic that already lives in `flows/lib.sh` or `internal/...`.
+Do: keep `SKILL.md` short and operational; one fact lives in one place; references one hop from `SKILL.md`. Prefer CLI examples. Do not add bundled scripts or parallel implementations of logic that belongs in `obol` CLI, `flows/lib.sh`, or `internal/...`.
 
 Don't: README-style prose; duplicate the same procedure in `SKILL.md` and references; bury safety constraints below examples; copy host-specific names, credentials, or logs.

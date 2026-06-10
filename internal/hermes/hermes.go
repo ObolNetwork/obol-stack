@@ -3,6 +3,7 @@ package hermes
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -40,8 +41,8 @@ const (
 	// are present so image regressions fail before the gateway starts.
 	hermesBinary = "/opt/hermes/.venv/bin/hermes"
 
-	containerUID  = 10000
-	containerGID  = 10000
+	containerUID  = 1000
+	containerGID  = 1000
 	dashboardPort = 9119
 )
 
@@ -252,8 +253,6 @@ func Sync(cfg *config.Config, id string, u *ui.UI) error {
 	}); err != nil {
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
-
-	fixHermesDataPVCK3dFallback(cfg, id, u)
 
 	// Publish wallet-metadata ConfigMap for the frontend (namespace now exists).
 	applyWalletMetadataConfigMap(cfg, id, deploymentDir)
@@ -745,6 +744,7 @@ func dashboardHostname(id string) string {
 
 func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token, primary string, configData []byte) string {
 	desc := agentruntime.Describe(agentruntime.Hermes)
+	configChecksum := sha256.Sum256(configData)
 
 	var b strings.Builder
 	fmt.Fprintf(&b, `resources:
@@ -831,36 +831,18 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
           labels:
             app.kubernetes.io/name: %s
             app.kubernetes.io/managed-by: obol
+          annotations:
+            checksum/hermes-config: "%x"
         spec:
           serviceAccountName: %s
           automountServiceAccountToken: true
           securityContext:
+            runAsNonRoot: true
             runAsUser: %d
             runAsGroup: %d
             fsGroup: %d
-            fsGroupChangePolicy: OnRootMismatch
+            fsGroupChangePolicy: Always
           initContainers:
-            - name: init-hermes-perms
-              image: %s
-              imagePullPolicy: IfNotPresent
-              securityContext:
-                runAsUser: 0
-                runAsGroup: 0
-                runAsNonRoot: false
-              command:
-                - sh
-                - -ec
-                - |
-                  # Hermes runs as a non-root UID, but its data PVC is a
-                  # local-path/hostPath volume where Kubernetes fsGroup is a
-                  # no-op. Chown the volume root every start so the non-root
-                  # main container can always write it, on every backend and
-                  # volume type. Do NOT replace this with fsGroup alone (see
-                  # the regression history around PVC ownership).
-                  chown -R %d:%d /data
-              volumeMounts:
-                - name: data
-                  mountPath: /data
             - name: init-hermes-data
               image: %s
               imagePullPolicy: IfNotPresent
@@ -934,7 +916,7 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                   value: %s
                 - name: OBOL_SKILLS_DIR
                   value: /data/.hermes/%s
-	`, desc.DataPVCName, namespace, desc.ServiceName, desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.ServiceName, desc.ServiceName, containerUID, containerGID, containerGID, quoteYAML(image()), containerUID, containerGID, quoteYAML(image()), desc.ServiceName, quoteYAML(image()), quoteYAML(hermesBinary), desc.DefaultPort, desc.DefaultPort, quoteYAML(primary), quoteYAML(namespace), obolSkillsDirName)
+	`, desc.DataPVCName, namespace, desc.ServiceName, desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.ServiceName, configChecksum, desc.ServiceName, containerUID, containerGID, containerGID, quoteYAML(image()), desc.ServiceName, quoteYAML(image()), quoteYAML(hermesBinary), desc.DefaultPort, desc.DefaultPort, quoteYAML(primary), quoteYAML(namespace), obolSkillsDirName)
 
 	if agentBaseURL != "" {
 		fmt.Fprintf(&b, "                - name: AGENT_BASE_URL\n                  value: %s\n", quoteYAML(agentBaseURL))
@@ -1391,55 +1373,4 @@ func fixRuntimeVolumeOwnership(cfg *config.Config, hostPath string, u *ui.UI) {
 	default:
 		_ = os.Chown(hostPath, containerUID, containerGID)
 	}
-}
-
-// fsGroup should own Hermes' data volume. This fallback only repairs legacy
-// k3d/userns clusters when the init container is already visibly stuck.
-func fixHermesDataPVCK3dFallback(cfg *config.Config, id string, u *ui.UI) {
-	backendName := "k3d"
-	if data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, ".stack-backend")); err == nil {
-		backendName = strings.TrimSpace(string(data))
-	}
-	if backendName != "k3d" {
-		return
-	}
-
-	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
-	if !hermesInitContainerStuck(cfg, namespace) {
-		return
-	}
-
-	hostPath := filepath.Join(cfg.DataDir, namespace, agentruntime.Describe(agentruntime.Hermes).DataPVCName)
-	fixRuntimeVolumeOwnership(cfg, hostPath, u)
-
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
-	deleteCmd := exec.Command(kubectlBin,
-		"-n", namespace, "delete", "pod",
-		"-l", "app.kubernetes.io/name=hermes",
-		"--ignore-not-found", "--wait=false")
-	deleteCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-	if err := deleteCmd.Run(); err == nil && u != nil {
-		u.Info("Restarted Hermes pod after best-effort k3d PVC ownership repair")
-	}
-}
-
-func hermesInitContainerStuck(cfg *config.Config, namespace string) bool {
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
-	cmd := exec.Command(kubectlBin,
-		"-n", namespace, "get", "pods",
-		"-l", "app.kubernetes.io/name=hermes",
-		"-o", "jsonpath={.items[*].status.initContainerStatuses[*].state.waiting.reason}")
-	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-	out, err := cmd.Output()
-	if err != nil {
-		return false
-	}
-	for _, reason := range strings.Fields(string(out)) {
-		if strings.Contains(reason, "CrashLoop") || strings.Contains(reason, "Error") {
-			return true
-		}
-	}
-	return false
 }

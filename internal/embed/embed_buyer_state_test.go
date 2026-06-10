@@ -1,9 +1,6 @@
 package embed
 
-import (
-	"fmt"
-	"testing"
-)
+import "testing"
 
 // TestBuyerStatePVC asserts that x402-buyer's /state is backed by a PVC
 // (not an emptyDir), and that the litellm Deployment uses the Recreate
@@ -91,14 +88,16 @@ func TestBuyerStatePVC(t *testing.T) {
 		t.Errorf("litellm Deployment strategy.type = %v, want Recreate (RWO PVC cannot be co-mounted during surge)", strat)
 	}
 
-	// The x402-buyer sidecar must run as UID/GID 1000 to match the owner
-	// local-path provisions the state PVC with. fsGroup is a no-op on
-	// hostPath-backed local-path volumes and a root chown init is forbidden
-	// in the restricted-PSS llm namespace, so UID alignment is the only way
-	// the sidecar can write /state/consumed.json. If this regresses to 65532,
-	// the buyer silently fails to persist consumed auths on the first paid
-	// call (Permission denied on a 1000:1000-owned dir) — the same re-spend
-	// cascade the PVC was introduced to prevent.
+	if policy := nested(dep, "spec", "template", "spec", "securityContext", "fsGroupChangePolicy"); policy != "OnRootMismatch" {
+		t.Errorf("litellm pod fsGroupChangePolicy = %v, want OnRootMismatch", policy)
+	}
+
+	// x402-buyer must keep container-level UID/GID 1000 while hostPath PVs
+	// from <= v0.10.0-rc12 clusters remain in support: those PVs ignore the
+	// pod fsGroup (kubelet skips ownership management on hostPath) and hold
+	// a consumed.json written 0600 by UID 1000 — a 65532 sidecar crashloops
+	// on `load state` and takes every paid/* route down. On fresh local-type
+	// PVs the explicit UID is harmless (fsGroup 65532 grants group access).
 	containers, ok := nested(dep, "spec", "template", "spec", "containers").([]any)
 	if !ok {
 		t.Fatal("litellm Deployment has no containers")
@@ -114,12 +113,11 @@ func TestBuyerStatePVC(t *testing.T) {
 	if buyer == nil {
 		t.Fatal("x402-buyer container missing from litellm Deployment")
 	}
-	// Compare via fmt to avoid depending on yaml.v3's exact numeric type.
-	if u := nested(buyer, "securityContext", "runAsUser"); fmt.Sprintf("%v", u) != "1000" {
-		t.Errorf("x402-buyer securityContext.runAsUser = %v, want 1000 (must match local-path owner of x402-buyer-state PVC)", u)
+	if u := nested(buyer, "securityContext", "runAsUser"); u != 1000 {
+		t.Errorf("x402-buyer securityContext.runAsUser = %v, want 1000 (legacy hostPath-PV state compat)", u)
 	}
-	if g := nested(buyer, "securityContext", "runAsGroup"); fmt.Sprintf("%v", g) != "1000" {
-		t.Errorf("x402-buyer securityContext.runAsGroup = %v, want 1000", g)
+	if g := nested(buyer, "securityContext", "runAsGroup"); g != 1000 {
+		t.Errorf("x402-buyer securityContext.runAsGroup = %v, want 1000 (legacy hostPath-PV state compat)", g)
 	}
 	if nr := nested(buyer, "securityContext", "runAsNonRoot"); nr != true {
 		t.Errorf("x402-buyer securityContext.runAsNonRoot = %v, want true (restricted PSS)", nr)

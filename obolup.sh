@@ -177,6 +177,30 @@ detect_installation_mode() {
 	fi
 }
 
+docker_info_check() {
+	local seconds="${1:-15}"
+	local output_file="${2:-${TMPDIR:-/tmp}/obol-docker-info.log}"
+
+	rm -f "$output_file"
+	docker info >"$output_file" 2>&1 &
+	local pid=$!
+	for _ in $(seq 1 "$seconds"); do
+		if ! kill -0 "$pid" 2>/dev/null; then
+			if wait "$pid"; then
+				return 0
+			else
+				local rc=$?
+				return "$rc"
+			fi
+		fi
+		sleep 1
+	done
+
+	kill "$pid" >/dev/null 2>&1 || true
+	wait "$pid" >/dev/null 2>&1 || true
+	return 124
+}
+
 # Check Docker installation and availability
 check_docker() {
 	log_info "Checking Docker requirements..."
@@ -196,10 +220,11 @@ check_docker() {
 	fi
 
 	# Check if Docker daemon is running and accessible
-	if ! docker info >/dev/null 2>&1; then
+	local docker_check_log="${TMPDIR:-/tmp}/obol-docker-info.$$"
+	if ! docker_info_check 15 "$docker_check_log"; then
 		# Distinguish permission errors from daemon-not-running
 		local docker_err
-		docker_err=$(docker info 2>&1)
+		docker_err=$(cat "$docker_check_log" 2>/dev/null || true)
 
 		if echo "$docker_err" | grep -qi "permission denied"; then
 			log_error "Docker is installed but your user does not have permission to access it"
@@ -225,10 +250,12 @@ check_docker() {
 			# Start Docker Desktop if it's installed but not running
 			if [[ -d "/Applications/Docker.app" ]]; then
 				log_warn "Docker Desktop is not running — starting it now..."
-				open -a Docker
+				if ! open -a Docker; then
+					log_warn "Could not open Docker Desktop"
+				fi
 				# Docker Desktop can take a while to initialise; poll until ready
 				local wait_secs=0
-				while ! docker info >/dev/null 2>&1; do
+				while ! docker_info_check 10 "$docker_check_log"; do
 					if [[ $wait_secs -ge 60 ]]; then
 						break
 					fi
@@ -239,7 +266,7 @@ check_docker() {
 		fi
 
 		# Re-check after start attempt
-		if ! docker info >/dev/null 2>&1; then
+		if ! docker_info_check 15 "$docker_check_log"; then
 			log_error "Docker daemon is not running"
 			echo ""
 			echo "  Please start the Docker daemon:"
@@ -248,6 +275,8 @@ check_docker() {
 				echo "    • snap:     sudo snap start docker"
 			else
 				echo "    • macOS/Windows: Start Docker Desktop application"
+				echo "    • If macOS says Docker is damaged, move /Applications/Docker.app to Trash"
+				echo "      and reinstall Docker Desktop from https://www.docker.com/products/docker-desktop/"
 			fi
 			echo ""
 			log_dim "  Then run this installer again."

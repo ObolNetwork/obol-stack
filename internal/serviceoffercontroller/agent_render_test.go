@@ -161,6 +161,9 @@ func TestAgentManifests_DeploymentUsesFSGroup(t *testing.T) {
 
 	podSpec := dep["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
 	securityContext := podSpec["securityContext"].(map[string]any)
+	if securityContext["runAsNonRoot"] != true {
+		t.Fatalf("runAsNonRoot = %v, want true", securityContext["runAsNonRoot"])
+	}
 	if securityContext["runAsUser"] != int64(hermesContainerUID) {
 		t.Fatalf("runAsUser = %v, want %d", securityContext["runAsUser"], hermesContainerUID)
 	}
@@ -170,8 +173,86 @@ func TestAgentManifests_DeploymentUsesFSGroup(t *testing.T) {
 	if securityContext["fsGroup"] != int64(hermesContainerGID) {
 		t.Fatalf("fsGroup = %v, want %d", securityContext["fsGroup"], hermesContainerGID)
 	}
-	if securityContext["fsGroupChangePolicy"] != "OnRootMismatch" {
-		t.Fatalf("fsGroupChangePolicy = %v, want OnRootMismatch", securityContext["fsGroupChangePolicy"])
+	if securityContext["fsGroupChangePolicy"] != "Always" {
+		t.Fatalf("fsGroupChangePolicy = %v, want Always", securityContext["fsGroupChangePolicy"])
+	}
+	if strat := dep["spec"].(map[string]any)["strategy"].(map[string]any)["type"]; strat != "Recreate" {
+		t.Fatalf("strategy.type = %v, want Recreate", strat)
+	}
+	annotations := dep["spec"].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)
+	if annotations["checksum/hermes-config"] == "" {
+		t.Fatalf("checksum/hermes-config annotation missing")
+	}
+}
+
+func TestAgentManifests_ConfigChecksumChangesWithModel(t *testing.T) {
+	first := &monetizeapi.Agent{}
+	first.Name = "quant"
+	first.Namespace = "agent-quant"
+	first.Spec = monetizeapi.AgentSpec{Model: "qwen3.5:9b"}
+
+	second := &monetizeapi.Agent{}
+	second.Name = "quant"
+	second.Namespace = "agent-quant"
+	second.Spec = monetizeapi.AgentSpec{Model: "qwen3.5:14b"}
+
+	firstChecksum := agentConfigChecksum(t, first)
+	secondChecksum := agentConfigChecksum(t, second)
+	if firstChecksum == "" || secondChecksum == "" {
+		t.Fatalf("missing checksum(s): first=%q second=%q", firstChecksum, secondChecksum)
+	}
+	if firstChecksum == secondChecksum {
+		t.Fatalf("checksum/hermes-config did not change when rendered config changed: %s", firstChecksum)
+	}
+}
+
+func TestAgentManifests_ConfigSeedWritesWritableRuntimeConfig(t *testing.T) {
+	agent := &monetizeapi.Agent{}
+	agent.Name = "quant"
+	agent.Namespace = "agent-quant"
+	agent.Spec = monetizeapi.AgentSpec{Model: "qwen3.5:9b"}
+
+	out, err := agentManifests(agent, "litellm", "api")
+	if err != nil {
+		t.Fatalf("agentManifests: %v", err)
+	}
+	var dep map[string]any
+	for _, m := range out {
+		if m.GetKind() == "Deployment" {
+			dep = m.UnstructuredContent()
+			break
+		}
+	}
+	if dep == nil {
+		t.Fatal("Deployment manifest missing")
+	}
+
+	podSpec := dep["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+	inits := podSpec["initContainers"].([]any)
+	if len(inits) != 2 {
+		t.Fatalf("initContainers length = %d, want 2 (config-seed + profile-seed)", len(inits))
+	}
+	configSeed := inits[0].(map[string]any)
+	if configSeed["name"] != "config-seed" {
+		t.Fatalf("init[0] name = %v, want config-seed", configSeed["name"])
+	}
+	script := configSeed["args"].([]any)[0].(string)
+	for _, must := range []string{
+		"cp /config-seed/config.yaml /data/.hermes/config.yaml",
+		"chmod 600 /data/.hermes/config.yaml",
+	} {
+		if !strings.Contains(script, must) {
+			t.Errorf("config seed script missing %q\n---\n%s", must, script)
+		}
+	}
+
+	containers := podSpec["containers"].([]any)
+	mounts := containers[0].(map[string]any)["volumeMounts"].([]any)
+	for _, mount := range mounts {
+		m := mount.(map[string]any)
+		if m["mountPath"] == "/data/.hermes/config.yaml" {
+			t.Fatalf("runtime config must not be mounted from ConfigMap: %#v", m)
+		}
 	}
 }
 
@@ -199,21 +280,7 @@ func TestAgentManifests_ProfileSeedInitContainer(t *testing.T) {
 	podSpec := dep["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
 	inits := podSpec["initContainers"].([]any)
 	if len(inits) != 2 {
-		t.Fatalf("initContainers length = %d, want 2 (init-perms + profile-seed)", len(inits))
-	}
-	// init[0] must be the root chown that re-owns the local-path volume to the
-	// Hermes UID before the non-root profile-seed init runs its mkdir.
-	chown := inits[0].(map[string]any)
-	if chown["name"] != "init-perms" {
-		t.Errorf("init[0] name = %v, want init-perms (root chown must run first)", chown["name"])
-	}
-	chownSC := chown["securityContext"].(map[string]any)
-	if chownSC["runAsUser"] != int64(0) {
-		t.Errorf("init-perms runAsUser = %v, want 0 (must be root to chown a hostPath volume)", chownSC["runAsUser"])
-	}
-	chownCmd := chown["command"].([]any)
-	if script := chownCmd[len(chownCmd)-1].(string); !strings.Contains(script, "chown -R 10000:10000 /data") {
-		t.Errorf("init-perms command = %q, want chown -R 10000:10000 /data", script)
+		t.Fatalf("initContainers length = %d, want 2 (config-seed + profile-seed)", len(inits))
 	}
 	init := inits[1].(map[string]any)
 	if init["name"] != "profile-seed" {
@@ -255,6 +322,25 @@ func TestAgentManifests_ProfileSeedInitContainer(t *testing.T) {
 	if secret["optional"] != true {
 		t.Errorf("profile seed optional = %v, want true", secret["optional"])
 	}
+}
+
+func agentConfigChecksum(t *testing.T, agent *monetizeapi.Agent) string {
+	t.Helper()
+	out, err := agentManifests(agent, "litellm", "api")
+	if err != nil {
+		t.Fatalf("agentManifests: %v", err)
+	}
+	for _, m := range out {
+		if m.GetKind() != "Deployment" {
+			continue
+		}
+		dep := m.UnstructuredContent()
+		annotations := dep["spec"].(map[string]any)["template"].(map[string]any)["metadata"].(map[string]any)["annotations"].(map[string]any)
+		got, _ := annotations["checksum/hermes-config"].(string)
+		return got
+	}
+	t.Fatal("Deployment manifest missing")
+	return ""
 }
 
 func TestRenderHermesConfig_HasModelAndSkillsDir(t *testing.T) {

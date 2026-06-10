@@ -184,7 +184,7 @@ func archiveReplacedHermesKeystore(cfg *config.Config, id string, existingWallet
 
 	dir := agentruntime.KeystoreVolumePath(cfg, agentruntime.Hermes, id)
 
-	// The keystores volume is normally container-owned (uid 10000, mode 700)
+	// The keystores volume is normally container-owned (uid 1000, mode 700)
 	// after provisionKeystoreToVolume's fixRuntimeVolumeOwnership. Bookend the
 	// stat/mkdir/rename with the same ownership flip provision uses, otherwise
 	// the host process can't even traverse the directory.
