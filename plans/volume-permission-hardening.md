@@ -25,8 +25,11 @@ security contexts stay the source of truth.
   `fsGroupChangePolicy: Always`, because their PVCs intentionally contain
   host-seeded editable `.hermes` state.
 - Hermes and spawned-agent root chown init containers were removed.
-- The x402 buyer no longer runs as UID/GID 1000; it inherits the restricted
-  pod UID/GID 65532 and relies on the pod `fsGroup`.
+- The x402 buyer keeps container-level UID/GID 1000: pre-v0.10.0 clusters
+  hold hostPath-typed state PVs (kubelet skips fsGroup there) with
+  consumed.json written 0600 by UID 1000 — a 65532 sidecar cannot read it.
+  On fresh local-type PVs the pod-level fsGroup 65532 grants group access,
+  so the explicit UID is harmless. See "Upgrading from <= v0.10.0-rc12".
 - Hermes and spawned-agent pod templates include checksum annotations so config
   updates roll the pod.
 - The shared `internal/k8sperm` chown helper was removed.
