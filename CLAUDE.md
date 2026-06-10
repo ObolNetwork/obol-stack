@@ -78,7 +78,7 @@ obol
 │   └── wallet      address, list, backup, restore
 ├── wallet          import
 ├── network         install, sync, delete, list, add, remove, status
-├── sell            inference, http, agent, mcp, demo, list, status, test, stop, update, delete, pricing, register, identity, info
+├── sell            inference, http, agent, mcp, demo, list, status, test, stop, update, delete, pricing, register, identity, info, resume
 ├── buy             inference
 ├── hermes          passthrough (SkipFlagParsing) → native hermes CLI
 │                   Token retrieval moved to `obol agent auth`

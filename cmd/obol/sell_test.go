@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -1843,4 +1844,83 @@ func TestBuildDemoResources_UsesImportedImageAndERPCPath(t *testing.T) {
 	}
 
 	t.Fatal("ERPC_URL not set for chain-backed demo")
+}
+
+// TestSellResumeCommand_Registered pins `obol sell resume` as a
+// first-class subcommand. The resume path used to be reachable only via
+// `obol stack up`, which never runs after a host reboot (Docker's
+// restart policy resurrects the k3d cluster by itself) — so persisted
+// sell-inference offers sat at UpstreamHealthy=False with an empty
+// public catalog until the operator manually re-ran stack-up. Dropping
+// this registration silently re-opens that gap.
+func TestSellResumeCommand_Registered(t *testing.T) {
+	cfg := newTestConfig(t)
+	for _, sub := range sellCommand(cfg).Commands {
+		if sub.Name != "resume" {
+			continue
+		}
+		for _, f := range sub.Flags {
+			for _, n := range f.Names() {
+				if n == "install-boot-unit" {
+					return
+				}
+			}
+		}
+		t.Fatal("sell resume must expose --install-boot-unit for reboot persistence")
+	}
+	t.Fatal("`obol sell resume` is not registered under `obol sell`")
+}
+
+// TestRenderResumeBootUnit pins the systemd unit emitted by
+// `obol sell resume --install-boot-unit`. Each assertion guards a
+// production behavior: ExecStart is the actual resume entrypoint,
+// OBOL_CONFIG_DIR pins the unit to the stack that installed it,
+// default.target makes it run at (lingering) login/boot, and the
+// pre-start sleep gives the Docker-restarted k3d API server time to
+// accept the resume path's kubectl applies.
+func TestRenderResumeBootUnit(t *testing.T) {
+	unit := renderResumeBootUnit("/home/op/.local/bin/obol", "/home/op/.config/obol")
+	for _, want := range []string{
+		"ExecStart=/home/op/.local/bin/obol sell resume",
+		"Environment=OBOL_CONFIG_DIR=/home/op/.config/obol",
+		"WantedBy=default.target",
+		"ExecStartPre=/bin/sleep",
+		"After=network-online.target docker.service",
+		"Type=oneshot",
+	} {
+		if !strings.Contains(unit, want) {
+			t.Errorf("boot unit missing %q:\n%s", want, unit)
+		}
+	}
+}
+
+// TestInstallResumeBootUnit_PlatformBehavior pins both GOOS branches:
+// non-Linux must refuse with actionable guidance (launchd is not wired
+// up), Linux must write the unit file under $HOME even when systemctl
+// is unavailable — the on-disk unit is the durable artifact and the
+// systemctl enable steps are best-effort warnings.
+func TestInstallResumeBootUnit_PlatformBehavior(t *testing.T) {
+	cfg := newTestConfig(t)
+	u := ui.New(false)
+
+	if runtime.GOOS != "linux" {
+		if err := installResumeBootUnit(cfg, u); err == nil {
+			t.Fatal("non-Linux install must return an error, got nil")
+		}
+		return
+	}
+
+	t.Setenv("HOME", t.TempDir())
+	if err := installResumeBootUnit(cfg, u); err != nil {
+		t.Fatalf("linux install must succeed even without systemctl: %v", err)
+	}
+	home, _ := os.UserHomeDir()
+	unitPath := filepath.Join(home, ".config", "systemd", "user", resumeBootUnitName)
+	body, err := os.ReadFile(unitPath)
+	if err != nil {
+		t.Fatalf("unit file not written: %v", err)
+	}
+	if !strings.Contains(string(body), "sell resume") {
+		t.Errorf("unit file does not invoke sell resume:\n%s", body)
+	}
 }
