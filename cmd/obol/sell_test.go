@@ -147,6 +147,28 @@ func newTestConfig(t *testing.T) *config.Config {
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
 
+func TestParseUpstreamHeaders(t *testing.T) {
+	t.Run("parses Key: Value pairs and trims", func(t *testing.T) {
+		got, err := parseUpstreamHeaders([]string{"X-Api-Key: abc", "X-Region:eu"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got["X-Api-Key"] != "abc" || got["X-Region"] != "eu" {
+			t.Errorf("got %v", got)
+		}
+	})
+	t.Run("nil for no flags", func(t *testing.T) {
+		if got, err := parseUpstreamHeaders(nil); err != nil || got != nil {
+			t.Errorf("got %v, %v; want nil, nil", got, err)
+		}
+	})
+	t.Run("rejects malformed pair", func(t *testing.T) {
+		if _, err := parseUpstreamHeaders([]string{"no-colon"}); err == nil {
+			t.Error("expected error for header without a colon")
+		}
+	})
+}
+
 func TestSellCommand_Structure(t *testing.T) {
 	cfg := newTestConfig(t)
 	cmd := sellCommand(cfg)
