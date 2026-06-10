@@ -1,9 +1,9 @@
 # 402 + storefront follow-ups for `oisin/openapi`
 
-Tracking what we deliberately punted on while shipping the type-aware 402 page
-(this branch). When `oisin/openapi` lands, walk through these and decide
-which to fold into the spec-driven render path vs. leave on the current
-in-binary template.
+Tracking what we deliberately punted on while shipping the type-aware 402 page.
+`oisin/openapi` HAS landed (Scalar UI + /openapi.json are live) — the items
+below are now actionable: walk through each and decide which to fold into the
+spec-driven render path vs. leave on the current in-binary template.
 
 ## Context (where things stand today)
 
