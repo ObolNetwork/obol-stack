@@ -3845,6 +3845,14 @@ const resumeBootUnitName = "obol-sell-resume.service"
 // itself has no cluster dependency, and resumeSellOffers warns-and-
 // continues per offer, so a still-starting cluster degrades gracefully
 // rather than failing the unit.
+//
+// RemainAfterExit=yes is load-bearing: the relaunched gateway is
+// spawned into the unit's cgroup (setsid detaches the session, NOT the
+// cgroup), and when a plain oneshot unit deactivates systemd kills
+// every process left in the cgroup — observed on the live reboot test
+// as "unit finished OK, gateway dead, log empty". Keeping the unit
+// active (exited) preserves the cgroup and the gateway with it; as a
+// bonus, `systemctl --user stop` becomes a deliberate gateway kill.
 func renderResumeBootUnit(obolBin, configDir string) string {
 	return `[Unit]
 Description=Obol sell offer resume (relaunch x402 gateways after boot)
@@ -3853,6 +3861,7 @@ Wants=network-online.target
 
 [Service]
 Type=oneshot
+RemainAfterExit=yes
 ExecStartPre=/bin/sleep 30
 Environment=OBOL_CONFIG_DIR=` + configDir + `
 ExecStart=` + obolBin + ` sell resume

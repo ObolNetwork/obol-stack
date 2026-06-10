@@ -1984,9 +1984,11 @@ func TestSellResumeCommand_Registered(t *testing.T) {
 // `obol sell resume --install-boot-unit`. Each assertion guards a
 // production behavior: ExecStart is the actual resume entrypoint,
 // OBOL_CONFIG_DIR pins the unit to the stack that installed it,
-// default.target makes it run at (lingering) login/boot, and the
+// default.target makes it run at (lingering) login/boot, the
 // pre-start sleep gives the Docker-restarted k3d API server time to
-// accept the resume path's kubectl applies.
+// accept the resume path's kubectl applies, and RemainAfterExit keeps
+// the unit's cgroup alive — without it systemd kills the detached
+// gateway the moment the oneshot finishes (live reboot-test failure).
 func TestRenderResumeBootUnit(t *testing.T) {
 	unit := renderResumeBootUnit("/home/op/.local/bin/obol", "/home/op/.config/obol")
 	for _, want := range []string{
@@ -1996,6 +1998,7 @@ func TestRenderResumeBootUnit(t *testing.T) {
 		"ExecStartPre=/bin/sleep",
 		"After=network-online.target docker.service",
 		"Type=oneshot",
+		"RemainAfterExit=yes",
 	} {
 		if !strings.Contains(unit, want) {
 			t.Errorf("boot unit missing %q:\n%s", want, unit)
