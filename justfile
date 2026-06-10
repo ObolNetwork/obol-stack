@@ -118,7 +118,7 @@ dev-frontend-reset:
     set -e
     echo "→ Resetting frontend to released image"
     obol kubectl set image deployment/obol-frontend-obol-app \
-        obol-app=obolnetwork/obol-stack-front-end:v0.1.25 -n obol-frontend
+        obol-app=obolnetwork/obol-stack-front-end:v0.1.27-rc0@sha256:e2f0d557cca41f6348149627d17ba306703dfac7f8e12f162500e006761ce490 -n obol-frontend
     obol kubectl rollout restart deployment/obol-frontend-obol-app -n obol-frontend
     obol kubectl rollout status deployment/obol-frontend-obol-app -n obol-frontend --timeout=120s
     echo "✓ Frontend reset to released image"
