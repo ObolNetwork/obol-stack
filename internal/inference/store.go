@@ -126,6 +126,15 @@ type Deployment struct {
 
 	// UpdatedAt is the RFC3339 timestamp of the most recent update.
 	UpdatedAt string `json:"updated_at,omitempty"`
+
+	// DeletedAt is set when `obol sell delete` removes the offer from
+	// the cluster. The descriptor stays on disk for `sell inference
+	// list/status` history, but resume must not replay a tombstoned
+	// offer (it would re-create the ServiceOffer and relaunch the host
+	// gateway, undoing the delete). Re-creating the offer with
+	// `obol sell inference <name>` rewrites the descriptor and clears
+	// the tombstone.
+	DeletedAt string `json:"deleted_at,omitempty"`
 }
 
 // Provenance tracks how a model or service was produced.
