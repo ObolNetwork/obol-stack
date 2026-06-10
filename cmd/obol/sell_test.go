@@ -1693,8 +1693,8 @@ func TestPersistSellHTTPOffer_RoundTrip(t *testing.T) {
 			},
 		},
 	}
-	if err := persistSellHTTPOffer(cfg, "default", "my-api", manifest); err != nil {
-		t.Fatalf("persistSellHTTPOffer: %v", err)
+	if err := persistServiceOffer(cfg, "default", "my-api", manifest); err != nil {
+		t.Fatalf("persistServiceOffer: %v", err)
 	}
 
 	expected := filepath.Join(cfg.ConfigDir, "sell-http", "default__my-api.yaml")
@@ -1734,10 +1734,10 @@ func TestPersistSellHTTPOffer_NamespaceIsolation(t *testing.T) {
 			"spec":       map[string]any{"type": "http"},
 		}
 	}
-	if err := persistSellHTTPOffer(cfg, "team-a", "shared", stub("team-a")); err != nil {
+	if err := persistServiceOffer(cfg, "team-a", "shared", stub("team-a")); err != nil {
 		t.Fatalf("persist team-a: %v", err)
 	}
-	if err := persistSellHTTPOffer(cfg, "team-b", "shared", stub("team-b")); err != nil {
+	if err := persistServiceOffer(cfg, "team-b", "shared", stub("team-b")); err != nil {
 		t.Fatalf("persist team-b: %v", err)
 	}
 	for _, ns := range []string{"team-a", "team-b"} {
@@ -1760,28 +1760,28 @@ func TestRemoveSellHTTPOffer_DropsPersistedManifest(t *testing.T) {
 		"apiVersion": "obol.org/v1alpha1", "kind": "ServiceOffer",
 		"metadata": map[string]any{"name": "doomed", "namespace": "llm"},
 	}
-	if err := persistSellHTTPOffer(cfg, "llm", "doomed", manifest); err != nil {
+	if err := persistServiceOffer(cfg, "llm", "doomed", manifest); err != nil {
 		t.Fatalf("persist: %v", err)
 	}
 	path := filepath.Join(cfg.ConfigDir, "sell-http", "llm__doomed.yaml")
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("manifest must exist before remove: %v", err)
 	}
-	if err := removeSellHTTPOffer(cfg, "llm", "doomed"); err != nil {
+	if err := removePersistedServiceOffer(cfg, "llm", "doomed"); err != nil {
 		t.Errorf("remove: %v", err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Errorf("manifest still exists after remove: %v", err)
 	}
 	// Idempotent: removing the missing file must not error.
-	if err := removeSellHTTPOffer(cfg, "llm", "doomed"); err != nil {
+	if err := removePersistedServiceOffer(cfg, "llm", "doomed"); err != nil {
 		t.Errorf("second remove must be no-op, got: %v", err)
 	}
 	// Defensive: empty inputs are silent no-ops, not panics.
-	if err := removeSellHTTPOffer(cfg, "", "foo"); err != nil {
+	if err := removePersistedServiceOffer(cfg, "", "foo"); err != nil {
 		t.Errorf("empty namespace: %v", err)
 	}
-	if err := removeSellHTTPOffer(cfg, "llm", ""); err != nil {
+	if err := removePersistedServiceOffer(cfg, "llm", ""); err != nil {
 		t.Errorf("empty name: %v", err)
 	}
 }
@@ -1799,14 +1799,14 @@ func TestResumeSellHTTPOffers_EmptyStoreNoOp(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfg.ConfigDir, "kubeconfig.yaml"), []byte("placeholder"), 0o600); err != nil {
 		t.Fatalf("seed kubeconfig: %v", err)
 	}
-	if err := resumeSellHTTPOffers(cfg, ui.New(false)); err != nil {
+	if err := resumePersistedServiceOffers(cfg, ui.New(false)); err != nil {
 		t.Errorf("empty-store resume must succeed: %v", err)
 	}
 }
 
 // TestSellDeleteAction_CallsRemoveSellHTTPOffer is a source-level guard
 // against the obvious post-delete leak: forget to call
-// removeSellHTTPOffer in the sell delete handler and the next
+// removePersistedServiceOffer in the sell delete handler and the next
 // `obol stack up` resurrects the offer the operator just killed. The
 // only signal would be "deleted offers spookily come back" which is
 // hard to attribute, hence the test.
@@ -1825,8 +1825,8 @@ func TestSellDeleteAction_CallsRemoveSellHTTPOffer(t *testing.T) {
 		t.Fatal("could not delimit sellDeleteCommand body")
 	}
 	scope := body[start : start+1+end]
-	if !strings.Contains(scope, "removeSellHTTPOffer(") {
-		t.Fatal("sellDeleteCommand must call removeSellHTTPOffer — otherwise the on-disk manifest survives the kubectl delete and `obol stack up` resurrects the offer")
+	if !strings.Contains(scope, "removePersistedServiceOffer(") {
+		t.Fatal("sellDeleteCommand must call removePersistedServiceOffer — otherwise the on-disk manifest survives the kubectl delete and `obol stack up` resurrects the offer")
 	}
 }
 
@@ -1847,7 +1847,7 @@ func TestResumeSellOffers_HTTPOnlyStore(t *testing.T) {
 		"apiVersion": "obol.org/v1alpha1", "kind": "ServiceOffer",
 		"metadata": map[string]any{"name": "only-http", "namespace": "llm"},
 	}
-	if err := persistSellHTTPOffer(cfg, "llm", "only-http", manifest); err != nil {
+	if err := persistServiceOffer(cfg, "llm", "only-http", manifest); err != nil {
 		t.Fatalf("persist: %v", err)
 	}
 	// kubectl apply will fail against the fake kubeconfig — that's
@@ -2034,5 +2034,235 @@ func TestInstallResumeBootUnit_PlatformBehavior(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "sell resume") {
 		t.Errorf("unit file does not invoke sell resume:\n%s", body)
+	}
+}
+
+// TestLoadPersistedServiceOffers_MixedTypes pins the ledger walk that
+// `obol sell resume` relies on: every *.yaml ServiceOffer manifest is
+// returned regardless of spec.type (http, agent, legacy files persisted
+// before the type was recorded), while corrupt YAML, non-YAML files,
+// and subdirectories are skipped without failing the walk.
+func TestLoadPersistedServiceOffers_MixedTypes(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	write("llm__api.yaml", "apiVersion: obol.org/v1alpha1\nkind: ServiceOffer\nmetadata:\n  name: api\n  namespace: llm\nspec:\n  type: http\n")
+	write("agent-quant__quant.yaml", "apiVersion: obol.org/v1alpha1\nkind: ServiceOffer\nmetadata:\n  name: quant\n  namespace: agent-quant\nspec:\n  type: agent\n")
+	write("llm__legacy.yaml", "apiVersion: obol.org/v1alpha1\nkind: ServiceOffer\nmetadata:\n  name: legacy\n  namespace: llm\n")
+	write("corrupt.yaml", "::: not yaml {{{")
+	write("notes.txt", "not a manifest")
+	if err := os.Mkdir(filepath.Join(dir, "subdir"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	offers, err := loadPersistedServiceOffers(dir, ui.New(false))
+	if err != nil {
+		t.Fatalf("loadPersistedServiceOffers: %v", err)
+	}
+
+	got := map[string]string{} // "ns/name" -> label
+	for _, o := range offers {
+		got[o.Namespace+"/"+o.Name] = o.label()
+	}
+	want := map[string]string{
+		"agent-quant/quant": "sell-agent",
+		"llm/api":           "sell-http",
+		"llm/legacy":        "sell",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d offers (%v), want %d", len(got), got, len(want))
+	}
+	for k, label := range want {
+		if got[k] != label {
+			t.Errorf("offer %s label = %q, want %q", k, got[k], label)
+		}
+	}
+
+	// Missing dir: no offers, no error — first run on a fresh host.
+	none, err := loadPersistedServiceOffers(filepath.Join(dir, "missing"), ui.New(false))
+	if err != nil || len(none) != 0 {
+		t.Fatalf("missing dir: offers=%v err=%v, want empty/nil", none, err)
+	}
+}
+
+// TestSellAgentPaths_PersistOffers is the source-level guard that BOTH
+// agent-offer creation sites — `obol sell agent <name>` and the
+// agent-backed demo flow — persist the rendered manifest into the
+// ledger. Without it, agent offers silently drop out of `obol sell
+// resume` coverage while http and inference offers come back, which is
+// exactly the inconsistency this ledger exists to prevent.
+func TestSellAgentPaths_PersistOffers(t *testing.T) {
+	src, err := os.ReadFile("sell_agent.go")
+	if err != nil {
+		t.Fatalf("read sell_agent.go: %v", err)
+	}
+	body := string(src)
+	for _, fn := range []string{"func sellAgentCommand(", "func runAgentBackedDemo("} {
+		start := strings.Index(body, fn)
+		if start < 0 {
+			t.Fatalf("%s not found", fn)
+		}
+		end := strings.Index(body[start+1:], "\nfunc ")
+		scope := body[start:]
+		if end >= 0 {
+			scope = body[start : start+1+end]
+		}
+		if !strings.Contains(scope, "persistServiceOffer(") {
+			t.Errorf("%s must call persistServiceOffer so agent offers are covered by `obol sell resume`", fn)
+		}
+	}
+}
+
+// TestRemovePersistedServiceOffersInNamespace pins the `obol agent
+// delete` cleanup: removing one agent's namespace drops exactly that
+// namespace's ledger entries and leaves every other offer alone.
+func TestRemovePersistedServiceOffersInNamespace(t *testing.T) {
+	cfg := newTestConfig(t)
+	manifest := func(ns, name string) map[string]any {
+		return map[string]any{
+			"apiVersion": "obol.org/v1alpha1", "kind": "ServiceOffer",
+			"metadata": map[string]any{"name": name, "namespace": ns},
+			"spec":     map[string]any{"type": "agent"},
+		}
+	}
+	if err := persistServiceOffer(cfg, "agent-quant", "quant", manifest("agent-quant", "quant")); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+	if err := persistServiceOffer(cfg, "llm", "api", manifest("llm", "api")); err != nil {
+		t.Fatalf("persist: %v", err)
+	}
+
+	removed, err := removePersistedServiceOffersInNamespace(cfg, "agent-quant")
+	if err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("removed = %d, want 1", removed)
+	}
+	if _, err := os.Stat(sellOfferStorePath(cfg, "agent-quant", "quant")); !os.IsNotExist(err) {
+		t.Error("agent-quant manifest must be gone")
+	}
+	if _, err := os.Stat(sellOfferStorePath(cfg, "llm", "api")); err != nil {
+		t.Errorf("llm manifest must survive: %v", err)
+	}
+
+	// Empty namespace and nil cfg are no-ops, not panics.
+	if n, err := removePersistedServiceOffersInNamespace(cfg, ""); n != 0 || err != nil {
+		t.Errorf("empty ns: n=%d err=%v", n, err)
+	}
+}
+
+// TestDeleteCRDAgent_CleansPersistedOffers is the source-level guard
+// that `obol agent delete` removes the agent's persisted sell offers —
+// the namespace deletion already took the CRs, so a survivor ledger
+// file would make every later resume replay a ghost offer.
+func TestDeleteCRDAgent_CleansPersistedOffers(t *testing.T) {
+	src, err := os.ReadFile("agent.go")
+	if err != nil {
+		t.Fatalf("read agent.go: %v", err)
+	}
+	body := string(src)
+	start := strings.Index(body, "func deleteCRDAgent(")
+	if start < 0 {
+		t.Fatal("deleteCRDAgent not found")
+	}
+	end := strings.Index(body[start+1:], "\nfunc ")
+	if end < 0 {
+		t.Fatal("could not delimit deleteCRDAgent body")
+	}
+	scope := body[start : start+1+end]
+	if !strings.Contains(scope, "removePersistedServiceOffersInNamespace(") {
+		t.Fatal("deleteCRDAgent must call removePersistedServiceOffersInNamespace — otherwise resume replays offers for deleted agents forever")
+	}
+}
+
+// TestLoadPersistedServiceOffers_DemoListBundle pins the demo-bundle
+// shape: the legacy demo persists a v1 List (namespace + backend +
+// ServiceOffer). The loader must key it from the List metadata and
+// report the inner offer's spec.type.
+func TestLoadPersistedServiceOffers_DemoListBundle(t *testing.T) {
+	dir := t.TempDir()
+	bundle := `apiVersion: v1
+kind: List
+metadata:
+  name: hello
+  namespace: demo
+items:
+  - apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: demo
+  - apiVersion: obol.org/v1alpha1
+    kind: ServiceOffer
+    metadata:
+      name: hello
+      namespace: demo
+    spec:
+      type: http
+`
+	if err := os.WriteFile(filepath.Join(dir, "demo__hello.yaml"), []byte(bundle), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	offers, err := loadPersistedServiceOffers(dir, ui.New(false))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(offers) != 1 {
+		t.Fatalf("got %d offers, want 1", len(offers))
+	}
+	o := offers[0]
+	if o.Namespace != "demo" || o.Name != "hello" || o.label() != "sell-http" {
+		t.Errorf("got %s/%s label=%s, want demo/hello label=sell-http", o.Namespace, o.Name, o.label())
+	}
+}
+
+// TestSellDemoCommand_PersistsBundle is the source-level guard that the
+// legacy demo path persists its bundle for resume coverage.
+func TestSellDemoCommand_PersistsBundle(t *testing.T) {
+	src, err := os.ReadFile("sell.go")
+	if err != nil {
+		t.Fatalf("read sell.go: %v", err)
+	}
+	body := string(src)
+	start := strings.Index(body, "func sellDemoCommand(")
+	if start < 0 {
+		t.Fatal("sellDemoCommand not found")
+	}
+	end := strings.Index(body[start+1:], "\nfunc ")
+	if end < 0 {
+		t.Fatal("could not delimit sellDemoCommand body")
+	}
+	scope := body[start : start+1+end]
+	if !strings.Contains(scope, "persistServiceOffer(") {
+		t.Fatal("sellDemoCommand must persist its demo bundle so `obol sell resume` restores a working demo")
+	}
+}
+
+// TestSellUpdateCommand_RefreshesLedger is the source-level guard for
+// the staleness bug class: `sell update` patches the live CR, and
+// without a ledger refresh the next resume kubectl-applies the OLD
+// payment terms back — silently reverting an intentional payTo or
+// price change.
+func TestSellUpdateCommand_RefreshesLedger(t *testing.T) {
+	src, err := os.ReadFile("sell.go")
+	if err != nil {
+		t.Fatalf("read sell.go: %v", err)
+	}
+	body := string(src)
+	start := strings.Index(body, "func sellUpdateCommand(")
+	if start < 0 {
+		t.Fatal("sellUpdateCommand not found")
+	}
+	end := strings.Index(body[start+1:], "\nfunc ")
+	if end < 0 {
+		t.Fatal("could not delimit sellUpdateCommand body")
+	}
+	scope := body[start : start+1+end]
+	if !strings.Contains(scope, "refreshPersistedServiceOffer(") {
+		t.Fatal("sellUpdateCommand must call refreshPersistedServiceOffer after the patch — else resume reverts updated payment terms")
 	}
 }

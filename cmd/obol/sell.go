@@ -813,7 +813,7 @@ Examples:
 				if err := kubectlApply(cfg, manifest); err != nil {
 					return err
 				}
-				if persistErr := persistSellHTTPOffer(cfg, ns, name, manifest); persistErr != nil {
+				if persistErr := persistServiceOffer(cfg, ns, name, manifest); persistErr != nil {
 					u.Warnf("could not persist offer for stack-up resume: %v", persistErr)
 				}
 				u.Successf("ServiceOffer %s/%s created from JSON", ns, name)
@@ -989,7 +989,7 @@ Examples:
 			if err != nil {
 				return err
 			}
-			if persistErr := persistSellHTTPOffer(cfg, ns, name, manifest); persistErr != nil {
+			if persistErr := persistServiceOffer(cfg, ns, name, manifest); persistErr != nil {
 				u.Warnf("could not persist offer for stack-up resume: %v", persistErr)
 			}
 			action := "created"
@@ -1667,6 +1667,25 @@ Example:
 			applyOut, err := kubectlApplyOutput(cfg, soManifest)
 			if err != nil {
 				return fmt.Errorf("apply ServiceOffer: %w", err)
+			}
+			// Persist the whole demo bundle (namespace + backend Deployment
+			// + Service + ServiceOffer) as one v1 List so `obol sell
+			// resume` restores a working demo, not an offer with a missing
+			// upstream. kubectl applies List manifests natively; the List
+			// metadata only keys the ledger file.
+			items := make([]any, 0, 4)
+			for _, res := range buildDemoResources(name, spec, chain) {
+				items = append(items, res)
+			}
+			items = append(items, soManifest)
+			bundle := map[string]any{
+				"apiVersion": "v1",
+				"kind":       "List",
+				"metadata":   map[string]any{"name": name, "namespace": demoNamespace},
+				"items":      items,
+			}
+			if persistErr := persistServiceOffer(cfg, demoNamespace, name, bundle); persistErr != nil {
+				u.Warnf("could not persist demo offer for resume: %v", persistErr)
 			}
 			action := "created"
 			if strings.Contains(applyOut, "configured") || strings.Contains(applyOut, "unchanged") {
@@ -2703,6 +2722,15 @@ Examples:
 				return fmt.Errorf("failed to patch serviceoffer: %w", err)
 			}
 
+			// Refresh the resume ledger from the live (post-patch) object.
+			// Without this, the persisted manifest keeps the OLD payment
+			// terms and the next `obol sell resume` / `obol stack up`
+			// kubectl-applies them back — silently reverting a payTo or
+			// price change the operator made on purpose.
+			if err := refreshPersistedServiceOffer(cfg, ns, name); err != nil {
+				u.Warnf("could not refresh persisted offer for resume: %v", err)
+			}
+
 			u.Successf("ServiceOffer %s/%s updated", ns, name)
 			u.Info("The controller will reconcile the new payment config.")
 			u.Infof("Check status: obol sell status %s -n %s", name, ns)
@@ -2775,7 +2803,7 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 			// either, by design (the descriptor is what `obol sell
 			// inference list/status` reads). For HTTP we keep no such
 			// post-delete state, so removing the file is the right shape.
-			if removeErr := removeSellHTTPOffer(cfg, ns, name); removeErr != nil {
+			if removeErr := removePersistedServiceOffer(cfg, ns, name); removeErr != nil {
 				u.Warnf("could not remove persisted sell-http offer at %s/%s: %v", ns, name, removeErr)
 			}
 
@@ -3753,8 +3781,10 @@ func sellResumeCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "resume",
 		Usage: "Re-apply persisted sell offers and relaunch host gateways (run after a host reboot)",
-		Description: `Replays every locally-persisted sell offer against the cluster and
-relaunches the detached host gateway for each sell-inference offer.
+		Description: `Replays every locally-persisted sell offer against the cluster —
+all ServiceOffer types: inference (re-applies cluster artifacts AND
+relaunches the detached host gateway), http, agent, and demo-created
+agent offers — so one command brings the whole catalog back.
 
 After a host reboot, Docker's restart policy brings the k3d cluster back
 automatically — but the host-side x402 gateways started by
@@ -3765,7 +3795,12 @@ offers survive in etcd with UpstreamHealthy=False, so the public catalog
 'obol stack up' already runs this resume path; this command exposes it
 directly so a reboot does not require a full stack-up to recover.
 
-Idempotent: offers whose gateway is still running are skipped.
+Idempotent: offers whose gateway is still running are skipped, and the
+kubectl applies re-assert existing objects. A replayed agent offer needs
+its Agent CR: still present after a reboot, but after a full stack
+recreation the offer waits (controller reports the missing agent) until
+'obol agent new' recreates it. 'sell mcp' servers are foreground
+processes with no ServiceOffer and are not resumed.
 
 Examples:
   obol sell resume                      Resume all persisted offers now
@@ -3945,53 +3980,51 @@ func installResumeBootUnit(cfg *config.Config, u *ui.UI) error {
 // Best-effort. Per-offer failures emit a warning and the loop continues,
 // so one broken descriptor cannot block stack-up.
 func resumeSellOffers(ctx context.Context, cfg *config.Config, u *ui.UI) error {
+	_ = ctx // reserved for cancellation support; current resume calls are synchronous and short
+
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, statErr := os.Stat(kubeconfigPath); statErr != nil {
-		// No cluster — nothing to reattach for either inference or http.
+		// No cluster — nothing to reattach.
 		return nil
 	}
 
+	// 1. Inference offers: the only type with a host-side process. Each
+	//    descriptor re-applies its cluster artifacts AND relaunches the
+	//    detached x402 gateway.
 	store := inference.NewStore(cfg.ConfigDir)
 	deployments, err := store.List()
 	if err != nil {
 		return fmt.Errorf("list inference deployments: %w", err)
 	}
 
-	if len(deployments) == 0 {
-		// No inference offers; fall through to http resume below.
-		if err := resumeSellHTTPOffers(cfg, u); err != nil {
-			u.Warnf("resume sell-http offers: %v", err)
+	if len(deployments) > 0 {
+		u.Blank()
+		u.Infof("Resuming %d locally-persisted sell-inference offer(s)...", len(deployments))
+
+		var resumed int
+		for _, d := range deployments {
+			if err := resumeOneInferenceOffer(cfg, u, d); err != nil {
+				u.Warnf("resume %s: %v", d.Name, err)
+				continue
+			}
+			resumed++
+			u.Successf("Resumed sell-inference offer %q", d.Name)
 		}
-		return nil
-	}
 
-	u.Blank()
-	u.Infof("Resuming %d locally-persisted sell-inference offer(s)...", len(deployments))
-
-	var resumed int
-	for _, d := range deployments {
-		if err := resumeOneInferenceOffer(cfg, u, d); err != nil {
-			u.Warnf("resume %s: %v", d.Name, err)
-			continue
+		if resumed > 0 {
+			u.Dim("  Gateways spawned as detached background processes — check <state>/sell-inference/<name>/gateway.log for output.")
 		}
-		resumed++
-		u.Successf("Resumed sell-inference offer %q", d.Name)
 	}
 
-	if resumed > 0 {
-		u.Dim("  Gateways spawned as detached background processes — check <state>/sell-inference/<name>/gateway.log for output.")
+	// 2. Every other offer type (http, agent, demo-agent): pure manifest
+	//    replay from the shared ledger — no host process to relaunch.
+	//    The two stores stay separate on disk because the inference
+	//    descriptor is rich (listen addr, asset, registration, gateway
+	//    PID) while the ledger holds only rendered ServiceOffer manifests.
+	if err := resumePersistedServiceOffers(cfg, u); err != nil {
+		u.Warnf("resume persisted sell offers: %v", err)
 	}
 
-	// Replay persisted `obol sell http` offers as well. The two stores are
-	// independent on disk (sell-http manifests live at
-	// <ConfigDir>/sell-http/, sell-inference descriptors at
-	// <ConfigDir>/inference/) but the operator wants one stack-up to
-	// bring every paid offer back regardless of type.
-	if err := resumeSellHTTPOffers(cfg, u); err != nil {
-		u.Warnf("resume sell-http offers: %v", err)
-	}
-
-	_ = ctx // reserved for cancellation support; current resume calls are synchronous and short
 	return nil
 }
 
@@ -4445,31 +4478,29 @@ func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTab
 	return spec, nil
 }
 
-// sellHTTPStoreDir returns the on-disk root for persisted `obol sell http`
-// ServiceOffer manifests. Schema is one YAML file per offer at
+// sellOfferStoreDir returns the on-disk ledger of persisted ServiceOffer
+// manifests — one YAML file per offer at
 // <ConfigDir>/sell-http/<namespace>__<name>.yaml so two offers with the
-// same name in different namespaces never collide.
+// same name in different namespaces never collide. (The dir name is
+// historical: it predates the ledger covering more than `sell http`.
+// Renaming it would orphan offers persisted by already-shipped CLIs.)
 //
-// Unlike `obol sell inference`, http offers don't have a host-side
-// foreground process to track — the upstream is an in-cluster Service.
-// The on-disk artifact is just the rendered ServiceOffer manifest; the
-// resume path kubectl-applies it to bring the offer back identically.
-//
-// Long-term we should fold this into a single sell-offer store (one
-// schema for both inference and http), so resume is one walk instead of
-// two. Keeping them separate for now because the inference store is
-// rich (host listen addr, asset symbol, registration block) while http
-// only needs the rendered manifest — collapsing them would force
-// inference-only fields onto every http descriptor.
-func sellHTTPStoreDir(cfg *config.Config) string {
+// EVERY offer type without a host-side process persists here: `sell
+// http`, `sell agent`, and the demo agent flow. The on-disk artifact is
+// just the rendered ServiceOffer manifest; the resume path
+// kubectl-applies it to bring the offer back identically. `sell
+// inference` keeps its own richer store (<ConfigDir>/inference/) because
+// it additionally tracks the host gateway (listen addr, asset terms,
+// registration, PID).
+func sellOfferStoreDir(cfg *config.Config) string {
 	return filepath.Join(cfg.ConfigDir, "sell-http")
 }
 
-func sellHTTPStorePath(cfg *config.Config, namespace, name string) string {
-	return filepath.Join(sellHTTPStoreDir(cfg), namespace+"__"+name+".yaml")
+func sellOfferStorePath(cfg *config.Config, namespace, name string) string {
+	return filepath.Join(sellOfferStoreDir(cfg), namespace+"__"+name+".yaml")
 }
 
-// persistSellHTTPOffer writes the rendered ServiceOffer manifest to disk
+// persistServiceOffer writes the rendered ServiceOffer manifest to disk
 // so `obol stack up` can replay it after a stack-down/up cycle wipes
 // etcd. Idempotent: subsequent calls overwrite atomically (write to a
 // `.tmp` sibling, rename into place) so a crash mid-write doesn't leave
@@ -4479,18 +4510,18 @@ func sellHTTPStorePath(cfg *config.Config, namespace, name string) string {
 // should warn but not abort the sell command, because the cluster-side
 // offer is already in place. Returning an error lets the caller pick
 // the surface.
-func persistSellHTTPOffer(cfg *config.Config, namespace, name string, manifest map[string]any) error {
+func persistServiceOffer(cfg *config.Config, namespace, name string, manifest map[string]any) error {
 	if cfg == nil || namespace == "" || name == "" {
-		return errors.New("persistSellHTTPOffer: missing cfg / namespace / name")
+		return errors.New("persistServiceOffer: missing cfg / namespace / name")
 	}
-	if err := os.MkdirAll(sellHTTPStoreDir(cfg), 0o755); err != nil {
+	if err := os.MkdirAll(sellOfferStoreDir(cfg), 0o755); err != nil {
 		return fmt.Errorf("create store dir: %w", err)
 	}
 	data, err := yaml.Marshal(manifest)
 	if err != nil {
 		return fmt.Errorf("marshal manifest: %w", err)
 	}
-	final := sellHTTPStorePath(cfg, namespace, name)
+	final := sellOfferStorePath(cfg, namespace, name)
 	tmp := final + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", tmp, err)
@@ -4502,52 +4533,160 @@ func persistSellHTTPOffer(cfg *config.Config, namespace, name string, manifest m
 	return nil
 }
 
-// removeSellHTTPOffer deletes the on-disk manifest for a single offer
+// removePersistedServiceOffer deletes the on-disk manifest for a single offer
 // when `obol sell delete` succeeds. Without this, the resume path on
 // the next `obol stack up` would re-create an offer the operator
 // intentionally deleted. Best-effort — a missing file is a no-op.
-func removeSellHTTPOffer(cfg *config.Config, namespace, name string) error {
+func removePersistedServiceOffer(cfg *config.Config, namespace, name string) error {
 	if cfg == nil || namespace == "" || name == "" {
 		return nil
 	}
-	path := sellHTTPStorePath(cfg, namespace, name)
+	path := sellOfferStorePath(cfg, namespace, name)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
 }
 
-// resumeSellHTTPOffers re-applies every persisted `obol sell http`
-// manifest after `obol stack up` rebuilds the cluster. Mirror of the
+// refreshPersistedServiceOffer re-renders the ledger entry for one offer
+// from the live cluster object, after an in-place mutation (`obol sell
+// update`). Reads the CR, strips server-managed fields down to
+// apiVersion/kind/metadata(name, namespace, labels)/spec, and overwrites
+// the persisted manifest. When the existing ledger file is a demo v1
+// List bundle, only the inner ServiceOffer item is replaced so the
+// backend manifests survive.
+//
+// Also ADOPTS offers that were never persisted (e.g. created by an
+// agent via raw kubectl): an explicit `sell update` is operator intent,
+// so the offer earns resume coverage from then on.
+func refreshPersistedServiceOffer(cfg *config.Config, ns, name string) error {
+	out, err := kubectlOutput(cfg, "get", "serviceoffers.obol.org", name, "-n", ns, "-o", "yaml")
+	if err != nil {
+		return fmt.Errorf("read live offer: %w", err)
+	}
+	var live map[string]any
+	if err := yaml.Unmarshal([]byte(out), &live); err != nil {
+		return fmt.Errorf("parse live offer: %w", err)
+	}
+	spec, ok := live["spec"].(map[string]any)
+	if !ok {
+		return errors.New("live offer has no spec")
+	}
+	metadata := map[string]any{"name": name, "namespace": ns}
+	if md, ok := live["metadata"].(map[string]any); ok {
+		if labels, ok := md["labels"].(map[string]any); ok && len(labels) > 0 {
+			metadata["labels"] = labels
+		}
+	}
+	fresh := map[string]any{
+		"apiVersion": "obol.org/v1alpha1",
+		"kind":       "ServiceOffer",
+		"metadata":   metadata,
+		"spec":       spec,
+	}
+
+	// Demo bundles persist as a v1 List; swap the inner offer in place.
+	if data, err := os.ReadFile(sellOfferStorePath(cfg, ns, name)); err == nil {
+		var existing map[string]any
+		if yaml.Unmarshal(data, &existing) == nil && existing["kind"] == "List" {
+			items, _ := existing["items"].([]any)
+			for i, it := range items {
+				m, ok := it.(map[string]any)
+				if ok && m["kind"] == "ServiceOffer" {
+					items[i] = fresh
+				}
+			}
+			existing["items"] = items
+			return persistServiceOffer(cfg, ns, name, existing)
+		}
+	}
+
+	return persistServiceOffer(cfg, ns, name, fresh)
+}
+
+// removePersistedServiceOffersInNamespace drops every ledger manifest
+// whose metadata.namespace matches ns. Used by `obol agent delete`: the
+// namespace deletion takes the agent's ServiceOffers with it, so their
+// persisted manifests must go too or resume replays ghosts. Returns the
+// number of files removed.
+func removePersistedServiceOffersInNamespace(cfg *config.Config, ns string) (int, error) {
+	if cfg == nil || ns == "" {
+		return 0, nil
+	}
+	manifests, err := loadPersistedServiceOffers(sellOfferStoreDir(cfg), ui.New(false))
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, m := range manifests {
+		if m.Namespace != ns {
+			continue
+		}
+		if err := os.Remove(m.Path); err != nil && !os.IsNotExist(err) {
+			return removed, err
+		}
+		removed++
+	}
+	return removed, nil
+}
+
+// resumePersistedServiceOffers re-applies every ServiceOffer manifest in
+// the ledger (http, agent, demo-agent — every type without a host-side
+// process) after a reboot or a stack-down/up cycle. Mirror of the
 // inference resume loop: walk the store dir, kubectl apply each file,
 // warn-and-continue on per-offer failures so one corrupt YAML can't
 // block the rest.
+//
+// A replayed type=agent offer needs its Agent CR to exist before it can
+// reach Ready. After a reboot the CR is still in etcd; after a full
+// stack recreation the controller reports the missing agent on the
+// offer's conditions until the operator recreates it (`obol agent new`).
 //
 // Skipped silently when the store dir is missing (no offers ever
 // persisted) or when no kubeconfig is present (stack up hasn't reached
 // the cluster yet). Counts and announces what was reattached so the
 // operator sees the same "Resumed N offers" feedback they get for
 // inference.
-func resumeSellHTTPOffers(cfg *config.Config, u *ui.UI) error {
-	dir := sellHTTPStoreDir(cfg)
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("read store dir: %w", err)
-	}
-	if len(entries) == 0 {
-		return nil
-	}
-
+func resumePersistedServiceOffers(cfg *config.Config, u *ui.UI) error {
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, statErr := os.Stat(kubeconfigPath); statErr != nil {
 		return nil // no cluster yet
 	}
 
+	manifests, err := loadPersistedServiceOffers(sellOfferStoreDir(cfg), u)
+	if err != nil {
+		return err
+	}
+	if len(manifests) == 0 {
+		return nil
+	}
+
 	u.Blank()
-	var manifests []sellHTTPStoredOffer
+	u.Infof("Resuming %d locally-persisted sell offer(s)...", len(manifests))
+	for _, m := range manifests {
+		if err := kubectlApply(cfg, m.Manifest); err != nil {
+			u.Warnf("resume %s %s/%s: %v", m.label(), m.Namespace, m.Name, err)
+			continue
+		}
+		u.Successf("Resumed %s offer %s/%s", m.label(), m.Namespace, m.Name)
+	}
+	return nil
+}
+
+// loadPersistedServiceOffers walks a ledger dir and parses every
+// *.yaml manifest in it. Unreadable or malformed files warn and are
+// skipped — the resume loop must survive one corrupt entry. A missing
+// dir means no offers were ever persisted and returns an empty slice.
+func loadPersistedServiceOffers(dir string, u *ui.UI) ([]persistedServiceOffer, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read store dir: %w", err)
+	}
+
+	var manifests []persistedServiceOffer
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".yaml") {
 			continue
@@ -4564,28 +4703,37 @@ func resumeSellHTTPOffers(cfg *config.Config, u *ui.UI) error {
 			continue
 		}
 		ns, name := manifestNSName(manifest)
-		manifests = append(manifests, sellHTTPStoredOffer{Path: path, Manifest: manifest, Namespace: ns, Name: name})
-	}
-	if len(manifests) == 0 {
-		return nil
-	}
-
-	u.Infof("Resuming %d locally-persisted sell-http offer(s)...", len(manifests))
-	for _, m := range manifests {
-		if err := kubectlApply(cfg, m.Manifest); err != nil {
-			u.Warnf("resume http %s/%s: %v", m.Namespace, m.Name, err)
+		if ns == "" || name == "" {
+			u.Warnf("skip %s: manifest has no metadata.namespace/name", path)
 			continue
 		}
-		u.Successf("Resumed sell-http offer %s/%s", m.Namespace, m.Name)
+		manifests = append(manifests, persistedServiceOffer{
+			Path:      path,
+			Manifest:  manifest,
+			Namespace: ns,
+			Name:      name,
+			Type:      manifestOfferType(manifest),
+		})
 	}
-	return nil
+	return manifests, nil
 }
 
-type sellHTTPStoredOffer struct {
+type persistedServiceOffer struct {
 	Path      string
 	Manifest  map[string]any
 	Namespace string
 	Name      string
+	Type      string // spec.type (http, agent, inference, ...); empty when absent
+}
+
+// label renders the offer for resume messaging: "sell-agent" /
+// "sell-http" / plain "sell" when the manifest carries no spec.type
+// (legacy files persisted before the type was recorded).
+func (m persistedServiceOffer) label() string {
+	if m.Type == "" {
+		return "sell"
+	}
+	return "sell-" + m.Type
 }
 
 // manifestNSName pulls metadata.namespace + metadata.name out of an
@@ -4599,4 +4747,28 @@ func manifestNSName(manifest map[string]any) (string, string) {
 	ns, _ := md["namespace"].(string)
 	name, _ := md["name"].(string)
 	return ns, name
+}
+
+// manifestOfferType pulls spec.type out of an unmarshaled ServiceOffer
+// manifest; empty string when absent or malformed. For v1 List bundles
+// (the legacy demo persists backend + offer together) it reports the
+// inner ServiceOffer's type.
+func manifestOfferType(manifest map[string]any) string {
+	if manifest["kind"] == "List" {
+		items, _ := manifest["items"].([]any)
+		for _, it := range items {
+			m, ok := it.(map[string]any)
+			if !ok || m["kind"] != "ServiceOffer" {
+				continue
+			}
+			return manifestOfferType(m)
+		}
+		return ""
+	}
+	spec, ok := manifest["spec"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	t, _ := spec["type"].(string)
+	return t
 }

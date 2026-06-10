@@ -980,6 +980,17 @@ func deleteCRDAgent(cfg *config.Config, name string, force bool, u *ui.UI) error
 		}
 		u.Dim("Removed host data dir " + root)
 	}
+
+	// Drop any persisted ServiceOffer manifests for this agent's
+	// namespace (offers created by `obol sell agent` / the demo flow).
+	// The CRs died with the namespace above; without this, every later
+	// `obol sell resume` / `obol stack up` replays an offer pointing at
+	// a deleted agent and warns forever.
+	if removed, err := removePersistedServiceOffersInNamespace(cfg, ns); err != nil {
+		u.Warnf("could not clean persisted sell offers for %s: %v", ns, err)
+	} else if removed > 0 {
+		u.Dim(fmt.Sprintf("Removed %d persisted sell offer manifest(s) for %s", removed, ns))
+	}
 	return nil
 }
 
