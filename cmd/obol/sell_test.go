@@ -1584,6 +1584,32 @@ func TestValidateSellInferenceModelName(t *testing.T) {
 	}
 }
 
+// TestWaitForClusterAPI pins the two fast paths of the boot-race wait:
+// no kubeconfig means no cluster and returns nil immediately; an
+// unreachable cluster surfaces an error once the deadline passes
+// instead of blocking resume forever.
+func TestWaitForClusterAPI(t *testing.T) {
+	u := ui.New(false)
+
+	t.Run("no kubeconfig returns nil immediately", func(t *testing.T) {
+		cfg := &config.Config{ConfigDir: t.TempDir(), BinDir: t.TempDir()}
+		if err := waitForClusterAPI(context.Background(), cfg, u, 0); err != nil {
+			t.Fatalf("expected nil without kubeconfig, got %v", err)
+		}
+	})
+
+	t.Run("unreachable cluster errors after deadline", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "kubeconfig.yaml"), []byte("apiVersion: v1\nkind: Config\n"), 0o600); err != nil {
+			t.Fatalf("write kubeconfig: %v", err)
+		}
+		cfg := &config.Config{ConfigDir: dir, BinDir: t.TempDir()}
+		if err := waitForClusterAPI(context.Background(), cfg, u, 0); err == nil {
+			t.Fatal("expected error for unreachable cluster with zero timeout")
+		}
+	})
+}
+
 // TestReadGatewayPID pins the on-disk PID file format. The file must be a
 // single decimal integer in ASCII (no JSON, no trailing newlines that
 // confuse trivial readers) so other tools — `tail -f .../gateway.log` and

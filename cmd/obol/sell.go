@@ -3778,6 +3778,14 @@ Examples:
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
+			// At boot the k3d API server lags Docker by a minute or
+			// more, and resumeOneInferenceOffer's kubectl applies run
+			// BEFORE the gateway relaunch and warn-and-continue on
+			// failure — without this wait a too-early resume silently
+			// resumes nothing and nothing retries.
+			if err := waitForClusterAPI(ctx, cfg, u, 3*time.Minute); err != nil {
+				u.Warnf("cluster API not ready: %v (continuing — per-offer applies may fail)", err)
+			}
 			if err := resumeSellOffers(ctx, cfg, u); err != nil {
 				return err
 			}
@@ -3786,6 +3794,41 @@ Examples:
 			}
 			return nil
 		},
+	}
+}
+
+// waitForClusterAPI blocks until the cluster API server answers a
+// /readyz probe, or the timeout elapses. A missing kubeconfig returns
+// nil immediately — no cluster means nothing to wait for and the resume
+// loop already degrades gracefully. Used by `obol sell resume` because
+// its main caller is a boot unit racing the k3d node container's
+// startup; `obol stack up` doesn't need it (cluster creation blocks).
+func waitForClusterAPI(ctx context.Context, cfg *config.Config, u *ui.UI, timeout time.Duration) error {
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, err := os.Stat(kubeconfigPath); err != nil {
+		return nil
+	}
+	bin, kc := kubectl.Paths(cfg)
+	deadline := time.Now().Add(timeout)
+	waited := false
+	for {
+		if _, err := kubectl.Output(bin, kc, "get", "--raw=/readyz"); err == nil {
+			if waited {
+				u.Dim("  Cluster API ready.")
+			}
+			return nil
+		} else if time.Now().After(deadline) {
+			return fmt.Errorf("cluster API not ready within %s: %w", timeout, err)
+		}
+		if !waited {
+			u.Dim("  Waiting for cluster API (boot race: k3d needs a moment after Docker starts)...")
+			waited = true
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+		}
 	}
 }
 
@@ -3833,13 +3876,13 @@ func installResumeBootUnit(cfg *config.Config, u *ui.UI) error {
 		return fmt.Errorf("--install-boot-unit requires Linux with systemd (detected %s); run `obol sell resume` manually after reboot instead", runtime.GOOS)
 	}
 
-	obolBin := filepath.Join(cfg.BinDir, "obol")
-	if _, err := os.Stat(obolBin); err != nil {
-		exe, exeErr := os.Executable()
-		if exeErr != nil {
-			return fmt.Errorf("locate obol binary: %w", exeErr)
-		}
-		obolBin = exe
+	// Pin the binary running THIS command into ExecStart — the operator
+	// just proved it has `sell resume`. The installed BinDir copy may be
+	// an older release without the subcommand (rc11 on the live seller
+	// box), which would make the unit fail on every boot.
+	obolBin, err := resumeGatewayBinary(cfg)
+	if err != nil {
+		return err
 	}
 
 	home, err := os.UserHomeDir()
@@ -3855,6 +3898,7 @@ func installResumeBootUnit(cfg *config.Config, u *ui.UI) error {
 		return fmt.Errorf("write unit file: %w", err)
 	}
 	u.Successf("Installed boot unit %s", unitPath)
+	u.Dim("  Unit runs: " + obolBin + " sell resume — keep this binary at this path, or re-run --install-boot-unit after moving/upgrading it.")
 
 	for _, args := range [][]string{
 		{"--user", "daemon-reload"},
