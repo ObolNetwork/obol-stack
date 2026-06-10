@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"os/exec"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -224,41 +226,100 @@ func TestEmbeddedImages_NamedImagesAreDigestPinned(t *testing.T) {
 	}
 }
 
-func TestEmbeddedImages_X402ControllerAndBuyerUseFixPins(t *testing.T) {
-	cases := []struct {
-		file string
-		ref  string
-	}{
-		{
-			// Repinned to 9504961 (main HEAD at release-cut) — images rebuilt
-			// from this commit via docker-publish-x402 workflow_dispatch.
-			// Carries forward everything c19ffaf (rc14) shipped:
-			//   - controller renders sub-agents with Hermes v2026.6.5 and
-			//     the UID-1000 kubelet-owned permission model (#610), and
-			//     surfaces maxTimeoutSeconds in the catalog ext (#614).
-			//   - buyer carries the settled-but-failed ConfirmSpend branch
-			//     (>=400 + settle tx hash counts as money moved) (#614).
-			// Still carries the Secret-create-only reconciler change from
-			// b39bcaa and the earlier ab71481/86b8c9f fixes (ancestors via
-			// main). See TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix.
-			file: "base/templates/x402.yaml",
-			ref:  "ghcr.io/obolnetwork/serviceoffer-controller:9504961@sha256:74d727712cf037f35e0ba31f8f1402bc3d75c606f328ff79da07160e724f4fae",
-		},
-		{
-			file: "base/templates/llm.yaml",
-			ref:  "ghcr.io/obolnetwork/x402-buyer:9504961@sha256:3f38aeff13ad115ebc8e2370511558d74373699af7feb8d4f35e1154cd2c12d3",
-		},
+// extractEmbeddedImagePin locates the single `image:` line for repo in the
+// given embedded template and returns its (tag, digest). Fails the test when
+// the ref is missing or not of the `<repo>:<short-sha>@sha256:<digest>` form
+// the repin automation maintains (.github/scripts/repin-x402-images.sh).
+func extractEmbeddedImagePin(t *testing.T, file, repo string) (tag, digest string) {
+	t.Helper()
+
+	data, err := ReadInfrastructureFile(file)
+	if err != nil {
+		t.Fatalf("read %s: %v", file, err)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.ref, func(t *testing.T) {
-			data, err := ReadInfrastructureFile(tc.file)
-			if err != nil {
-				t.Fatalf("read %s: %v", tc.file, err)
-			}
-			if !strings.Contains(string(data), "image: "+tc.ref) {
-				t.Fatalf("%s must pin current x402 bundle image %q", tc.file, tc.ref)
-			}
+	re := regexp.MustCompile(`image: ` + regexp.QuoteMeta(repo) + `:([0-9a-f]{7,40})@(sha256:[0-9a-f]{64})`)
+
+	m := re.FindSubmatch(data)
+	if m == nil {
+		t.Fatalf("%s: no commit-tagged, digest-pinned image ref for %s — the pin must look like "+
+			"%s:<short-sha>@sha256:<digest> (run .github/scripts/repin-x402-images.sh)", file, repo, repo)
+	}
+
+	return string(m[1]), string(m[2])
+}
+
+// requireGitAncestor asserts that ancestor is reachable from the commit the
+// pin tag names. Skips (not fails) when git or either commit is unavailable —
+// shallow clones and source tarballs can't answer ancestry questions; the
+// release workflow's verify-image-pins gate enforces freshness with full
+// history.
+func requireGitAncestor(t *testing.T, ancestor, pinTag string) {
+	t.Helper()
+
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available; ancestry check skipped")
+	}
+
+	for _, c := range []string{ancestor, pinTag} {
+		if err := exec.Command("git", "rev-parse", "--verify", "--quiet", c+"^{commit}").Run(); err != nil {
+			t.Skipf("commit %s not resolvable in this clone (shallow checkout?); ancestry check skipped", c)
+		}
+	}
+
+	if err := exec.Command("git", "merge-base", "--is-ancestor", ancestor, pinTag).Run(); err != nil {
+		t.Fatalf("pinned image build commit %s does not descend from required fix commit %s", pinTag, ancestor)
+	}
+}
+
+// TestEmbeddedImages_X402PinsShareOneBuildCommit guards the consistency
+// invariant behind the repin automation: x402-verifier,
+// serviceoffer-controller, and x402-buyer are built together by
+// docker-publish-x402.yml, so their embedded pins must reference one build
+// commit. Mixed tags mean a partial/manual repin — exactly the state that
+// shipped a controller/buyer skew before rc11 (cf. 8fb1553) and the stale
+// base pins before rc14 (cf. 2db429b).
+func TestEmbeddedImages_X402PinsShareOneBuildCommit(t *testing.T) {
+	verifierTag, _ := extractEmbeddedImagePin(t, "base/templates/x402.yaml", "ghcr.io/obolnetwork/x402-verifier")
+	controllerTag, _ := extractEmbeddedImagePin(t, "base/templates/x402.yaml", "ghcr.io/obolnetwork/serviceoffer-controller")
+	buyerTag, _ := extractEmbeddedImagePin(t, "base/templates/llm.yaml", "ghcr.io/obolnetwork/x402-buyer")
+
+	if verifierTag != controllerTag || verifierTag != buyerTag {
+		t.Fatalf("embedded x402 pins must share one build commit; got verifier=%s controller=%s buyer=%s "+
+			"(repin all three: .github/scripts/repin-x402-images.sh <commit>)",
+			verifierTag, controllerTag, buyerTag)
+	}
+}
+
+// TestEmbeddedImages_X402PinsCarryRequiredFixes replaces the old
+// exact-ref equality tests so the repin automation can bump pins without
+// editing this file, while the "image carries fix X" guarantees get
+// stronger: ancestry-verified against git history instead of trusted via a
+// hand-maintained string. Each entry names a commit whose absence shipped a
+// real bug; bumping a pin BACKWARD past any of them fails here.
+func TestEmbeddedImages_X402PinsCarryRequiredFixes(t *testing.T) {
+	// All three images share one build commit (asserted above), so checking
+	// the controller tag covers the set.
+	tag, _ := extractEmbeddedImagePin(t, "base/templates/x402.yaml", "ghcr.io/obolnetwork/serviceoffer-controller")
+
+	// Only commits reachable from main belong here. A release-branch commit
+	// (e.g. c19ffaf, the rc14 train) stops being an ancestor of future main
+	// pins the moment the train squash-merges — the entry would hard-fail
+	// every clone that still has the branch ref and skip everywhere else.
+	// Train freshness is the release gate's job (verify-x402-pins.sh).
+	requiredFixes := []struct {
+		commit string
+		why    string
+	}{
+		{"b39bcaa", "Secret-create-only reconciler — without it per-agent provisioning 403s under the no-update/patch Secret RBAC"},
+		{"ab71481", "suppress verifyOnly=false warning on the in-process settle path (per-request log spam for sell-agent buyers)"},
+		{"86b8c9f", "buyer drops expired pre-signed auths before signing (long-running paid inference)"},
+	}
+
+	for _, fix := range requiredFixes {
+		t.Run(fix.commit, func(t *testing.T) {
+			requireGitAncestor(t, fix.commit, tag)
+			_ = fix.why // documentation; the failure message names the commit
 		})
 	}
 }
