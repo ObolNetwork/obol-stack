@@ -50,6 +50,20 @@ else
     fail "Skills mismatch: got=$got want=$expected"
 fi
 
+# §1.1.1: .no-bundled-skills marker landed on the host PVC path.
+# SeedHostFiles writes it; the cluster mounts HostHomePath into the pod via
+# the data PVC. Without the marker, Hermes' sync_skills() seeds ~24 stock
+# categories (~1 MB of SKILL.md text) into /data/.hermes/skills on every
+# launch — see internal/agentcrd/agent_contract_integration_test.go for the
+# v2026.5.28 → v2026.6.5 root cause.
+step ".no-bundled-skills marker present on host PVC"
+marker_file="$host_root/.no-bundled-skills"
+if [ -f "$marker_file" ]; then
+    pass ".no-bundled-skills marker present at $marker_file"
+else
+    fail ".no-bundled-skills marker missing at $marker_file — Hermes will re-seed bundled skills on every launch"
+fi
+
 # §1.2: Agent CR observable
 step "kubectl get agent $AGENT_NAME -n $AGENT_NS"
 phase=$("$OBOL" kubectl get agent "$AGENT_NAME" -n "$AGENT_NS" \
@@ -69,19 +83,62 @@ case "$phase" in
         ;;
 esac
 
-# §1.3: Hermes pod check
-step "Hermes pod running in $AGENT_NS"
-pod_phase=""
+# §1.3: Hermes pod check — gate on the Ready condition, not phase. Phase
+# flips to Running while containers are still booting; §1.3.1 execs into the
+# pod and would false-pass on an empty skills dir mid-boot.
+step "Hermes pod ready in $AGENT_NS"
+pod_ready=""
 for i in $(seq 1 30); do
-    pod_phase=$("$OBOL" kubectl get pods -n "$AGENT_NS" -l app.kubernetes.io/name=hermes \
-        -o jsonpath='{.items[0].status.phase}' 2>/dev/null || true)
-    [ "$pod_phase" = "Running" ] && break
+    pod_ready=$("$OBOL" kubectl get pods -n "$AGENT_NS" -l app.kubernetes.io/name=hermes \
+        -o jsonpath='{.items[0].status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+    [ "$pod_ready" = "True" ] && break
     sleep 4
 done
-if [ "$pod_phase" = "Running" ]; then
-    pass "Hermes pod Running"
+if [ "$pod_ready" = "True" ]; then
+    pass "Hermes pod Ready"
 else
-    fail "Hermes pod did not reach Running within 120s (phase=$pod_phase)"
+    fail "Hermes pod did not become Ready within 120s (ready=$pod_ready)"
+fi
+
+# §1.3.1: Bundled-skills contract — the marker on the host PVC was honored
+# inside the pod. This is the load-bearing CI check that should have caught
+# the v2026.5.28 bundled-skills bloat ($1 MB SKILL.md text re-seeded on every
+# launch by sync_skills(), which ignored the marker before v2026.6.5 / commit
+# 2ed96372a "blank-slate skills"). We assert the same two halves the Go
+# integration test does (internal/agentcrd/agent_contract_integration_test.go):
+#   (a) /data/.hermes/obol-skills is populated with the operator-chosen subset
+#       — proof our seeding path worked.
+#   (b) /data/.hermes/skills (the native bundled-skills dir) is absent or empty
+#       — proof Hermes honored the marker and did NOT re-seed bundled skills.
+HERMES_POD=$("$OBOL" kubectl get pods -n "$AGENT_NS" -l app.kubernetes.io/name=hermes \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+
+step "Pod-side obol-skills external_dirs populated"
+if [ -n "$HERMES_POD" ]; then
+    ext_out=$("$OBOL" kubectl exec -n "$AGENT_NS" "$HERMES_POD" -c hermes -- \
+        ls -A /data/.hermes/obol-skills 2>/dev/null || true)
+    if [ -n "$(echo "$ext_out" | tr -d '[:space:]')" ]; then
+        pass "obol-skills dir in pod = $(echo "$ext_out" | tr '\n' ',' | sed 's/,$//')"
+    else
+        fail "obol-skills external_dirs is empty in pod — operator subset did not land"
+    fi
+else
+    fail "Hermes pod name not resolvable in $AGENT_NS — cannot assert pod-side skills"
+fi
+
+step "Pod-side bundled-skills dir is absent or empty"
+if [ -n "$HERMES_POD" ]; then
+    # Tolerate "No such file or directory" — that's the strongest signal the
+    # marker was honored. Any non-empty listing is a contract violation.
+    bundled_out=$("$OBOL" kubectl exec -n "$AGENT_NS" "$HERMES_POD" -c hermes -- \
+        sh -c 'ls -A /data/.hermes/skills 2>/dev/null || true' 2>/dev/null || true)
+    if [ -z "$(echo "$bundled_out" | tr -d '[:space:]')" ]; then
+        pass "/data/.hermes/skills absent/empty — bundled-skill seeding skipped"
+    else
+        fail "/data/.hermes/skills is non-empty (Hermes re-seeded bundled skills despite the marker); contents: $(echo "$bundled_out" | head -c 200)"
+    fi
+else
+    fail "Hermes pod name not resolvable in $AGENT_NS — cannot assert bundled-skills empty"
 fi
 
 # §1.4: Remote-signer pod (only when wallet was requested)
@@ -189,4 +246,4 @@ if [ "${FLOW_CLEANUP:-0}" = "1" ]; then
     "$OBOL" agent delete --force "$AGENT_NAME" >/dev/null 2>&1 || true
 fi
 
-summary
+emit_metrics

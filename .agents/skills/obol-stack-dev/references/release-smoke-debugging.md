@@ -107,6 +107,21 @@ When buying from external x402 sellers (sellers running outside our k3d cluster 
 - **Fix in repo**: `c2dddc1` — added module-level `USER_AGENT = os.environ.get("OBOL_BUYER_USER_AGENT", "obol-buy-x402/1.0 (+https://github.com/ObolNetwork/obol-stack)")` to `internal/embed/skills/buy-x402/scripts/buy.py`, applied in `_probe_endpoint` (kind=http), `_probe_endpoint` (kind=inference), and the paid `X-PAYMENT` request in `buy_paid_oneshot`. Tested four UAs against v1337 (`curl/*`, generic `Mozilla/*`, `Chrome/*`, custom `obol-buy-x402/*`) — all four returned 402 cleanly. The fix is "send anything that isn't `Python-urllib`", not "send a specific browser UA". Operator override: `OBOL_BUYER_USER_AGENT`.
 - **Follow-up (not yet confirmed)**: the same WAF block likely affects the Go-side controller probe at `internal/serviceoffercontroller/purchase.go:183`, since Go's `http.Client` defaults to `User-Agent: Go-http-client/1.1`. Verify against v1337 and apply the same UA override on the Go side if reproduced.
 
+### 11. "0 spent / N remaining" from the sidecar is NOT proof no debit happened
+
+The buyer sidecar's `/status` (and `PurchaseRequest.status`, and verifier logs) all report the **same local view** — they will agree with each other even when the chain disagrees with all three. rc13 mainnet OBOL self-test (2026-06-09) caught a 0.001 OBOL on-chain debit from a request that returned `HTTP 503 "Payment settlement failed"` while every signal the stack produced said "nothing was paid." The facilitator submitted the Permit2 settle tx, it mined successfully (`0xb5122d818a058e8bf529380260fa2584ba3d50bfc800f1e906faca34d3932307`), and **then** the facilitator's post-submit step returned 500.
+
+- **Fix in repo (this branch)**:
+  - Verifier preserves the facilitator's `transaction` field via `X-PAYMENT-RESPONSE` even on a non-200 `/settle` (`internal/x402/forwardauth.go` + `TestForwardAuth_SettleErrorPreservesTxHashInHeader`).
+  - Buyer sidecar treats any error response (>= 400) with `X-PAYMENT-RESPONSE.transaction != ""` as **spent on-chain**: `ConfirmSpend` the held auth, fire `OnPaymentUnsettled`, log the hash (`internal/x402/buyer/proxy.go` + `TestProxy_UpstreamErrorWithTxHash_PersistsConsume`).
+  - `buy.py` `_print_paid_request_failure` prints `⚠️  SETTLEMENT MAY HAVE COMPLETED ON-CHAIN` with the tx hash + the exact `balance --chain <X>` command when a paid call fails (>= 400) with a settle header.
+- **Not yet fixed (follow-up PRs)**:
+  - Verifier doing a receipt lookup against eRPC before returning 200 vs 5xx (would let the verifier serve the upstream response if settle landed on-chain).
+  - Settle idempotency on retry (today guarded only by Permit2 nonce reuse reverting on-chain, which burns gas).
+  - Facilitator-side: why does mainnet OBOL `/settle` return 500 *after* a successful submit? That's the hosted service (`x402.gcp.obol.tech`), not in this repo.
+- **Operator debugging recipe** (when a buyer-reported "0 spent" disagrees with a suspected debit): see `docs/observability.md` § "Verify settlement against the chain, never the sidecar snapshot" — has the exact `eth_getLogs` curl to confirm.
+- **Rule of thumb**: chain is canonical, sidecar status is a derived snapshot. The CRD itself documents this (`PurchaseRequest.status` is the controller's last reconciled snapshot, not a live counter — `CLAUDE.md` "Quick full-cycle smoke test"). For real-time auth pool state, always query the sidecar `/status`; for real-money truth, always query the chain.
+
 ## Diagnostic Patterns
 
 - **Don't confuse 503 with "verifier broken"** — almost always one of #1, #2, #5, #6, or a missing CA bundle (`paid-flows.md`).

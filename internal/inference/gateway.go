@@ -174,8 +174,10 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 	}
 
-	// Create x402 payment requirement.
-	requirement := x402pkg.BuildV2Requirement(g.config.Chain, g.config.PricePerRequest, g.config.WalletAddress)
+	// Create x402 payment requirement. The standalone gateway has no
+	// operator surface for MaxTimeoutSeconds yet, so pass 0 to fall back
+	// to DefaultMaxTimeoutSeconds.
+	requirement := x402pkg.BuildV2Requirement(g.config.Chain, g.config.PricePerRequest, g.config.WalletAddress, 0)
 
 	// Configure x402 ForwardAuth middleware.
 	paymentMiddleware := x402pkg.NewForwardAuthMiddleware(x402pkg.ForwardAuthConfig{

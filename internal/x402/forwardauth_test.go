@@ -79,7 +79,7 @@ func validPaymentHeader() string {
 
 func testRequirements() []x402types.PaymentRequirements {
 	return []x402types.PaymentRequirements{
-		BuildV2Requirement(ChainBaseSepolia, "0.001", "0xWallet"),
+		BuildV2Requirement(ChainBaseSepolia, "0.001", "0xWallet", 0),
 	}
 }
 
@@ -495,6 +495,82 @@ func TestForwardAuth_VerifyOnlyTrue_NoStartupWarning(t *testing.T) {
 	gotLog := buf.String()
 	if strings.Contains(gotLog, "verifyOnly=false") {
 		t.Fatalf("did not expect verifyOnly warning when VerifyOnly=true, got:\n%s", gotLog)
+	}
+}
+
+// TestForwardAuth_SettleErrorPreservesTxHashInHeader pins the rc13-headline
+// fix for the silent-money-loss class of bug: when the facilitator returns
+// a 5xx AFTER successfully submitting the settle tx on-chain, the buyer
+// must still see the tx hash so it can reconcile against the chain and
+// flag the spent auth. Before this fix the verifier dropped the entire
+// facilitator response on the floor when StatusCode != 200, the buyer
+// released the held auth back into the pool, and 0.001 OBOL moved on
+// mainnet with the user seeing only HTTP 503 "Payment settlement failed".
+// See docs/observability.md ("Verify settlement against the chain").
+func TestForwardAuth_SettleErrorPreservesTxHashInHeader(t *testing.T) {
+	var verifyCalled, settleCalled atomic.Int32
+	fac := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/verify":
+			verifyCalled.Add(1)
+			_ = json.NewEncoder(w).Encode(facilitatorVerifyResponse{IsValid: true, Payer: "0xPayer"})
+		case "/settle":
+			settleCalled.Add(1)
+			// Facilitator returns 500 — but the on-chain submission already
+			// landed and the response carries the tx hash. This is the
+			// rc13 mainnet OBOL incident (docs/observability.md).
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(facilitatorSettleResponse{
+				Success:     false,
+				ErrorReason: "unexpected_error",
+				Transaction: "0xb5122d818a058e8bf529380260fa2584ba3d50bfc800f1e906faca34d3932307",
+				Network:     "ethereum",
+				Payer:       "0xPayer",
+			})
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	defer fac.Close()
+
+	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL:   fac.URL,
+		VerifyOnly:       false,
+		SettlesInProcess: true,
+	}, testRequirements())
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"result":"ok"}`))
+	})
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req.Header.Set("X-PAYMENT", validPaymentHeader())
+	rec := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503 (settle failed)", rec.Code)
+	}
+	gotHeader := rec.Header().Get("X-PAYMENT-RESPONSE")
+	if gotHeader == "" {
+		t.Fatal("X-PAYMENT-RESPONSE must be set even on settle error so the buyer can reconcile against the chain")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(gotHeader)
+	if err != nil {
+		t.Fatalf("X-PAYMENT-RESPONSE not base64: %v", err)
+	}
+	var parsed facilitatorSettleResponse
+	if err := json.Unmarshal(decoded, &parsed); err != nil {
+		t.Fatalf("X-PAYMENT-RESPONSE not JSON: %v", err)
+	}
+	const wantTx = "0xb5122d818a058e8bf529380260fa2584ba3d50bfc800f1e906faca34d3932307"
+	if parsed.Transaction != wantTx {
+		t.Errorf("Transaction in header = %q, want %q (the on-chain tx hash must survive the error path)", parsed.Transaction, wantTx)
+	}
+	if parsed.Success {
+		t.Error("Success should remain false on the error path")
 	}
 }
 
