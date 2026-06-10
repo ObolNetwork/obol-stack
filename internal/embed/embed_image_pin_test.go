@@ -230,10 +230,9 @@ func TestEmbeddedImages_X402ControllerAndBuyerUseFixPins(t *testing.T) {
 		ref  string
 	}{
 		{
-			// Repinned to c19ffaf (release/v0.10.0-rc14 HEAD; the rc11
-			// pattern, cf. 8fb1553) — images built from the release branch
-			// via docker-publish-x402 workflow_dispatch, so unlike the prior
-			// 04bebbc base pin they DO contain this train's source changes:
+			// Repinned to 9504961 (main HEAD at release-cut) — images rebuilt
+			// from this commit via docker-publish-x402 workflow_dispatch.
+			// Carries forward everything c19ffaf (rc14) shipped:
 			//   - controller renders sub-agents with Hermes v2026.6.5 and
 			//     the UID-1000 kubelet-owned permission model (#610), and
 			//     surfaces maxTimeoutSeconds in the catalog ext (#614).
@@ -243,11 +242,11 @@ func TestEmbeddedImages_X402ControllerAndBuyerUseFixPins(t *testing.T) {
 			// b39bcaa and the earlier ab71481/86b8c9f fixes (ancestors via
 			// main). See TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix.
 			file: "base/templates/x402.yaml",
-			ref:  "ghcr.io/obolnetwork/serviceoffer-controller:c19ffaf@sha256:7d907f525f7b020a5b40a87c7088b9a12286b4c9197bd2f1ee8d5e4710ff7346",
+			ref:  "ghcr.io/obolnetwork/serviceoffer-controller:9504961@sha256:74d727712cf037f35e0ba31f8f1402bc3d75c606f328ff79da07160e724f4fae",
 		},
 		{
 			file: "base/templates/llm.yaml",
-			ref:  "ghcr.io/obolnetwork/x402-buyer:c19ffaf@sha256:e23e30430670600faf2c1082c1bfbd5ae78d99c0355cf31c98e3c77e52f5fd2d",
+			ref:  "ghcr.io/obolnetwork/x402-buyer:9504961@sha256:3f38aeff13ad115ebc8e2370511558d74373699af7feb8d4f35e1154cd2c12d3",
 		},
 	}
 

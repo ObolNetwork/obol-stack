@@ -819,12 +819,13 @@ func TestX402VerifierImage_CarriesAgentAuthFix(t *testing.T) {
 		t.Fatalf("ReadInfrastructureFile: %v", err)
 	}
 
-	// Bumped to c19ffaf (release/v0.10.0-rc14 HEAD) to carry the rc14
+	// Bumped to 9504961 (main HEAD at release-cut) — rebuilt via
+	// docker-publish-x402 workflow_dispatch. Carries forward the rc14
 	// verifier changes: settle tx hash surfaced via X-PAYMENT-RESPONSE on
 	// the error path and ClampMaxTimeoutSeconds on the 402 wire. The agent
 	// upstream auth fix from abfd55a and ab71481's verifyOnly warning
 	// suppression remain in scope (ancestors via main).
-	const ref = "ghcr.io/obolnetwork/x402-verifier:c19ffaf@sha256:535067aa8bcfaac6f628d76733c5786b0d0e46f70e8ffdc978d53e91e27fb8e6"
+	const ref = "ghcr.io/obolnetwork/x402-verifier:9504961@sha256:22741770a711e3859abd3cdbd78d4e318417344449e8e6a9d8b52981caba2adb"
 	if !strings.Contains(string(data), "image: "+ref) {
 		t.Fatalf("x402-verifier image must carry agent upstream auth fix: %s", ref)
 	}
@@ -837,8 +838,8 @@ func TestX402VerifierImage_CarriesAgentAuthFix(t *testing.T) {
 // built from source that has that behaviour — the prior f5d94fc side-branch pin
 // did not, so the deployed binary Updated the per-agent Secrets on re-reconcile
 // and 403'd. b39bcaa (post-rc10 main) carries the fix, and also ships PR #590's
-// actionable pending-registration status message. The current c19ffaf pin
-// (release/v0.10.0-rc14 HEAD) descends from b39bcaa via main, so the fix
+// actionable pending-registration status message. The current 9504961 pin
+// (main HEAD at release-cut) descends from b39bcaa via main, so the fix
 // remains in scope.
 // Bumping this pin requires a conscious, documented change here so a future
 // downgrade can't silently re-ship the bug.
@@ -848,7 +849,7 @@ func TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix(t *testing.T) {
 		t.Fatalf("ReadInfrastructureFile: %v", err)
 	}
 
-	const ref = "ghcr.io/obolnetwork/serviceoffer-controller:c19ffaf@sha256:7d907f525f7b020a5b40a87c7088b9a12286b4c9197bd2f1ee8d5e4710ff7346"
+	const ref = "ghcr.io/obolnetwork/serviceoffer-controller:9504961@sha256:74d727712cf037f35e0ba31f8f1402bc3d75c606f328ff79da07160e724f4fae"
 	if !strings.Contains(string(data), "image: "+ref) {
 		t.Fatalf("serviceoffer-controller image must carry the Secret-create-only reconciler fix "+
 			"(else per-agent provisioning 403s under the no-update/patch Secret RBAC): %s", ref)
