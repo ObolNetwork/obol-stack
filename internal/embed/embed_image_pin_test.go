@@ -230,31 +230,24 @@ func TestEmbeddedImages_X402ControllerAndBuyerUseFixPins(t *testing.T) {
 		ref  string
 	}{
 		{
-			// Repinned to 04bebbc (current main HEAD as of rc13) to pick up:
-			//   - ab71481 fix(x402): suppress verifyOnly=false warning on the
-			//     in-process settle path — covers the per-request log spam
-			//     seen by sell-agent buyers on the prior pin.
-			//   - 86b8c9f fix(x402-buyer): drop expired pre-signed auths
-			//     before signing — affects long-running paid inference.
+			// Repinned to c19ffaf (release/v0.10.0-rc14 HEAD; the rc11
+			// pattern, cf. 8fb1553) — images built from the release branch
+			// via docker-publish-x402 workflow_dispatch, so unlike the prior
+			// 04bebbc base pin they DO contain this train's source changes:
+			//   - controller renders sub-agents with Hermes v2026.6.5 and
+			//     the UID-1000 kubelet-owned permission model (#610), and
+			//     surfaces maxTimeoutSeconds in the catalog ext (#614).
+			//   - buyer carries the settled-but-failed ConfirmSpend branch
+			//     (>=400 + settle tx hash counts as money moved) (#614).
 			// Still carries the Secret-create-only reconciler change from
-			// b39bcaa. See TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix.
-			//
-			// FOLLOW-UP REQUIRED after this PR merges: 04bebbc is this PR's
-			// own merge base, so these images do NOT contain this PR's source
-			// changes — the controller still renders sub-agents with Hermes
-			// v2026.5.28 (compiled-in agent_render.go default), the verifier
-			// still hardcodes maxTimeoutSeconds=60 and drops the settle tx
-			// hash on facilitator errors, and the buyer lacks the
-			// settled-but-failed ConfirmSpend branch. Rebuild all three from
-			// the merge commit and repin (the rc11 pattern, cf. 8fb1553)
-			// before cutting v0.10.0 final. OBOL_DEVELOPMENT=true masks this
-			// locally because dev clusters rebuild from worktree source.
+			// b39bcaa and the earlier ab71481/86b8c9f fixes (ancestors via
+			// main). See TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix.
 			file: "base/templates/x402.yaml",
-			ref:  "ghcr.io/obolnetwork/serviceoffer-controller:04bebbc@sha256:286d07604c001006d54a5f89ef854210ab805859c072e7b8dd89fe0c6f130d7d",
+			ref:  "ghcr.io/obolnetwork/serviceoffer-controller:c19ffaf@sha256:7d907f525f7b020a5b40a87c7088b9a12286b4c9197bd2f1ee8d5e4710ff7346",
 		},
 		{
 			file: "base/templates/llm.yaml",
-			ref:  "ghcr.io/obolnetwork/x402-buyer:04bebbc@sha256:1c2bb19824bae2caf4b305a495b6686ff6e973b378c2b88fc89d73a06265aaf7",
+			ref:  "ghcr.io/obolnetwork/x402-buyer:c19ffaf@sha256:e23e30430670600faf2c1082c1bfbd5ae78d99c0355cf31c98e3c77e52f5fd2d",
 		},
 	}
 
