@@ -255,6 +255,8 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 							return stack.Purge(cfg, getUI(cmd), cmd.Bool("force"), cmd.Bool("yes"))
 						},
 					},
+					stackExportCommand(cfg),
+					stackImportCommand(cfg),
 				},
 			},
 			// ============================================================

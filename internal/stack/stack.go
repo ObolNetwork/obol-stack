@@ -27,6 +27,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
+	"github.com/ObolNetwork/obol-stack/internal/stackbackup"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/update"
@@ -312,9 +313,14 @@ func Purge(cfg *config.Config, u *ui.UI, force, skipConfirm bool) error {
 		return nil
 	}
 
-	// When --force is set, data dir will be deleted — offer wallet backup.
+	// When --force is set, data dir will be deleted — offer a full stack
+	// export (agents, wallets, config). Falls back to the narrower
+	// OpenClaw wallet prompt when the user declines, preserving the old
+	// behavior as a second chance for keys specifically.
 	if force {
-		openclaw.PromptBackupBeforePurge(cfg, u)
+		if !stackbackup.PromptExportBeforePurge(cfg, u) {
+			openclaw.PromptBackupBeforePurge(cfg, u)
+		}
 	}
 
 	stackID := getStackID(cfg)

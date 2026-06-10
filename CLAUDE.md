@@ -73,7 +73,7 @@ Integration tests use `//go:build integration`; skip when prerequisites missing.
 
 ```
 obol
-├── stack           init, up, down, purge
+├── stack           init, up, down, purge, export, import
 ├── agent           init, new, sync, setup, auth, list, delete, update
 │   └── wallet      address, list, backup, restore
 ├── wallet          import
@@ -218,7 +218,9 @@ Two-stage templating: `values.yaml.gotmpl` annotated with `@enum`/`@default`/`@d
 | `obol stack init` | Generate cluster ID (petname), resolve absolute paths, write k3d.yaml, copy infrastructure |
 | `obol stack up` | `k3d cluster create`, export kubeconfig, k3s auto-applies manifests, auto-configures LiteLLM with Ollama models (preserves Ollama modified-time order; `:cloud` aliases demoted behind local chat models; embedding-only models last; warns + suggests `ollama pull qwen3.5:4b` when empty or all-`:cloud`), deploys default Hermes agent, applies agent capabilities, starts persistent Cloudflare tunnel |
 | `obol stack down` | `k3d cluster stop` (delete fallback; preserves config + data) |
-| `obol stack purge [-f]` | Delete config; `-f` also deletes root-owned PVCs |
+| `obol stack purge [-f]` | Delete config; `-f` also deletes root-owned PVCs; `-f` offers a full `stack export` first (fallback: OpenClaw wallet prompt) |
+| `obol stack export` | Full backup archive: config dir (minus kubeconfig/defaults), agent data dirs (brains + keystores, deployments quiesced for consistency), encrypted wallet backups, etcd-drift resources (Agent CRs, ServiceOffers, LiteLLM/eRPC CMs). `internal/stackbackup/` |
+| `obol stack import <archive>` | Restore: host state first (then `stack up` mounts restored brains/keystores), `--cluster-only` re-applies CRs/CMs + re-syncs agents after up. PurchaseRequests/buyer auths intentionally not restored (auths expire) |
 
 k3d: 1 server, ports `80:80` + `8080:80` + `443:443` + `8443:443`, image `rancher/k3s:v1.35.1-k3s1`.
 
@@ -390,7 +392,7 @@ A registry digest pin instead of `:latest` on the verifier means your dev rewrit
 14. **First-request flake on freshly-deployed verifier** — the first request after `x402-verifier` becomes Ready can return an empty body / Bad Gateway from Traefik because the HTTPRoute is wired but the verifier's serviceoffer-source watcher has not loaded the route yet. `flows/flow-07-sell-verify.sh` and `flows/flow-08-buy.sh` wrap the 402-body fetch in a 12x5s retry loop. Do not extend retry loops elsewhere to mask intermittents — this one is a real first-request race.
 
 15. **"0 spent" is not proof no money moved** — an error response (>= 400) carrying `X-PAYMENT-RESPONSE` with a tx hash means the facilitator settled on-chain and THEN failed; the buyer marks that auth consumed, buy.py prints a settled-on-chain warning. Chain is canonical; see `docs/observability.md` ("Verify settlement against the chain").
-16. **Clusters created on <= v0.10.0-rc12 keep hostPath-typed PVs** — kubelet ignores `fsGroup` there, and v0.10.0's non-root pods (UID 1000, no chown inits) cannot read the legacy 10000-owned data. Supported path: recreate the cluster (wallet backup/restore); full steps in the v0.10.0 release notes (Breaking changes).
+16. **Clusters created on <= v0.10.0-rc12 keep hostPath-typed PVs** — kubelet ignores `fsGroup` there, and v0.10.0's non-root pods (UID 1000, no chown inits) cannot read the legacy 10000-owned data. Symptom after ANY chart re-render (`agent sync`, model sync, tests that sync): `Init:CrashLoopBackOff` with `mkdir /data/.hermes: Permission denied`. Supported path: recreate the cluster (`obol stack export` -> recreate -> `import`); full steps in the v0.10.0 release notes (Breaking changes). Non-destructive workaround: `docker exec <k3d-node> chown -R 1000:1000 /data/<ns>/hermes-data` then delete the pod.
 17. **EIP-7702-contaminated test accounts on a Base Sepolia fork** — standard anvil/hardhat accounts #1–#9 (the `test test ... junk` mnemonic) carry EIP-7702 delegation code (`0xef0100…`) from real-chain 7702 experiments on Base Sepolia. Base-Sepolia USDC is FiatTokenV2_2, which verifies EIP-3009 via `SignatureChecker.isValidSignatureNow` — any `from` with code routes to EIP-1271 `isValidSignature` and ignores a perfectly valid ECDSA signature, reverting `FiatTokenV2: invalid signature` (surfacing as facilitator 503 / `unexpected_error`). The buyer/`from` MUST be a freshly generated EOA (account #0 happens to be clean; payTo with code is fine — only the signer is checked). This is why flow-08 funds the agent's generated wallet, and why `flow-17-sell-mcp.sh` generates fresh buyer + seller keys and preflights `cast code "$BUYER_ADDR" == 0x`.
 18. **x402 SDK signs `validAfter = now` with no past buffer** — the `x402-foundation/x402/go` client sets EIP-3009 `validAfter` to wall-clock now. An anvil fork's `block.timestamp` is pinned to the forked block and lags real time the longer the fork has been up, so verify/settle revert `FiatTokenV2: authorization is not yet valid`. In a normal release-smoke run flow-17 follows flow-10 immediately so the gap is tiny; flow-17 still defends with `cast rpc evm_setNextBlockTimestamp $((now+30)) && evm_mine` right before the paid call. (obol's own buy.py uses a past buffer and isn't affected.)
 
