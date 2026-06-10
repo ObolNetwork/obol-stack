@@ -11,6 +11,7 @@ import {
   OpenInNew,
 } from '@obolnetwork/obol-ui';
 import { StatusPill } from '../../atoms/StatusIndicator';
+import { Tooltip } from '../../atoms/Tooltip';
 import { CopyButton } from '../../atoms/CopyButton/CopyButton';
 import { ObolAmountSwitch } from '../../atoms/ObolAmountSwitch';
 import { StopDrainModal } from '../StopDrainModal';
@@ -18,6 +19,10 @@ import {
   serviceOfferAssetSymbol,
   serviceOfferTrustBadges,
 } from '@/lib/services/service-offer-display';
+import {
+  deriveOfferDisplayStatus,
+  registeredConditionMessage,
+} from '@/lib/services/offer-status';
 import { publicServiceEndpoint } from '@/lib/services/public-storefront';
 import type {
   ServiceOffer,
@@ -147,6 +152,37 @@ const SkillChip = styled(Text, {
   whiteSpace: 'nowrap',
 });
 
+const ConditionsRow = styled(Flex, {
+  alignItems: 'center',
+  gap: '$xs',
+  flexWrap: 'wrap',
+  marginTop: '$sm',
+  paddingTop: '$xs',
+  borderTop: '1px dashed $stroke',
+});
+
+const ConditionDot = styled(Flex, {
+  alignItems: 'center',
+  gap: '$xxxs',
+  fontSize: '$1',
+  color: '$body',
+
+  variants: {
+    state: {
+      ok: { color: '$obolGreen' },
+      pending: { color: '$obolGold' },
+      missing: { color: '$body', opacity: 0.65 },
+    },
+  },
+});
+
+const Dot = styled(Box, {
+  width: 6,
+  height: 6,
+  borderRadius: '$round',
+  backgroundColor: 'currentColor',
+});
+
 const DrainingBadge = styled(Text, {
   fontSize: '$1',
   fontWeight: '$semibold',
@@ -189,6 +225,14 @@ const TYPE_LABEL: Record<ServiceOfferType, string> = {
   http: 'HTTP',
 };
 
+const CONDITION_ORDER: Array<{ key: string; short: string }> = [
+  { key: 'ModelReady', short: 'Model' },
+  { key: 'UpstreamHealthy', short: 'Upstream' },
+  { key: 'PaymentGateReady', short: 'Gate' },
+  { key: 'RoutePublished', short: 'Route' },
+  { key: 'Registered', short: 'Registered' },
+];
+
 function truncateAddress(address: string): string {
   if (address.length <= 10) return address;
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
@@ -209,6 +253,34 @@ function formatPrice(
 
 function pluralizeSales(n: number): string {
   return n === 1 ? '1 sale' : `${n.toLocaleString()} sales`;
+}
+
+function conditionState(
+  conditions: ServiceOfferCondition[] | undefined,
+  type: string
+): 'ok' | 'pending' | 'missing' {
+  const c = conditions?.find(x => x.type === type);
+  if (!c) return 'missing';
+  return c.status === 'True' ? 'ok' : 'pending';
+}
+
+function conditionTitle(
+  key: string,
+  conditions: ServiceOfferCondition[] | undefined
+): string {
+  const c = conditions?.find(x => x.type === key);
+  if (!c) return `${key}: not reported yet`;
+  const state = c.status === 'True' ? 'ready' : 'pending';
+  const message = c.message?.trim();
+  return message ? `${key}: ${state} - ${message}` : `${key}: ${state}`;
+}
+
+function conditionsToShow(offer: ServiceOffer) {
+  return CONDITION_ORDER.filter(({ key }) => {
+    if (key === 'ModelReady' && offer.type === 'http') return false;
+    if (key === 'Registered' && !offer.registration?.enabled) return false;
+    return true;
+  });
 }
 
 function agentDisplayName(link: ServiceOfferAgentLink): string {
@@ -301,7 +373,10 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
   const isDraining = drainEnd !== null;
   const now = useNow(1000, isDraining);
   const countdown = drainEnd ? formatCountdown(drainEnd, now) : null;
-  const isReady = !isDraining && offer.status === 'Ready';
+  const displayStatus = deriveOfferDisplayStatus(offer, { isDraining });
+  const registrationPendingTip =
+    registeredConditionMessage(offer) ||
+    'Serving paid traffic now. On-chain ERC-8004 registration is still pending, so this offer reports Ready=False until the registration tx lands - complete it with `obol sell register`.';
 
   return (
     <CardContainer>
@@ -321,17 +396,6 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
             </TypeBadge>
           )}
           {offer.isDemo && <TypeBadge>Demo</TypeBadge>}
-          {offer.registrationPending && (
-            <TypeBadge
-              css={{
-                color: '#f5c542',
-                borderColor: 'rgba(245, 197, 66, 0.35)',
-                background: 'rgba(245, 197, 66, 0.1)',
-              }}
-            >
-              Registration pending
-            </TypeBadge>
-          )}
           {transferMethod && (
             <TypeBadge
               css={{
@@ -365,10 +429,27 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
               Draining{countdown ? ` · ends in ${countdown}` : ''}
             </DrainingBadge>
           )}
-          <StatusPill
-            status={isDraining ? 'syncing' : isReady ? 'synced' : 'syncing'}
-            label={isDraining ? 'Draining' : isReady ? 'Ready' : 'Pending'}
-          />
+          {displayStatus === 'registration-pending' ? (
+            <Tooltip content={registrationPendingTip}>
+              <span style={{ display: 'inline-flex' }}>
+                <StatusPill
+                  status="synced"
+                  label="Live · registration pending"
+                />
+              </span>
+            </Tooltip>
+          ) : (
+            <StatusPill
+              status={displayStatus === 'ready' ? 'synced' : 'syncing'}
+              label={
+                displayStatus === 'draining'
+                  ? 'Draining'
+                  : displayStatus === 'ready'
+                    ? 'Ready'
+                    : 'Pending'
+              }
+            />
+          )}
         </HeaderStatus>
       </TopRow>
 
@@ -456,6 +537,33 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
           ))}
         </SkillsRow>
       )}
+
+      <ConditionsRow>
+        {conditionsToShow(offer).map(({ key, short }) => {
+          const state = conditionState(offer.conditions, key);
+          return (
+            <ConditionDot
+              key={key}
+              state={state}
+              title={conditionTitle(key, offer.conditions)}
+            >
+              <Dot />
+              <Text css={{ fontSize: '$1', color: 'inherit' }}>{short}</Text>
+            </ConditionDot>
+          );
+        })}
+        <Text
+          css={{
+            marginLeft: 'auto',
+            fontSize: '$1',
+            color: '$body',
+            opacity: 0.65,
+            fontFamily: 'monospace',
+          }}
+        >
+          {offer.namespace}/{offer.name}
+        </Text>
+      </ConditionsRow>
 
       <Flex
         css={{

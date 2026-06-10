@@ -2,13 +2,20 @@ import React from 'react';
 import { Image, Button, Flex, Text, styled, theme } from '@obolnetwork/obol-ui';
 import { Close } from '@/icons';
 import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
-import { useBalance, UseBalanceReturnType, useChainId } from 'wagmi';
-import { formatUnits } from 'viem';
+import {
+  useBalance,
+  UseBalanceReturnType,
+  useChainId,
+  useReadContract,
+} from 'wagmi';
+import { erc20Abi, formatUnits } from 'viem';
 import { useTokenPrices } from '../../../hooks/useTokenPrices';
 import { ChainIcon } from '../../atoms/ChainIcon';
 import { getChainName } from '../../../types/dashboard';
 import { TOKEN_ADDRESSES } from '../../../lib/constants/tokens';
 import { truncateAddress } from '../../../utils/address';
+
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 interface WalletModalProps {
   isOpen: boolean;
@@ -31,6 +38,26 @@ const calculateUsdBalance = (
   const ethValue =
     parseFloat(formatUnits(ethBalance.value, ethBalance.decimals)) * ethPrice;
   return ethValue.toLocaleString('en-US', {
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3,
+  });
+};
+
+type TokenBalance = {
+  value: bigint;
+  decimals: number;
+  symbol: string;
+};
+
+const calculateTokenUsdBalance = (
+  balance: TokenBalance | undefined,
+  price: number
+): string => {
+  if (!balance) return '0.000';
+
+  const value =
+    parseFloat(formatUnits(balance.value, balance.decimals)) * price;
+  return value.toLocaleString('en-US', {
     minimumFractionDigits: 3,
     maximumFractionDigits: 3,
   });
@@ -190,16 +217,32 @@ export function WalletModal({
   account,
   onDisconnect,
 }: WalletModalProps) {
+  const walletAddress = account.address as `0x${string}` | undefined;
+  const balanceAddress = walletAddress ?? ZERO_ADDRESS;
+
   // Get ETH balance
   const { data: ethBalance } = useBalance({
-    address: account.address as `0x${string}`,
+    address: walletAddress,
   });
 
   // Get Obol token balance
-  const { data: obolBalance } = useBalance({
-    address: account.address as `0x${string}`,
-    token: TOKEN_ADDRESSES.OBOL,
+  const { data: obolRawBalance } = useReadContract({
+    abi: erc20Abi,
+    address: TOKEN_ADDRESSES.OBOL,
+    functionName: 'balanceOf',
+    args: [balanceAddress],
+    query: {
+      enabled: Boolean(walletAddress),
+    },
   });
+  const obolBalance =
+    obolRawBalance !== undefined
+      ? {
+          value: obolRawBalance,
+          decimals: 18,
+          symbol: 'OBOL',
+        }
+      : undefined;
 
   const chainId = useChainId();
 
@@ -208,7 +251,7 @@ export function WalletModal({
 
   // Calculate balances in USD
   const ethBalanceUsd = calculateUsdBalance(ethBalance, ethPrice);
-  const obolBalanceUsd = calculateUsdBalance(obolBalance, obolPrice);
+  const obolBalanceUsd = calculateTokenUsdBalance(obolBalance, obolPrice);
   const obolBalanceAmount = obolBalance
     ? parseFloat(formatUnits(obolBalance.value, obolBalance.decimals)).toFixed(
         4
