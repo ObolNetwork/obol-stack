@@ -63,6 +63,7 @@ func sellCommand(cfg *config.Config) *cli.Command {
 			sellRegisterCommand(cfg),
 			sellIdentityCommand(cfg),
 			sellInfoCommand(cfg),
+			sellResumeCommand(cfg),
 		},
 	}
 }
@@ -3744,20 +3745,149 @@ func loadProvenance(path string) (*inference.Provenance, error) {
 //
 // Kubernetes Endpoints require an IP address, not a hostname. We resolve the
 // host IP using the same strategy as ollamaHostIPForBackend in internal/stack.
+// ---------------------------------------------------------------------------
+// sell resume — re-apply persisted offers + relaunch host gateways
+// ---------------------------------------------------------------------------
+
+func sellResumeCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:  "resume",
+		Usage: "Re-apply persisted sell offers and relaunch host gateways (run after a host reboot)",
+		Description: `Replays every locally-persisted sell offer against the cluster and
+relaunches the detached host gateway for each sell-inference offer.
+
+After a host reboot, Docker's restart policy brings the k3d cluster back
+automatically — but the host-side x402 gateways started by
+'obol sell inference' die with the host and nothing restarts them. The
+offers survive in etcd with UpstreamHealthy=False, so the public catalog
+(/api/services.json) goes empty even though the stack looks up.
+
+'obol stack up' already runs this resume path; this command exposes it
+directly so a reboot does not require a full stack-up to recover.
+
+Idempotent: offers whose gateway is still running are skipped.
+
+Examples:
+  obol sell resume                      Resume all persisted offers now
+  obol sell resume --install-boot-unit  Also run automatically at boot (Linux/systemd)`,
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:  "install-boot-unit",
+				Usage: "Install + enable a systemd user unit that runs 'obol sell resume' at boot (Linux only)",
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+			if err := resumeSellOffers(ctx, cfg, u); err != nil {
+				return err
+			}
+			if cmd.Bool("install-boot-unit") {
+				return installResumeBootUnit(cfg, u)
+			}
+			return nil
+		},
+	}
+}
+
+// resumeBootUnitName is the systemd user unit installed by
+// `obol sell resume --install-boot-unit`.
+const resumeBootUnitName = "obol-sell-resume.service"
+
+// renderResumeBootUnit produces the systemd user unit that re-runs the
+// sell resume path at boot. Pure so tests can pin the contents.
+//
+// The unit sleeps before resuming: Docker restarts the k3d node
+// containers on boot, but the API server inside them needs a moment
+// before the resume path's kubectl applies succeed. The gateway relaunch
+// itself has no cluster dependency, and resumeSellOffers warns-and-
+// continues per offer, so a still-starting cluster degrades gracefully
+// rather than failing the unit.
+func renderResumeBootUnit(obolBin, configDir string) string {
+	return `[Unit]
+Description=Obol sell offer resume (relaunch x402 gateways after boot)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStartPre=/bin/sleep 30
+Environment=OBOL_CONFIG_DIR=` + configDir + `
+ExecStart=` + obolBin + ` sell resume
+
+[Install]
+WantedBy=default.target
+`
+}
+
+// installResumeBootUnit writes and enables a systemd user unit so the
+// resume path runs automatically after a host reboot. Linux-only: the
+// host gateways this exists to relaunch run on headless Linux sellers;
+// macOS operators run `obol sell resume` manually (launchd support can
+// follow if asked for).
+//
+// systemctl calls are best-effort — the unit file on disk is the
+// durable artifact, and the printed hints cover the enable steps when
+// systemctl is unavailable (e.g. containers, exotic inits).
+func installResumeBootUnit(cfg *config.Config, u *ui.UI) error {
+	if runtime.GOOS != "linux" {
+		return fmt.Errorf("--install-boot-unit requires Linux with systemd (detected %s); run `obol sell resume` manually after reboot instead", runtime.GOOS)
+	}
+
+	obolBin := filepath.Join(cfg.BinDir, "obol")
+	if _, err := os.Stat(obolBin); err != nil {
+		exe, exeErr := os.Executable()
+		if exeErr != nil {
+			return fmt.Errorf("locate obol binary: %w", exeErr)
+		}
+		obolBin = exe
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return fmt.Errorf("resolve home dir: %w", err)
+	}
+	unitDir := filepath.Join(home, ".config", "systemd", "user")
+	if err := os.MkdirAll(unitDir, 0o755); err != nil {
+		return fmt.Errorf("create systemd user dir: %w", err)
+	}
+	unitPath := filepath.Join(unitDir, resumeBootUnitName)
+	if err := os.WriteFile(unitPath, []byte(renderResumeBootUnit(obolBin, cfg.ConfigDir)), 0o644); err != nil {
+		return fmt.Errorf("write unit file: %w", err)
+	}
+	u.Successf("Installed boot unit %s", unitPath)
+
+	for _, args := range [][]string{
+		{"--user", "daemon-reload"},
+		{"--user", "enable", resumeBootUnitName},
+	} {
+		if out, cmdErr := exec.Command("systemctl", args...).CombinedOutput(); cmdErr != nil {
+			u.Warnf("systemctl %s failed: %v (%s)", strings.Join(args, " "), cmdErr, strings.TrimSpace(string(out)))
+			u.Dim("  Enable manually: systemctl --user daemon-reload && systemctl --user enable " + resumeBootUnitName)
+		}
+	}
+
+	u.Dim("  User units only run at boot when lingering is on — run once: loginctl enable-linger $USER")
+	return nil
+}
+
 // resumeSellOffers re-applies the cluster-side artifacts (Service +
 // Endpoints + ServiceOffer) for every locally-persisted `obol sell
-// inference` deployment after `obol stack up` brings a fresh cluster
-// online. Without this step the cluster has no record of operator-created
-// offers (CRs live in etcd, which is destroyed by `obol stack down`),
-// even though the host-side descriptors at
-// `<ConfigDir>/inference/<name>/` still exist.
+// inference` deployment, and relaunches each offer's host gateway as a
+// detached background process. Without this step the cluster has no
+// record of operator-created offers (CRs live in etcd, which is
+// destroyed by `obol stack down`), even though the host-side descriptors
+// at `<ConfigDir>/inference/<name>/` still exist.
 //
-// The foreground gateway is NOT restarted here — `obol sell inference`
-// is an interactive operator action and we don't want stack-up to launch
-// long-running processes. The operator re-runs `obol sell inference
-// <name>` after stack-up to bring the gateway back; this step ensures
-// the cluster side is already in place so the gateway hits a "service
-// healthy" reconcile instead of "create from scratch".
+// Two entrypoints share this path:
+//   - `obol stack up` (cmd/obol/main.go) — fresh-cluster case.
+//   - `obol sell resume` — host-reboot case. Docker's restart policy
+//     brings the k3d cluster back on boot WITHOUT a `stack up`, so the
+//     offers survive in etcd but the host gateway processes are gone and
+//     every sell-inference offer sits at UpstreamHealthy=False (empty
+//     /api/services.json catalog) until something relaunches them.
+//
+// Idempotent: gateway relaunch is skipped when a live PID is on disk and
+// the kubectl applies re-assert existing objects.
 //
 // Best-effort. Per-offer failures emit a warning and the loop continues,
 // so one broken descriptor cannot block stack-up.
