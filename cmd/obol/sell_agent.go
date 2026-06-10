@@ -238,6 +238,9 @@ Examples:
 			if err != nil {
 				return fmt.Errorf("apply ServiceOffer: %w", err)
 			}
+			if persistErr := persistServiceOffer(cfg, offerNs, name, manifest); persistErr != nil {
+				u.Warnf("could not persist offer for resume: %v", persistErr)
+			}
 			action := "created"
 			if strings.Contains(out, "configured") || strings.Contains(out, "unchanged") {
 				action = "updated"
@@ -436,6 +439,9 @@ func runAgentBackedDemo(
 	applyOut, err := kubectlApplyOutput(cfg, soManifest)
 	if err != nil {
 		return fmt.Errorf("apply ServiceOffer: %w", err)
+	}
+	if persistErr := persistServiceOffer(cfg, offerNs, name, soManifest); persistErr != nil {
+		u.Warnf("could not persist offer for resume: %v", persistErr)
 	}
 	action := "created"
 	if strings.Contains(applyOut, "configured") || strings.Contains(applyOut, "unchanged") {
