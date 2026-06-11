@@ -165,6 +165,25 @@ func sanitizeEntryName(name string) (string, error) {
 	return clean, nil
 }
 
+// symlinkEscapesRoot reports whether a symlink placed at linkPath pointing to
+// target would resolve outside destRoot. Entry NAMES are sanitized
+// (sanitizeEntryName), but a symlink's TARGET is not — an unchecked target
+// lets a LATER entry be written THROUGH the link to an arbitrary path (the
+// classic symlink tar-extraction escape: entry "x" -> /etc, then entry
+// "x/passwd" resolves outside the root). Absolute targets and ".."-walking
+// relative targets that leave the root are rejected; in-root links (the common
+// case — a relative link to a sibling file) are allowed.
+func symlinkEscapesRoot(destRoot, linkPath, target string) bool {
+	var resolved string
+	if filepath.IsAbs(target) {
+		resolved = filepath.Clean(target)
+	} else {
+		resolved = filepath.Clean(filepath.Join(filepath.Dir(linkPath), target))
+	}
+	root := filepath.Clean(destRoot)
+	return resolved != root && !strings.HasPrefix(resolved, root+string(os.PathSeparator))
+}
+
 // extractEntry writes one tar entry under destRoot/relName.
 func extractEntry(tr *tar.Reader, hdr *tar.Header, destRoot, relName string) error {
 	dest := filepath.Join(destRoot, relName)
@@ -172,6 +191,9 @@ func extractEntry(tr *tar.Reader, hdr *tar.Header, destRoot, relName string) err
 	case tar.TypeDir:
 		return os.MkdirAll(dest, os.FileMode(hdr.Mode)|0o700)
 	case tar.TypeSymlink:
+		if symlinkEscapesRoot(destRoot, dest, hdr.Linkname) {
+			return fmt.Errorf("symlink %q targets %q which escapes extraction root", relName, hdr.Linkname)
+		}
 		if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
 			return err
 		}
@@ -193,4 +215,50 @@ func extractEntry(tr *tar.Reader, hdr *tar.Header, destRoot, relName string) err
 	default:
 		return nil // ignore other entry types
 	}
+}
+
+// Decompression-bomb guard. archive/tar bounds each file read to the header
+// size, but a tiny gzip can declare (and inflate to) a disk-filling tar. The
+// guard tracks the live ratio of uncompressed bytes produced to compressed
+// bytes consumed and aborts once it is implausible. bombFloorBytes avoids
+// false positives on small, naturally high-ratio inputs; legitimate multi-GB
+// agent-data exports never sustain a ratio this high. Both are vars so tests
+// can lower them. (vars, not consts, for that reason.)
+var (
+	bombFloorBytes      int64 = 64 << 20 // ignore the ratio below this many uncompressed bytes
+	maxCompressionRatio int64 = 100      // abort above this uncompressed:compressed ratio
+)
+
+// countingReader counts the bytes read from an underlying reader (used on the
+// raw compressed stream, beneath gzip).
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// ratioGuard wraps the decompressed stream and trips when the running
+// decompression ratio exceeds maxCompressionRatio past bombFloorBytes. It
+// sits between gzip and tar, so every byte the tar reader consumes — headers
+// and file bodies alike, including io.Copy in extractEntry — is accounted.
+type ratioGuard struct {
+	r            io.Reader
+	compressed   *int64 // bytes pulled from the compressed source so far
+	uncompressed int64
+}
+
+func (g *ratioGuard) Read(p []byte) (int, error) {
+	n, err := g.r.Read(p)
+	g.uncompressed += int64(n)
+	if g.uncompressed > bombFloorBytes {
+		if c := *g.compressed; c > 0 && g.uncompressed/c > maxCompressionRatio {
+			return n, fmt.Errorf("refusing archive: decompression ratio %d:1 exceeds %d:1 limit (possible decompression bomb)", g.uncompressed/c, maxCompressionRatio)
+		}
+	}
+	return n, err
 }

@@ -137,12 +137,13 @@ func walkArchive(input string, fn func(*tar.Reader, *tar.Header, string) error) 
 		return err
 	}
 	defer f.Close()
-	gz, err := gzip.NewReader(f)
+	counted := &countingReader{r: f}
+	gz, err := gzip.NewReader(counted)
 	if err != nil {
 		return fmt.Errorf("not a gzip archive: %w", err)
 	}
 	defer gz.Close()
-	tr := tar.NewReader(gz)
+	tr := tar.NewReader(&ratioGuard{r: gz, compressed: &counted.n})
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
