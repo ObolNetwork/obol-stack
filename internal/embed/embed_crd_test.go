@@ -813,22 +813,13 @@ func TestX402VerifierRBAC_CanReadAgentAPISecrets(t *testing.T) {
 	t.Fatal("x402-verifier ClusterRole missing scoped secret get/list/watch rule")
 }
 
+// TestX402VerifierImage_CarriesAgentAuthFix: the pin VALUE is maintained by
+// the repin automation (.github/scripts/repin-x402-images.sh); what this test
+// guards is that whatever commit is pinned still descends from abfd55a (the
+// agent upstream auth fix). Bumping the pin backward past it fails here.
 func TestX402VerifierImage_CarriesAgentAuthFix(t *testing.T) {
-	data, err := ReadInfrastructureFile("base/templates/x402.yaml")
-	if err != nil {
-		t.Fatalf("ReadInfrastructureFile: %v", err)
-	}
-
-	// Bumped to 9504961 (main HEAD at release-cut) — rebuilt via
-	// docker-publish-x402 workflow_dispatch. Carries forward the rc14
-	// verifier changes: settle tx hash surfaced via X-PAYMENT-RESPONSE on
-	// the error path and ClampMaxTimeoutSeconds on the 402 wire. The agent
-	// upstream auth fix from abfd55a and ab71481's verifyOnly warning
-	// suppression remain in scope (ancestors via main).
-	const ref = "ghcr.io/obolnetwork/x402-verifier:9504961@sha256:22741770a711e3859abd3cdbd78d4e318417344449e8e6a9d8b52981caba2adb"
-	if !strings.Contains(string(data), "image: "+ref) {
-		t.Fatalf("x402-verifier image must carry agent upstream auth fix: %s", ref)
-	}
+	tag, _ := extractEmbeddedImagePin(t, "base/templates/x402.yaml", "ghcr.io/obolnetwork/x402-verifier")
+	requireGitAncestor(t, "abfd55a", tag)
 }
 
 // TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix is the tripwire
@@ -837,23 +828,12 @@ func TestX402VerifierImage_CarriesAgentAuthFix(t *testing.T) {
 // treats Secret as create-only (isCreateOnlyKind). The image MUST therefore be
 // built from source that has that behaviour — the prior f5d94fc side-branch pin
 // did not, so the deployed binary Updated the per-agent Secrets on re-reconcile
-// and 403'd. b39bcaa (post-rc10 main) carries the fix, and also ships PR #590's
-// actionable pending-registration status message. The current 9504961 pin
-// (main HEAD at release-cut) descends from b39bcaa via main, so the fix
-// remains in scope.
-// Bumping this pin requires a conscious, documented change here so a future
-// downgrade can't silently re-ship the bug.
+// and 403'd. b39bcaa (post-rc10 main) carries the fix.
+// The pin value itself is maintained by the repin automation; this test
+// asserts ancestry so a future downgrade can't silently re-ship the bug.
 func TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix(t *testing.T) {
-	data, err := ReadInfrastructureFile("base/templates/x402.yaml")
-	if err != nil {
-		t.Fatalf("ReadInfrastructureFile: %v", err)
-	}
-
-	const ref = "ghcr.io/obolnetwork/serviceoffer-controller:9504961@sha256:74d727712cf037f35e0ba31f8f1402bc3d75c606f328ff79da07160e724f4fae"
-	if !strings.Contains(string(data), "image: "+ref) {
-		t.Fatalf("serviceoffer-controller image must carry the Secret-create-only reconciler fix "+
-			"(else per-agent provisioning 403s under the no-update/patch Secret RBAC): %s", ref)
-	}
+	tag, _ := extractEmbeddedImagePin(t, "base/templates/x402.yaml", "ghcr.io/obolnetwork/serviceoffer-controller")
+	requireGitAncestor(t, "b39bcaa", tag)
 }
 
 // TestServiceOfferControllerSecretRBAC_Scoped guards the controller's Secret
