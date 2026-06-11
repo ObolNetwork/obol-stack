@@ -76,3 +76,4 @@ obol-wallet-backup-*.json
 obol-wallet-backup-*.enc
 .private_keys/
 .claude/worktrees/
+plans/
