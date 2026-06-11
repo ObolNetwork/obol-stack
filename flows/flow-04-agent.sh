@@ -118,15 +118,25 @@ if [ -n "${OBOL_LLM_ENDPOINT:-}" ] && [ "$model_name" != "${OBOL_LLM_MODEL:-qwen
 fi
 
 llm_payload_suffix="$(llm_disable_thinking_payload_suffix)"
-out=$(curl -sf --max-time 120 -X POST "http://localhost:${AGENT_PF_PORT}/v1/chat/completions" \
+# 300s window, NOT 120: this is the first inference ever routed through
+# the Hermes agent pipeline, which prepends a multi-thousand-token system
+# prompt. On a local Ollama model that first call pays full prompt
+# processing before the KV cache warms (~150s observed for a 27B on an
+# M-series host; Hermes' internal client retries re-pay it until the
+# cache survives one attempt). GPU-class endpoints answer in seconds.
+# No -f: an HTTP-level failure must surface its status and body in the
+# fail message instead of an empty string (a silent `-f` 401/timeout
+# here previously cost a long misdiagnosis).
+http_code=$(curl -s -o /tmp/flow04-inference.json -w "%{http_code}" --max-time 300 -X POST "http://localhost:${AGENT_PF_PORT}/v1/chat/completions" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $TOKEN" \
     -d "{\"model\":\"$model_name\",\"messages\":[{\"role\":\"user\",\"content\":\"What is 2+2?\"}],\"max_tokens\":50,\"stream\":false${llm_payload_suffix}}" 2>&1) || true
+out=$(cat /tmp/flow04-inference.json 2>/dev/null || true)
 
 if echo "$out" | grep -q "choices"; then
-    pass "Agent inference returned response"
+    pass "Agent inference returned response (HTTP $http_code)"
 else
-    fail "Agent inference failed — ${out:0:200}"
+    fail "Agent inference failed — HTTP ${http_code:-000}: ${out:0:200}"
 fi
 
 # Regression check from the model-rank fix (PR #388): a 1B-parameter local
