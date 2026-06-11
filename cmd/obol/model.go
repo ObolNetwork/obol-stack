@@ -285,6 +285,10 @@ func promoteAndSync(cfg *config.Config, u *ui.UI, models []string) error {
 			u.Successf("Primary model is now %s (reorder anytime with: obol model prefer <model>)", models[0])
 		}
 	}
+	// Record-on-write: every `obol model setup ...` variant funnels through
+	// here after mutating the litellm ConfigMap, so this one snapshot keeps
+	// the host-side record (replayed by `obol stack up`) current.
+	model.RecordState(cfg, u)
 	return syncAgentModels(cfg, u)
 }
 
@@ -622,6 +626,7 @@ func modelPreferCommand(cfg *config.Config) *cli.Command {
 			if err := model.PreferModels(cfg, u, names); err != nil {
 				return err
 			}
+			model.RecordState(cfg, u)
 
 			if cmd.Bool("no-sync") {
 				return nil
@@ -837,6 +842,7 @@ func modelRemoveCommand(cfg *config.Config) *cli.Command {
 			if err := model.RemoveModel(cfg, u, modelName); err != nil {
 				return err
 			}
+			model.RecordState(cfg, u)
 
 			if cmd.Bool("no-sync") {
 				return nil

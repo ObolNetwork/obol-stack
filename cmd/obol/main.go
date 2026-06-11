@@ -10,9 +10,11 @@ import (
 	"runtime/debug"
 	"syscall"
 
+	"github.com/ObolNetwork/obol-stack/internal/agentcrd"
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
+	"github.com/ObolNetwork/obol-stack/internal/network"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
@@ -208,6 +210,13 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 							if err := stack.Up(cfg, u, cmd.Bool("wildcard-dns")); err != nil {
 								return err
 							}
+							// Replay recorded remote RPC upstreams into the
+							// (possibly fresh) eRPC ConfigMap. Best-effort.
+							network.ReconcileRecordedRPCs(cfg, u)
+							// Re-apply recorded Agent CRs BEFORE sell offers:
+							// agent-backed ServiceOffers resolve agent.ref and
+							// would dangle without their Agent. Best-effort.
+							agentcrd.ResumeAll(cfg, u)
 							// Re-apply cluster-side state for locally-persisted
 							// `obol sell *` offers. ServiceOffer CRs and the
 							// Service/Endpoints that route to the host gateway

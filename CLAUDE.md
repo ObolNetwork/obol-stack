@@ -201,7 +201,7 @@ obol sell delete ollama-gated -n llm
 
 ## RPC Gateway
 
-`obol network add|remove|status` manages remote RPCs via eRPC ConfigMap. Default: read-only (blocks `eth_sendRawTransaction`, `eth_sendTransaction`). `--allow-writes` flips readOnly → route `eth_sendRawTransaction` to the user-chosen upstream via eRPC per-method selection policy. `--endpoint` adds a custom RPC directly (skips ChainList). Key functions in `internal/network/rpc.go`: `AddPublicRPCs()` (ChainList), `AddCustomRPC()`, `ListRPCNetworks()`.
+`obol network add|remove|status` manages remote RPCs via eRPC ConfigMap. Default: read-only (blocks `eth_sendRawTransaction`, `eth_sendTransaction`). `--allow-writes` flips readOnly → route `eth_sendRawTransaction` to the user-chosen upstream via eRPC per-method selection policy. `--endpoint` adds a custom RPC directly (skips ChainList). Key functions in `internal/network/rpc.go`: `AddPublicRPCs()` (ChainList), `AddCustomRPC()`, `ListRPCNetworks()`. Record-on-write: add/remove update `$CONFIG_DIR/rpc/recorded-upstreams.yaml` (`internal/network/record.go`); `obol stack up` replays via `ReconcileRecordedRPCs()` so remote RPCs survive cluster recreation. Local-node upstreams are NOT recorded (`network sync` re-registers them).
 
 ## Network Management
 
@@ -216,7 +216,7 @@ Two-stage templating: `values.yaml.gotmpl` annotated with `@enum`/`@default`/`@d
 | Command | Action |
 |---------|--------|
 | `obol stack init` | Generate cluster ID (petname), resolve absolute paths, write k3d.yaml, copy infrastructure |
-| `obol stack up` | `k3d cluster create`, export kubeconfig, k3s auto-applies manifests, auto-configures LiteLLM with Ollama models (preserves Ollama modified-time order; `:cloud` aliases demoted behind local chat models; embedding-only models last; warns + suggests `ollama pull qwen3.5:4b` when empty or all-`:cloud`), deploys default Hermes agent, applies agent capabilities, starts persistent Cloudflare tunnel |
+| `obol stack up` | `k3d cluster create`, export kubeconfig, k3s auto-applies manifests, auto-configures LiteLLM with Ollama models (preserves Ollama modified-time order; `:cloud` aliases demoted behind local chat models; embedding-only models last; warns + suggests `ollama pull qwen3.5:4b` when empty or all-`:cloud`), re-imposes recorded model config (`model.ReconcileRecorded` — operator's `obol model` choices win over auto-detect), deploys default Hermes agent, applies agent capabilities, starts persistent Cloudflare tunnel, then replays recorded state: RPC upstreams (`network.ReconcileRecordedRPCs`) → Agent CRs (`agentcrd.ResumeAll`) → sell offers (`resumeSellOffers`; agent-type offers ride the sell-http store). Guard: `cmd/obol/stackup_resume_guard_test.go` |
 | `obol stack down` | `k3d cluster stop` (delete fallback; preserves config + data) |
 | `obol stack purge [-f]` | Delete config; `-f` also deletes root-owned PVCs; `-f` offers a full `stack export` first (fallback: OpenClaw wallet prompt) |
 | `obol stack export` | Full backup archive: config dir (minus kubeconfig/defaults), agent data dirs (brains + keystores, deployments quiesced for consistency), encrypted wallet backups, etcd-drift resources (Agent CRs, ServiceOffers, LiteLLM/eRPC CMs). `internal/stackbackup/` |

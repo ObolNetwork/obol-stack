@@ -1,7 +1,41 @@
 # Stack-wide export/import + sellable service packaging — design review
 
 Status: Phase 1 implemented 2026-06-10 (`internal/stackbackup/`, `obol stack
-export|import`, purge-time full-backup prompt). Phases 2–3 not yet scheduled.
+export|import`, purge-time full-backup prompt). Phase 2 implemented
+2026-06-11 (record-on-write, see below). Phase 3 not yet scheduled.
+
+Phase 2 implementation (2026-06-11):
+
+- `obol sell agent` now persists its ServiceOffer manifest into the existing
+  `sell-http/` store (the replay path is type-agnostic and `sell delete`
+  already cleans it). `sell mcp` (foreground process) and `sell demo`
+  (ephemeral by design) stay unrecorded.
+- Agent CRs: `obol agent new`/`update` persist the applied manifest to
+  `$CONFIG_DIR/agents/<name>.yaml` (`internal/agentcrd/manifest.go`);
+  `agent delete` removes it; `agentcrd.ResumeAll` replays at `stack up`
+  BEFORE sell-offer resume (agent-backed offers resolve agent.ref). Guard:
+  `cmd/obol/stackup_resume_guard_test.go`.
+- Models: `obol model setup|prefer|remove` snapshot the resulting
+  model_list (minus `paid/*` — purchase-derived) + referenced provider keys
+  to `$CONFIG_DIR/llm/recorded-models.yaml` (0600) via `model.RecordState`.
+  Recording happens at the COMMAND layer only — `autoConfigureLLM` must
+  never record, or stack-up auto-detection would overwrite operator intent
+  right before `model.ReconcileRecorded` (called in syncDefaults after
+  autoConfigureLLM, before default-Hermes setup) re-imposes it. Recorded
+  order wins; unrecorded current entries are appended after.
+- Remote RPCs: `AddPublicRPCs`/`AddCustomRPC`/`RemovePublicRPCs` update
+  `$CONFIG_DIR/rpc/recorded-upstreams.yaml` (0600 — custom URLs can carry
+  paid-provider keys) after each successful ConfigMap write;
+  `network.ReconcileRecordedRPCs` replays via the same idempotent add
+  functions after `stack up`. ChainList endpoints are snapshotted at add
+  time for deterministic offline replay. Local-node upstreams stay
+  unrecorded (`network sync` re-registers them from values.yaml).
+- `obol network remove` only unrecords the ChainList selection, mirroring
+  its cluster-side semantics; custom endpoints have no removal command
+  today, so their records are removed by editing the file (follow-up:
+  `network remove --endpoint`).
+- stackbackup export needs no changes: the config component captures the
+  three new stores automatically.
 
 Implementation findings (2026-06-10):
 
