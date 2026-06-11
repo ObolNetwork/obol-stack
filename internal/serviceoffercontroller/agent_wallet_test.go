@@ -88,7 +88,7 @@ func TestEnsureAgentWallet_ReusesExistingKeystore(t *testing.T) {
 		KeystoreUUID: "existing-uuid",
 		KeystoreJSON: []byte(`{"crypto":{}}`),
 		Password:     "preseed",
-	})
+	}, "preseed-token")
 	ensureRemoteSignerSecretLabels(preSeeded, agent.Name)
 	c := newProvisioningTestController(t, agent, litellmSecretObject(t, "key"), preSeeded)
 
@@ -136,7 +136,7 @@ func TestEnsureAgentWallet_RejectsExistingSecretWithoutAddressAnnotation(t *test
 		KeystoreUUID: "existing-uuid",
 		KeystoreJSON: []byte(`{"crypto":{}}`),
 		Password:     "preseed",
-	})
+	}, "preseed-token")
 	orphaned.SetAnnotations(nil)
 	wantData := remoteSignerSecretData(t, orphaned)
 	c := newProvisioningTestController(t, agent, litellmSecretObject(t, "key"), orphaned)
@@ -209,7 +209,7 @@ func TestReconcileAgent_WithExistingWallet_DoesNotRotateKeyMaterial(t *testing.T
 		KeystoreUUID: "existing-uuid",
 		KeystoreJSON: []byte(`{"crypto":{"ciphertext":"preserved"}}`),
 		Password:     "preseed",
-	})
+	}, "preseed-token")
 	ensureRemoteSignerSecretLabels(preSeeded, agent.Name)
 	wantData := remoteSignerSecretData(t, preSeeded)
 	c := newProvisioningTestController(t, agent, litellmSecretObject(t, "key"), preSeeded)

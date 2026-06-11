@@ -273,17 +273,28 @@ LiteLLM virtual keys are the natural mechanism and require no new proxy:
     first-claimant-wins by creationTimestamp with ns/name tie-break,
     deletes stale route children, 30s re-poll since no event edge fires
     when the older offer goes away).
-  - ⬜ Remote-signer bearer auth (NEXT — cross-repo): signer side is
-    ../remote-signer (Rust, axum 0.8, src/api/router.rs `create_router`):
-    add a middleware layer enforcing `Authorization: Bearer $TOKEN` from
-    a REMOTE_SIGNER_AUTH_TOKEN env (unset = no auth, back-compat;
-    health/readiness exempt) + image release. Stack side: controller
-    generates a per-namespace token Secret, injects env into the signer
-    Deployment (agent_wallet.go) and hermes Deployment (agent_render.go);
-    host-rendered signers (hermes/openclaw helmfiles) get the same via
-    values-remote-signer.yaml; all signer clients need the header —
-    hermes skills (ethereum-local-wallet, buy-x402/buy.py signing calls)
-    and any host flows. Defense-in-depth on top of the NetworkPolicy.
+  - ✅ Remote-signer bearer auth (implemented 2026-06-11, both repos;
+    ACTIVATION PENDING a signer image release):
+    - ../remote-signer: `SIGNER__AUTH__TOKEN` (config.rs AuthSettings) +
+      route_layer middleware on /api/v1/* (router.rs; constant-time
+      compare, health endpoints exempt, unset = auth-disabled
+      back-compat). 3 new integration tests; 18/18 pass.
+    - obol-stack: keystore Secret gains an `authToken` key (fresh mints +
+      one-shot backfill for pre-auth Secrets, never rotated by reconcile);
+      signer Deployment gets SIGNER__AUTH__TOKEN and the hermes
+      Deployment gets REMOTE_SIGNER_TOKEN, both via OPTIONAL secretKeyRefs
+      so pre-backfill Secrets and wallet-less agents can't wedge pod
+      startup; signer.py attaches `Authorization: Bearer` when the env is
+      set (buy.py rides its helpers; coordinate.py declares but never
+      calls the signer directly); remote-signer-api.md documents auth.
+    - Rollout: release a remote-signer image with the auth code, bump
+      `remoteSignerImage` in agent_wallet.go (currently v0.3.0 — ignores
+      the env, so the stack-side injection is live-safe today), and the
+      enforcement turns on per-agent with no further migration.
+    - Follow-up: host-rendered signers (master hermes + openclaw, chart
+      from ../helm-charts) need the same env plumbed through
+      values-remote-signer.yaml + chart — until then those signers stay
+      auth-disabled (token env absent = back-compat path).
 - **C. Cost/control surface (approved with checks):** per-agent LiteLLM
   virtual keys with generous default budget + model allowlist via new Agent
   CRD fields; verify hermes behavior on cap-trip first; budget-nearing

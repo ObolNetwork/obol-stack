@@ -343,6 +343,22 @@ func agentPodSpec(agent *monetizeapi.Agent) map[string]any {
 			"name":  "REMOTE_SIGNER_URL",
 			"value": fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", remoteSignerName, agent.Namespace, remoteSignerPort),
 		})
+		// Bearer token for the signer's REST API; skill scripts
+		// (ethereum-local-wallet signer.py and everything importing it)
+		// attach it as an Authorization header when set. optional: the
+		// Secret key is backfilled by the controller on pre-auth
+		// keystores, and an absent token simply means the (older) signer
+		// runs auth-disabled.
+		containerEnv = append(containerEnv, map[string]any{
+			"name": "REMOTE_SIGNER_TOKEN",
+			"valueFrom": map[string]any{
+				"secretKeyRef": map[string]any{
+					"name":     remoteSignerSecretName,
+					"key":      remoteSignerAuthTokenKey,
+					"optional": true,
+				},
+			},
+		})
 	}
 
 	probe := map[string]any{

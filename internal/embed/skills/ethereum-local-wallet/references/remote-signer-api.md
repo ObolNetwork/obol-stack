@@ -2,6 +2,21 @@
 
 Base URL: `$REMOTE_SIGNER_URL` (default: `http://remote-signer:9000`)
 
+## Authentication
+
+When the signer runs with a bearer token (the Obol Stack controller
+injects one per agent namespace), every `/api/v1/*` request requires:
+
+```
+Authorization: Bearer $REMOTE_SIGNER_TOKEN
+```
+
+`signer.py` attaches this automatically when the `REMOTE_SIGNER_TOKEN`
+env var is set — prefer its helpers over raw HTTP. Missing/wrong token →
+`401 {"error": "missing or invalid bearer token", "code": "UNAUTHORIZED"}`.
+Health endpoints are exempt. Signers without a configured token accept
+unauthenticated requests (legacy deployments).
+
 ## Health
 
 | Method | Path | Response |
