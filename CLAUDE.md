@@ -78,7 +78,7 @@ obol
 │   └── wallet      address, list, backup, restore
 ├── wallet          import
 ├── network         install, sync, delete, list, add, remove, status
-├── sell            inference, http, agent, mcp, demo, list, status, test, stop, update, delete, pricing, register, identity, info
+├── sell            inference, http, agent, mcp, demo, list, status, test, stop, update, delete, pricing, register, identity, info, resume
 ├── buy             inference
 ├── hermes          passthrough (SkipFlagParsing) → native hermes CLI
 │                   Token retrieval moved to `obol agent auth`
@@ -101,6 +101,7 @@ obol
 - `network install` has dynamic subcommands (one per supported chain; `--help` to list). `network sync [<network>/<id>]` with `--all`.
 - `sell info <name>` prints purchase instructions (URL, model, buy.py command).
 - `sell mcp [name]` runs a foreground x402-paid MCP server: forwards buyer JSON args to a backend HTTP service, injecting the seller's own API key (buyer never sees it). Payment rides MCP `_meta` (`internal/x402mcp`).
+- `sell resume` replays every persisted sell offer (inference incl. detached host-gateway relaunch; http/agent/demo-agent via the manifest ledger at `$OBOL_CONFIG_DIR/sell-http/`) — run after a host reboot; `obol stack up` runs the same path. `--install-boot-unit` adds a systemd user unit (Linux). `sell mcp` is foreground-only, no offer, not resumed.
 - `hermes` is passthrough to native hermes CLI via `hermes.CLI()` (cmd/obol/hermes.go:27). No Go-level subcommands registered.
 - `bootstrap` (cmd/obol/bootstrap.go) is a hidden command for installer use only — not user-facing.
 

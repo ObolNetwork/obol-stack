@@ -238,6 +238,9 @@ Examples:
 			if err != nil {
 				return fmt.Errorf("apply ServiceOffer: %w", err)
 			}
+			if persistErr := persistServiceOffer(cfg, offerNs, name, agentOfferBundle(offerNs, name, manifest)); persistErr != nil {
+				u.Warnf("could not persist offer for resume: %v", persistErr)
+			}
 			action := "created"
 			if strings.Contains(out, "configured") || strings.Contains(out, "unchanged") {
 				action = "updated"
@@ -437,6 +440,9 @@ func runAgentBackedDemo(
 	if err != nil {
 		return fmt.Errorf("apply ServiceOffer: %w", err)
 	}
+	if persistErr := persistServiceOffer(cfg, offerNs, name, agentOfferBundle(offerNs, name, soManifest)); persistErr != nil {
+		u.Warnf("could not persist offer for resume: %v", persistErr)
+	}
 	action := "created"
 	if strings.Contains(applyOut, "configured") || strings.Contains(applyOut, "unchanged") {
 		action = "updated"
@@ -630,4 +636,37 @@ func agentOfferRegistrationMetadata(agent *agentRefForSale, price, symbol, chain
 		metadata["model"] = strings.TrimSpace(agent.Model)
 	}
 	return metadata
+}
+
+// agentOfferBundle wraps an agent-typed ServiceOffer manifest together
+// with its namespace in a v1 List for the resume ledger. After a full
+// stack recreation the agent namespace is gone, and a bare offer
+// manifest would fail at apply with "namespaces not found" — bundling
+// the namespace lets the replay land and park the offer on the
+// controller's missing-agent condition until `obol agent new` recreates
+// the agent. The Agent CR itself is deliberately NOT bundled: replaying
+// it would mint a fresh wallet and orphan any funds held by the old
+// one. Labels match the canonical namespace creators (agent_crd.go /
+// the demo flow); kubectl ignores List metadata, which only keys the
+// ledger file.
+func agentOfferBundle(offerNs, name string, offer map[string]any) map[string]any {
+	return map[string]any{
+		"apiVersion": "v1",
+		"kind":       "List",
+		"metadata":   map[string]any{"name": name, "namespace": offerNs},
+		"items": []any{
+			map[string]any{
+				"apiVersion": "v1",
+				"kind":       "Namespace",
+				"metadata": map[string]any{
+					"name": offerNs,
+					"labels": map[string]any{
+						"obol.org/agent-namespace":     "true",
+						"app.kubernetes.io/managed-by": "obol-cli",
+					},
+				},
+			},
+			offer,
+		},
+	}
 }

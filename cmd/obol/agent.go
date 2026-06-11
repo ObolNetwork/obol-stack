@@ -966,6 +966,27 @@ func deleteCRDAgent(cfg *config.Config, name string, force bool, u *ui.UI) error
 			}
 		}
 		u.Successf("Agent %s/%s deleted", ns, name)
+
+		// The agent finalizer tears down the agent's children but
+		// deliberately leaves the namespace — and nothing deletes the
+		// agent's ServiceOffers, which would otherwise survive stuck on
+		// WaitingForAgent and, worse, reconcile back to Ready (selling
+		// to the DELETED agent's payTo) if an agent with the same name
+		// is ever recreated. Delete them here; the offer finalizer
+		// cleans up the route/middleware/registration children.
+		if err := kubectl.Run(bin, kc, "delete", "serviceoffers.obol.org", "--all", "-n", ns, "--ignore-not-found", "--wait=false"); err != nil {
+			u.Warnf("could not delete ServiceOffers in %s: %v — clean up with `obol sell delete <offer> -n %s`", ns, err, ns)
+		}
+
+		// Drop the resume-ledger entries for those offers. Scoped to the
+		// cluster-reachable branch on purpose: when the cluster is
+		// unreachable the CRs survive, and the ledger must keep covering
+		// them.
+		if removed, err := removePersistedServiceOffersInNamespace(cfg, ns); err != nil {
+			u.Warnf("could not clean persisted sell offers for %s: %v", ns, err)
+		} else if removed > 0 {
+			u.Dim(fmt.Sprintf("Removed %d persisted sell offer manifest(s) for %s", removed, ns))
+		}
 	} else {
 		u.Dim("Cluster unreachable; skipping CR deletion (host-side files only)")
 	}
