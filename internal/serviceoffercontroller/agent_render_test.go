@@ -31,6 +31,7 @@ func TestAgentManifests_KindCoverage(t *testing.T) {
 		"Secret",
 		"Deployment",
 		"Service",
+		"NetworkPolicy",
 	}
 	got := make([]string, 0, len(out))
 	for _, m := range out {

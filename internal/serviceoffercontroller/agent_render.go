@@ -81,6 +81,7 @@ func agentManifests(agent *monetizeapi.Agent, litellmKey, apiKey string) ([]*uns
 		buildAgentAPISecret(agent, apiKey),
 		buildAgentDeployment(agent, configYAML),
 		buildAgentService(agent),
+		buildAgentNetworkPolicy(agent),
 	}
 	return out, nil
 }
@@ -424,6 +425,126 @@ func agentPodSpec(agent *monetizeapi.Agent) map[string]any {
 			},
 		},
 	}
+}
+
+// Cluster CIDRs blocked by the agent NetworkPolicy's internet-egress rule.
+// These are k3s defaults and the stack's k3d/k3s configs do not override
+// them. Same stance as hermesImage(): pinned constants over host env
+// plumbing; operators running a non-default CIDR layout can patch the
+// rendered policy (or we grow controller env overrides when that becomes
+// real).
+const (
+	clusterPodCIDR     = "10.42.0.0/16"
+	clusterServiceCIDR = "10.43.0.0/16"
+)
+
+// buildAgentNetworkPolicy locks an agent business namespace down to the
+// "internet-open, cluster-closed" shape from
+// plans/agent-business-architecture.md §3.5:
+//
+//   - Ingress: paid traffic only (Traefik ForwardAuth path and the
+//     x402-verifier HandleProxy path, both restricted to the Hermes port),
+//     same-namespace traffic (hermes ↔ remote-signer), and Prometheus
+//     scrapes from the monitoring namespace. Crucially, NOTHING else
+//     reaches the remote-signer (port 9000): agent A can no longer call
+//     agent B's signer or Hermes API.
+//   - Egress: kube-dns, LiteLLM (llm:4000), eRPC (erpc:80/4001), Traefik
+//     (80/443 — in-pod paid requests to other sellers go via
+//     traefik.traefik.svc), same-namespace, and the public internet via an
+//     ipBlock that excludes the cluster pod/service CIDRs. The apiserver
+//     stays reachable: kube-proxy DNATs kubernetes.default to the host
+//     process address, which lands OUTSIDE the cluster CIDRs and is
+//     therefore allowed by the internet rule — this is what makes the
+//     policy portable on k3d/Flannel where a positive apiserver allowlist
+//     is not (see the frontend-egress revert note in helmfile.yaml).
+//
+// Selected namespaces are matched on the immutable
+// kubernetes.io/metadata.name label (set by the apiserver since k8s 1.22).
+// k3s ships its embedded NetworkPolicy controller enabled, so this
+// enforces on the default stack.
+func buildAgentNetworkPolicy(agent *monetizeapi.Agent) *unstructured.Unstructured {
+	nsMatch := func(name string) map[string]any {
+		return map[string]any{
+			"namespaceSelector": map[string]any{
+				"matchLabels": map[string]any{"kubernetes.io/metadata.name": name},
+			},
+		}
+	}
+	tcpPort := func(port int64) map[string]any {
+		return map[string]any{"port": port, "protocol": "TCP"}
+	}
+
+	u := &unstructured.Unstructured{}
+	u.SetUnstructuredContent(map[string]any{
+		"apiVersion": "networking.k8s.io/v1",
+		"kind":       "NetworkPolicy",
+		"metadata": map[string]any{
+			"name":      "agent-isolation",
+			"namespace": agent.Namespace,
+			"labels":    asAnyMap(agentLabels(agent.Name)),
+		},
+		"spec": map[string]any{
+			"podSelector": map[string]any{},
+			"policyTypes": []any{"Ingress", "Egress"},
+			"ingress": []any{
+				// Same-namespace: hermes <-> remote-signer.
+				map[string]any{"from": []any{map[string]any{"podSelector": map[string]any{}}}},
+				// Paid traffic to the Hermes API only — never the signer.
+				map[string]any{
+					"from":  []any{nsMatch("traefik"), nsMatch("x402")},
+					"ports": []any{tcpPort(hermesPort)},
+				},
+				// Prometheus scrapes (any port, future-proof for hermes/
+				// signer metrics exporters).
+				map[string]any{"from": []any{nsMatch("monitoring")}},
+			},
+			"egress": []any{
+				// Same-namespace: hermes -> its own remote-signer :9000.
+				map[string]any{"to": []any{map[string]any{"podSelector": map[string]any{}}}},
+				// DNS.
+				map[string]any{
+					"to": []any{map[string]any{
+						"namespaceSelector": map[string]any{
+							"matchLabels": map[string]any{"kubernetes.io/metadata.name": "kube-system"},
+						},
+						"podSelector": map[string]any{
+							"matchLabels": map[string]any{"k8s-app": "kube-dns"},
+						},
+					}},
+					"ports": []any{
+						map[string]any{"port": int64(53), "protocol": "UDP"},
+						map[string]any{"port": int64(53), "protocol": "TCP"},
+					},
+				},
+				// Inference via LiteLLM.
+				map[string]any{"to": []any{nsMatch("llm")}, "ports": []any{tcpPort(4000)}},
+				// Chain reads via eRPC (80 = JSON-RPC, 4001 = metrics/aux).
+				map[string]any{"to": []any{nsMatch("erpc")}, "ports": []any{tcpPort(80), tcpPort(4001)}},
+				// Buying from other sellers goes through Traefik's
+				// cluster-internal address (obol.stack doesn't resolve
+				// in-pod). No port constraint: NetworkPolicy ports match
+				// the post-DNAT POD port, and Traefik's are named
+				// targetPorts (web=8000, websecure=8443) that numeric
+				// rules can't address portably — the namespace boundary
+				// is the control here, and the traefik namespace is the
+				// public ingress plane anyway.
+				map[string]any{"to": []any{nsMatch("traefik")}},
+				// Public internet (skills fetching URLs, facilitators,
+				// RPCs) and — via post-DNAT host address — the apiserver.
+				// Cluster pod/service CIDRs are excluded so this never
+				// reopens cross-namespace traffic.
+				map[string]any{
+					"to": []any{map[string]any{
+						"ipBlock": map[string]any{
+							"cidr":   "0.0.0.0/0",
+							"except": []any{clusterPodCIDR, clusterServiceCIDR},
+						},
+					}},
+				},
+			},
+		},
+	})
+	return u
 }
 
 func buildAgentService(agent *monetizeapi.Agent) *unstructured.Unstructured {

@@ -811,6 +811,9 @@ Examples:
 					"spec": spec,
 				}
 
+				if err := preflightOfferPathCollision(cfg, manifest); err != nil {
+					return err
+				}
 				if err := kubectlApply(cfg, manifest); err != nil {
 					return err
 				}
@@ -984,6 +987,10 @@ Examples:
 					"namespace": ns,
 				},
 				"spec": spec,
+			}
+
+			if err := preflightOfferPathCollision(cfg, manifest); err != nil {
+				return err
 			}
 
 			applyOut, err := kubectlApplyOutput(cfg, manifest)
@@ -4550,6 +4557,72 @@ func sellOfferStoreDir(cfg *config.Config) string {
 
 func sellOfferStorePath(cfg *config.Config, namespace, name string) string {
 	return filepath.Join(sellOfferStoreDir(cfg), namespace+"__"+name+".yaml")
+}
+
+// preflightOfferPathCollision fails fast when another live ServiceOffer
+// already claims the manifest's public path. The x402 verifier's route
+// table is first-match-wins, so a colliding offer would silently shadow
+// (or be shadowed by) the existing one. Best-effort: an unreachable
+// cluster or missing CRD skips the check — the apply that follows will
+// surface the real error, and the serviceoffer-controller backstops with
+// RoutePublished=False/PathConflict either way. (A
+// ValidatingAdmissionPolicy cannot do this check: VAPs cannot list other
+// cluster objects.)
+func preflightOfferPathCollision(cfg *config.Config, manifest map[string]any) error {
+	meta, _ := manifest["metadata"].(map[string]any)
+	name, _ := meta["name"].(string)
+	ns, _ := meta["namespace"].(string)
+	spec, _ := manifest["spec"].(map[string]any)
+	path, _ := spec["path"].(string)
+	if path == "" {
+		path = "/services/" + name
+	}
+	bin, kubeconfig := kubectl.Paths(cfg)
+	out, err := kubectl.Output(bin, kubeconfig, "get", "serviceoffers.obol.org", "-A", "-o", "json")
+	if err != nil {
+		return nil //nolint:nilerr // best-effort preflight; the apply surfaces real errors
+	}
+	return offerPathCollisionInList([]byte(out), ns, name, path)
+}
+
+// offerPathCollisionInList is the pure core of preflightOfferPathCollision.
+func offerPathCollisionInList(listJSON []byte, ns, name, path string) error {
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name              string `json:"name"`
+				Namespace         string `json:"namespace"`
+				DeletionTimestamp string `json:"deletionTimestamp"`
+			} `json:"metadata"`
+			Spec struct {
+				Path string `json:"path"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(listJSON, &list); err != nil {
+		return nil //nolint:nilerr // unparseable listing: leave it to the controller backstop
+	}
+	if path == "" {
+		path = "/services/" + name
+	}
+	want := strings.TrimSuffix(path, "/")
+	for _, item := range list.Items {
+		if item.Metadata.Namespace == ns && item.Metadata.Name == name {
+			continue // re-applying the same offer is an update, not a collision
+		}
+		if item.Metadata.DeletionTimestamp != "" {
+			continue
+		}
+		other := item.Spec.Path
+		if other == "" {
+			other = "/services/" + item.Metadata.Name
+		}
+		if strings.TrimSuffix(other, "/") == want {
+			return fmt.Errorf("path %s is already used by offer %s/%s — pass --path to pick a different public path, or delete the existing offer first",
+				path, item.Metadata.Namespace, item.Metadata.Name)
+		}
+	}
+	return nil
 }
 
 // persistServiceOffer writes the rendered ServiceOffer manifest to disk

@@ -464,7 +464,24 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		return err
 	}
 
-	if offer.IsDraining() {
+	if conflict := c.findPathConflict(offer); conflict != "" {
+		// First-claimant-wins: an older offer holds this path. Publishing
+		// anyway would silently shadow one of the two offers in the
+		// verifier's first-match route table. Tear down any children we
+		// previously published (covers collisions that predate this check
+		// and an older offer moving onto our path) and poll for the path
+		// freeing up — there is no event edge when the older offer goes
+		// away that re-enqueues this one.
+		msg := fmt.Sprintf("path %s is already claimed by older offer %s — set a different spec.path", offer.EffectivePath(), conflict)
+		log.Printf("serviceoffer-controller: %s/%s path conflict: %s", offer.Namespace, offer.Name, msg)
+		if err := c.deleteRouteChildren(ctx, offer); err != nil {
+			return err
+		}
+		setCondition(&status, "Draining", "False", "Active", "Offer is active")
+		setCondition(&status, "PaymentGateReady", "False", "PathConflict", msg)
+		setCondition(&status, "RoutePublished", "False", "PathConflict", msg)
+		c.offerQueue.AddAfter(offer.Namespace+"/"+offer.Name, 30*time.Second)
+	} else if offer.IsDraining() {
 		now := time.Now()
 		drainEndsAt := offer.DrainEndsAt()
 		if offer.DrainExpired(now) {

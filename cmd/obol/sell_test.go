@@ -2390,3 +2390,37 @@ func TestAgentOfferBundle_RoundTrip(t *testing.T) {
 		t.Errorf("got %s/%s label=%s, want agent-quant/quant label=sell-agent", o.Namespace, o.Name, o.label())
 	}
 }
+
+// TestOfferPathCollisionInList pins the CLI preflight against the same
+// first-claimant semantics the controller enforces (PathConflict).
+func TestOfferPathCollisionInList(t *testing.T) {
+	listing := []byte(`{"items":[
+		{"metadata":{"name":"alpha","namespace":"agent-a"},"spec":{"path":"/services/shared"}},
+		{"metadata":{"name":"gone","namespace":"agent-x","deletionTimestamp":"2026-06-11T00:00:00Z"},"spec":{"path":"/services/free"}},
+		{"metadata":{"name":"defaulted","namespace":"llm"},"spec":{}}
+	]}`)
+
+	// Colliding with a live offer fails, including trailing-slash form.
+	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/shared/"); err == nil {
+		t.Fatal("expected collision with agent-a/alpha")
+	}
+	// A deleting offer frees its path.
+	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/free"); err != nil {
+		t.Fatalf("deleting offer must not block the path: %v", err)
+	}
+	// Empty spec.path defaults to /services/<name> on BOTH sides.
+	if err := offerPathCollisionInList(listing, "agent-b", "defaulted", ""); err == nil {
+		t.Fatal("requester's defaulted path must collide with llm/defaulted's defaulted path")
+	}
+	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/defaulted"); err == nil {
+		t.Fatal("expected collision with llm/defaulted's defaulted path")
+	}
+	// Re-applying the same offer is an update, not a collision.
+	if err := offerPathCollisionInList(listing, "agent-a", "alpha", "/services/shared"); err != nil {
+		t.Fatalf("self-update must pass: %v", err)
+	}
+	// Unparseable listings defer to the controller backstop.
+	if err := offerPathCollisionInList([]byte("not json"), "a", "b", "/c"); err != nil {
+		t.Fatalf("garbage listing must not block: %v", err)
+	}
+}

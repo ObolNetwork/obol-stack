@@ -234,6 +234,10 @@ Examples:
 				"spec": spec,
 			}
 
+			if err := preflightOfferPathCollision(cfg, manifest); err != nil {
+				return err
+			}
+
 			out, err := kubectlApplyOutput(cfg, manifest)
 			if err != nil {
 				return fmt.Errorf("apply ServiceOffer: %w", err)
