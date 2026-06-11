@@ -31,6 +31,12 @@ const (
 	// stable name lets the volume `items` projection drop the password
 	// key cleanly without us having to thread the UUID through.
 	remoteSignerKeystoreKey = "keystore.json"
+	// Bearer token for the signer's REST API. Injected into the signer
+	// as SIGNER__AUTH__TOKEN and into Hermes as REMOTE_SIGNER_TOKEN —
+	// defense-in-depth on top of the agent-isolation NetworkPolicy.
+	// Signer images < v0.4.0 ignore the env, so injection is a safe
+	// no-op until the image pin advances.
+	remoteSignerAuthTokenKey = "authToken"
 )
 
 // ensureAgentWallet provisions a per-namespace remote-signer when the
@@ -79,6 +85,9 @@ func (c *Controller) ensureSignerKeystore(ctx context.Context, agent *monetizeap
 	if err == nil {
 		annotations := existing.GetAnnotations()
 		if addr := annotations[signerKeystoreAddressAnnotation]; addr != "" {
+			if err := c.backfillSignerAuthToken(ctx, namespace, existing); err != nil {
+				return "", fmt.Errorf("backfill signer auth token: %w", err)
+			}
 			return addr, nil
 		}
 		// Secret exists but has no address — likely written by a
@@ -95,13 +104,40 @@ func (c *Controller) ensureSignerKeystore(ctx context.Context, agent *monetizeap
 	if err != nil {
 		return "", err
 	}
+	authToken, err := generateAPIKey()
+	if err != nil {
+		return "", err
+	}
 
-	secret := buildSignerKeystoreSecret(namespace, mat)
+	secret := buildSignerKeystoreSecret(namespace, mat, authToken)
 	ensureRemoteSignerSecretLabels(secret, agent.Name)
 	if err := c.applyAgentObject(ctx, c.client.Resource(monetizeapi.SecretGVR).Namespace(namespace), secret); err != nil {
 		return "", err
 	}
 	return mat.Address, nil
+}
+
+// backfillSignerAuthToken adds the bearer-token key to keystore Secrets
+// minted before signer auth existed. One-shot per Secret: presence of the
+// key (even an empty value) means we leave it alone, so operator-rotated
+// tokens are never clobbered by reconciles.
+func (c *Controller) backfillSignerAuthToken(ctx context.Context, namespace string, existing *unstructured.Unstructured) error {
+	data, _, _ := unstructured.NestedMap(existing.Object, "data")
+	if _, ok := data[remoteSignerAuthTokenKey]; ok {
+		return nil
+	}
+	token, err := generateAPIKey()
+	if err != nil {
+		return err
+	}
+	updated := existing.DeepCopy()
+	if err := unstructured.SetNestedField(updated.Object,
+		base64.StdEncoding.EncodeToString([]byte(token)),
+		"data", remoteSignerAuthTokenKey); err != nil {
+		return err
+	}
+	_, err = c.client.Resource(monetizeapi.SecretGVR).Namespace(namespace).Update(ctx, updated, metav1.UpdateOptions{})
+	return err
 }
 
 func ensureRemoteSignerSecretLabels(secret *unstructured.Unstructured, agentName string) bool {
@@ -127,7 +163,7 @@ func ensureRemoteSignerSecretLabels(secret *unstructured.Unstructured, agentName
 	return changed
 }
 
-func buildSignerKeystoreSecret(namespace string, mat *openclaw.KeystoreMaterial) *unstructured.Unstructured {
+func buildSignerKeystoreSecret(namespace string, mat *openclaw.KeystoreMaterial, authToken string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetUnstructuredContent(map[string]any{
 		"apiVersion": "v1",
@@ -149,8 +185,9 @@ func buildSignerKeystoreSecret(namespace string, mat *openclaw.KeystoreMaterial)
 			// internally, and the volume's `items` projection only
 			// references this key (the password lives under a separate
 			// key, read via env, never mounted into the keystore dir).
-			remoteSignerKeystoreKey: base64.StdEncoding.EncodeToString(mat.KeystoreJSON),
-			"password":              base64.StdEncoding.EncodeToString([]byte(mat.Password)),
+			remoteSignerKeystoreKey:  base64.StdEncoding.EncodeToString(mat.KeystoreJSON),
+			"password":               base64.StdEncoding.EncodeToString([]byte(mat.Password)),
+			remoteSignerAuthTokenKey: base64.StdEncoding.EncodeToString([]byte(authToken)),
 		},
 	})
 	return u
@@ -215,6 +252,20 @@ func remoteSignerManifests(agent *monetizeapi.Agent) []*unstructured.Unstructure
 										"secretKeyRef": map[string]any{
 											"name": remoteSignerSecretName,
 											"key":  "password",
+										},
+									},
+								},
+								// optional: pre-auth Secrets may lack the key
+								// until the controller backfills it; the pod
+								// must not deadlock on that (signer treats an
+								// absent token as auth-disabled).
+								map[string]any{
+									"name": "SIGNER__AUTH__TOKEN",
+									"valueFrom": map[string]any{
+										"secretKeyRef": map[string]any{
+											"name":     remoteSignerSecretName,
+											"key":      remoteSignerAuthTokenKey,
+											"optional": true,
 										},
 									},
 								},

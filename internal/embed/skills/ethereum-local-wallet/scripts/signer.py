@@ -104,10 +104,23 @@ def _resolve_chain(value):
     raise ValueError(f"Unknown network {value!r}. Supported: {supported}")
 
 
+def _signer_auth_headers():
+    """Bearer auth for the remote-signer when REMOTE_SIGNER_TOKEN is set.
+
+    The controller injects the token alongside REMOTE_SIGNER_URL; older
+    deployments without auth simply don't set it, and the header is
+    harmless against signers that don't enforce auth yet.
+    """
+    token = os.environ.get("REMOTE_SIGNER_TOKEN", "").strip()
+    if not token:
+        return {}
+    return {"Authorization": f"Bearer {token}"}
+
+
 def _signer_get(path):
     """GET request to the remote-signer."""
     url = f"{SIGNER_URL}{path}"
-    req = urllib.request.Request(url, method="GET")
+    req = urllib.request.Request(url, method="GET", headers=_signer_auth_headers())
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.loads(resp.read())
@@ -127,7 +140,7 @@ def _signer_post(path, data):
     payload = json.dumps(data).encode()
     req = urllib.request.Request(
         url, data=payload, method="POST",
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **_signer_auth_headers()},
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
