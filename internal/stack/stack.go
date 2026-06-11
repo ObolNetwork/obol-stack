@@ -530,6 +530,13 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	// step required. Non-fatal: the user can always run `obol model setup` later.
 	autoConfigureLLM(cfg, u)
 
+	// Re-impose the operator's recorded model config (entries + order +
+	// provider keys) over whatever auto-configuration just decided. Must run
+	// AFTER autoConfigureLLM (recorded intent wins) and BEFORE the default
+	// Hermes setup below (the agent's default model is the model_list head).
+	// No-op when `obol model ...` was never used.
+	model.ReconcileRecorded(cfg, u)
+
 	// Deploy default Hermes instance (non-fatal on failure).
 	// Not wrapped in RunWithSpinner because SetupDefault/Onboard produce their
 	// own UI output (Info, Detail, Print) and run sub-spinners via u.Exec.
