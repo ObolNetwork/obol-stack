@@ -247,10 +247,43 @@ LiteLLM virtual keys are the natural mechanism and require no new proxy:
   per §1, including the agents-before-offers fix to `sell resume` and the
   wallet-regeneration warning in ResumeAll. Outcome: one branch with reboot
   recovery + full record-on-write + export/import.
-- **B. Isolation MVP (approved):** agent-namespace NetworkPolicies
-  (internet-open, cluster-allowlisted egress per §3.5); remote-signer
-  bearer auth (cross-repo: ../remote-signer + controller injection);
-  path-collision preflight (CLI) + Degraded condition (controller).
+- **B. Isolation MVP (approved, 2/3 landed 2026-06-11):**
+  - ✅ Agent-namespace NetworkPolicy: controller renders `agent-isolation`
+    alongside every Agent's primitives (`buildAgentNetworkPolicy`,
+    internal/serviceoffercontroller/agent_render.go) + RBAC grant in
+    x402.yaml. LIVE-VERIFIED on agent-demo-quant: cross-ns pod → signer
+    9000 / hermes 8642 blocked both directions; same-ns signer, LiteLLM,
+    eRPC, Traefik, apiserver (post-DNAT via the internet rule — the k3d
+    apiserver problem from the frontend revert genuinely doesn't apply),
+    and public internet all confirmed working from the agent pod.
+    Learnings: NetworkPolicy ports match POST-DNAT pod targetPorts, so
+    the Traefik rule is namespace-only (named targetPorts web/websecure
+    aren't portably matchable numerically); host-backed Services (ollama →
+    host.k3d.internal) ride the internet rule by construction — fine, they
+    are host resources. k3s's embedded netpol controller is enabled on the
+    stack's k3d (only local-storage/traefik are disabled). NOTE: the
+    in-cluster controller image must be rebuilt (next dev `stack up`
+    auto-builds) before NEW agents get the policy; demo-quant got it
+    hand-applied during verification.
+  - ✅ Path collisions: CLI preflight (`preflightOfferPathCollision`,
+    cmd/obol/sell.go — wired into sell http, sell http --from-json, sell
+    agent) + controller backstop (`findPathConflict`,
+    internal/serviceoffercontroller/pathconflict.go —
+    PaymentGateReady/RoutePublished=False reason=PathConflict,
+    first-claimant-wins by creationTimestamp with ns/name tie-break,
+    deletes stale route children, 30s re-poll since no event edge fires
+    when the older offer goes away).
+  - ⬜ Remote-signer bearer auth (NEXT — cross-repo): signer side is
+    ../remote-signer (Rust, axum 0.8, src/api/router.rs `create_router`):
+    add a middleware layer enforcing `Authorization: Bearer $TOKEN` from
+    a REMOTE_SIGNER_AUTH_TOKEN env (unset = no auth, back-compat;
+    health/readiness exempt) + image release. Stack side: controller
+    generates a per-namespace token Secret, injects env into the signer
+    Deployment (agent_wallet.go) and hermes Deployment (agent_render.go);
+    host-rendered signers (hermes/openclaw helmfiles) get the same via
+    values-remote-signer.yaml; all signer clients need the header —
+    hermes skills (ethereum-local-wallet, buy-x402/buy.py signing calls)
+    and any host flows. Defense-in-depth on top of the NetworkPolicy.
 - **C. Cost/control surface (approved with checks):** per-agent LiteLLM
   virtual keys with generous default budget + model allowlist via new Agent
   CRD fields; verify hermes behavior on cap-trip first; budget-nearing

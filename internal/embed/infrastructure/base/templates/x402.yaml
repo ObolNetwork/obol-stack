@@ -187,6 +187,11 @@ rules:
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["httproutes"]
     verbs: ["get", "create", "update", "patch", "delete"]
+  # Agent-namespace isolation: the controller renders an agent-isolation
+  # NetworkPolicy alongside every Agent's primitives (agent_render.go).
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "create", "update", "patch", "delete"]
   - apiGroups: ["gateway.networking.k8s.io"]
     resources: ["referencegrants"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
