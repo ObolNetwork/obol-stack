@@ -235,6 +235,14 @@ main() {
         # every launch, undetected because this flow wasn't in CI). Adding it
         # here is follow-up #2 from the rc13 report PR.
         "$SCRIPT_DIR/flow-16-sell-agent.sh"
+        # flow-17 is the only end-to-end coverage of `obol sell mcp` (paid
+        # MCP tool over x402 in-band _meta). It reuses flow-10's anvil fork
+        # + facilitator, runs the foreground MCP server, and drives the full
+        # free/requirements/unpaid/paid loop with the x402 SDK's MCP client,
+        # asserting on-chain settlement + seller-credential injection. Needs
+        # no cluster of its own, so it sits at the end of the baseline group
+        # while anvil + the facilitator are still up.
+        "$SCRIPT_DIR/flow-17-sell-mcp.sh"
     )
 
     for flow in "${flows[@]}"; do
