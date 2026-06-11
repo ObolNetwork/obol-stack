@@ -78,4 +78,47 @@ func TestBuildAgentNetworkPolicy_IsolationInvariants(t *testing.T) {
 	if !strings.Contains(body, `"port":4000`) {
 		t.Error("egress must allow LiteLLM on llm:4000")
 	}
+
+	// Link-local (incl. the cloud IMDS endpoint 169.254.169.254) must be
+	// excepted from the internet rule so semi-untrusted skill code cannot
+	// SSRF instance-metadata credentials on a cloud node.
+	if !strings.Contains(body, linkLocalCIDR) {
+		t.Errorf("internet egress rule must except link-local %s (IMDS hardening)", linkLocalCIDR)
+	}
+
+	// DNS must be reachable or the agent is dead: the kube-dns podSelector
+	// and port 53 must both be present, not just the kube-system namespace.
+	if !strings.Contains(body, `"k8s-app":"kube-dns"`) {
+		t.Error("egress DNS rule must target the kube-dns podSelector, not the whole kube-system namespace")
+	}
+	if !strings.Contains(body, `"port":53`) {
+		t.Error("egress must allow DNS on port 53")
+	}
+}
+
+// TestAgentManifests_IncludesNetworkPolicy guards that the isolation policy
+// is actually rendered alongside the agent's primitives — buildAgentNetworkPolicy
+// being correct is moot if it is never added to the applied manifest set.
+func TestAgentManifests_IncludesNetworkPolicy(t *testing.T) {
+	agent := &monetizeapi.Agent{}
+	agent.Name = "quant"
+	agent.Namespace = "agent-quant"
+	agent.Spec.Model = "qwen3.5:9b"
+
+	manifests, err := agentManifests(agent, "litellm-key", "api-key")
+	if err != nil {
+		t.Fatalf("agentManifests: %v", err)
+	}
+	found := false
+	for _, m := range manifests {
+		if m.GetKind() == "NetworkPolicy" {
+			found = true
+			if m.GetName() != "agent-isolation" || m.GetNamespace() != "agent-quant" {
+				t.Errorf("unexpected NetworkPolicy identity: %s/%s", m.GetNamespace(), m.GetName())
+			}
+		}
+	}
+	if !found {
+		t.Error("agentManifests must include the agent-isolation NetworkPolicy")
+	}
 }
