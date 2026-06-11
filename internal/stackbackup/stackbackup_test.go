@@ -234,6 +234,75 @@ func TestExtractRejectsPathTraversal(t *testing.T) {
 	}
 }
 
+// TestExtractRejectsSymlinkEscape covers the symlink variant of the traversal
+// escape: a clean entry NAME whose symlink TARGET points outside the root.
+// Without target validation, a follow-up entry written through the link would
+// land at an arbitrary path. Both a "../"-walking and an absolute target must
+// be refused, and no link may be created.
+func TestExtractRejectsSymlinkEscape(t *testing.T) {
+	for _, target := range []string{"../../../../etc/cron.d", "/etc/passwd"} {
+		archive := filepath.Join(t.TempDir(), "evil-symlink.tar.gz")
+		f, err := os.Create(archive)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gz := gzip.NewWriter(f)
+		tw := tar.NewWriter(gz)
+		if err := tw.WriteHeader(&tar.Header{Name: "link", Linkname: target, Mode: 0o777, Typeflag: tar.TypeSymlink}); err != nil {
+			t.Fatal(err)
+		}
+		tw.Close()
+		gz.Close()
+		f.Close()
+
+		dest := t.TempDir()
+		err = walkArchive(archive, func(tr *tar.Reader, hdr *tar.Header, clean string) error {
+			return extractEntry(tr, hdr, dest, clean)
+		})
+		if err == nil || !strings.Contains(err.Error(), "escapes extraction root") {
+			t.Fatalf("symlink escape to %q not rejected: %v", target, err)
+		}
+		if _, err := os.Lstat(filepath.Join(dest, "link")); !os.IsNotExist(err) {
+			t.Fatalf("escaping symlink to %q must not be created: %v", target, err)
+		}
+	}
+}
+
+// TestExtractRejectsDecompressionBomb verifies the ratio guard trips on an
+// archive that inflates far beyond its compressed size. Thresholds are lowered
+// so the test stays small and fast.
+func TestExtractRejectsDecompressionBomb(t *testing.T) {
+	origFloor, origRatio := bombFloorBytes, maxCompressionRatio
+	bombFloorBytes, maxCompressionRatio = 1024, 2
+	defer func() { bombFloorBytes, maxCompressionRatio = origFloor, origRatio }()
+
+	archive := filepath.Join(t.TempDir(), "bomb.tar.gz")
+	f, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	zeros := make([]byte, 1<<20) // 1 MiB of zeros gzips to ~1 KiB -> ~1000:1
+	if err := tw.WriteHeader(&tar.Header{Name: "big", Mode: 0o600, Size: int64(len(zeros)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(zeros); err != nil {
+		t.Fatal(err)
+	}
+	tw.Close()
+	gz.Close()
+	f.Close()
+
+	dest := t.TempDir()
+	err = walkArchive(archive, func(tr *tar.Reader, hdr *tar.Header, clean string) error {
+		return extractEntry(tr, hdr, dest, clean)
+	})
+	if err == nil || !strings.Contains(err.Error(), "decompression bomb") {
+		t.Fatalf("decompression bomb not rejected: %v", err)
+	}
+}
+
 func TestReadStackID(t *testing.T) {
 	dir := t.TempDir()
 	if got := readStackID(dir); got != "" {
