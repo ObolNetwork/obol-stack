@@ -47,6 +47,7 @@ export async function POST(request: NextRequest) {
       upstream,
       port,
       healthPath,
+      model,
     } = body;
 
     if (!name || !wallet || !chain || !pricePerRequest) {
@@ -55,6 +56,14 @@ export async function POST(request: NextRequest) {
           error:
             'Missing required fields: name, wallet, chain, pricePerRequest',
         },
+        { status: 400 }
+      );
+    }
+
+    const serviceType = normalizeServiceOfferType(type);
+    if (serviceType === 'inference' && !model) {
+      return NextResponse.json(
+        { error: 'Missing required field for inference listings: model' },
         { status: 400 }
       );
     }
@@ -70,13 +79,14 @@ export async function POST(request: NextRequest) {
     }
 
     const client = new SellClient();
-    const serviceType = normalizeServiceOfferType(type);
     const paymentToken = normalizeSellToken(token);
     const { asset, error } = resolveSellAsset(chain, paymentToken);
     if (error) {
       return NextResponse.json({ error }, { status: 400 });
     }
 
+    // Inference listings route to a per-offer host gateway (port 8402), not LiteLLM.
+    const isInference = serviceType === 'inference';
     await client.createServiceOffer({
       name,
       namespace: targetNamespace,
@@ -86,9 +96,10 @@ export async function POST(request: NextRequest) {
       token: paymentToken,
       asset,
       pricePerRequest,
-      upstream: upstream || 'litellm',
-      port: port || 4000,
-      healthPath: healthPath || '/health/readiness',
+      model: isInference ? String(model).trim() : undefined,
+      upstream: isInference ? name : upstream || 'litellm',
+      port: isInference ? 8402 : port || 4000,
+      healthPath: isInference ? '/health' : healthPath || '/health/readiness',
     });
 
     return NextResponse.json({

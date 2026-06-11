@@ -19,6 +19,26 @@ export function buildServiceOfferBody(req: CreateServiceOfferRequest) {
   const asset = serviceOfferAssetBody(req.asset);
   if (asset) payment.asset = asset;
 
+  const spec: Record<string, unknown> = {
+    type: req.type ?? 'http',
+    upstream: {
+      service: req.upstream,
+      namespace: req.namespace,
+      port: req.port,
+      healthPath: req.healthPath || '/health',
+    },
+    payment,
+  };
+
+  // Inference offers require spec.model — the controller blocks ModelReady without it.
+  if (req.type === 'inference' && req.model) {
+    spec.model = {
+      name: req.model,
+      runtime: req.modelRuntime ?? 'ollama',
+    };
+    spec.path = `/services/${req.name}`;
+  }
+
   return {
     apiVersion: `${CRD_GROUP}/${CRD_VERSION}`,
     kind: 'ServiceOffer',
@@ -26,16 +46,7 @@ export function buildServiceOfferBody(req: CreateServiceOfferRequest) {
       name: req.name,
       namespace: req.namespace,
     },
-    spec: {
-      type: req.type ?? 'http',
-      upstream: {
-        service: req.upstream,
-        namespace: req.namespace,
-        port: req.port,
-        healthPath: req.healthPath || '/health',
-      },
-      payment,
-    },
+    spec,
   };
 }
 

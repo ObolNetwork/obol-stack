@@ -7,8 +7,6 @@ import type {
 } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
-import { useAccount } from 'wagmi';
-
 import { ChainIcon } from '@/components/atoms/ChainIcon';
 import { CopyButton } from '@/components/atoms/CopyButton';
 import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
@@ -20,6 +18,8 @@ import {
   type SellPaymentChain,
   type SellPaymentToken,
 } from '@/lib/services/sell-assets';
+import { DEFAULT_AGENT_ID } from '@/lib/services/agent-runtime';
+import { useOperatorWallets } from '@/hooks/useOperatorWallets';
 import type { ChainName } from '@/types/dashboard';
 
 export interface NewListingDialogProps {
@@ -32,6 +32,8 @@ type PaymentToken = SellPaymentToken;
 type PriceUnit = 'req' | 'mtok' | 'hour';
 type Visibility = 'local' | 'erc8004';
 type ChainKey = SellPaymentChain;
+
+const Mono = styled('span', { fontFamily: 'monospace' });
 
 const TOKEN_PREFIX: Record<PaymentToken, string> = {
   USDC: '$',
@@ -597,7 +599,15 @@ const Banner = styled('div', {
 // ── Main dialog ─────────────────────────────────────────────────────────
 
 export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
-  const { address } = useAccount();
+  const operator = useOperatorWallets();
+
+  // Payments settle to the stack master agent wallet, not the browser-connected wallet.
+  const sellerWallet = useMemo(() => {
+    const master = operator.agents.find(
+      a => a.runtime === 'hermes' && a.instanceId === DEFAULT_AGENT_ID
+    );
+    return master?.addresses[0] ?? operator.agents[0]?.addresses[0];
+  }, [operator.agents]);
 
   const [type, setType] = useState<ServiceType>('route');
   const [name, setName] = useState('my-service');
@@ -659,14 +669,27 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
       `  --per-request ${priceAmount} \\`,
       `  --token ${priceToken} \\`,
       `  --chain ${chain} \\`,
-      `  --wallet ${address ?? '<connect wallet>'}`,
+      `  --wallet ${sellerWallet ?? '<agent wallet>'}`,
     ].join('\n');
-  }, [type, name, model, upstream, priceAmount, priceToken, chain, address]);
+  }, [
+    type,
+    name,
+    model,
+    upstream,
+    priceAmount,
+    priceToken,
+    chain,
+    sellerWallet,
+  ]);
 
   if (!open) return null;
 
   const canSubmit =
-    Boolean(address) && !submitting && name.trim().length > 0 && !paymentError;
+    Boolean(sellerWallet) &&
+    !submitting &&
+    name.trim().length > 0 &&
+    !paymentError &&
+    (type !== 'inference' || model.trim().length > 0);
 
   const handleTokenChange = (token: PaymentToken) => {
     const next = reconcileSellPaymentSelection(
@@ -693,8 +716,15 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
   };
 
   const handleSubmit = async () => {
-    if (!address) {
-      setErrorMessage('Connect a wallet first — it receives x402 payments.');
+    if (!sellerWallet) {
+      setErrorMessage(
+        'No agent wallet found — deploy the stack agent (obol agent init) first.'
+      );
+      setSubmitState('error');
+      return;
+    }
+    if (type === 'inference' && !model.trim()) {
+      setErrorMessage('Model name is required for inference listings.');
       setSubmitState('error');
       return;
     }
@@ -715,16 +745,18 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
           name,
           namespace: 'llm',
           type: type === 'inference' ? 'inference' : 'http',
-          wallet: address,
+          wallet: sellerWallet,
           chain,
           token: priceToken,
           pricePerRequest: priceAmount,
-          upstream: type === 'inference' ? 'litellm' : upstream.split(':')[0],
+          // Model + upstream are set server-side for inference; model must be sent here.
+          model: type === 'inference' ? model.trim() : undefined,
+          upstream: type === 'inference' ? name.trim() : upstream.split(':')[0],
           port:
             type === 'inference'
-              ? 4000
+              ? 8402
               : Number(upstream.split(':')[1] ?? '8080') || 8080,
-          healthPath: '/health',
+          healthPath: type === 'inference' ? '/health' : '/health',
         }),
       });
 
@@ -780,18 +812,24 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
         </Header>
 
         <Body>
-          {!address ? (
+          {!sellerWallet ? (
             <Banner tone="info">
-              Connect a wallet from the top-nav to enable submission. The
-              connected address receives x402 payments.
+              No agent wallet found yet. Run{' '}
+              <Mono css={{ color: '$obolGreen' }}>obol agent init</Mono> so the
+              master agent wallet can receive x402 payments.
             </Banner>
-          ) : null}
+          ) : (
+            <Banner tone="info">
+              Payments settle to the master agent wallet{' '}
+              <Mono css={{ color: '$light' }}>{sellerWallet}</Mono>.
+            </Banner>
+          )}
 
           <FormField
             label="Service type"
             hint={
               type === 'inference'
-                ? 'An OpenAI-compatible LLM endpoint behind LiteLLM. Buyers call it like any model.'
+                ? 'Ollama model sold via a host inference gateway (port 8402). Run the CLI below to start the gateway after creating.'
                 : "Any HTTP upstream — REST, MCP, webhook. Routed through the cluster's x402 verifier."
             }
           >
@@ -824,7 +862,10 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
               />
             </FormField>
             {type === 'inference' ? (
-              <FormField label="Upstream model" hint="Model served by LiteLLM.">
+              <FormField
+                label="Upstream model"
+                hint="Ollama model id (e.g. qwen3.5:4b)."
+              >
                 <TextInput
                   mono
                   value={model}

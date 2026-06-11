@@ -151,4 +151,7 @@ export interface CreateServiceOfferRequest {
   upstream: string;
   port: number;
   healthPath?: string;
+  /** Required for type=inference — maps to spec.model.name. */
+  model?: string;
+  modelRuntime?: string;
 }

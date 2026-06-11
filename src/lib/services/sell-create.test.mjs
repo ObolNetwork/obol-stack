@@ -27,6 +27,7 @@ describe('buildServiceOfferBody', () => {
       name: 'obol-demo',
       namespace: 'llm',
       type: 'inference',
+      model: 'qwen3.5:4b',
       wallet: '0x1111111111111111111111111111111111111111',
       chain: 'mainnet',
       token: 'OBOL',
@@ -39,12 +40,16 @@ describe('buildServiceOfferBody', () => {
         eip712Version: '1',
       },
       pricePerRequest: '0.5',
-      upstream: 'litellm',
-      port: 4000,
-      healthPath: '/health/readiness',
+      upstream: 'obol-demo',
+      port: 8402,
+      healthPath: '/health',
     });
 
     assert.equal(body.spec.type, 'inference');
+    assert.equal(body.spec.model.name, 'qwen3.5:4b');
+    assert.equal(body.spec.model.runtime, 'ollama');
+    assert.equal(body.spec.path, '/services/obol-demo');
+    assert.equal(body.spec.upstream.port, 8402);
     assert.equal(body.spec.payment.network, 'mainnet');
     assert.equal(body.spec.payment.asset.symbol, 'OBOL');
     assert.equal(body.spec.payment.asset.transferMethod, 'permit2');
