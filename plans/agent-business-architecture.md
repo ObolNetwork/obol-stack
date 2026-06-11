@@ -298,15 +298,22 @@ LiteLLM virtual keys are the natural mechanism and require no new proxy:
 - **C. Cost/control surface (approved with checks):** per-agent LiteLLM
   virtual keys with generous default budget + model allowlist via new Agent
   CRD fields; verify hermes behavior on cap-trip first; budget-nearing
-  alert; seller-side metric labels only if cheap.
+  alert; seller-side metric labels only if cheap. EXPANDED: virtual keys
+  are only half — a secret-injecting egress proxy (iron-proxy or a
+  purpose-built sidecar) puts the credential out of the agent's reach
+  entirely. Both compose (proxy prevents leak, vkey bounds the injected
+  credential). Full plan: plans/agent-secret-isolation-proxy.md
+  (C1 vkeys → C2 iron-proxy spike → C3 proxy sidecar).
 - **D. Unification (trimmed):** deprecate legacy onboard paths; extract
   shared keystore/config-render/seed helpers. Default agent stays
   host-rendered and unsellable by design.
-- **E. Sellable bundles (separate pass, plan-only handoff):** OCI charts of
-  Agent CR + ServiceOffer templates, demo "agent business" bundles living
-  in ../helm-charts. Enabled by A (declared files) + C (budgets make shared
-  bundles safe). Include the iron-proxy secret-isolation idea in that
-  pass's design.
+- **E. Sellable bundles (separate pass, dedicated plan):** library base
+  chart `obol-agent-business` in ../helm-charts + concrete businesses
+  (gas-oracle / eth-data-desk / research-desk), installed via
+  `obol app install obol/<business>` and refined conversationally through
+  the master agent's factory RBAC. CRDs assumed-from-stack. Full plan:
+  plans/agent-business-charts.md. Strictly after A–C so charts ship the
+  Step C isolation defaults (egress.proxy + budget + model allowlist).
 
 Suggested review boundaries when implementing B/C (per repo convention):
 "agent A pod cannot reach agent B signer/API (NetworkPolicy denies, test via
