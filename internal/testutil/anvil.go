@@ -227,6 +227,37 @@ func (f *AnvilFork) FundETH(t *testing.T, addr string, amount *big.Int) {
 	t.Logf("funded %s with %s wei", addr, amount)
 }
 
+// ApprovePermit2ViaImpersonation performs the one-time approve(Permit2, max)
+// from owner on token via anvil_impersonateAccount — the fork-test stand-in
+// for the on-chain approval a real wallet owner does once per token. Without
+// it buy.py's Permit2 allowance preflight (correctly) refuses to pre-sign.
+func (f *AnvilFork) ApprovePermit2ViaImpersonation(t *testing.T, token, owner string) {
+	t.Helper()
+
+	const permit2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3"
+	// approve(address,uint256) selector + permit2 + max uint256.
+	data := "0x095ea7b3" +
+		"000000000000000000000000" + strings.ToLower(strings.TrimPrefix(permit2, "0x")) +
+		strings.Repeat("f", 64)
+
+	for _, call := range []string{
+		fmt.Sprintf(`{"jsonrpc":"2.0","method":"anvil_impersonateAccount","params":["%s"],"id":1}`, owner),
+		fmt.Sprintf(`{"jsonrpc":"2.0","method":"eth_sendTransaction","params":[{"from":"%s","to":"%s","data":"%s"}],"id":1}`, owner, token, data),
+		fmt.Sprintf(`{"jsonrpc":"2.0","method":"anvil_stopImpersonatingAccount","params":["%s"],"id":1}`, owner),
+	} {
+		resp, err := http.Post(f.RPCURL, "application/json", strings.NewReader(call))
+		if err != nil {
+			t.Fatalf("approve Permit2 via impersonation: %v", err)
+		}
+		raw, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if strings.Contains(string(raw), `"error"`) {
+			t.Fatalf("approve Permit2 via impersonation: %s", raw)
+		}
+	}
+	t.Logf("approved Permit2 for %s on token %s (impersonated)", owner, token)
+}
+
 // ClearCode removes contract code from an address on Anvil.
 // Required for deterministic Anvil accounts that have proxy contracts on Base Sepolia —
 // USDC's SignatureChecker sees code → tries EIP-1271 instead of ecrecover.

@@ -70,6 +70,13 @@ func cleanupPurchaseRequestsForTest(t *testing.T, cfg *config.Config) {
 	t.Helper()
 	namespace := agentNamespace(cfg)
 
+	// Delete FIRST, then strip finalizers. The controller re-adds its
+	// finalizer to any live PurchaseRequest, so clearing before delete is a
+	// no-op race; and a deleting purchase with unspent auths intentionally
+	// drains (stays Terminating) — the finalizer strip is the test's
+	// force-path past that drain.
+	_, _ = obolRunErr(cfg, "kubectl", "delete", "purchaserequests.obol.org",
+		"-n", namespace, "--all", "--ignore-not-found", "--wait=false")
 	if out, err := obolRunErr(cfg, "kubectl", "get", "purchaserequests.obol.org",
 		"-n", namespace, "-o", "name"); err == nil {
 		for _, name := range strings.Fields(out) {
@@ -77,8 +84,15 @@ func cleanupPurchaseRequestsForTest(t *testing.T, cfg *config.Config) {
 				"-n", namespace, "--type=merge", "-p", `{"metadata":{"finalizers":[]}}`)
 		}
 	}
-	_, _ = obolRunErr(cfg, "kubectl", "delete", "purchaserequests.obol.org",
-		"-n", namespace, "--all", "--ignore-not-found", "--wait=false")
+	for i := 0; i < 12; i++ {
+		out, err := obolRunErr(cfg, "kubectl", "get", "purchaserequests.obol.org",
+			"-n", namespace, "-o", "name")
+		if err == nil && strings.TrimSpace(out) == "" {
+			return
+		}
+		time.Sleep(5 * time.Second)
+	}
+	t.Logf("warning: PurchaseRequests still present in %s after cleanup", namespace)
 }
 
 // getServiceOffer returns the ServiceOffer as a parsed JSON map.
@@ -1101,18 +1115,30 @@ req = urllib.request.Request(
     },
 )
 
-try:
-    with urllib.request.urlopen(req, timeout=180) as resp:
+# Transport-level errors (connection refused) are retried: the controller
+# may roll the LiteLLM deployment to publish the paid/<model> route right
+# before the first paid call, and the Service can briefly point at a
+# terminating pod. HTTP errors are NOT retried — their status codes are
+# what the test asserts on.
+import time
+for attempt in range(12):
+    try:
+        with urllib.request.urlopen(req, timeout=180) as resp:
+            sys.stdout.write(json.dumps({
+                "status": resp.status,
+                "body": resp.read().decode(),
+            }))
+            break
+    except urllib.error.HTTPError as err:
         sys.stdout.write(json.dumps({
-            "status": resp.status,
-            "body": resp.read().decode(),
+            "status": err.code,
+            "body": err.read().decode(),
         }))
-except urllib.error.HTTPError as err:
-    sys.stdout.write(json.dumps({
-        "status": err.code,
-        "body": err.read().decode(),
-    }))
-    sys.exit(1)
+        sys.exit(1)
+    except urllib.error.URLError:
+        if attempt == 11:
+            raise
+        time.sleep(5)
 `, model, prompt, "http://litellm.llm.svc.cluster.local:4000/v1/chat/completions", "Bearer "+masterKey)
 
 	out, err := execInAgentErr(cfg, "python3", "-c", script)
@@ -3886,6 +3912,13 @@ func TestIntegration_SellBuySidecar_OBOLPermit2(t *testing.T) {
 	}
 	anvil.FundETH(t, agentWallet, big.NewInt(1e18))
 	anvil.MintMintableERC20(t, obolToken, anvil.Accounts[0].PrivateKey, agentWallet, new(big.Int).Mul(big.NewInt(10), big.NewInt(1e18)))
+	// One-time approve(Permit2, max) the buyer wallet owner does on a real
+	// chain. The fork token is not the registry's canonical OBOL address, so
+	// the 402 never advertises eip2612GasSponsoring (anti-spoof check in
+	// internal/x402/chains.go) and buy.py's allowance preflight requires a
+	// real allowance. Earlier green runs only skipped that preflight when
+	// the allowance read raced eRPC pin propagation and missed the fork.
+	anvil.ApprovePermit2ViaImpersonation(t, obolToken, agentWallet)
 	t.Logf("funded agent wallet %s with 10 OBOL on fork token %s", agentWallet, obolToken)
 
 	originalERPCConfig := getERPCConfigYAML(t, cfg)
