@@ -447,7 +447,8 @@ function PurchaseExpansion({ p }: { p: PurchaseRequest }) {
         <Flex css={{ gap: 16, fontFamily: 'monospace', fontSize: '$2' }}>
           <Box>
             <FieldLabel>Total spent</FieldLabel>
-            <Mono css={{ color: '$light' }}>{p.status.totalSpent ?? '0'}</Mono>
+            {/* Controller writes status.spent (consumed auths); totalSpent is unused. */}
+            <Mono css={{ color: '$light' }}>{p.status.spent}</Mono>
           </Box>
           <Box>
             <FieldLabel>Total signed</FieldLabel>
@@ -455,6 +456,7 @@ function PurchaseExpansion({ p }: { p: PurchaseRequest }) {
           </Box>
           <Box>
             <FieldLabel>Wallet bal.</FieldLabel>
+            {/* walletBalance is on the CRD but not populated during reconciliation yet. */}
             <Mono css={{ color: '$light' }}>
               {p.status.walletBalance ?? '—'}
             </Mono>

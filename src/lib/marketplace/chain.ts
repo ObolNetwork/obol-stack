@@ -33,3 +33,21 @@ export function toChainName(
   if (VALID.includes(lower as ChainName)) return lower as ChainName;
   return ALIASES[lower];
 }
+
+/** Legacy, CAIP-2, and CRD aliases for the same chain (Prom join keys). */
+const SETTLEMENT_CHAIN_ALIASES: Record<ChainName, readonly string[]> = {
+  mainnet: ['mainnet', 'ethereum', 'eth', 'eip155:1'],
+  sepolia: ['sepolia', 'eip155:11155111'],
+  hoodi: ['hoodi'],
+  base: ['base', 'base-mainnet', 'eip155:8453'],
+  'base-sepolia': ['base-sepolia', 'eip155:84532'],
+  aztec: ['aztec'],
+};
+
+/** Network strings to try when joining PurchaseRequests to Prometheus gauges. */
+export function chainLookupAliases(network: string): string[] {
+  const lower = network.trim().toLowerCase();
+  const canonical = toChainName(lower);
+  if (canonical) return [...SETTLEMENT_CHAIN_ALIASES[canonical]];
+  return [lower];
+}
