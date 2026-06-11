@@ -206,22 +206,27 @@ Examples:
 				"payment": payment,
 				"path":    path,
 			}
-			if register {
-				skills := make([]any, len(agent.Skills))
-				for i, s := range agent.Skills {
-					skills[i] = s
-				}
-				symbol := assetTerms.Symbol
-				if symbol == "" {
-					symbol = strings.ToUpper(tokenName)
-				}
-				spec["registration"] = map[string]any{
-					"enabled":     true,
-					"name":        regName,
-					"description": regDesc,
-					"skills":      skills,
-					"metadata":    agentOfferRegistrationMetadata(agent, price, symbol, chain),
-				}
+			// The registration block is always set — the catalog
+			// (/api/services.json, /skill.md) and the 402 page read
+			// registration.description and registration.skills regardless
+			// of `enabled`. Gating the whole block behind --no-register
+			// used to collapse the storefront card to the generic
+			// "x402 payment-gated agent service" line. `enabled` alone
+			// controls ERC-8004 publication.
+			skills := make([]any, len(agent.Skills))
+			for i, s := range agent.Skills {
+				skills[i] = s
+			}
+			symbol := assetTerms.Symbol
+			if symbol == "" {
+				symbol = strings.ToUpper(tokenName)
+			}
+			spec["registration"] = map[string]any{
+				"enabled":     register,
+				"name":        regName,
+				"description": regDesc,
+				"skills":      skills,
+				"metadata":    agentOfferRegistrationMetadata(agent, price, symbol, chain),
 			}
 
 			manifest := map[string]any{
@@ -406,18 +411,20 @@ func runAgentBackedDemo(
 		"payment": payment,
 		"path":    "/services/" + name,
 	}
-	if register {
-		skillsAny := make([]any, len(spec.Agent.Skills))
-		for i, s := range spec.Agent.Skills {
-			skillsAny[i] = s
-		}
-		specMap["registration"] = map[string]any{
-			"enabled":     true,
-			"name":        name,
-			"description": spec.Description,
-			"skills":      skillsAny,
-			"metadata":    agentOfferRegistrationMetadata(agentForMetadata, price, symbol, chain),
-		}
+	// Always set (enabled gates only ERC-8004 publication): the catalog and
+	// 402 page read registration.description/skills regardless, and without
+	// this block a --no-register demo-quant card degraded to the generic
+	// "x402 payment-gated agent service" line on the storefront.
+	skillsAny := make([]any, len(spec.Agent.Skills))
+	for i, s := range spec.Agent.Skills {
+		skillsAny[i] = s
+	}
+	specMap["registration"] = map[string]any{
+		"enabled":     register,
+		"name":        name,
+		"description": spec.Description,
+		"skills":      skillsAny,
+		"metadata":    agentOfferRegistrationMetadata(agentForMetadata, price, symbol, chain),
 	}
 
 	soManifest := map[string]any{

@@ -81,8 +81,23 @@ func TestBuildOpenAPIDocument_EmptyCluster(t *testing.T) {
 	if schemas := dig(t, doc, "components", "schemas"); schemas == nil {
 		t.Error("components.schemas missing on empty-cluster doc")
 	}
-	if sec := dig(t, doc, "components", "securitySchemes", "x402Payment"); sec == nil {
-		t.Error("components.securitySchemes.x402Payment missing")
+	// No securitySchemes: payment is not an HTTP auth scheme. Discovery
+	// indexers (x402scan) classified the apiKey-typed X-PAYMENT scheme as
+	// "API-key-gated", masking the paid classification.
+	if comps, _ := dig(t, doc, "components").(map[string]any); comps != nil {
+		if _, ok := comps["securitySchemes"]; ok {
+			t.Error("components.securitySchemes should be omitted (X-PAYMENT is not an auth scheme)")
+		}
+	}
+	if _, ok := doc["security"]; ok {
+		t.Error("global security block should be omitted")
+	}
+	// Discovery indexers audit info.x-guidance and info.contact.
+	if g, _ := dig(t, doc, "info", "x-guidance").(string); g == "" {
+		t.Error("info.x-guidance missing")
+	}
+	if c := dig(t, doc, "info", "contact", "url"); c != "https://github.com/ObolNetwork/obol-stack" {
+		t.Errorf("info.contact.url = %v, want obol-stack repo", c)
 	}
 }
 
@@ -148,25 +163,37 @@ func TestBuildOpenAPIDocument_InferenceOffer(t *testing.T) {
 	if s, _ := successRef.(string); !strings.HasSuffix(s, "OpenAIChatCompletionsResponse") {
 		t.Errorf("200 schema $ref = %v, want OpenAIChatCompletionsResponse", successRef)
 	}
-	// x-x402-payment extension carries the payment block (CAIP-2 normalized).
-	xpay, _ := opMap["x-x402-payment"].(map[string]any)
+	// x-payment-info marks the operation as paid for discovery indexers.
+	// The offer has no explicit asset, so it settles in the chain's default
+	// USDC → currency USD; the perMTok price is converted to the same
+	// per-request approximation the verifier enforces (1.50/MTok → 0.0015).
+	xpay, _ := opMap["x-payment-info"].(map[string]any)
 	if xpay == nil {
-		t.Fatalf("x-x402-payment extension missing")
-	}
-	if xpay["network"] != "eip155:8453" {
-		t.Errorf("network = %v, want CAIP-2 form", xpay["network"])
-	}
-	if xpay["payTo"] != "0x1111111111111111111111111111111111111111" {
-		t.Errorf("payTo = %v, want offer.payTo", xpay["payTo"])
+		t.Fatalf("x-payment-info extension missing")
 	}
 	price, _ := xpay["price"].(map[string]any)
-	if price["perMTok"] != "1.50" {
-		t.Errorf("price.perMTok = %v, want 1.50", price["perMTok"])
+	if price["mode"] != "fixed" {
+		t.Errorf("price.mode = %v, want fixed", price["mode"])
 	}
-	// Security requirement points at the x402Payment scheme.
-	sec, _ := opMap["security"].([]any)
-	if len(sec) != 1 {
-		t.Fatalf("expected one security requirement, got %v", sec)
+	if price["currency"] != "USD" {
+		t.Errorf("price.currency = %v, want USD for USDC-settled offer", price["currency"])
+	}
+	if price["amount"] != "0.0015" {
+		t.Errorf("price.amount = %v, want per-request approximation 0.0015", price["amount"])
+	}
+	protocols, _ := xpay["protocols"].([]any)
+	if len(protocols) != 1 {
+		t.Fatalf("protocols = %v, want exactly the x402 entry", xpay["protocols"])
+	}
+	if _, ok := protocols[0].(map[string]any)["x402"]; !ok {
+		t.Errorf("protocols[0] = %v, want {\"x402\": {}}", protocols[0])
+	}
+	// Security is explicitly empty: x402 is enforced by the paywall, not an
+	// HTTP auth scheme, and [x-payment-info + security: []] is what indexers
+	// read as a paid route.
+	sec, ok := opMap["security"].([]any)
+	if !ok || len(sec) != 0 {
+		t.Fatalf("security = %v, want explicitly empty array", opMap["security"])
 	}
 }
 

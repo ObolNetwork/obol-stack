@@ -179,10 +179,13 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 	// to DefaultMaxTimeoutSeconds.
 	requirement := x402pkg.BuildV2Requirement(g.config.Chain, g.config.PricePerRequest, g.config.WalletAddress, 0)
 
-	// Configure x402 ForwardAuth middleware.
+	// Configure x402 ForwardAuth middleware. The bazaar discovery extension
+	// advertises the chat-completions invocation shape on every 402 so
+	// facilitators/indexers can catalog the standalone gateway too.
 	paymentMiddleware := x402pkg.NewForwardAuthMiddleware(x402pkg.ForwardAuthConfig{
 		FacilitatorURL: g.config.FacilitatorURL,
 		VerifyOnly:     g.config.VerifyOnly,
+		Extensions:     x402pkg.WithBazaar(nil, "inference", ""),
 		// The standalone inference gateway is in-process and settlement-aware,
 		// so a configured VerifyOnly=false is correct by design — suppress the
 		// misleading per-request warning on this path.

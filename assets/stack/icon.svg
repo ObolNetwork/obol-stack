@@ -1,0 +1,16 @@
+<svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg" width="512" height="512">
+  <!--
+    Obol Stack catalog icon. The three zigzagged parallelograms ("stack"
+    mark, geometry identical to web/public-storefront/public/
+    obol-stack-logo.svg) in obol-green (#2fe4ab) on the bg02 dark token
+    (#111f22) from the storefront palette. Canonical source for the PNG
+    renders hosted at https://obol.org/assets/stack/ and referenced by
+    x402.ResourceIconURL on every 402 resource block.
+  -->
+  <rect width="512" height="512" rx="100" fill="#111f22"/>
+  <g fill="#2fe4ab" transform="translate(91.75, 152.85) scale(1.2219)">
+    <path d="M 189.751 48.141 L 36.393 48.141 L 82.61 0 L 233.868 0 Z" />
+    <path d="M 225.333 109.208 L 71.975 109.208 L 118.192 61.067 L 269.45 61.067 Z" />
+    <path d="M 152.746 168.855 L -0.613 168.855 L 45.605 120.714 L 196.862 120.714 Z" />
+  </g>
+</svg>

@@ -152,8 +152,27 @@ func TestBuildExtensionsForAsset(t *testing.T) {
 		t.Errorf("expected nil extensions when flag is false, got %v", got)
 	}
 	got := BuildExtensionsForAsset(AssetInfo{EIP2612GasSponsoring: true})
-	if _, ok := got["eip2612GasSponsoring"]; !ok {
-		t.Errorf("expected eip2612GasSponsoring key, got %v", got)
+	adv, ok := got["eip2612GasSponsoring"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected eip2612GasSponsoring key, got %v", got)
+	}
+	// The spec'd v2 extension pattern is {info, schema}: info describes the
+	// capability, schema describes the fields the client must fill into its
+	// PaymentPayload echo. buy.py keys only on the key's presence, so this
+	// shape is load-bearing for spec conformance, not the buy flow.
+	info, _ := adv["info"].(map[string]any)
+	if info == nil || info["version"] != "1" {
+		t.Errorf("eip2612GasSponsoring.info missing or unversioned: %v", adv["info"])
+	}
+	schema, _ := adv["schema"].(map[string]any)
+	if schema == nil {
+		t.Fatalf("eip2612GasSponsoring.schema missing: %v", adv)
+	}
+	props, _ := schema["properties"].(map[string]any)
+	for _, field := range []string{"from", "asset", "spender", "amount", "nonce", "deadline", "signature", "version"} {
+		if _, ok := props[field]; !ok {
+			t.Errorf("eip2612GasSponsoring.schema.properties missing %q", field)
+		}
 	}
 
 	baseSepoliaOBOL := ResolveAssetInfo(ChainBaseSepolia, &RouteRule{

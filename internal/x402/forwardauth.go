@@ -219,21 +219,47 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 // understand; it remains the default when ForwardAuthConfig.SendPaymentRequired
 // is unset and the fallback when the renderer has nothing else to do.
 func sendPaymentRequiredJSON(w http.ResponseWriter, r *http.Request, requirements []x402types.PaymentRequirements, extensions map[string]any) {
-	resource := &x402types.ResourceInfo{
-		URL:         buildResourceURL(r),
-		Description: "Payment required for " + r.URL.Path,
-	}
-	resp := x402types.PaymentRequired{
-		X402Version: 2,
-		Error:       "Payment required for this resource",
-		Resource:    resource,
-		Accepts:     requirements,
-		Extensions:  extensions,
+	resp := buildPaymentRequired(r, requirements, extensions)
+
+	body, err := json.Marshal(resp)
+	if err != nil {
+		http.Error(w, "Payment required", http.StatusPaymentRequired)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	setPaymentRequiredHeader(w, body)
 	w.WriteHeader(http.StatusPaymentRequired)
-	_ = json.NewEncoder(w).Encode(resp)
+	_, _ = w.Write(body)
+}
+
+// buildPaymentRequired assembles the v2 PaymentRequired object for the
+// incoming request, including the bazaar service metadata on the resource
+// block (serviceName/iconUrl — see specs/extensions/bazaar.md, soft-drop
+// rules apply facilitator-side).
+func buildPaymentRequired(r *http.Request, requirements []x402types.PaymentRequirements, extensions map[string]any) x402types.PaymentRequired {
+	return x402types.PaymentRequired{
+		X402Version: 2,
+		Error:       "Payment required for this resource",
+		Resource: &x402types.ResourceInfo{
+			URL:         buildResourceURL(r),
+			Description: "Payment required for " + r.URL.Path,
+			MimeType:    "application/json",
+			ServiceName: ResourceServiceName,
+			IconUrl:     ResourceIconURL,
+		},
+		Accepts:    requirements,
+		Extensions: extensions,
+	}
+}
+
+// setPaymentRequiredHeader writes the canonical x402 v2 HTTP transport
+// location for the PaymentRequired object: a base64-encoded copy in the
+// PAYMENT-REQUIRED response header (specs/transports-v2/http.md). The JSON
+// body remains for the de-facto ecosystem (buy.py, x402scan, x402-buyer)
+// that reads the body.
+func setPaymentRequiredHeader(w http.ResponseWriter, paymentRequiredJSON []byte) {
+	w.Header().Set("PAYMENT-REQUIRED", base64.StdEncoding.EncodeToString(paymentRequiredJSON))
 }
 
 // findMatchingRequirementV1 finds the first requirement matching the payment's

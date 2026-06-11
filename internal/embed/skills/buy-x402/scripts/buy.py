@@ -955,6 +955,32 @@ def _auth_expiry():
     return int(time.time()) + ttl
 
 
+def _echo_server_extensions(extensions):
+    """Echo the server-advertised 402 extensions, info-only.
+
+    x402 v2 requires clients to echo the extensions they received in their
+    PaymentPayload ("the client must include at least the info received") —
+    notably `bazaar`, whose facilitator-side cataloging only happens when the
+    client echoes it. Only each extension's `info` is echoed, matching the
+    spec's own PaymentPayload examples: the `schema` half is ~4.5 KB for
+    bazaar and these payloads are stored per-auth in the PurchaseRequest CR,
+    where full echoes would shrink the max pre-signable pool ~5x against
+    etcd's object size limit. Deep copy via JSON round-trip so per-auth
+    overlays (eip2612 permit info) can't mutate shared state.
+    """
+    echoed = {}
+    for key, value in (extensions or {}).items():
+        if not isinstance(value, dict) or "info" not in value:
+            # Legacy advertisements ({} pre-spec-shape) carry nothing to
+            # echo; the eip2612 overlay below supplies its own info.
+            continue
+        try:
+            echoed[key] = {"info": json.loads(json.dumps(value["info"]))}
+        except (TypeError, ValueError):
+            continue
+    return echoed
+
+
 def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payment=None, extensions=None):
     """Pre-sign N x402 payment payloads, defaulting to legacy ERC-3009 USDC."""
     chain = _resolve_chain(chain)
@@ -962,6 +988,7 @@ def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payme
     auths = []
     payment = payment or {}
     extensions = extensions or {}
+    echoed_extensions = _echo_server_extensions(extensions)
     extra = payment.get("extra", {}) or {}
     transfer_method = extra.get("assetTransferMethod", "eip3009")
     domain_name = extra.get("name", USDC_DOMAIN_NAME)
@@ -1089,20 +1116,26 @@ def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payme
                 if not permit_sig:
                     print(f"Error: remote-signer returned no EIP-2612 signature for auth {i+1}", file=sys.stderr)
                     sys.exit(1)
-                payload["extensions"] = {
-                    "eip2612GasSponsoring": {
-                        "info": {
-                            "from": signer_address,
-                            "asset": payment.get("asset", usdc_addr),
-                            "spender": PERMIT2_ADDRESS,
-                            "amount": str(price),
-                            "nonce": permit_nonce,
-                            "deadline": deadline,
-                            "signature": permit_sig,
-                            "version": "1",
-                        }
+            # Echo server-advertised extensions, then overlay the per-auth
+            # eip2612 permit info — per spec the CLIENT fills that extension's
+            # info with the signed permit fields (the server's advertisement
+            # carries only a description + the schema we're filling).
+            payload_extensions = dict(echoed_extensions)
+            if eip2612_enabled:
+                payload_extensions["eip2612GasSponsoring"] = {
+                    "info": {
+                        "from": signer_address,
+                        "asset": payment.get("asset", usdc_addr),
+                        "spender": PERMIT2_ADDRESS,
+                        "amount": str(price),
+                        "nonce": permit_nonce,
+                        "deadline": deadline,
+                        "signature": permit_sig,
+                        "version": "1",
                     }
                 }
+            if payload_extensions:
+                payload["extensions"] = payload_extensions
             auths.append({
                 "id": permit2_nonce,
                 "payment": payload,
@@ -1185,6 +1218,8 @@ def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payme
                     },
                 },
             }
+            if echoed_extensions:
+                payload["extensions"] = dict(echoed_extensions)
             auths.append({
                 "id": nonce,
                 "payment": payload,
