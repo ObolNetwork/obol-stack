@@ -6,10 +6,14 @@ export|import`, purge-time full-backup prompt). Phase 2 implemented
 
 Phase 2 implementation (2026-06-11):
 
-- `obol sell agent` now persists its ServiceOffer manifest into the existing
-  `sell-http/` store (the replay path is type-agnostic and `sell delete`
-  already cleans it). `sell mcp` (foreground process) and `sell demo`
-  (ephemeral by design) stay unrecorded.
+- `obol sell agent` offer persistence: superseded on rebase (2026-06-11)
+  by rc15's richer sell ledger (PR #619 — type-aware store, List bundles
+  for agent/demo offers, refresh on update/stop, `obol sell resume` + boot
+  unit). The rebase keeps rc15's ledger wholesale and adds
+  `agentcrd.ResumeAll` before offer replay in BOTH `stack up` and
+  `sell resume` (guards: cmd/obol/stackup_resume_guard_test.go). See
+  plans/agent-business-architecture.md §1 for the full reconciliation.
+  `sell mcp` (foreground process) stays unrecorded.
 - Agent CRs: `obol agent new`/`update` persist the applied manifest to
   `$CONFIG_DIR/agents/<name>.yaml` (`internal/agentcrd/manifest.go`);
   `agent delete` removes it; `agentcrd.ResumeAll` replays at `stack up`
