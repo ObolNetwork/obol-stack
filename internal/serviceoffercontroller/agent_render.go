@@ -452,6 +452,16 @@ func agentPodSpec(agent *monetizeapi.Agent) map[string]any {
 const (
 	clusterPodCIDR     = "10.42.0.0/16"
 	clusterServiceCIDR = "10.43.0.0/16"
+	// Link-local (RFC 3927), which includes the cloud instance-metadata
+	// endpoint 169.254.169.254 (IMDS). Agents run semi-untrusted skill
+	// code that fetches arbitrary URLs; on a cloud node an SSRF to IMDS
+	// could exfiltrate the node's instance credentials. It is never a
+	// legitimate egress target for an agent, and excluding it does NOT
+	// affect apiserver reachability — kube-proxy DNATs kubernetes.default
+	// to the node's real (non-link-local) address. RFC1918 host/LAN ranges
+	// are deliberately left reachable: the local-first stack expects agents
+	// to reach host services (e.g. host.k3d.internal).
+	linkLocalCIDR = "169.254.0.0/16"
 )
 
 // buildAgentNetworkPolicy locks an agent business namespace down to the
@@ -548,12 +558,14 @@ func buildAgentNetworkPolicy(agent *monetizeapi.Agent) *unstructured.Unstructure
 				// Public internet (skills fetching URLs, facilitators,
 				// RPCs) and — via post-DNAT host address — the apiserver.
 				// Cluster pod/service CIDRs are excluded so this never
-				// reopens cross-namespace traffic.
+				// reopens cross-namespace traffic; link-local is excluded
+				// so semi-untrusted skill code cannot SSRF the cloud IMDS
+				// endpoint (169.254.169.254).
 				map[string]any{
 					"to": []any{map[string]any{
 						"ipBlock": map[string]any{
 							"cidr":   "0.0.0.0/0",
-							"except": []any{clusterPodCIDR, clusterServiceCIDR},
+							"except": []any{clusterPodCIDR, clusterServiceCIDR, linkLocalCIDR},
 						},
 					}},
 				},
