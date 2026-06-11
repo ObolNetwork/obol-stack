@@ -35,6 +35,22 @@ const CHAIN_PARAMS: Partial<Record<ChainName, AddEthereumChainParameter>> = {
     rpcUrls: [config.erpcUrl + '/hoodi'],
     blockExplorerUrls: ['https://hoodi.etherscan.io'],
   },
+  // Base Mainnet
+  base: {
+    chainId: '0x2105', // 8453
+    chainName: 'Base',
+    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+    rpcUrls: [config.erpcUrl + '/base'],
+    blockExplorerUrls: ['https://basescan.org'],
+  },
+  // Base Sepolia Testnet
+  'base-sepolia': {
+    chainId: '0x14a34', // 84532
+    chainName: 'Base Sepolia',
+    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+    rpcUrls: [config.erpcUrl + '/base-sepolia'],
+    blockExplorerUrls: ['https://sepolia.basescan.org'],
+  },
 };
 
 export async function addNetworkToWallet(
