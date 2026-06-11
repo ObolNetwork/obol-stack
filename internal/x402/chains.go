@@ -288,7 +288,52 @@ func BuildExtensionsForAsset(asset AssetInfo) map[string]any {
 		return nil
 	}
 	return map[string]any{
-		"eip2612GasSponsoring": map[string]any{},
+		"eip2612GasSponsoring": eip2612GasSponsoringAdvertisement(),
+	}
+}
+
+// eip2612GasSponsoringAdvertisement is the server-side {info, schema} block
+// from specs/extensions/eip2612_gas_sponsoring.md. The schema describes the
+// fields the CLIENT must fill into extensions.eip2612GasSponsoring.info on
+// its PaymentPayload (a signed EIP-2612 permit approving canonical Permit2);
+// the server-side info carries only the human description and version.
+// buy.py only checks for the key's presence before taking the permit flow,
+// so enriching the value from {} to the spec shape is compatible.
+func eip2612GasSponsoringAdvertisement() map[string]any {
+	hexAddress := func(desc string) map[string]any {
+		return map[string]any{"type": "string", "pattern": "^0x[a-fA-F0-9]{40}$", "description": desc}
+	}
+	uintString := func(desc string) map[string]any {
+		return map[string]any{"type": "string", "pattern": "^[0-9]+$", "description": desc}
+	}
+	return map[string]any{
+		"info": map[string]any{
+			"description": "The facilitator accepts an EIP-2612 gasless Permit to the canonical Permit2 contract and submits it on-chain on the payer's behalf.",
+			"version":     "1",
+		},
+		"schema": map[string]any{
+			"$schema": "https://json-schema.org/draft/2020-12/schema",
+			"type":    "object",
+			"properties": map[string]any{
+				"from":     hexAddress("The address of the sender."),
+				"asset":    hexAddress("The address of the ERC-20 token contract."),
+				"spender":  hexAddress("The address of the spender (canonical Permit2)."),
+				"amount":   uintString("The amount to approve (uint256). Typically MaxUint."),
+				"nonce":    uintString("The current EIP-2612 nonce of the sender."),
+				"deadline": uintString("The timestamp at which the signature expires."),
+				"signature": map[string]any{
+					"type":        "string",
+					"pattern":     "^0x[a-fA-F0-9]+$",
+					"description": "The 65-byte concatenated signature (r, s, v) as a hex string.",
+				},
+				"version": map[string]any{
+					"type":        "string",
+					"pattern":     "^[0-9]+(\\.[0-9]+)*$",
+					"description": "Schema version identifier.",
+				},
+			},
+			"required": []any{"from", "asset", "spender", "amount", "nonce", "deadline", "signature", "version"},
+		},
 	}
 }
 

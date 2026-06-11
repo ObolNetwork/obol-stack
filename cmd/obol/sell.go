@@ -1512,7 +1512,7 @@ var demoTypes = map[string]demoSpec{
 	"quant": {
 		Type:         "quant",
 		Price:        "10",
-		Description:  "A simple example agent that can analyse Ethereum and Base for you",
+		Description:  "Pay this agent to research a question involving Ethereum or Base.",
 		NeedsERPC:    true,
 		DefaultChain: "ethereum",
 		DefaultToken: "OBOL",

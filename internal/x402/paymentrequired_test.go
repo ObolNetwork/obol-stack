@@ -219,16 +219,27 @@ func TestHTMLAware_AgentShowsChatCompletionsInPayManually(t *testing.T) {
 	d.OfferType = "agent"
 	d.OfferName = "quant"
 	d.Model = "qwen3.5:9b"
-	d.OfferDescription = "A simple example agent that can analyse Ethereum and Base for you"
+	d.OfferDescription = "Pay this agent to research a question involving Ethereum or Base."
 	d.AgentSkills = []string{"ethereum-networks", "gas", "addresses"}
 
 	render := NewHTMLAwarePaymentRequired(d)
 	r := httptest.NewRequest("GET", "/services/quant", nil)
 	r.Header.Set("Accept", "text/html")
 	w := httptest.NewRecorder()
-	render(w, r, []x402types.PaymentRequirements{sampleRequirement()}, nil)
+	extensions := WithBazaar(nil, d.OfferType, d.Model)
+	render(w, r, []x402types.PaymentRequirements{sampleRequirement()}, extensions)
 
 	body := w.Body.String()
+
+	// The raw x402 JSON embedded in the Pay-manually card carries the same
+	// extensions as the wire 402 — a browser hit must show the bazaar block,
+	// not a bare/empty extensions object (html/template escapes the quotes).
+	mustContain(t, body, `&#34;extensions&#34;:`)
+	mustContain(t, body, `&#34;bazaar&#34;:`)
+	// And the canonical PAYMENT-REQUIRED header rides along on HTML too.
+	if w.Header().Get("PAYMENT-REQUIRED") == "" {
+		t.Error("HTML 402 missing PAYMENT-REQUIRED header")
+	}
 
 	// Primary "Send a prompt" card is gone — the example body lives in
 	// the Pay-manually card instead, after the raw x402 JSON.
@@ -248,7 +259,7 @@ func TestHTMLAware_AgentShowsChatCompletionsInPayManually(t *testing.T) {
 	mustContain(t, body, `href="https://docs.obol.org/obol-stack"`)
 
 	// Description renders in the Service card.
-	mustContain(t, body, "A simple example agent that can analyse Ethereum and Base for you")
+	mustContain(t, body, "Pay this agent to research a question involving Ethereum or Base.")
 
 	// Skills render as pills under the description.
 	mustContain(t, body, `<span class="skill-pill">ethereum-networks</span>`)

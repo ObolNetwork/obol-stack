@@ -12,8 +12,8 @@ import (
 	"strings"
 	"sync/atomic"
 
-	x402types "github.com/x402-foundation/x402/go/types"
 	"github.com/prometheus/client_golang/prometheus"
+	x402types "github.com/x402-foundation/x402/go/types"
 )
 
 // Verifier is a ForwardAuth-compatible HTTP handler that enforces x402
@@ -333,7 +333,7 @@ func (v *Verifier) matchPaidRouteFull(cfg *PricingConfig, uri string) (*RouteRul
 	asset := ResolveAssetInfo(chain, rule)
 	requirement := BuildV2RequirementWithAsset(chain, asset, rule.Price, wallet, rule.MaxTimeoutSeconds)
 	mergeAgentExtras(&requirement, rule)
-	extensions := BuildExtensionsForAsset(asset)
+	extensions := WithBazaar(BuildExtensionsForAsset(asset), rule.OfferType, rule.Model)
 	return rule, requirement, extensions, prometheusLabels(rule), chain, asset, true
 }
 

@@ -173,22 +173,18 @@ func resolveSiteURL(r *http.Request) string {
 // full OG metadata, a service-info card, three "ways to pay" prompt cards
 // (Obol Agent, other AI agent, raw JSON), and copy buttons.
 func sendPaymentRequiredHTML(w http.ResponseWriter, r *http.Request, requirements []x402types.PaymentRequirements, extensions map[string]any, display PaymentDisplay) {
-	resource := &x402types.ResourceInfo{
-		URL:         buildResourceURL(r),
-		Description: "Payment required for " + r.URL.Path,
-	}
-	jsonBody := x402types.PaymentRequired{
-		X402Version: 2,
-		Error:       "Payment required for this resource",
-		Resource:    resource,
-		Accepts:     requirements,
-		Extensions:  extensions,
-	}
+	jsonBody := buildPaymentRequired(r, requirements, extensions)
 	indented, err := json.MarshalIndent(jsonBody, "", "  ")
 	if err != nil {
 		// Should not happen — fall back to JSON path.
 		sendPaymentRequiredJSON(w, r, requirements, extensions)
 		return
+	}
+	// The canonical PAYMENT-REQUIRED header rides along even when the body
+	// is HTML for a browser — protocol-aware clients that sent Accept:
+	// text/html still get the machine-readable challenge.
+	if compact, err := json.Marshal(jsonBody); err == nil {
+		setPaymentRequiredHeader(w, compact)
 	}
 
 	siteURL := resolveSiteURL(r)

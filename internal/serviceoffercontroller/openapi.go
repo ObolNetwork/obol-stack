@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
-	"github.com/ObolNetwork/obol-stack/internal/x402"
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 )
 
 // openAPISpecVersion is the OpenAPI specification version we emit. 3.1.0
@@ -60,13 +60,15 @@ func buildOpenAPIDocument(offers []*monetizeapi.ServiceOffer, tunnelURL string) 
 		"tags":    buildOpenAPITags(ready),
 		"paths":   buildOpenAPIPaths(ready),
 		"components": map[string]any{
-			"schemas":         openAPIComponentSchemas(),
-			"responses":       openAPIComponentResponses(),
-			"securitySchemes": openAPISecuritySchemes(),
+			"schemas":   openAPIComponentSchemas(),
+			"responses": openAPIComponentResponses(),
 		},
-		"security": []any{
-			map[string]any{"x402Payment": []any{}},
-		},
+		// No global security block: payment is enforced by the x402 paywall
+		// (runtime 402 + X-PAYMENT retry), not an HTTP auth scheme. Modeling
+		// X-PAYMENT as an apiKey securityScheme made discovery indexers
+		// (x402scan) classify every route as API-key-gated instead of paid;
+		// per their convention, paid operations carry `x-payment-info` and
+		// an explicitly empty per-operation `security: []`.
 	}
 
 	encoded, err := json.MarshalIndent(doc, "", "  ")
@@ -96,6 +98,25 @@ func buildOpenAPIInfo(readyCount int) map[string]any {
 		"title":       "Obol Stack — paid services",
 		"version":     "1",
 		"description": description,
+		"contact": map[string]any{
+			"name": "Obol Stack",
+			"url":  "https://github.com/ObolNetwork/obol-stack",
+		},
+		// x-guidance is the agent-facing usage overview read by discovery
+		// indexers (x402scan L4 audit). Keep it answer-shaped: what an agent
+		// must do to call any operation in this document.
+		"x-guidance": "All operations are x402 payment-gated; no API key or signup is needed — " +
+			"any wallet holding the listed settlement asset can pay. To call one: " +
+			"(1) send the request without payment and read the 402 JSON response — `accepts[]` " +
+			"lists the price in atomic units, the CAIP-2 chain id, and the settlement token contract; " +
+			"(2) sign a payment authorization matching one accepts entry and retry the identical " +
+			"request with the payload base64-encoded in the `X-PAYMENT` header; " +
+			"(3) on success the settlement metadata arrives in the `X-PAYMENT-RESPONSE` header. " +
+			"Each 402 also carries machine-readable invocation schemas in `extensions.bazaar` " +
+			"and the same challenge base64-encoded in the `PAYMENT-REQUIRED` header. " +
+			"For chat-completions operations, take the model identifier from the operation summary " +
+			"or the catalog at /api/services.json. Streaming (`stream: true`) is supported and " +
+			"recommended for long-running agent calls.",
 	}
 }
 
@@ -173,9 +194,9 @@ func buildOpenAPIPaths(offers []*monetizeapi.ServiceOffer) map[string]any {
 //   - http (default) → POST <path> with application/json body, generic 200.
 //
 // Every operation references the shared `PaymentRequired` 402 response and
-// carries an `x-x402-payment` extension that snapshots the per-operation
-// payment block. Phase 2 will let operators override these emissions with
-// explicit per-offer fragments.
+// carries an `x-payment-info` extension marking it as x402-paid for
+// discovery indexers. Phase 2 will let operators override these emissions
+// with explicit per-offer fragments.
 func openAPIPathsForOffer(offer *monetizeapi.ServiceOffer) map[string]map[string]any {
 	if offer == nil {
 		return nil
@@ -246,8 +267,8 @@ type openAPIOperationOptions struct {
 
 // openAPIOperation builds one OperationObject. It is responsible for tags,
 // the operation ID, the request body, the 200 response, the shared 402
-// response reference, the x-x402-payment extension, and the per-operation
-// security requirement.
+// response reference, the x-payment-info extension, and the explicitly
+// empty per-operation security block.
 func openAPIOperation(offer *monetizeapi.ServiceOffer, opts openAPIOperationOptions) map[string]any {
 	op := map[string]any{
 		"summary":     opts.summary,
@@ -258,10 +279,12 @@ func openAPIOperation(offer *monetizeapi.ServiceOffer, opts openAPIOperationOpti
 			"200": opts.successResponse,
 			"402": map[string]any{"$ref": "#/components/responses/PaymentRequired"},
 		},
-		"security": []any{
-			map[string]any{"x402Payment": []any{}},
-		},
-		"x-x402-payment": offerPaymentExtension(offer),
+		// Explicitly empty: there is no HTTP auth scheme. Payment runs at
+		// the x402 paywall, declared via x-payment-info. Discovery indexers
+		// read [x-payment-info present + security: []] as a paid route;
+		// runtime 402 behaviour stays authoritative over this metadata.
+		"security":       []any{},
+		"x-payment-info": offerPaymentInfoExtension(offer),
 	}
 	if opts.requestBody != nil {
 		op["requestBody"] = opts.requestBody
@@ -313,67 +336,44 @@ func openAPIGenericSuccessResponse(description string) map[string]any {
 	}
 }
 
-// offerPaymentExtension serializes the per-operation x402 payment block.
-// Mirrors PaymentRequirements (v2) so a buyer can locate the same fields
-// they would receive in a live 402 response, including the resolved CAIP-2
-// network and the price in both decimal and atomic units when known.
-func offerPaymentExtension(offer *monetizeapi.ServiceOffer) map[string]any {
-	scheme := offer.Spec.Payment.Scheme
-	if scheme == "" {
-		scheme = "exact"
-	}
-	caip2, _ := caip2ForNetwork(offer.Spec.Payment.Network)
-	network := caip2
-	if network == "" {
-		network = offer.Spec.Payment.Network
-	}
+// offerPaymentInfoExtension emits the `x-payment-info` OpenAPI extension —
+// the de-facto convention discovery indexers (x402scan/agentcash) use to
+// classify an operation as paid and display its price. There is no official
+// x402↔OpenAPI binding; the shape follows https://www.x402scan.com/discovery/spec:
+//
+//	{ "price": {"mode": "fixed", "currency": "USD", "amount": "0.001"},
+//	  "protocols": [{"x402": {}}] }
+//
+// USDC-settled offers advertise ISO-4217 "USD" (1:1). Other assets advertise
+// their token symbol; indexers that require ISO-4217 fall back to
+// presence-only classification (still "paid"), which is the honest outcome
+// for tokens with no USD quote. perMTok prices are converted to the same
+// per-request approximation the verifier enforces on the 402 wire, so this
+// metadata never promises a cheaper call than the runtime charges.
+func offerPaymentInfoExtension(offer *monetizeapi.ServiceOffer) map[string]any {
+	price := map[string]any{"mode": "fixed"}
 
-	ext := map[string]any{
-		"scheme":  scheme,
-		"network": network,
-		"payTo":   offer.Spec.Payment.PayTo,
-	}
-	if offer.Spec.Payment.MaxTimeoutSeconds > 0 {
-		// Advertise the value the 402 wire will enforce — the verifier clamps
-		// over-cap spec values (x402.ClampMaxTimeoutSeconds), so the catalog
-		// must not promise a larger settle window than buyers actually get.
-		ext["maxTimeoutSeconds"] = x402.ClampMaxTimeoutSeconds(offer.Spec.Payment.MaxTimeoutSeconds)
-	}
-
-	if asset := offerAssetJSON(offer); asset != nil {
-		assetBlock := map[string]any{}
-		if asset.Address != "" {
-			assetBlock["address"] = asset.Address
-		}
-		if asset.Symbol != "" {
-			assetBlock["symbol"] = asset.Symbol
-		}
-		if asset.Decimals > 0 {
-			assetBlock["decimals"] = asset.Decimals
-		}
-		if asset.TransferMethod != "" {
-			assetBlock["transferMethod"] = asset.TransferMethod
-		}
-		if len(assetBlock) > 0 {
-			ext["asset"] = assetBlock
+	if asset := offerAssetJSON(offer); asset != nil && asset.Symbol != "" {
+		if strings.EqualFold(asset.Symbol, "USDC") {
+			price["currency"] = "USD"
+		} else {
+			price["currency"] = asset.Symbol
 		}
 	}
 
-	price := map[string]any{}
-	raw, unit := offerPriceRawAndUnit(offer)
-	if raw != "" && unit != "" {
-		price[unit] = raw
-		if asset := offerAssetJSON(offer); asset != nil && asset.Decimals > 0 {
-			if atomic := decimalToAtomicString(raw, int(asset.Decimals)); atomic != "" {
-				price[unit+"Atomic"] = atomic
+	if amount, unit := offerPriceRawAndUnit(offer); amount != "" {
+		if unit == "perMTok" {
+			if approx, err := schemas.ApproximateRequestPriceFromPerMTok(amount); err == nil {
+				amount = approx
 			}
 		}
-	}
-	if len(price) > 0 {
-		ext["price"] = price
+		price["amount"] = amount
 	}
 
-	return ext
+	return map[string]any{
+		"price":     price,
+		"protocols": []any{map[string]any{"x402": map[string]any{}}},
+	}
 }
 
 // operationTagsForOffer combines the offer's coarse type tag with any

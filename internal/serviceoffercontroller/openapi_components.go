@@ -29,10 +29,10 @@ func x402PaymentRequiredSchema() map[string]any {
 		"required": []any{"x402Version", "accepts"},
 		"properties": map[string]any{
 			"x402Version": map[string]any{
-				"type":     "integer",
-				"const":    2,
+				"type":                    "integer",
+				"const":                   2,
 				"x-x402-protocol-version": 2,
-				"description": "x402 protocol version. Obol Stack currently emits v2 responses.",
+				"description":             "x402 protocol version. Obol Stack currently emits v2 responses.",
 			},
 			"error": map[string]any{
 				"type":        "string",
@@ -50,7 +50,10 @@ func x402PaymentRequiredSchema() map[string]any {
 			"extensions": map[string]any{
 				"type":                 "object",
 				"additionalProperties": true,
-				"description":          "Optional per-asset hints (e.g. eip2612GasSponsoring metadata).",
+				"description": "Protocol extensions advertised by the server. Each value follows the " +
+					"x402 v2 `{info, schema}` extension pattern — e.g. `bazaar` (machine-readable " +
+					"invocation schemas for discovery) and `eip2612GasSponsoring` (gasless Permit2 " +
+					"approve support). Clients echo received extensions in their PaymentPayload.",
 			},
 		},
 	}
@@ -103,7 +106,9 @@ func x402PaymentRequirementsSchema() map[string]any {
 	}
 }
 
-// x402ResourceSchema mirrors x402types.ResourceInfo.
+// x402ResourceSchema mirrors x402types.ResourceInfo, including the optional
+// bazaar service-metadata fields (serviceName/tags/iconUrl) facilitators use
+// to enrich catalog listings.
 func x402ResourceSchema() map[string]any {
 	return map[string]any{
 		"type":     "object",
@@ -113,6 +118,22 @@ func x402ResourceSchema() map[string]any {
 			"url":         map[string]any{"type": "string", "format": "uri"},
 			"description": map[string]any{"type": "string"},
 			"mimeType":    map[string]any{"type": "string"},
+			"serviceName": map[string]any{
+				"type":        "string",
+				"maxLength":   32,
+				"description": "Human-readable name of the service hosting the resource.",
+			},
+			"tags": map[string]any{
+				"type":        "array",
+				"maxItems":    5,
+				"items":       map[string]any{"type": "string", "maxLength": 32},
+				"description": "Topical tags for discovery filtering.",
+			},
+			"iconUrl": map[string]any{
+				"type":        "string",
+				"format":      "uri",
+				"description": "Absolute https URL to an icon representing the service.",
+			},
 		},
 	}
 }
@@ -248,9 +269,10 @@ func openAPIComponentResponses() map[string]any {
 				"Retry the same request with a base64-encoded x402 payment payload in the `X-PAYMENT` " +
 				"header. See https://www.x402.org for the wire format.",
 			"headers": map[string]any{
-				"X-PAYMENT-REQUIRED": map[string]any{
-					"description": "Indicates the response is an x402 challenge. Body carries the requirements.",
-					"schema":      map[string]any{"type": "string"},
+				"PAYMENT-REQUIRED": map[string]any{
+					"description": "Base64-encoded copy of the `X402PaymentRequired` JSON body — the " +
+						"canonical x402 v2 HTTP transport location for the challenge.",
+					"schema": map[string]any{"type": "string"},
 				},
 			},
 			"content": map[string]any{
@@ -258,19 +280,6 @@ func openAPIComponentResponses() map[string]any {
 					"schema": map[string]any{"$ref": "#/components/schemas/X402PaymentRequired"},
 				},
 			},
-		},
-	}
-}
-
-// openAPISecuritySchemes returns the security scheme for x402 payment.
-func openAPISecuritySchemes() map[string]any {
-	return map[string]any{
-		"x402Payment": map[string]any{
-			"type": "apiKey",
-			"in":   "header",
-			"name": "X-PAYMENT",
-			"description": "Base64-encoded x402 v2 payment payload. Sign a `PaymentPayload` matching one " +
-				"of the entries in the prior 402 response's `accepts[]` array. See https://www.x402.org.",
 		},
 	}
 }
