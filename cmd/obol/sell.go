@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ObolNetwork/obol-stack/internal/agentcrd"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
@@ -3827,11 +3828,11 @@ offers survive in etcd with UpstreamHealthy=False, so the public catalog
 directly so a reboot does not require a full stack-up to recover.
 
 Idempotent: offers whose gateway is still running are skipped, and the
-kubectl applies re-assert existing objects. A replayed agent offer needs
-its Agent CR: still present after a reboot, but after a full stack
-recreation the offer waits (controller reports the missing agent) until
-'obol agent new' recreates it. 'sell mcp' servers are foreground
-processes with no ServiceOffer and are not resumed.
+kubectl applies re-assert existing objects. Recorded Agent CRs
+($OBOL_CONFIG_DIR/agents/) are re-applied BEFORE offers so agent-backed
+offers resolve their agent.ref even after a full stack recreation.
+'sell mcp' servers are foreground processes with no ServiceOffer and are
+not resumed.
 
 Examples:
   obol sell resume                      Resume all persisted offers now
@@ -3852,6 +3853,9 @@ Examples:
 			if err := waitForClusterAPI(ctx, cfg, u, 3*time.Minute); err != nil {
 				u.Warnf("cluster API not ready: %v (continuing — per-offer applies may fail)", err)
 			}
+			// Recorded Agent CRs first: agent-backed offers resolve
+			// agent.ref and would dangle on a freshly-recreated cluster.
+			agentcrd.ResumeAll(cfg, u)
 			if err := resumeSellOffers(ctx, cfg, u); err != nil {
 				return err
 			}

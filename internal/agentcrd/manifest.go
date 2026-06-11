@@ -89,6 +89,7 @@ func ResumeAll(cfg *config.Config, u *ui.UI) {
 			u.Warnf("Could not read recorded agent %s: %v", name, err)
 			continue
 		}
+		warnIfWalletWouldRegenerate(cfg, name, data, u)
 		nsErr := kubectl.PipeCommands(bin, kubeconfig,
 			[]string{"create", "namespace", Namespace(name), "--dry-run=client", "-o", "yaml"},
 			[]string{"apply", "-f", "-"})
@@ -100,5 +101,39 @@ func ResumeAll(cfg *config.Config, u *ui.UI) {
 			continue
 		}
 		u.Successf("Re-applied agent %s", name)
+	}
+}
+
+// warnIfWalletWouldRegenerate flags the funds-stranding edge: replaying a
+// wallet-bearing agent against a cluster that lost its keystore Secret
+// (full recreation without a prior `obol stack import`) makes the
+// controller mint a FRESH wallet — anything held at the old address is
+// stranded unless the operator restores the keystore first. Best-effort:
+// an unreachable cluster or a wallet-less agent stays silent.
+func warnIfWalletWouldRegenerate(cfg *config.Config, name string, manifest []byte, u *ui.UI) {
+	var doc struct {
+		Spec struct {
+			Wallet struct {
+				Create bool `yaml:"create"`
+			} `yaml:"wallet"`
+		} `yaml:"spec"`
+	}
+	if err := yaml.Unmarshal(manifest, &doc); err != nil || !doc.Spec.Wallet.Create {
+		return
+	}
+	bin, kubeconfig := kubectl.Paths(cfg)
+	if err := kubectl.RunSilent(bin, kubeconfig,
+		"get", "namespace", Namespace(name)); err != nil {
+		// Namespace itself is gone — full recreation. The keystore Secret
+		// check below would also fail, but distinguish nothing: same warning.
+		u.Warnf("Agent %s declares a wallet but its namespace is gone — the controller will mint a NEW wallet on replay. "+
+			"If the old wallet held funds, restore the keystore first: 'obol stack import <backup> --cluster-only' or 'obol agent wallet restore'.", name)
+		return
+	}
+	if err := kubectl.RunSilent(bin, kubeconfig,
+		"get", "secret", "remote-signer-keystore", "-n", Namespace(name)); err != nil {
+		u.Warnf("Agent %s declares a wallet but namespace %s has no keystore Secret — the controller will mint a NEW wallet. "+
+			"If the old wallet held funds, restore it first: 'obol stack import <backup> --cluster-only' or 'obol agent wallet restore'.",
+			name, Namespace(name))
 	}
 }

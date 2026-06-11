@@ -40,3 +40,30 @@ func TestStackUpAction_ReplaysRecordedState(t *testing.T) {
 		t.Error("agentcrd.ResumeAll must run BEFORE resumeSellOffers — agent-backed ServiceOffers need their Agent CR first")
 	}
 }
+
+// TestSellResumeAction_ReplaysAgentsBeforeOffers extends the same guard to
+// `obol sell resume` (the reboot-recovery path, incl. the systemd boot
+// unit): after a full stack recreation the ledger replays agent-backed
+// offers, which dangle unless recorded Agent CRs are re-applied first.
+func TestSellResumeAction_ReplaysAgentsBeforeOffers(t *testing.T) {
+	src, err := os.ReadFile("sell.go")
+	if err != nil {
+		t.Fatalf("read sell.go: %v", err)
+	}
+	body := string(src)
+
+	agentsIdx := strings.Index(body, "agentcrd.ResumeAll(")
+	if agentsIdx < 0 {
+		t.Fatal("cmd/obol/sell.go (sell resume action) must call agentcrd.ResumeAll before replaying offers")
+	}
+	// The resume action's offer replay is the only call site that returns
+	// the error (`if err := resumeSellOffers(...)`); main.go's stack-up
+	// call warns instead.
+	offersIdx := strings.Index(body, "if err := resumeSellOffers(ctx, cfg, u); err != nil")
+	if offersIdx < 0 {
+		t.Fatal("expected the sell resume action's resumeSellOffers call in sell.go")
+	}
+	if agentsIdx > offersIdx {
+		t.Error("agentcrd.ResumeAll must run BEFORE resumeSellOffers in the sell resume action")
+	}
+}
