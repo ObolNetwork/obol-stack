@@ -1327,9 +1327,12 @@ def _reconcile_purchase_autorefill(pr, live_status, signer_address):
     # None — we only update the price when we get an unambiguous fresh
     # quote so a transient seller error never silently rewrites the cap.
     endpoint = spec.get("endpoint") or ""
+    live_extensions = {}
     if endpoint:
         try:
             live = _probe_endpoint(_normalize_endpoint(endpoint), spec.get("model") or "")
+            if live:
+                live_extensions = live.get("extensions", {}) or {}
             if live and live.get("accepts"):
                 live_amount = str(
                     live["accepts"][0].get("maxAmountRequired")
@@ -1390,6 +1393,7 @@ def _reconcile_purchase_autorefill(pr, live_status, signer_address):
         asset,
         refill_count,
         payment=payment_req,
+        extensions=live_extensions,
     )
     try:
         updated_auths = _build_active_auth_pool(existing_auths, live_status, new_auths)
@@ -2213,7 +2217,8 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=Non
     )
 
     print(f"Pre-signing 1 payment authorization for {price} on {chain} ...")
-    auths = _presign_auths(signer_address, pay_to, price, chain, usdc_addr, 1, payment=payment)
+    auths = _presign_auths(signer_address, pay_to, price, chain, usdc_addr, 1, payment=payment,
+                           extensions=pricing.get("extensions", {}) or {})
     if not auths:
         print("Failed to pre-sign payment.", file=sys.stderr)
         sys.exit(1)
@@ -2390,7 +2395,8 @@ def cmd_pay_agent(url, messages=None, model_id=None, network=None, timeout=None,
     )
 
     print(f"Pre-signing 1 payment authorization for {price} on {chain} ...")
-    auths = _presign_auths(signer_address, pay_to, price, chain, usdc_addr, 1, payment=payment)
+    auths = _presign_auths(signer_address, pay_to, price, chain, usdc_addr, 1, payment=payment,
+                           extensions=pricing.get("extensions", {}) or {})
     if not auths:
         print("Failed to pre-sign payment.", file=sys.stderr)
         sys.exit(1)
