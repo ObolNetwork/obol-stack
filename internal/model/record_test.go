@@ -3,6 +3,7 @@ package model
 import (
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -123,5 +124,17 @@ func TestRecordedModelStateRoundTrip(t *testing.T) {
 	}
 	if _, err := readRecordedModelState(cfg); err == nil {
 		t.Fatal("future record version accepted")
+	}
+}
+
+func TestMapKeys(t *testing.T) {
+	if got := mapKeys(map[string]string{}); len(got) != 0 {
+		t.Fatalf("mapKeys(empty) = %v, want empty", got)
+	}
+	got := mapKeys(map[string]string{"OPENAI_API_KEY": "a", "ANTHROPIC_API_KEY": "b"})
+	sort.Strings(got)
+	want := []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("mapKeys = %v, want %v", got, want)
 	}
 }

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ObolNetwork/obol-stack/internal/config"
 )
 
 func TestSelectDataNamespaces(t *testing.T) {
@@ -313,5 +315,76 @@ func TestReadStackID(t *testing.T) {
 	}
 	if got := readStackID(dir); got != "big-teal" {
 		t.Fatalf("readStackID = %q", got)
+	}
+}
+
+func TestManifestComponent(t *testing.T) {
+	m := &Manifest{Components: []Component{
+		{Name: "wallets", Included: true},
+		{Name: "cluster", Included: false},
+	}}
+	if c := m.component("wallets"); c == nil || !c.Included {
+		t.Fatalf("component(wallets) = %+v, want included", c)
+	}
+	if c := m.component("cluster"); c == nil || c.Included {
+		t.Fatalf("component(cluster) = %+v, want present+excluded", c)
+	}
+	if c := m.component("nope"); c != nil {
+		t.Fatalf("component(nope) = %+v, want nil", c)
+	}
+}
+
+func TestListInstances(t *testing.T) {
+	cfg := &config.Config{ConfigDir: t.TempDir()}
+
+	// Missing applications/<runtime> dir lists nothing (not an error).
+	if got := listInstances(cfg, "hermes"); got != nil {
+		t.Fatalf("absent runtime dir = %v, want nil", got)
+	}
+
+	base := filepath.Join(cfg.ConfigDir, "applications", "hermes")
+	for _, id := range []string{"obol-agent", "quant"} {
+		if err := os.MkdirAll(filepath.Join(base, id), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A stray file (not a dir) must be ignored — only instance dirs count.
+	if err := os.WriteFile(filepath.Join(base, "README"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got := listInstances(cfg, "hermes")
+	if len(got) != 2 {
+		t.Fatalf("listInstances = %v, want 2 instance dirs", got)
+	}
+	seen := map[string]bool{}
+	for _, id := range got {
+		seen[id] = true
+	}
+	if !seen["obol-agent"] || !seen["quant"] {
+		t.Fatalf("listInstances = %v, want obol-agent + quant", got)
+	}
+}
+
+func TestWalkArchiveRejectsNonGzip(t *testing.T) {
+	plain := filepath.Join(t.TempDir(), "not-an-archive.tar.gz")
+	if err := os.WriteFile(plain, []byte("this is not gzip"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := walkArchive(plain, func(tr *tar.Reader, hdr *tar.Header, clean string) error {
+		t.Fatal("callback must not be reached for a non-gzip file")
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "not a gzip archive") {
+		t.Fatalf("non-gzip input not rejected cleanly: %v", err)
+	}
+}
+
+func TestWalletNote(t *testing.T) {
+	if got := walletNote("hermes", "obol-agent", nil); got != "hermes/obol-agent" {
+		t.Fatalf("walletNote(ok) = %q", got)
+	}
+	got := walletNote("openclaw", "quant", os.ErrPermission)
+	if !strings.HasPrefix(got, "openclaw/quant: FAILED") {
+		t.Fatalf("walletNote(err) = %q, want FAILED prefix", got)
 	}
 }
