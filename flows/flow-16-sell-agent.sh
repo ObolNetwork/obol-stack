@@ -190,21 +190,36 @@ else
     fail "spec.agent.ref unexpected: name=$ref_name ns=$ref_ns"
 fi
 
-# §2.2: ServiceOffer Ready
-step "ServiceOffer $OFFER_NAME reaches Ready"
-ready=""
+# §2.2: ServiceOffer serving. NOT Ready=True: this flow creates the offer
+# with registration enabled and never submits the ERC-8004 tx, so the
+# controller keeps Ready=False / Registered=AwaitingExternalRegistration
+# by design ("offer already serves paid traffic") — a Ready=True poll can
+# never pass here (flow-11 polls Ready only AFTER running `obol sell
+# register`). Gate on the serving condition set instead, which is exactly
+# what §3's 402 probe exercises. Window is 300s: the controller's
+# UpstreamHealthy probe rides the agent's FIRST big-prompt inference,
+# and on a local Ollama model that pays full prompt processing for the
+# Hermes system prompt before the cache warms (~150s observed for a 27B
+# on an M-series host; GPU endpoints converge in seconds).
+step "ServiceOffer $OFFER_NAME reaches serving state (UpstreamHealthy+PaymentGateReady+RoutePublished)"
+serving=""
 for i in $(seq 1 60); do
-    out=$("$OBOL" sell status "$OFFER_NAME" -n "$AGENT_NS" 2>&1 || true)
-    if echo "$out" | grep -q "Ready: True\|Ready=True"; then
-        ready="yes"
+    conds=$("$OBOL" kubectl get serviceoffer "$OFFER_NAME" -n "$AGENT_NS" \
+        -o jsonpath='{range .status.conditions[*]}{.type}={.status} {end}' 2>/dev/null || true)
+    # Anchored: a bare "Ready=True" grep would substring-match
+    # "PaymentGateReady=True" (the old gate did exactly that).
+    if echo "$conds" | grep -qE '(^| )UpstreamHealthy=True' \
+        && echo "$conds" | grep -qE '(^| )PaymentGateReady=True' \
+        && echo "$conds" | grep -qE '(^| )RoutePublished=True'; then
+        serving="yes"
         break
     fi
-    sleep 2
+    sleep 5
 done
-if [ -n "$ready" ]; then
-    pass "ServiceOffer Ready"
+if [ -n "$serving" ]; then
+    pass "ServiceOffer serving (conditions: $conds)"
 else
-    fail "ServiceOffer did not reach Ready within 120s"
+    fail "ServiceOffer did not reach serving state within 300s — conditions: ${conds:-unreadable}"
 fi
 
 # §3: Probe surfaces agent metadata in 402 extra (GATED_ON_2D — needs route)

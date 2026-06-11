@@ -142,7 +142,15 @@ func AddCustomRPC(cfg *config.Config, chainID int, chainName, endpoint string, r
 		return err
 	}
 
-	return writeERPCConfig(cfg, erpcConfig)
+	if err := writeERPCConfig(cfg, erpcConfig); err != nil {
+		return err
+	}
+	// Record-on-write: the eRPC ConfigMap does not survive cluster
+	// recreation; `obol stack up` replays this record.
+	if err := recordCustomRPC(cfg, chainID, chainName, endpoint, readOnly); err != nil {
+		return fmt.Errorf("RPC added to eRPC, but persisting the host-side record failed (it will not survive cluster recreation): %w", err)
+	}
+	return nil
 }
 
 func upsertCustomRPCUpstream(project map[string]any, chainID int, chainName, endpoint string, readOnly bool) error {
@@ -363,7 +371,15 @@ func AddPublicRPCs(cfg *config.Config, chainID int, chainName string, endpoints 
 	}
 
 	// Write back.
-	return writeERPCConfig(cfg, erpcConfig)
+	if err := writeERPCConfig(cfg, erpcConfig); err != nil {
+		return err
+	}
+	// Record-on-write: snapshot the resolved endpoints so `obol stack up`
+	// can replay them deterministically after cluster recreation.
+	if err := recordChainlistRPCs(cfg, chainID, chainName, endpoints, readOnly); err != nil {
+		return fmt.Errorf("RPCs added to eRPC, but persisting the host-side record failed (they will not survive cluster recreation): %w", err)
+	}
+	return nil
 }
 
 // RemovePublicRPCs removes all ChainList RPCs for a chain from the eRPC ConfigMap.
@@ -424,7 +440,14 @@ func RemovePublicRPCs(cfg *config.Config, chainID int) error {
 
 	project["upstreams"] = filtered
 
-	return writeERPCConfig(cfg, erpcConfig)
+	if err := writeERPCConfig(cfg, erpcConfig); err != nil {
+		return err
+	}
+	// Drop the host-side record too, or `obol stack up` would re-add them.
+	if err := unrecordChainlistRPCs(cfg, chainID); err != nil {
+		return fmt.Errorf("RPCs removed from eRPC, but the host-side record could not be updated (they would return on next stack up): %w", err)
+	}
+	return nil
 }
 
 // GetERPCStatus returns eRPC pod status and upstream counts.

@@ -356,6 +356,19 @@ Examples:
 			if _, err := kubectlApplyOutput(cfg, doc); err != nil {
 				return fmt.Errorf("apply Agent: %w", err)
 			}
+			// Refresh the host-side record so `obol stack up` replays the
+			// updated spec, not the one from `obol agent new`. Persist a
+			// clean manifest (the fetched doc carries server-managed
+			// metadata that must not be replayed).
+			record := map[string]any{
+				"apiVersion": doc["apiVersion"],
+				"kind":       doc["kind"],
+				"metadata":   map[string]any{"name": name, "namespace": ns},
+				"spec":       spec,
+			}
+			if err := agentcrd.PersistManifest(cfg, name, record); err != nil {
+				u.Warnf("Agent updated, but refreshing the host-side record failed: %v", err)
+			}
 			u.Successf("Agent %s/%s updated", ns, name)
 			return nil
 		},
@@ -966,6 +979,27 @@ func deleteCRDAgent(cfg *config.Config, name string, force bool, u *ui.UI) error
 			}
 		}
 		u.Successf("Agent %s/%s deleted", ns, name)
+
+		// The agent finalizer tears down the agent's children but
+		// deliberately leaves the namespace — and nothing deletes the
+		// agent's ServiceOffers, which would otherwise survive stuck on
+		// WaitingForAgent and, worse, reconcile back to Ready (selling
+		// to the DELETED agent's payTo) if an agent with the same name
+		// is ever recreated. Delete them here; the offer finalizer
+		// cleans up the route/middleware/registration children.
+		if err := kubectl.Run(bin, kc, "delete", "serviceoffers.obol.org", "--all", "-n", ns, "--ignore-not-found", "--wait=false"); err != nil {
+			u.Warnf("could not delete ServiceOffers in %s: %v — clean up with `obol sell delete <offer> -n %s`", ns, err, ns)
+		}
+
+		// Drop the resume-ledger entries for those offers. Scoped to the
+		// cluster-reachable branch on purpose: when the cluster is
+		// unreachable the CRs survive, and the ledger must keep covering
+		// them.
+		if removed, err := removePersistedServiceOffersInNamespace(cfg, ns); err != nil {
+			u.Warnf("could not clean persisted sell offers for %s: %v", ns, err)
+		} else if removed > 0 {
+			u.Dim(fmt.Sprintf("Removed %d persisted sell offer manifest(s) for %s", removed, ns))
+		}
 	} else {
 		u.Dim("Cluster unreachable; skipping CR deletion (host-side files only)")
 	}
@@ -979,6 +1013,10 @@ func deleteCRDAgent(cfg *config.Config, name string, force bool, u *ui.UI) error
 			return fmt.Errorf("remove host data dir %s: %w", root, err)
 		}
 		u.Dim("Removed host data dir " + root)
+	}
+	// Drop the recorded manifest, or `obol stack up` would resurrect the agent.
+	if err := agentcrd.RemoveManifest(cfg, name); err != nil {
+		u.Warnf("Could not remove recorded agent manifest: %v", err)
 	}
 	return nil
 }

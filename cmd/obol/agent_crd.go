@@ -171,6 +171,11 @@ func createCRDAgent(cfg *config.Config, u *ui.UI, opts createCRDAgentOptions) er
 	if err != nil {
 		return fmt.Errorf("apply Agent: %w", err)
 	}
+	// Record-on-write: the Agent CR only lives in etcd; persist the applied
+	// manifest so `obol stack up` re-creates it after cluster recreation.
+	if err := agentcrd.PersistManifest(cfg, opts.Name, manifest); err != nil {
+		u.Warnf("Agent created, but persisting the host-side record failed (it will not survive cluster recreation): %v", err)
+	}
 	action := "created"
 	if strings.Contains(out, "configured") || strings.Contains(out, "unchanged") {
 		action = "updated"
