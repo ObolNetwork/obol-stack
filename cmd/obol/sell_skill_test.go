@@ -34,8 +34,15 @@ func TestSellSkill_Flags(t *testing.T) {
 		"pay-to", "chain", "token", "price", "per-request",
 		"path", "max-timeout", "namespace",
 		"no-register", "register-name",
-		"as-service", "agent",
 	)
+
+	// Selling a skill's execution is `obol sell agent`, not a flag here:
+	// the as-service sugar was removed as redundant.
+	for _, name := range []string{"as-service", "agent"} {
+		if _, ok := flags[name]; ok {
+			t.Errorf("flag --%s must not exist on sell skill (sell a skill's execution via `obol sell agent`)", name)
+		}
+	}
 
 	// Payment flag set mirrors sell http.
 	assertStringDefault(t, flags, "chain", "base")
@@ -245,67 +252,6 @@ func TestBuildSkillShareOfferManifest_AssetTerms(t *testing.T) {
 	spec := buildSkillShareOfferManifest(in)["spec"].(map[string]any)
 	if _, ok := spec["payment"].(map[string]any)["asset"]; !ok {
 		t.Error("payment.asset missing for non-default token")
-	}
-}
-
-func TestBuildSkillServiceOfferManifest(t *testing.T) {
-	agent := &agentRefForSale{
-		Name:      "quant",
-		Namespace: "agent-quant",
-		Runtime:   monetizeapi.AgentRuntimeHermes,
-		Model:     "qwen3.5:9b",
-		Skills:    []string{"quant-notes", "monetize"},
-	}
-	m := buildSkillServiceOfferManifest(skillServiceOfferInputs{
-		OfferName:  "quant-svc",
-		Agent:      agent,
-		SkillName:  "quant-notes",
-		Version:    "0.1.0",
-		PayTo:      "0x2222222222222222222222222222222222222222",
-		Chain:      "base",
-		Price:      "0.01",
-		Symbol:     "USDC",
-		MaxTimeout: 300,
-		Register:   true,
-		RegName:    "quant-svc",
-		RegDesc:    "serves quant notes",
-	})
-
-	md := m["metadata"].(map[string]any)
-	if md["namespace"] != "agent-quant" {
-		t.Errorf("offer must land in the agent's namespace, got %v", md["namespace"])
-	}
-
-	spec := m["spec"].(map[string]any)
-	if spec["type"] != "agent" {
-		t.Fatalf("spec.type = %v, want agent (SERVICE mode is sugar over type=agent)", spec["type"])
-	}
-	if _, hasSkill := spec["skill"]; hasSkill {
-		t.Error("type=agent offers must not carry a spec.skill block")
-	}
-
-	ref := spec["agent"].(map[string]any)["ref"].(map[string]any)
-	if ref["name"] != "quant" || ref["namespace"] != "agent-quant" {
-		t.Errorf("agent.ref = %v", ref)
-	}
-
-	reg := spec["registration"].(map[string]any)
-	if reg["enabled"] != true {
-		t.Errorf("registration.enabled = %v", reg["enabled"])
-	}
-	skills := reg["skills"].([]any)
-	if len(skills) != 2 || skills[0] != "quant-notes" || skills[1] != "monetize" {
-		t.Errorf("registration.skills must keep the agent's full list, got %v", skills)
-	}
-	meta := reg["metadata"].(map[string]string)
-	if meta["skillName"] != "quant-notes" || meta["skillVersion"] != "0.1.0" {
-		t.Errorf("registration.metadata missing skill identity: %v", meta)
-	}
-	if meta["runtime"] != monetizeapi.AgentRuntimeHermes || meta["model"] != "qwen3.5:9b" {
-		t.Errorf("agent metadata extras lost: %v", meta)
-	}
-	if spec["path"] != "/services/quant-svc" {
-		t.Errorf("spec.path = %v", spec["path"])
 	}
 }
 

@@ -295,18 +295,16 @@ displayName, description, offer, namespace). Each request costs one
 
 ### Alternative: sell the skill as a live service instead
 
-If buyers should *invoke* the skill rather than download it, sell your agent
-with the skill installed — thin sugar over the existing `type=agent` path
-(host CLI, run by the operator):
+If buyers should *invoke* the skill rather than download it, sell the agent
+that carries it through the normal agent path — no skill-specific flag:
 
 ```bash
-obol sell skill <offer-name> --as-service --agent <agent-name> \
-  --skill-name <skill> --skill-version 0.1.0 --price 0.001 --chain base-sepolia
+obol agent new <agent-name> --skills <skill>     # if not already created
+obol sell agent <agent-name> --price 0.001 --chain base-sepolia
 ```
 
-The skill must already be in the Agent CR's skill list (`obol agent new
-... --skills`); the offer carries no `spec.skill` block and the 402
-surfaces `extra.agentSkills` via the normal agent machinery.
+The 402 surfaces `extra.agentSkills` via the normal agent machinery. `obol
+sell skill` sells the bundle bytes; `obol sell agent` sells execution.
 
 ### On-chain integrity + rating (OPERATOR-submitted — never you)
 

@@ -250,26 +250,22 @@ obol skills reputation \
   [--raters 0xAddr1,0xAddr2]   # optional whitelist; default: all raters
 ```
 
-## SERVICE mode: sell a skill as a live agent
+## Selling execution instead of bytes
 
-When buyers should pay to *use* the skill rather than own a copy, wrap an
-agent that has the skill installed:
+When buyers should pay to *use* the skill rather than own a copy, sell the
+agent that has the skill installed — through the existing agent path, with
+no skill-specific flag:
 
 ```bash
 obol agent new quant --skills gas,addresses --model <model> --create-wallet
-obol sell skill quant-svc --as-service --agent quant \
-  --skill-name gas --skill-version 0.1.0 \
-  --price 0.001 --chain base-sepolia
+obol sell agent quant --price 0.001 --chain base-sepolia
 ```
 
-This is pure sugar over `obol sell agent`: the offer is `type=agent` (no
-`spec.skill` block), the skill must already be in the Agent CR's skill list
-(update the agent first if not — the sell path never mutates the Agent), and
-the 402 surfaces `extra.agentModel`/`extra.agentSkills` plus
-`skillName`/`skillVersion` in the registration metadata for discovery.
-Buyers call the agent's OpenAI-compatible endpoint
+The offer is `type=agent`; the 402 surfaces `extra.agentModel`/
+`extra.agentSkills` and buyers call the agent's OpenAI-compatible endpoint
 (`/services/<offer>/v1/chat/completions`) — prefer `stream: true` for long
-generations through a quick tunnel.
+generations through a quick tunnel. In short: `obol sell skill` sells the
+bundle bytes, `obol sell agent` sells execution.
 
 ## Agents self-publishing skills
 

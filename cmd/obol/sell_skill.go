@@ -3,18 +3,16 @@ package main
 // obol sell skill — sell a skill (SKILL.md + scripts bundle) as one
 // sellable + ratable unit.
 //
-// Two modes:
-//   - SHARE (default): pack the skill directory into a deterministic
-//     gzipped tarball, store it in a ConfigMap, and publish a
-//     ServiceOffer of type=skill. The serviceoffer-controller renders a
-//     restricted-PSS busybox bundle server from the ConfigMap and gates
-//     /services/<name>/* behind x402; buyers download bundle.tar.gz with
-//     a one-shot paid request and can verify the sha256 offline and
-//     against the seller's ERC-8004 metadata anchor.
-//   - SERVICE (--as-service): thin sugar over the existing type=agent
-//     sell path — wrap an Agent CR that has the skill on its allow-list
-//     in a type=agent ServiceOffer whose registration metadata carries
-//     the skill identity. Zero controller change.
+// Pack the skill directory into a deterministic gzipped tarball, store
+// it in a ConfigMap, and publish a ServiceOffer of type=skill. The
+// serviceoffer-controller renders a restricted-PSS busybox bundle server
+// from the ConfigMap and gates /services/<name>/* behind x402; buyers
+// download bundle.tar.gz with a one-shot paid request and can verify the
+// sha256 offline and against the seller's ERC-8004 metadata anchor.
+//
+// To sell a skill's *execution* rather than its bytes, gate the agent
+// that carries it with the existing agent path: `obol agent new <name>
+// --skills <skill>` then `obol sell agent <name>`.
 
 import (
 	"context"
@@ -61,24 +59,22 @@ func skillBundleConfigMapName(offerName string) string {
 func sellSkillCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "skill",
-		Usage:     "Sell a skill bundle (SKILL.md + scripts) as a paid download, or wrap an agent that serves it",
+		Usage:     "Sell a skill bundle (SKILL.md + scripts) as a paid download",
 		ArgsUsage: "<name>",
-		Description: `SHARE mode (default) packages a skill directory into a deterministic
-gzipped tarball and publishes it behind an x402 payment gate as a
-ServiceOffer of type=skill. The bundle's sha256 is pinned in the offer,
-surfaced in the 402 response (extra.skill), and can be anchored on the
-ERC-8004 Identity Registry with ` + "`obol skills calldata set-hash`" + `.
+		Description: `Packages a skill directory into a deterministic gzipped tarball and
+publishes it behind an x402 payment gate as a ServiceOffer of
+type=skill. The bundle's sha256 is pinned in the offer, surfaced in the
+402 response (extra.skill), and can be anchored on the ERC-8004 Identity
+Registry with ` + "`obol skills calldata set-hash`" + `.
 
-SERVICE mode (--as-service --agent <agent>) instead wraps an existing
-Agent CR that already lists the skill (` + "`obol agent new --skills ...`" + `)
-in a type=agent ServiceOffer carrying the skill identity in its
-registration metadata — selling the skill's execution, not its bytes.
+To sell a skill's execution rather than its bytes, gate the agent that
+carries it: ` + "`obol agent new <name> --skills <skill>`" + ` then
+` + "`obol sell agent <name>`" + `.
 
 Examples:
   obol sell skill quant-notes --from ./skills/quant-notes --skill-version 0.1.0 \
     --per-request 0.25 --chain base --pay-to 0x...
-  obol sell skill buy-x402 --from-embedded buy-x402 --skill-version 0.1.0 --price 0.05
-  obol sell skill quant-svc --as-service --agent quant --skill-name quant-notes --skill-version 0.1.0 --price 0.01`,
+  obol sell skill buy-x402 --from-embedded buy-x402 --skill-version 0.1.0 --price 0.05`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "from",
@@ -148,19 +144,11 @@ Examples:
 				Name:  "register-name",
 				Usage: "Agent name for ERC-8004 registration (defaults to the offer name)",
 			},
-			&cli.BoolFlag{
-				Name:  "as-service",
-				Usage: "SERVICE mode: publish a type=agent offer wrapping --agent instead of a downloadable bundle",
-			},
-			&cli.StringFlag{
-				Name:  "agent",
-				Usage: "Agent CR name to wrap (required with --as-service; the skill must be on the agent's --skills list)",
-			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			if cmd.NArg() != 1 {
-				return fmt.Errorf("offer name required: obol sell skill <name> (--from <dir> | --from-embedded <skill> | --as-service --agent <agent>)")
+				return fmt.Errorf("offer name required: obol sell skill <name> (--from <dir> | --from-embedded <skill>)")
 			}
 			name := strings.TrimSpace(cmd.Args().First())
 			if err := validate.Name(name); err != nil {
@@ -180,9 +168,6 @@ Examples:
 				return fmt.Errorf("price required: use --price or --per-request (skills are priced per request — one paid request, one download)")
 			}
 
-			if cmd.Bool("as-service") {
-				return runSellSkillAsService(ctx, cfg, u, cmd, name, version, price)
-			}
 			return runSellSkillShare(ctx, cfg, u, cmd, name, version, price)
 		},
 	}
@@ -387,134 +372,6 @@ func printSkillPurchaseInstructions(u *ui.UI, baseURL, servicePath, skillName, v
 		skillName, version, hash, chain)
 }
 
-// runSellSkillAsService is SERVICE mode: pure sugar over the existing
-// type=agent sell path. The Agent CR's skill allow-list is the source
-// of truth — we refuse to sell a skill the agent does not declare
-// rather than mutating the Agent from the sell path.
-func runSellSkillAsService(_ context.Context, cfg *config.Config, u *ui.UI, cmd *cli.Command, name, version, price string) error {
-	agentName := strings.TrimSpace(cmd.String("agent"))
-	if agentName == "" {
-		return fmt.Errorf("--agent <name> is required with --as-service (run `obol agent new <name> --skills <skill>` first)")
-	}
-	if strings.TrimSpace(cmd.String("from")) != "" || strings.TrimSpace(cmd.String("from-embedded")) != "" {
-		return fmt.Errorf("--as-service sells the skill's execution, not its bytes: drop --from/--from-embedded")
-	}
-
-	skillName := name
-	if override := strings.TrimSpace(cmd.String("skill-name")); override != "" {
-		skillName = override
-	}
-	if !skillNameRe.MatchString(skillName) || len(skillName) > 64 {
-		return fmt.Errorf("invalid skill name %q: must match %s (max 64 chars); pass --skill-name to override", skillName, skillNameRe)
-	}
-
-	if err := kubectl.EnsureCluster(cfg); err != nil {
-		return fmt.Errorf("Obol Stack is not running. Start it with `obol stack up` first")
-	}
-
-	agent, err := getAgentRefForSale(cfg, agentName)
-	if err != nil {
-		return err
-	}
-	if !slices.Contains(agent.Skills, skillName) {
-		return fmt.Errorf("agent %q does not declare skill %q (skills: %s) — the Agent CR's skill list is the source of truth; "+
-			"recreate or update the agent with `obol agent new %s --skills %s,...` first",
-			agentName, skillName, strings.Join(agent.Skills, ", "), agentName, skillName)
-	}
-
-	chain := cmd.String("chain")
-	assetTerms, err := resolveAssetTermsFor(cmd.String("token"), &chain, cmd.IsSet("chain"))
-	if err != nil {
-		return err
-	}
-	symbol := assetTerms.Symbol
-	if symbol == "" {
-		symbol = strings.ToUpper(cmd.String("token"))
-	}
-
-	payTo := strings.TrimSpace(cmd.String("pay-to"))
-	if payTo == "" {
-		if agent.WalletAddress != "" {
-			payTo = agent.WalletAddress
-			u.Infof("Routing revenue to agent's own wallet: %s", payTo)
-		} else if resolved, rerr := hermes.ResolveWalletAddress(cfg); rerr == nil {
-			payTo = resolved
-			u.Infof("Routing revenue to host remote-signer wallet: %s", payTo)
-		} else {
-			return fmt.Errorf("recipient required: use --pay-to <addr> or provision a wallet at agent creation time")
-		}
-	}
-	if err := x402verifier.ValidateWallet(payTo); err != nil {
-		return err
-	}
-
-	// The offer must land beside the agent (controller guard:
-	// spec.agent.ref.namespace == offer.namespace), so --namespace is
-	// ignored in service mode.
-	if cmd.IsSet("namespace") && cmd.String("namespace") != agent.Namespace {
-		u.Warnf("--namespace %s ignored: type=agent offers live in the agent's namespace (%s)", cmd.String("namespace"), agent.Namespace)
-	}
-
-	regName := strings.TrimSpace(cmd.String("register-name"))
-	if regName == "" {
-		regName = name
-	}
-	regDesc := strings.TrimSpace(cmd.String("description"))
-	if regDesc == "" {
-		regDesc = agent.Objective
-	}
-
-	offer := buildSkillServiceOfferManifest(skillServiceOfferInputs{
-		OfferName:  name,
-		Agent:      agent,
-		SkillName:  skillName,
-		Version:    version,
-		PayTo:      payTo,
-		Chain:      chain,
-		Price:      price,
-		Symbol:     symbol,
-		MaxTimeout: cmd.Int("max-timeout"),
-		AssetTerms: assetTerms,
-		Path:       strings.TrimSpace(cmd.String("path")),
-		Register:   !cmd.Bool("no-register"),
-		RegName:    regName,
-		RegDesc:    regDesc,
-	})
-
-	if err := preflightOfferPathCollision(cfg, offer); err != nil {
-		return err
-	}
-	applyOut, err := kubectlApplyOutput(cfg, offer)
-	if err != nil {
-		return fmt.Errorf("apply ServiceOffer: %w", err)
-	}
-	if persistErr := persistServiceOffer(cfg, agent.Namespace, name, agentOfferBundle(agent.Namespace, name, offer)); persistErr != nil {
-		u.Warnf("could not persist offer for resume: %v", persistErr)
-	}
-
-	action := "created"
-	if strings.Contains(applyOut, "configured") || strings.Contains(applyOut, "unchanged") {
-		action = "updated"
-	}
-	u.Successf("ServiceOffer %s/%s %s (type: agent serving skill %s@%s, %s %s/req → %s)",
-		agent.Namespace, name, action, skillName, version, price, symbol, payTo)
-	u.Infof("Check status: obol sell status %s -n %s", name, agent.Namespace)
-
-	servicePath := strings.TrimSpace(cmd.String("path"))
-	if servicePath == "" {
-		servicePath = "/services/" + name
-	}
-	if tURL, terr := tunnel.EnsureTunnelForSell(cfg, u); terr != nil {
-		u.Warnf("Tunnel not started: %v", terr)
-		u.Dim("  Start manually with: obol tunnel restart")
-	} else {
-		u.Successf("Tunnel: %s%s", strings.TrimRight(tURL, "/"), servicePath)
-	}
-	u.Dim(fmt.Sprintf("Buyers can rate the skill after use: obol skills calldata feedback %s@%s --agent-id <seller-agent-id> --value <0-100> --chain %s",
-		skillName, version, chain))
-	return nil
-}
-
 // validateSkillSourceFlags enforces the --from XOR --from-embedded
 // contract for SHARE mode.
 func validateSkillSourceFlags(from, fromEmbedded string) error {
@@ -648,90 +505,6 @@ func buildSkillShareOfferManifest(in skillShareOfferInputs) map[string]any {
 		"metadata": map[string]any{
 			"name":      in.OfferName,
 			"namespace": in.Namespace,
-		},
-		"spec": spec,
-	}
-}
-
-// skillServiceOfferInputs feeds the SERVICE-mode (type=agent) builder.
-type skillServiceOfferInputs struct {
-	OfferName  string
-	Agent      *agentRefForSale
-	SkillName  string
-	Version    string
-	PayTo      string
-	Chain      string
-	Price      string
-	Symbol     string
-	MaxTimeout int
-	AssetTerms schemas.AssetTerms
-	Path       string
-	Register   bool
-	RegName    string
-	RegDesc    string
-}
-
-// buildSkillServiceOfferManifest assembles a plain type=agent offer
-// (the existing controller machinery untouched) whose registration
-// block keeps the agent's full skill list and gains the sold skill's
-// identity in metadata. spec.skill is deliberately NOT set: type=agent
-// offers carry no skill block and the 402 already surfaces
-// extra.agentSkills via agent resolution.
-func buildSkillServiceOfferManifest(in skillServiceOfferInputs) map[string]any {
-	payment := map[string]any{
-		"scheme":            "exact",
-		"network":           in.Chain,
-		"payTo":             in.PayTo,
-		"maxTimeoutSeconds": in.MaxTimeout,
-		"price": map[string]any{
-			"perRequest": in.Price,
-		},
-	}
-	if !in.AssetTerms.IsZero() {
-		payment["asset"] = in.AssetTerms
-	}
-
-	path := in.Path
-	if path == "" {
-		path = "/services/" + in.OfferName
-	}
-
-	skills := make([]any, len(in.Agent.Skills))
-	for i, s := range in.Agent.Skills {
-		skills[i] = s
-	}
-	metadata := agentOfferRegistrationMetadata(in.Agent, in.Price, in.Symbol, in.Chain)
-	metadata["skillName"] = in.SkillName
-	metadata["skillVersion"] = in.Version
-
-	spec := map[string]any{
-		"type": "agent",
-		"agent": map[string]any{
-			"ref": map[string]any{
-				"name":      in.Agent.Name,
-				"namespace": in.Agent.Namespace,
-			},
-		},
-		"payment": payment,
-		"path":    path,
-		// Always set — the catalog and 402 page read
-		// registration.description/skills regardless of `enabled`
-		// (which gates only ERC-8004 publication). See sell agent.
-		"registration": map[string]any{
-			"enabled":     in.Register,
-			"name":        in.RegName,
-			"description": in.RegDesc,
-			"skills":      skills,
-			"metadata":    metadata,
-		},
-	}
-
-	return map[string]any{
-		"apiVersion": "obol.org/v1alpha1",
-		"kind":       "ServiceOffer",
-		"metadata": map[string]any{
-			"name":      in.OfferName,
-			"namespace": in.Agent.Namespace,
 		},
 		"spec": spec,
 	}

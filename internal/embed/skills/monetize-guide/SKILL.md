@@ -199,10 +199,10 @@ On-chain hash pinning and ratings (`obol skills calldata set-hash` /
 the OPERATOR submits it with their own wallet. Never sign or submit these
 transactions yourself; present the printed command and calldata to the user.
 
-To instead sell the skill as a live, invocable service, wrap your agent:
-`obol sell skill <name> --as-service --agent <agent-name> --skill-name
-<skill> --skill-version <ver>` (sugar over the `type=agent` path; the skill
-must already be in the Agent CR's skill list).
+To instead sell the skill as a live, invocable service, sell the agent that
+carries it: `obol agent new <agent-name> --skills <skill>` then `obol sell
+agent <agent-name>`. `obol sell skill` sells the bundle bytes; `obol sell
+agent` sells execution.
 
 #### HTTP Service (in-cluster)
 
