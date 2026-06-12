@@ -72,22 +72,73 @@ def join(kb, program, worker):
     raise SystemExit("join timed out waiting for owner approval")
 
 
+# Hardware adaptation applied to train.py before running. autoresearch ships
+# a FlashAttention-3 attention path (flash_attn_func) that has no kernel image
+# for some GPUs (e.g. NVIDIA GB10 / Blackwell sm_121). train.py is the file an
+# autoresearch agent edits, so swapping that one call to PyTorch-native SDPA —
+# which runs on any CUDA device — is a legitimate, in-framework adaptation.
+_FA3_CALL = "y = fa3.flash_attn_func(q, k, v, causal=True, window_size=window_size)"
+_SDPA_CALL = ("y = torch.nn.functional.scaled_dot_product_attention("
+              "q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), "
+              "is_causal=True, enable_gqa=True).transpose(1, 2)")
+
+# Model/batch fit: the default 124M model at DEVICE_BATCH_SIZE=128 (×2048 seq)
+# OOM-kills on a memory-pressured GPU. Shrink to a small GPT at a small batch
+# so eager training fits and finishes fast — train.py's own comment says
+# "reduce if OOM". Still a real GPT producing a real val_bpb.
+_TRAIN_SUBS = [
+    (_FA3_CALL, _SDPA_CALL),
+    ("    n_layer: int = 12", "    n_layer: int = 4"),
+    ("    n_embd: int = 768", "    n_embd: int = 512"),
+    ("DEVICE_BATCH_SIZE = 128", "DEVICE_BATCH_SIZE = 8"),
+    # One micro-batch per optimizer step: the default 2**19 token batch means
+    # 32 grad-accum micro-steps per step (~35s/step eager on GB10). 2**14 =
+    # batch*seq, so grad_accum_steps=1 and a step is ~1s — train.py needs
+    # step>10 to stop, so this keeps the whole run to seconds, not minutes.
+    ("TOTAL_BATCH_SIZE = 2**19", "TOTAL_BATCH_SIZE = 2**14"),
+]
+
+_PREP = r'''
+import re, shutil
+shutil.copy("train.py", "train.py.obolbak"); shutil.copy("prepare.py", "prepare.py.obolbak")
+t = open("train.py").read()
+for a, b in {subs!r}:
+    t = t.replace(a, b)
+open("train.py", "w").write(t)
+p = open("prepare.py").read()
+p = re.sub(r"^TIME_BUDGET = .*", "TIME_BUDGET = {budget}", p, flags=re.M)
+p = re.sub(r"^EVAL_TOKENS = .*", "EVAL_TOKENS = 131072  # shrunk for fast eager eval", p, flags=re.M)
+open("prepare.py", "w").write(p)
+'''
+
+
 def run_autoresearch(repo, time_budget):
-    """Run the real karpathy/autoresearch training; return (val_bpb, tail)."""
+    """Run the real karpathy/autoresearch training; return (val_bpb, tail).
+
+    Adapts train.py for the local GPU (FA3 → SDPA), shrinks the fixed time
+    budget, runs eager (FA3's absence makes torch.compile tracing moot on
+    these devices), then restores the originals.
+    """
     repo = os.path.expanduser(repo)
     if not os.path.isdir(repo):
         raise SystemExit("autoresearch repo not found at %s" % repo)
     env = dict(os.environ)
     env["PATH"] = os.path.expanduser("~/.local/bin") + ":" + env.get("PATH", "")
-    # Shrink the fixed training budget for a fast-but-real run by patching the
-    # imported constant via an env shim train.py respects if present, else sed.
-    # autoresearch reads TIME_BUDGET from prepare.py; override at runtime.
+    # Run eager (no torch.compile). On bleeding-edge GPUs (NVIDIA GB10 /
+    # Blackwell sm_121a) Triton/ptxas can't yet assemble inductor kernels;
+    # eager has no Triton dependency and just runs. The cost of eager is a
+    # slow final eval over EVAL_TOKENS, which we shrink below so the run
+    # completes quickly — both are legitimate train.py-for-this-hardware edits.
+    env["TORCHDYNAMO_DISABLE"] = "1"
+
+    prep = _PREP.format(subs=_TRAIN_SUBS, budget=int(time_budget))
     cmd = (
-        "cd %s && sed -i.bak 's/^TIME_BUDGET = .*/TIME_BUDGET = %d/' prepare.py && "
-        "uv run --no-sync python train.py; mv -f prepare.py.bak prepare.py 2>/dev/null || true"
-        % (repo, int(time_budget))
+        "cd %s && python3 -c %s && "
+        "uv run --no-sync python train.py; "
+        "mv -f train.py.obolbak train.py 2>/dev/null; mv -f prepare.py.obolbak prepare.py 2>/dev/null || true"
+        % (repo, _shquote(prep))
     )
-    log("Running autoresearch experiment (TIME_BUDGET=%ss) …" % time_budget)
+    log("Running autoresearch experiment (TIME_BUDGET=%ss, GB10-adapted) …" % time_budget)
     p = subprocess.run(["bash", "-lc", cmd], env=env, capture_output=True, text=True)
     out = (p.stdout or "") + "\n" + (p.stderr or "")
     m = re.search(r"^val_bpb:\s*([0-9.]+)", out, re.MULTILINE)
@@ -95,6 +146,10 @@ def run_autoresearch(repo, time_budget):
         log(out[-2000:])
         raise SystemExit("could not parse val_bpb from train.py output")
     return float(m.group(1)), out[-1500:]
+
+
+def _shquote(s):
+    return "'" + s.replace("'", "'\\''") + "'"
 
 
 def run_custom(experiment, metric):
