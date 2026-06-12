@@ -3,6 +3,9 @@ package main
 import (
 	"testing"
 
+	"github.com/ObolNetwork/obol-stack/internal/model"
+	"github.com/urfave/cli/v3"
+
 	"github.com/ObolNetwork/obol-stack/internal/config"
 )
 
@@ -68,4 +71,47 @@ func TestSetupPromoteList(t *testing.T) {
 			t.Fatalf("setupPromoteList aliased its input: mutating the result changed in[0] to %q", in[0])
 		}
 	})
+}
+
+// TestModelSetup_BYOKFlags pins the BYOK onboarding surface: the setup
+// command exposes --provider/--api-key/--model/--free, and every BYOK
+// aggregator in the registry dispatches through the generic cloud path
+// (only Ollama is special-cased).
+func TestModelSetup_BYOKFlags(t *testing.T) {
+	cfg := &config.Config{}
+	var setup *cli.Command
+	for _, sub := range modelCommand(cfg).Commands {
+		if sub.Name == "setup" {
+			setup = sub
+		}
+	}
+	if setup == nil {
+		t.Fatal("model setup command missing")
+	}
+
+	want := map[string]bool{"provider": false, "api-key": false, "model": false, "free": false}
+	for _, f := range setup.Flags {
+		for _, n := range f.Names() {
+			if _, ok := want[n]; ok {
+				want[n] = true
+			}
+		}
+	}
+	for n, found := range want {
+		if !found {
+			t.Errorf("model setup missing --%s flag", n)
+		}
+	}
+
+	// The registry must carry the BYOK providers this PR adds.
+	for _, id := range []string{"venice", "openrouter", "nvidia", "gmi", "novita", "huggingface"} {
+		p, ok := model.ProviderByID(id)
+		if !ok {
+			t.Errorf("provider %q missing from registry", id)
+			continue
+		}
+		if p.BaseURL == "" {
+			t.Errorf("provider %q has no BaseURL", id)
+		}
+	}
 }

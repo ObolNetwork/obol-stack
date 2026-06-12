@@ -262,6 +262,13 @@ Caveats:
 
 **Auto-configuration**: `obol stack up` → `autoConfigureLLM()` detects host Ollama models, patches LiteLLM config. `obolup.sh` → `check_agent_model_api_key()` reads `~/.openclaw/openclaw.json`, resolves API key from `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` (Anthropic) or `OPENAI_API_KEY` (OpenAI), exports for downstream.
 
+**BYOK cloud providers** (easiest getting-started path) — provider knowledge is a single registry in `internal/model/model.go` (`knownProviders` / `ProviderInfo` with `Mode`/`BaseURL`/`Default`/`Free`); adding a provider is one row, no per-provider switch. `obol model setup <provider> --api-key <key>` wires the agent's LiteLLM brain in one command. Built-in: `anthropic`, `openai`, `ollama` (native/local) + OpenAI-compatible aggregators `venice`, `openrouter`, `nvidia`, `gmi`, `novita`, `huggingface` (`Mode=openai-compatible` → `model_list` entry `openai/<id>` + explicit `api_base` + key from the provider's env var; no wildcard). When `--model` is omitted, setup uses the registry `Default` or lists the live `GET <base>/v1/models` (TTY picker / non-TTY error naming real ids). `obol model setup openrouter --free` seeds only the curated free-tier model snapshot. Distinct from `obol buy inference`, which is x402 crypto-paid sellers, NOT BYOK. Unlisted endpoints still use `obol model setup custom`.
+
+```bash
+obol model setup venice     --api-key $VENICE_API_KEY        # one command, agent ready
+obol model setup openrouter --api-key $OPENROUTER_API_KEY --free
+```
+
 **External OpenAI-compatible LLM** (vLLM / sglang / mlx-lm / remote GPU) — canonical user flow, no ConfigMap surgery:
 
 ```bash

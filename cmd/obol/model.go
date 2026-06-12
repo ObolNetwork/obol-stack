@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -67,16 +66,20 @@ func modelSetupCommand(cfg *config.Config) *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "provider",
-				Usage: "Provider name: anthropic, openai, or ollama",
+				Usage: "Provider id (anthropic, openai, ollama, venice, openrouter, nvidia, gmi, novita, huggingface). Run with no flags to pick interactively.",
 			},
 			&cli.StringFlag{
 				Name:    "api-key",
-				Usage:   "API key for the provider",
+				Usage:   "API key for the provider (BYOK; also read from the provider's env var if set)",
 				Sources: cli.EnvVars("LLM_API_KEY"),
 			},
 			&cli.StringSliceFlag{
 				Name:  "model",
-				Usage: "Model(s) to configure (e.g. claude-sonnet-4-5-20250929, gpt-4o)",
+				Usage: "Model(s) to configure (e.g. claude-sonnet-4-6, gpt-5.5, or an aggregator model id)",
+			},
+			&cli.BoolFlag{
+				Name:  "free",
+				Usage: "Seed only the provider's curated free-tier models (OpenRouter)",
 			},
 		},
 		Commands: []*cli.Command{
@@ -120,15 +123,17 @@ func modelSetupCommand(cfg *config.Config) *cli.Command {
 				}
 			}
 
-			// Provider-specific flow
-			switch provider {
-			case "ollama":
-				return setupOllama(cfg, u, models)
-			case "anthropic", "openai":
-				return setupCloudProvider(cfg, u, provider, apiKey, models)
-			default:
-				return fmt.Errorf("unknown provider %q — use anthropic, openai, or ollama", provider)
+			// Provider-specific flow — dispatch off the registry, not a
+			// hardcoded switch. Ollama is local; everything else is a
+			// key-based cloud/BYOK provider handled by one generic path.
+			prof, ok := model.ProviderByID(provider)
+			if !ok {
+				return fmt.Errorf("unknown provider %q — run `obol model setup` (no flags) to pick from the list, or `obol model setup custom --endpoint … --model …` for an unlisted OpenAI-compatible endpoint", provider)
 			}
+			if prof.ID == model.ProviderOllama {
+				return setupOllama(cfg, u, models)
+			}
+			return setupCloudProvider(cfg, u, prof, apiKey, models, cmd.Bool("free"))
 		},
 	}
 }
@@ -187,13 +192,14 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 	return promoteAndSync(cfg, u, explicit)
 }
 
-func setupCloudProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, models []string) error {
+func setupCloudProvider(cfg *config.Config, u *ui.UI, prof model.ProviderInfo, apiKey string, models []string, free bool) error {
 	if apiKey == "" {
+		if prof.SignupURL != "" {
+			u.Dim(fmt.Sprintf("Get a %s API key: %s", prof.Name, prof.SignupURL))
+		}
+
 		var err error
-
-		info := providerInfo(provider)
-
-		apiKey, err = u.SecretInput(fmt.Sprintf("%s API key (%s)", info.Name, info.EnvVar))
+		apiKey, err = u.SecretInput(fmt.Sprintf("%s API key (%s)", prof.Name, prof.EnvVar))
 		if err != nil {
 			return err
 		}
@@ -203,38 +209,34 @@ func setupCloudProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, m
 		}
 	}
 
-	if len(models) == 0 {
-		// Per-provider defaults — kept in sync with what the providers
-		// document as their current chat-tuned flagship. Bumping these is a
-		// small follow-up PR when frontier models drop, and it isolates the
-		// "what's good today" maintenance to one place.
-		var defaultModel string
-		switch provider {
-		case "anthropic":
-			defaultModel = "claude-sonnet-4-6"
-		case "openai":
-			defaultModel = "gpt-5.5"
+	// --free: seed the provider's curated free-tier models (unless the
+	// operator already named explicit --model values).
+	if free {
+		if len(prof.Free) == 0 {
+			return fmt.Errorf("--free is not available for %s (no curated free models); pass --model instead", prof.Name)
 		}
+		if len(models) == 0 {
+			models = append([]string(nil), prof.Free...)
+			u.Infof("Seeding %d curated free %s model(s)", len(models), prof.Name)
+		}
+	}
 
-		// Interactive: let the user override the default with a free-text
-		// entry. Non-interactive (no TTY): silently use the default — the
-		// caller can always pass --model to be explicit.
-		chosen := defaultModel
-		if defaultModel != "" && u.IsTTY() && !u.IsJSON() {
-			input, err := u.Input(fmt.Sprintf("Model for %s", provider), defaultModel)
-			if err != nil {
-				return err
-			}
-			if strings.TrimSpace(input) != "" {
-				chosen = strings.TrimSpace(input)
-			}
+	// Resolve a model when none was given: the registry Default, else (for
+	// BYOK aggregators with a rotating catalog) the live /v1/models list.
+	if len(models) == 0 {
+		chosen, err := resolveSetupModel(u, prof, apiKey)
+		if err != nil {
+			return err
 		}
 		if chosen != "" {
 			models = []string{chosen}
 		}
 	}
+	if len(models) == 0 {
+		return fmt.Errorf("no model selected for %s — pass --model <id>", prof.Name)
+	}
 
-	if err := model.ConfigureLiteLLM(cfg, u, provider, apiKey, models); err != nil {
+	if err := model.ConfigureLiteLLM(cfg, u, prof.ID, apiKey, models); err != nil {
 		u.Print("")
 		u.Print("  Hint: Configuration stored in: litellm-config ConfigMap (llm namespace)")
 
@@ -245,6 +247,58 @@ func setupCloudProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, m
 	u.Successf("Model configured. To change later, run: obol model setup (or obol model remove <name>)")
 
 	return promoteAndSync(cfg, u, models)
+}
+
+// resolveSetupModel picks a model when the operator passed none. A registry
+// Default wins (overridable in a TTY). With no static default — BYOK
+// aggregators whose catalog rotates — it lists the live /v1/models endpoint:
+// a picker in a TTY, otherwise an error naming real ids so the operator can
+// re-run with --model. Returns "" only when there is genuinely nothing to
+// pick (the caller then errors).
+func resolveSetupModel(u *ui.UI, prof model.ProviderInfo, apiKey string) (string, error) {
+	if prof.Default != "" {
+		if u.IsTTY() && !u.IsJSON() {
+			input, err := u.Input(fmt.Sprintf("Model for %s", prof.ID), prof.Default)
+			if err != nil {
+				return "", err
+			}
+			if strings.TrimSpace(input) != "" {
+				return strings.TrimSpace(input), nil
+			}
+		}
+		return prof.Default, nil
+	}
+
+	if !prof.IsBYOK() {
+		return "", nil
+	}
+
+	ids, err := model.FetchOpenAICompatibleModels(prof.BaseURL, apiKey)
+	if err != nil {
+		u.Dim(fmt.Sprintf("Couldn't list %s models (%v)", prof.Name, err))
+		if u.IsTTY() && !u.IsJSON() {
+			return u.Input(fmt.Sprintf("Model id for %s", prof.Name), "")
+		}
+		return "", fmt.Errorf("could not resolve a model for %s: pass --model <id> (keys/models at %s)", prof.Name, prof.SignupURL)
+	}
+
+	if u.IsTTY() && !u.IsJSON() {
+		shown := ids
+		if len(shown) > 30 {
+			shown = shown[:30]
+		}
+		idx, err := u.Select(fmt.Sprintf("Select a %s model:", prof.Name), shown, 0)
+		if err != nil {
+			return "", err
+		}
+		return shown[idx], nil
+	}
+
+	sample := ids
+	if len(sample) > 8 {
+		sample = sample[:8]
+	}
+	return "", fmt.Errorf("pass --model <id> for %s; available include: %s", prof.Name, strings.Join(sample, ", "))
 }
 
 // syncAgentModels re-renders the stack-managed Hermes default agent from the
@@ -852,17 +906,6 @@ func modelRemoveCommand(cfg *config.Config) *cli.Command {
 	}
 }
 
-func providerInfo(id string) model.ProviderInfo {
-	providers, _ := model.GetAvailableProviders(nil)
-	for _, p := range providers {
-		if p.ID == id {
-			return p
-		}
-	}
-
-	return model.ProviderInfo{ID: id, Name: id}
-}
-
 // detectedCredential describes a credential found in the environment.
 type detectedCredential struct {
 	key    string // the actual API key value (empty for Ollama)
@@ -875,22 +918,22 @@ type detectedCredential struct {
 func detectCredentials() map[string]detectedCredential {
 	creds := make(map[string]detectedCredential)
 
-	// Anthropic: check ANTHROPIC_API_KEY, then CLAUDE_CODE_OAUTH_TOKEN
-	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
-		creds["anthropic"] = detectedCredential{key: key, source: "ANTHROPIC_API_KEY"}
-	} else if key := os.Getenv("CLAUDE_CODE_OAUTH_TOKEN"); key != "" {
-		creds["anthropic"] = detectedCredential{key: key, source: "CLAUDE_CODE_OAUTH_TOKEN"}
-	}
+	// Registry-driven: every provider's primary + alternate env vars are
+	// checked via model.ResolveAPIKey, so a new provider row auto-detects
+	// without editing this function. Ollama has no key — probe reachability.
+	providers, _ := model.GetAvailableProviders(nil)
+	for _, p := range providers {
+		if p.ID == model.ProviderOllama {
+			if ollamaModels, err := model.ListOllamaModels(); err == nil && len(ollamaModels) > 0 {
+				creds[p.ID] = detectedCredential{
+					source: fmt.Sprintf("%d model(s) available", len(ollamaModels)),
+				}
+			}
+			continue
+		}
 
-	// OpenAI: check OPENAI_API_KEY
-	if key := os.Getenv("OPENAI_API_KEY"); key != "" {
-		creds["openai"] = detectedCredential{key: key, source: "OPENAI_API_KEY"}
-	}
-
-	// Ollama: check if reachable with models
-	if ollamaModels, err := model.ListOllamaModels(); err == nil && len(ollamaModels) > 0 {
-		creds["ollama"] = detectedCredential{
-			source: fmt.Sprintf("%d model(s) available", len(ollamaModels)),
+		if key, envVar := model.ResolveAPIKey(p.ID); key != "" {
+			creds[p.ID] = detectedCredential{key: key, source: envVar}
 		}
 	}
 
