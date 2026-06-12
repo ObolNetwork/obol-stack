@@ -325,6 +325,7 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 			openclawCommand(cfg),
 			sellCommand(cfg),
 			buyCommand(cfg),
+			smokeCommand(cfg),
 			modelCommand(cfg),
 			{
 				Name:  "app",
