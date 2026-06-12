@@ -1166,3 +1166,82 @@ func modelNames(entries []ModelEntry) []string {
 	}
 	return out
 }
+
+func TestBuildModelEntries_OpenAICompatible(t *testing.T) {
+	entries := buildModelEntries("venice", []string{"venice-uncensored"})
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1 (aggregators get no wildcard)", len(entries))
+	}
+	e := entries[0]
+	if e.ModelName != "venice-uncensored" {
+		t.Errorf("model_name = %q", e.ModelName)
+	}
+	if e.LiteLLMParams.Model != "openai/venice-uncensored" {
+		t.Errorf("model = %q, want openai/venice-uncensored", e.LiteLLMParams.Model)
+	}
+	if e.LiteLLMParams.APIBase != "https://api.venice.ai/api/v1" {
+		t.Errorf("api_base = %q, want venice base_url", e.LiteLLMParams.APIBase)
+	}
+	if e.LiteLLMParams.APIKey != "os.environ/VENICE_API_KEY" {
+		t.Errorf("api_key = %q, want os.environ/VENICE_API_KEY", e.LiteLLMParams.APIKey)
+	}
+}
+
+func TestBuildModelEntries_UnknownProviderLegacyShape(t *testing.T) {
+	// Providers not in the registry keep the legacy generic shape (no api_base).
+	entries := buildModelEntries("somevendor", []string{"m1"})
+	if len(entries) != 1 || entries[0].LiteLLMParams.Model != "somevendor/m1" {
+		t.Fatalf("unexpected legacy entries: %+v", entries)
+	}
+	if entries[0].LiteLLMParams.APIBase != "" {
+		t.Errorf("legacy shape must not set api_base, got %q", entries[0].LiteLLMParams.APIBase)
+	}
+}
+
+func TestProviderByID(t *testing.T) {
+	p, ok := ProviderByID("openrouter")
+	if !ok {
+		t.Fatal("openrouter must be in the registry")
+	}
+	if p.BaseURL == "" || p.EnvVar != "OPENROUTER_API_KEY" || len(p.Free) == 0 {
+		t.Errorf("openrouter row incomplete: %+v", p)
+	}
+	if _, ok := ProviderByID("nope"); ok {
+		t.Error("unknown provider must not be found")
+	}
+}
+
+func TestDetectProvider_AggregatorByAPIBase(t *testing.T) {
+	venice := ModelEntry{ModelName: "x", LiteLLMParams: LiteLLMParams{
+		Model: "openai/x", APIBase: "https://api.venice.ai/api/v1",
+	}}
+	if got := detectProvider(venice); got != "venice" {
+		t.Errorf("venice entry detected as %q, want venice", got)
+	}
+	// A native OpenAI entry (no api_base) must still read as openai.
+	oai := ModelEntry{ModelName: "gpt-5.5", LiteLLMParams: LiteLLMParams{Model: "openai/gpt-5.5"}}
+	if got := detectProvider(oai); got != ProviderOpenAI {
+		t.Errorf("openai entry detected as %q, want openai", got)
+	}
+}
+
+func TestProviderRegistry_Invariants(t *testing.T) {
+	seen := map[string]bool{}
+	for _, p := range knownProviders {
+		if seen[p.ID] {
+			t.Errorf("duplicate provider id %q", p.ID)
+		}
+		seen[p.ID] = true
+		if p.Mode == modeOpenAICompatible && (p.BaseURL == "" || p.EnvVar == "") {
+			t.Errorf("BYOK provider %q must set BaseURL and EnvVar", p.ID)
+		}
+		if len(p.Free) > 0 && p.Mode != modeOpenAICompatible {
+			t.Errorf("provider %q has Free models but is not openai-compatible", p.ID)
+		}
+	}
+	for _, id := range []string{ProviderAnthropic, ProviderOpenAI, ProviderOllama} {
+		if _, ok := ProviderByID(id); !ok {
+			t.Errorf("native provider %q missing from registry", id)
+		}
+	}
+}
