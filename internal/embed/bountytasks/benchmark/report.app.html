@@ -1,0 +1,40 @@
+<!doctype html>
+<!--
+  benchmark@v1 mcp-app report variant. The runner fills the {{…}} placeholders
+  from the SAME dataModel contract as report.a2ui.json ({{scores.rows}} expands
+  to <tr> rows), then the serving tool url_encodes the result into an A2UI
+  `custom` McpApp node's properties.content. The CLIENT renders it inside the
+  double-iframe (sandbox: allow-scripts, never allow-same-origin) — so this
+  file MUST stay self-contained: no external fetches, no storage, no cookies.
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>{{model.name}} — benchmark@v1</title>
+  <style>
+    body { font: 14px/1.5 -apple-system, system-ui, sans-serif; margin: 1.5rem; color: #1a1a1a; }
+    h1 { font-size: 1.2rem; margin: 0 0 .25rem; }
+    h1 small { color: #777; font-weight: normal; }
+    .badge { display: inline-block; padding: .15rem .6rem; border-radius: 999px; background: #eef; font-weight: 600; }
+    table { border-collapse: collapse; margin: 1rem 0; width: 100%; }
+    th, td { border-bottom: 1px solid #e5e5e5; padding: .35rem .6rem; text-align: left; }
+    dl { display: grid; grid-template-columns: max-content 1fr; gap: .2rem .8rem; }
+    dt { color: #777; }
+    footer { margin-top: 1.25rem; color: #999; font-size: .8rem; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>{{model.name}} <small>{{model.subtitle}}</small></h1>
+  <p><span class="badge">{{verdict.label}}</span></p>
+  <table>
+    <thead><tr><th>task</th><th>claimed</th><th>verified</th><th>tolerance</th><th>pass</th></tr></thead>
+    <tbody>{{scores.rows}}</tbody>
+  </table>
+  <dl>
+    <dt>hardwareClass</dt><dd>{{hardware.class}}</dd>
+    <dt>proof</dt><dd>{{hardware.proof}}</dd>
+    <dt>throughput</dt><dd>{{hardware.throughput}}</dd>
+  </dl>
+  <footer>{{provenance.line}}</footer>
+</body>
+</html>

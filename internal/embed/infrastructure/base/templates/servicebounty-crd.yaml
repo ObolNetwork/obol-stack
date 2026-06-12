@@ -1,0 +1,322 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+  name: servicebounties.obol.org
+spec:
+  group: obol.org
+  names:
+    kind: ServiceBounty
+    listKind: ServiceBountyList
+    plural: servicebounties
+    shortNames:
+    - sb
+    singular: servicebounty
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.task.typeRef
+      name: Task
+      type: string
+    - jsonPath: .spec.reward.amount
+      name: Reward
+      type: string
+    - jsonPath: .spec.eval.mode
+      name: Verification
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ServiceBounty is the demand-side inverse of a ServiceOffer: a poster
+          escrows a reward for work (benchmark, fine-tune, serve) and the
+          controller releases it on an accepted, ERC-8004-reputation-graded
+          verdict produced by an OBOL-paid evaluation market. No validator set,
+          no slashing. Task semantics live in versioned task-type packages
+          referenced by spec.task.typeRef; the CRD is stable, task types are data.
+        type: object
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            required:
+            - task
+            - reward
+            properties:
+              task:
+                type: object
+                required:
+                - typeRef
+                properties:
+                  typeRef:
+                    description: Embedded task-type package ref, e.g. "benchmark@v1".
+                    type: string
+                  params:
+                    description: Opaque knobs validated against the task type's schema.
+                    type: object
+                    additionalProperties:
+                      type: string
+                  targetModel:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                      runtime:
+                        type: string
+                  datasetCommit:
+                    type: object
+                    properties:
+                      root:
+                        type: string
+                      privateFraction:
+                        type: string
+                  hardwareProof:
+                    type: string
+                    enum:
+                    - self-report
+                    - gpu-attestation
+                    - evaluator-measured
+              acceptance:
+                type: object
+                properties:
+                  method:
+                    type: string
+                    enum:
+                    - rerun-tolerance
+                    - harness-rerun
+                    - sla-probe
+                    - poster-manual
+                  tolerance:
+                    type: object
+                    additionalProperties:
+                      type: string
+                  commitReveal:
+                    type: boolean
+              reward:
+                type: object
+                properties:
+                  network:
+                    description: Payment network (e.g. base, base-sepolia).
+                    type: string
+                  payTo:
+                    description: Poster's escrow-return / refund address.
+                    type: string
+                    pattern: ^0x[a-fA-F0-9]{40}$
+                  asset:
+                    type: object
+                    properties:
+                      address:
+                        type: string
+                      symbol:
+                        type: string
+                      decimals:
+                        type: integer
+                      transferMethod:
+                        type: string
+                        enum:
+                        - eip3009
+                        - permit2
+                      eip712Name:
+                        description: EIP-712 domain name for permit2 assets (e.g. OBOL).
+                        type: string
+                      eip712Version:
+                        description: EIP-712 domain version for permit2 assets.
+                        type: string
+                  amount:
+                    type: string
+                  escrow:
+                    type: object
+                    properties:
+                      scheme:
+                        type: string
+                        enum:
+                        - upto
+                        - authCapture
+                      facilitator:
+                        type: string
+                      mode:
+                        type: string
+                        enum:
+                        - auto
+                        - facilitator-check
+                        - onchain-lock
+                      valueCapMicros:
+                        type: string
+              eval:
+                type: object
+                properties:
+                  k:
+                    type: integer
+                  mode:
+                    description: required (default) routes acceptance through the
+                      OBOL evaluator quorum; dangerouslySkipped declares
+                      poster-as-judge (bounty marked unverified, no reputation
+                      feedback emitted).
+                    type: string
+                    enum:
+                    - required
+                    - dangerouslySkipped
+                    default: required
+                  selection:
+                    type: string
+                    enum:
+                    - vrf-reputation-weighted
+                    - poster-manual
+                  payment:
+                    type: object
+                    properties:
+                      asset:
+                        type: string
+                      perEvaluator:
+                        type: string
+                      fundedBy:
+                        type: string
+                      settle:
+                        type: string
+              trust:
+                type: object
+                properties:
+                  reputationGate:
+                    type: boolean
+                  selfBond:
+                    type: object
+                    properties:
+                      required:
+                        type: boolean
+                      amount:
+                        type: string
+                      token:
+                        type: string
+              deadline:
+                type: string
+                format: date-time
+              maxFulfillers:
+                type: integer
+                default: 1
+          status:
+            type: object
+            properties:
+              observedGeneration:
+                type: integer
+                format: int64
+              phase:
+                type: string
+              conditions:
+                type: array
+                items:
+                  type: object
+                  required:
+                  - type
+                  - status
+                  properties:
+                    type:
+                      type: string
+                    status:
+                      type: string
+                    reason:
+                      type: string
+                    message:
+                      type: string
+                    lastTransitionTime:
+                      type: string
+                      format: date-time
+              escrowState:
+                type: string
+              weightedScore:
+                type: integer
+              captureTxHash:
+                type: string
+              refundTxHash:
+                type: string
+              reportURI:
+                type: string
+              claims:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    fulfillerAddress:
+                      type: string
+                    claimedAt:
+                      type: string
+                      format: date-time
+                    commitHash:
+                      type: string
+                    phase:
+                      type: string
+              evaluatorPanel:
+                description: Controller-selected seat assignment (deterministic
+                  per-bounty sampling from enrolled evaluators); empty = open-door
+                  fallback.
+                type: array
+                items:
+                  type: object
+                  properties:
+                    address:
+                      type: string
+                    seat:
+                      type: string
+              evaluations:
+                description: Eval-market commit-reveal records promoted from the
+                  obol.org/eval-commit-<addr> / eval-reveal-<addr> annotations.
+                type: array
+                items:
+                  type: object
+                  properties:
+                    address:
+                      type: string
+                    commitHash:
+                      type: string
+                    score:
+                      type: integer
+                    revealedAt:
+                      type: string
+                      format: date-time
+                    withinBand:
+                      type: boolean
+                    phase:
+                      type: string
+                    seat:
+                      type: string
+                    paid:
+                      type: boolean
+                    validationTxHash:
+                      type: string
+              evalBudgetState:
+                description: Poster-funded OBOL eval budget at the escrow gateway
+                  (Reserved | Captured | Voided); evaluators are paid win-or-lose.
+                type: string
+              evalPayoutTxHash:
+                description: Batch-settlement receipt for the eval leg.
+                type: string
+              ladderRecorded:
+                description: One-shot latch for cross-bounty ladder bookkeeping.
+                type: boolean
+              revealDeadline:
+                description: Opens when K commitments are in; missing reveals past
+                  it are graded as worst-case outliers.
+                type: string
+                format: date-time
+              bondState:
+                description: Fulfiller self-bond at the escrow gateway (Reserved |
+                  Returned | Forfeited).
+                type: string
+        required:
+        - spec
+    served: true
+    storage: true
+    subresources:
+      status: {}

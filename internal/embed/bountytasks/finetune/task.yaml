@@ -1,0 +1,80 @@
+# finetune@v1 — STAGED (enabled: false). Ships in the binary so the schema and
+# eval policy are reviewable, but it is not postable: `obol bounty post` only
+# generates subcommands for enabled types and bounty.Resolve refuses disabled
+# refs at admission. Flipped on when the MLX-LoRA runner + held-out re-eval
+# verification land (fine-tunes verify by inference-only re-eval of the
+# committed checkpoint — never by re-training, which is non-deterministic and
+# cost-prohibitive).
+id: finetune
+version: 1
+runner: mlx-lora
+enabled: false
+summary: Fine-tune a model on a committed dataset; verified by held-out re-eval of the committed checkpoint.
+
+requires:
+  - finetune.mlx
+
+params:
+  - name: dataset
+    type: string
+    required: true
+    description: Content-addressed training dataset URI (e.g. ipfs://… or https://…#sha256=…).
+  - name: epochs
+    type: string
+    default: "3"
+    description: Training epochs.
+  - name: learningRate
+    type: string
+    default: "1e-4"
+    description: Learning rate.
+  - name: loraRank
+    type: string
+    default: "32"
+    description: LoRA adapter rank.
+  - name: hardwareClass
+    type: string
+    default: any
+    description: Declared hardware class — free-form so specific GPUs are expressible.
+
+# harness-rerun: evaluators re-eval the COMMITTED checkpoint (modelHash binds
+# it at submit) on the held-out fraction; scores must land within tolerance.
+acceptance:
+  method: harness-rerun
+  commitReveal: true
+  tolerance:
+    evalLoss: "0.05"
+
+eval:
+  defaultK: 3
+  selection: vrf-reputation-weighted
+  payment:
+    asset: OBOL
+    perEvaluator: "2.00"
+    fundedBy: poster
+    settle: batch-settlement
+  ladder:
+    shadowAgreements: 5
+    probationEvals: 10
+    probationValueCap: "50.00"
+    revealWindow: 10m
+    nonRevealPenalty: outlier
+
+hardwareProof: self-report
+
+deliverable:
+  report:
+    variants:
+      - kind: declarative
+        surface: report.a2ui.json
+        catalogId: https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json
+  gate: local
+  artifacts:
+    - name: adapter.safetensors
+      kind: weights
+      required: true
+    - name: eval.json
+      kind: eval-report
+      required: true
+    - name: run.manifest
+      kind: provenance
+      required: true

@@ -130,6 +130,24 @@ rules:
   - apiGroups: ["obol.org"]
     resources: ["purchaserequests/status"]
     verbs: ["get", "update", "patch"]
+  # ServiceBounty demand-side reconcile: watch + finalizer updates + status.
+  # The controller never CREATES bounties (posters do), and the bounty pass
+  # creates no routes/Middleware/Secrets — a bounty must never become ingress.
+  - apiGroups: ["obol.org"]
+    resources: ["servicebounties"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["obol.org"]
+    resources: ["servicebounties/status"]
+    verbs: ["get", "update", "patch"]
+  # Evaluator pool: the controller READS enrollments for panel selection and
+  # writes only the controller-owned ladder STATE (status). It never creates
+  # or deletes enrollments — evaluators do.
+  - apiGroups: ["obol.org"]
+    resources: ["evaluatorenrollments"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["obol.org"]
+    resources: ["evaluatorenrollments/status"]
+    verbs: ["get", "update", "patch"]
   - apiGroups: ["obol.org"]
     resources: ["agents"]
     verbs: ["get", "list", "watch", "update", "patch"]

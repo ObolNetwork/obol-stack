@@ -1,0 +1,103 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+  name: evaluatorenrollments.obol.org
+spec:
+  group: obol.org
+  names:
+    kind: EvaluatorEnrollment
+    listKind: EvaluatorEnrollmentList
+    plural: evaluatorenrollments
+    shortNames:
+    - ee
+    singular: evaluatorenrollment
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.address
+      name: Address
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          EvaluatorEnrollment opts an evaluator into the OBOL eval market: an
+          address + task types it can re-run + optional device attestation.
+          Ladder state in status is controller-owned (Shadow → Probation →
+          Full per task type). No staking — the only collateral is the future
+          income a reputation earns.
+        type: object
+        properties:
+          apiVersion:
+            type: string
+          kind:
+            type: string
+          metadata:
+            type: object
+          spec:
+            type: object
+            required:
+            - address
+            - taskTypes
+            properties:
+              address:
+                description: Evaluator payout/identity address (bound into commitments).
+                type: string
+                pattern: ^0x[a-fA-F0-9]{40}$
+              taskTypes:
+                description: Versioned task-type refs this evaluator can re-run.
+                type: array
+                items:
+                  type: string
+              attestation:
+                type: object
+                properties:
+                  scheme:
+                    type: string
+                    enum:
+                    - none
+                    - secure-enclave
+                  publicKey:
+                    type: string
+                  signature:
+                    type: string
+          status:
+            type: object
+            properties:
+              observedGeneration:
+                type: integer
+                format: int64
+              records:
+                description: Per-task-type ladder progress (controller-owned).
+                type: array
+                items:
+                  type: object
+                  properties:
+                    taskType:
+                      type: string
+                    tier:
+                      type: string
+                    shadowAgreements:
+                      type: integer
+                    probationEvals:
+                      type: integer
+                    completed:
+                      type: integer
+                    divergences:
+                      type: integer
+                    recentFulfillers:
+                      type: array
+                      items:
+                        type: string
+        required:
+        - spec
+    served: true
+    storage: true
+    subresources:
+      status: {}

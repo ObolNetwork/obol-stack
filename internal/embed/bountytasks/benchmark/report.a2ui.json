@@ -1,0 +1,80 @@
+{
+  "$comment": "benchmark@v1 deliverable as an ordered A2UI v1.0-candidate message list (a2ui-project/a2ui, specification/v1_0). Targets the STANDARD basic catalog, so any v1.0 renderer (obol FE react renderer included) draws the scorecard — no custom catalog required. The runner fills updateDataModel with display-ready strings; machine-readable numbers live in the results.json artifact (kind: eval-report), which is the agent-facing source of truth. List rows bind relative to each /scores item.",
+  "messages": [
+    {
+      "version": "v1.0",
+      "createSurface": {
+        "surfaceId": "obol-bounty-benchmark-report",
+        "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+      }
+    },
+    {
+      "version": "v1.0",
+      "updateComponents": {
+        "surfaceId": "obol-bounty-benchmark-report",
+        "components": [
+          { "id": "root", "component": "Card", "child": "layout" },
+          {
+            "id": "layout", "component": "Column",
+            "children": [
+              "title", "subtitle", "verdict", "div-scores",
+              "scores-header", "scores-list", "div-hardware",
+              "hw-title", "hw-class", "hw-proof", "hw-throughput",
+              "div-provenance", "provenance"
+            ]
+          },
+          { "id": "title", "component": "Text", "variant": "h2", "text": { "path": "/model/name" } },
+          { "id": "subtitle", "component": "Text", "variant": "caption", "text": { "path": "/model/subtitle" } },
+          { "id": "verdict", "component": "Text", "variant": "h3", "text": { "path": "/verdict/label" } },
+          { "id": "div-scores", "component": "Divider" },
+          {
+            "id": "scores-header", "component": "Row",
+            "children": ["h-task", "h-claimed", "h-verified", "h-tolerance", "h-pass"]
+          },
+          { "id": "h-task", "component": "Text", "variant": "caption", "text": "task" },
+          { "id": "h-claimed", "component": "Text", "variant": "caption", "text": "claimed" },
+          { "id": "h-verified", "component": "Text", "variant": "caption", "text": "verified" },
+          { "id": "h-tolerance", "component": "Text", "variant": "caption", "text": "tolerance" },
+          { "id": "h-pass", "component": "Text", "variant": "caption", "text": "pass" },
+          {
+            "id": "scores-list", "component": "List", "direction": "vertical",
+            "children": { "componentId": "score-row", "path": "/scores" }
+          },
+          {
+            "id": "score-row", "component": "Row",
+            "children": ["s-task", "s-claimed", "s-verified", "s-tolerance", "s-pass"]
+          },
+          { "id": "s-task", "component": "Text", "text": { "path": "/task" } },
+          { "id": "s-claimed", "component": "Text", "text": { "path": "/claimed" } },
+          { "id": "s-verified", "component": "Text", "text": { "path": "/verified" } },
+          { "id": "s-tolerance", "component": "Text", "text": { "path": "/tolerance" } },
+          { "id": "s-pass", "component": "Text", "text": { "path": "/pass" } },
+          { "id": "div-hardware", "component": "Divider" },
+          { "id": "hw-title", "component": "Text", "variant": "h3", "text": "Hardware" },
+          { "id": "hw-class", "component": "Text", "text": { "path": "/hardware/class" } },
+          { "id": "hw-proof", "component": "Text", "text": { "path": "/hardware/proof" } },
+          { "id": "hw-throughput", "component": "Text", "text": { "path": "/hardware/throughput" } },
+          { "id": "div-provenance", "component": "Divider" },
+          { "id": "provenance", "component": "Text", "variant": "caption", "text": { "path": "/provenance/line" } }
+        ]
+      }
+    },
+    {
+      "version": "v1.0",
+      "updateDataModel": {
+        "surfaceId": "obol-bounty-benchmark-report",
+        "path": "/",
+        "value": {
+          "$comment": "Filled by the runner; the shape below is the contract (display-ready placeholders).",
+          "model": { "name": "", "subtitle": "" },
+          "verdict": { "label": "" },
+          "scores": [
+            { "task": "", "claimed": "", "verified": "", "tolerance": "", "pass": "" }
+          ],
+          "hardware": { "class": "", "proof": "", "throughput": "" },
+          "provenance": { "line": "" }
+        }
+      }
+    }
+  ]
+}

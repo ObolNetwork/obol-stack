@@ -1,0 +1,37 @@
+<!doctype html>
+<!--
+  benchlocal@v1 mcp-app report variant. The runner fills the {{…}} placeholders
+  from the SAME dataModel contract as report.a2ui.json ({{categories.rows}}
+  expands to <tr> rows), then the serving tool url_encodes the result into an
+  A2UI `custom` McpApp node's properties.content. The CLIENT renders it inside
+  the double-iframe (sandbox: allow-scripts, never allow-same-origin) — keep
+  this file self-contained: no external fetches, no storage, no cookies.
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>{{model.name}} — benchlocal@v1</title>
+  <style>
+    body { font: 14px/1.5 -apple-system, system-ui, sans-serif; margin: 1.5rem; color: #1a1a1a; }
+    h1 { font-size: 1.2rem; margin: 0 0 .25rem; }
+    h1 small { color: #777; font-weight: normal; }
+    .badge { display: inline-block; padding: .15rem .6rem; border-radius: 999px; background: #eef; font-weight: 600; }
+    .total { font-size: 1.1rem; font-weight: 600; margin: .75rem 0 .25rem; }
+    table { border-collapse: collapse; margin: .5rem 0 1rem; width: 100%; }
+    th, td { border-bottom: 1px solid #e5e5e5; padding: .35rem .6rem; text-align: left; }
+    .scenarios { color: #777; font-size: .9rem; }
+    footer { margin-top: 1.25rem; color: #999; font-size: .8rem; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <h1>{{model.name}} <small>{{model.subtitle}}</small></h1>
+  <p><span class="badge">{{verdict.label}}</span></p>
+  <p class="total">{{totalScore}}</p>
+  <table>
+    <thead><tr><th>category</th><th>score</th></tr></thead>
+    <tbody>{{categories.rows}}</tbody>
+  </table>
+  <p class="scenarios">{{scenarios.summary}}</p>
+  <footer>{{provenance.line}}</footer>
+</body>
+</html>
