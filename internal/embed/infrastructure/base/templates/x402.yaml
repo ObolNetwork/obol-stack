@@ -255,7 +255,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: verifier
-          image: ghcr.io/obolnetwork/x402-verifier:8ebec92@sha256:079322ffcac158ced5bb4c891a3ccca8a9a622edf3b08866252d4c3b7d556d4a
+          image: ghcr.io/obolnetwork/x402-verifier:d16d167@sha256:1d501bbaa14cd3bfc37cffa47c1c8d19a5743e86cb6066bc73f3197b89ca0abf
           imagePullPolicy: IfNotPresent
           # PSS Restricted: per-container hardening. Verifier is a Go binary
           # reading two RO ConfigMaps; no writeable rootfs paths required.
@@ -357,7 +357,7 @@ spec:
           # bug; b39bcaa (post-rc10 main) carries it, and also ships PR #590's
           # actionable pending-registration status message.
           # See TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix.
-          image: ghcr.io/obolnetwork/serviceoffer-controller:8ebec92@sha256:f6d73260d7425b6b967c1c39672afbd47c08fa0ce86fbfb985e75da26bf39b4e
+          image: ghcr.io/obolnetwork/serviceoffer-controller:d16d167@sha256:ab2bc596b0c2b40664519d01e37aea349a6df22dd1b4ed5e44c1c9e1fcf89519
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
