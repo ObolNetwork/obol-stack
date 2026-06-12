@@ -270,3 +270,73 @@ func TestMedianInt64(t *testing.T) {
 		}
 	}
 }
+
+// ── eval payment units: capture recipients must match the voucher seats ────
+
+// The poster's Permit2 voucher seats are signed in ATOMIC token units
+// (cmd/obol bountyEvalFundRecipients: perAtomic, probation floor(perAtomic/2));
+// escrow.BuildTransferDetails matches CaptureBatch recipients against those
+// seats with exact integer comparison. The controller's settle paths must
+// therefore speak atomic units whenever the asset resolves in the token
+// registry — a human-unit "2.00" recipient would 4xx every real capture.
+func TestEvalSeatAmounts_AtomicMatchesVoucherSeatMath(t *testing.T) {
+	sb := testEvalBounty("atomic-units") // Asset OBOL, PerEvaluator 2.00
+	sb.Spec.Reward.Network = "base-sepolia"
+
+	full, half, ok := evalSeatAmounts(sb)
+	if !ok {
+		t.Fatal("evalSeatAmounts must resolve a positive perEvaluator price")
+	}
+	wantFull, err := escrow.HumanToAtomic("2.00", 18) // OBOL is 18 decimals on base-sepolia
+	if err != nil {
+		t.Fatalf("HumanToAtomic: %v", err)
+	}
+	if full != wantFull || full != "2000000000000000000" {
+		t.Fatalf("full seat = %q, want atomic %q", full, wantFull)
+	}
+	if half != "1000000000000000000" {
+		t.Fatalf("probation seat = %q, want floor(perAtomic/2) = 1000000000000000000", half)
+	}
+
+	// An asset/network pair outside the token registry (OBOL is not
+	// registered on base mainnet) falls back to human-unit bookkeeping
+	// strings — the dev ledger gateway treats amounts as opaque, and no
+	// CLI-signed voucher can exist for an unresolvable token anyway.
+	sb.Spec.Reward.Network = "base"
+	full, half, ok = evalSeatAmounts(sb)
+	if !ok || full != "2.00" || half != "1.00" {
+		t.Fatalf("unresolvable token fallback = (%q, %q, %v), want (2.00, 1.00, true)", full, half, ok)
+	}
+
+	sb.Spec.Eval.Payment.PerEvaluator = "not-a-number"
+	if _, _, ok := evalSeatAmounts(sb); ok {
+		t.Fatal("a non-numeric perEvaluator price must not settle")
+	}
+}
+
+func TestEvalSettle_CaptureRecipientsAreAtomic(t *testing.T) {
+	sb := testEvalBounty("atomic-settle")
+	sb.Spec.Reward.Network = "base-sepolia" // OBOL resolves → atomic units
+	c := newBountyTestController(t, sb)
+	fake := newFakeEscrow()
+	c.bountyEscrow = fake
+	ns := "hermes-obol-agent"
+
+	claimAndSubmit(t, c, ns, "atomic-settle")
+	// All in band (median 85) — no escalation, straight to settle.
+	commitAndReveal(t, c, ns, "atomic-settle", map[string]int64{evalA: 90, evalB: 85, evalC: 80})
+
+	got := getBounty(t, c, ns, "atomic-settle")
+	if got.Status.EvalBudgetState != escrow.StateCaptured {
+		t.Fatalf("eval budget = %q, want Captured", got.Status.EvalBudgetState)
+	}
+	recipients := fake.batches["uid-atomic-settle-eval"]
+	if len(recipients) != 3 {
+		t.Fatalf("capture recipients = %d, want 3", len(recipients))
+	}
+	for _, r := range recipients {
+		if r.Amount != "2000000000000000000" {
+			t.Fatalf("recipient %s amount = %q, want atomic 2000000000000000000 (matches the CLI voucher seat)", r.Address, r.Amount)
+		}
+	}
+}

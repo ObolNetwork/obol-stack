@@ -389,6 +389,115 @@ spec:
                   - type
                   type: object
                 type: array
+              escalation:
+                description: |-
+                  Escalation is the second-round eval state opened when the first-round
+                  quorum diverges beyond the task's escalation epsilon.
+                properties:
+                  budgetState:
+                    description: |-
+                      BudgetState tracks the escalation eval budget at the escrow gateway:
+                      Reserved | Captured | Voided.
+                    type: string
+                  evaluations:
+                    description: Evaluations are the escalation round's commit-reveal
+                      records.
+                    items:
+                      description: |-
+                        ServiceBountyEvaluation is one evaluator's commit-reveal record. WithinBand
+                        is the per-bounty ladder bookkeeping hook: divergence from the quorum median
+                        (or a missing/invalid reveal) is what future reputation feedback keys on.
+                      properties:
+                        address:
+                          description: Address is the evaluator's payout/identity
+                            address (annotation key suffix).
+                          type: string
+                        commitHash:
+                          description: CommitHash = EvalCommitHash(score, salt, address),
+                            promoted first-write-wins.
+                          type: string
+                        grounded:
+                          description: |-
+                            Grounded marks a verdict backed by an on-chain ERC-8004 validation
+                            entry observed for this bounty's eval-request hash — the chain-anchored
+                            reputation signal, as opposed to an annotation-only reveal.
+                          type: boolean
+                        paid:
+                          description: |-
+                            Paid marks inclusion in the eval-budget batch settlement (counting
+                            seats that revealed validly; shadows evaluate free).
+                          type: boolean
+                        phase:
+                          description: 'Phase: Committed | Revealed | BadReveal |
+                            NonReveal.'
+                          type: string
+                        revealedAt:
+                          description: RevealedAt records when a valid reveal was
+                            promoted.
+                          format: date-time
+                          type: string
+                        score:
+                          description: Score is the revealed 0-100 verdict (ERC-8004
+                            validationResponse semantics).
+                          format: int64
+                          type: integer
+                        seat:
+                          description: |-
+                            Seat mirrors the panel seat kind (full | probation | shadow); empty in
+                            open-door mode.
+                          type: string
+                        validationTxHash:
+                          description: |-
+                            ValidationTxHash is the evaluator-submitted ERC-8004 validationResponse
+                            transaction, recorded as provenance (the evaluator's OWN wallet signs;
+                            the controller never does).
+                          type: string
+                        withinBand:
+                          description: |-
+                            WithinBand is false for NonReveal/BadReveal and for revealed scores
+                            outside the outlier band around the quorum median.
+                          type: boolean
+                      type: object
+                    type: array
+                  panel:
+                    description: Panel is the escalation-round seat assignment.
+                    items:
+                      description: ServiceBountyPanelSeat is one selected evaluator
+                        seat.
+                      properties:
+                        address:
+                          description: Address is the enrolled evaluator's address.
+                          type: string
+                        seat:
+                          description: 'Seat: full | probation | shadow.'
+                          type: string
+                      type: object
+                    type: array
+                  reason:
+                    description: Reason records why the escalation opened (e.g. quorum
+                      divergence).
+                    type: string
+                  revealDeadline:
+                    description: RevealDeadline is the escalation round's commit→reveal
+                      cutoff.
+                    format: date-time
+                    type: string
+                  round:
+                    description: Round is the escalation round number (1 = first escalation).
+                    type: integer
+                  voucherDeadline:
+                    description: VoucherDeadline is when the escalation eval-budget
+                      voucher expires.
+                    format: date-time
+                    type: string
+                required:
+                - round
+                type: object
+              escrowSpender:
+                description: |-
+                  EscrowSpender is the facilitator address Permit2 vouchers must name as
+                  the only executor (Receipt.Spender echoed into status for signers).
+                type: string
               escrowState:
                 description: 'EscrowState: Reserved | Captured | Voided (held auth
                   at the facilitator).'
@@ -421,6 +530,12 @@ spec:
                       description: CommitHash = EvalCommitHash(score, salt, address),
                         promoted first-write-wins.
                       type: string
+                    grounded:
+                      description: |-
+                        Grounded marks a verdict backed by an on-chain ERC-8004 validation
+                        entry observed for this bounty's eval-request hash — the chain-anchored
+                        reputation signal, as opposed to an annotation-only reveal.
+                      type: boolean
                     paid:
                       description: |-
                         Paid marks inclusion in the eval-budget batch settlement (counting
@@ -480,6 +595,28 @@ spec:
               observedGeneration:
                 format: int64
                 type: integer
+              panelSeed:
+                description: |-
+                  PanelSeed records the randomness source the evaluator panel was drawn
+                  from, so the sampling is auditable (drand round, raw randomness, sig).
+                properties:
+                  randomness:
+                    description: Randomness is the beacon output the panel sampling
+                      was keyed on.
+                    type: string
+                  round:
+                    description: Round is the drand round the randomness came from.
+                    format: int64
+                    type: integer
+                  signature:
+                    description: Signature is the beacon signature proving the randomness.
+                    type: string
+                  source:
+                    description: Source names the randomness origin (e.g. drand, local-dev).
+                    type: string
+                required:
+                - source
+                type: object
               phase:
                 type: string
               refundTxHash:

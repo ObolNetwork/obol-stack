@@ -66,6 +66,9 @@ eval:
     probationValueCap: "50.00"
     revealWindow: 10m
     nonRevealPenalty: outlier
+    decayHalfLife: 720h
+    escalationWindow: 30m
+    escalationEpsilon: 5
 
 # Pack scores are hardware-agnostic (pass/fail scoring), so self-report is the
 # honest default; bounties pinning a specific GPU should post with

@@ -65,6 +65,15 @@ func TestEnabled_IncludesBenchmark(t *testing.T) {
 	if ladder.NonRevealPenalty != "outlier" {
 		t.Errorf("ladder.nonRevealPenalty = %q, want outlier (non-reveal must cost >= divergence)", ladder.NonRevealPenalty)
 	}
+	if ladder.DecayHalfLife != "720h" {
+		t.Errorf("ladder.decayHalfLife = %q, want 720h (reputation must decay with inactivity)", ladder.DecayHalfLife)
+	}
+	if ladder.EscalationWindow != "30m" {
+		t.Errorf("ladder.escalationWindow = %q, want 30m (escalation rounds need their own reveal window)", ladder.EscalationWindow)
+	}
+	if ladder.EscalationEpsilon != 5 {
+		t.Errorf("ladder.escalationEpsilon = %d, want 5 (diverged quorums must escalate, not settle)", ladder.EscalationEpsilon)
+	}
 
 	// Report variants drive a2ui catalog negotiation: the first variant whose
 	// catalogId the client advertises wins. The lean default is declarative;
@@ -91,6 +100,29 @@ func TestEnabled_IncludesBenchmark(t *testing.T) {
 	}
 	if !hasMCPApp {
 		t.Error("no mcp-app variant; generic MCP-Apps clients would have no rendering")
+	}
+}
+
+// applyLadderDefaults backfills knobs older task packages omit — without it a
+// package missing decayHalfLife/escalationWindow/escalationEpsilon would have
+// undecaying reputation and unescalatable verdicts.
+func TestApplyLadderDefaults(t *testing.T) {
+	var l Ladder
+	applyLadderDefaults(&l)
+	if l.DecayHalfLife != "720h" {
+		t.Errorf("default decayHalfLife = %q, want 720h", l.DecayHalfLife)
+	}
+	if l.EscalationWindow != "30m" {
+		t.Errorf("default escalationWindow = %q, want 30m", l.EscalationWindow)
+	}
+	if l.EscalationEpsilon != 5 {
+		t.Errorf("default escalationEpsilon = %d, want 5", l.EscalationEpsilon)
+	}
+
+	set := Ladder{DecayHalfLife: "24h", EscalationWindow: "1h", EscalationEpsilon: 9}
+	applyLadderDefaults(&set)
+	if set.DecayHalfLife != "24h" || set.EscalationWindow != "1h" || set.EscalationEpsilon != 9 {
+		t.Errorf("explicit ladder values overwritten: %+v", set)
 	}
 }
 

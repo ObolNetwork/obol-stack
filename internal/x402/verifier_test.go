@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	x402types "github.com/x402-foundation/x402/go/types"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	x402types "github.com/x402-foundation/x402/go/types"
 )
 
 // ── Mock facilitator ────────────────────────────────────────────────────────

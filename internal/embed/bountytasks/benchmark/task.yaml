@@ -72,6 +72,9 @@ eval:
     probationValueCap: "50.00" # reward (human units) above which no probation seat is offered
     revealWindow: 10m          # commit→reveal window; every commit closes before any reveal opens
     nonRevealPenalty: outlier  # non-reveal is graded as a worst-case outlier (>= divergence penalty)
+    decayHalfLife: 720h        # reputation half-life: ladder weight halves per window of inactivity
+    escalationWindow: 30m      # second-round commit→reveal window when a diverged quorum escalates
+    escalationEpsilon: 5       # max spread (score points) between counting reveals before escalation
 
 # hardwareProof — self-report is a reputation-backed CLAIM (forgeable text).
 # Throughput-flavored bounties should require gpu-attestation or

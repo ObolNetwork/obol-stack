@@ -106,6 +106,14 @@ type EvaluatorLadderRecord struct {
 	// RecentFulfillers are the last few fulfiller addresses this evaluator
 	// judged — the pair-diversity rule down-weights repeat pairings.
 	RecentFulfillers []string `json:"recentFulfillers,omitempty"`
+
+	// LastEvalAt is when this evaluator's most recent seat settled — the
+	// anchor for reputation decay (decayHalfLife).
+	LastEvalAt *metav1.Time `json:"lastEvalAt,omitempty"`
+
+	// GroundedEvals counts settled seats whose verdict was grounded by an
+	// on-chain ERC-8004 validation entry.
+	GroundedEvals int `json:"groundedEvals,omitempty"`
 }
 
 // ── deepcopy (hand-written, matching the package idiom) ─────────────────────
@@ -188,5 +196,9 @@ func (in *EvaluatorLadderRecord) DeepCopyInto(out *EvaluatorLadderRecord) {
 	if in.RecentFulfillers != nil {
 		out.RecentFulfillers = make([]string, len(in.RecentFulfillers))
 		copy(out.RecentFulfillers, in.RecentFulfillers)
+	}
+	if in.LastEvalAt != nil {
+		l, m := &in.LastEvalAt, &out.LastEvalAt
+		*m = (*l).DeepCopy()
 	}
 }

@@ -313,6 +313,60 @@ type ServiceBountyStatus struct {
 	// Reserved | Returned (success/honest timeout) | Forfeited (rejected work,
 	// offsets the poster's burned eval budget).
 	BondState string `json:"bondState,omitempty"`
+
+	// PanelSeed records the randomness source the evaluator panel was drawn
+	// from, so the sampling is auditable (drand round, raw randomness, sig).
+	PanelSeed *ServiceBountyPanelSeed `json:"panelSeed,omitempty"`
+
+	// Escalation is the second-round eval state opened when the first-round
+	// quorum diverges beyond the task's escalation epsilon.
+	Escalation *ServiceBountyEscalation `json:"escalation,omitempty"`
+
+	// EscrowSpender is the facilitator address Permit2 vouchers must name as
+	// the only executor (Receipt.Spender echoed into status for signers).
+	EscrowSpender string `json:"escrowSpender,omitempty"`
+}
+
+// ServiceBountyPanelSeed is the auditable randomness behind a panel draw.
+type ServiceBountyPanelSeed struct {
+	// Source names the randomness origin (e.g. drand, local-dev).
+	Source string `json:"source"`
+
+	// Round is the drand round the randomness came from.
+	Round uint64 `json:"round,omitempty"`
+
+	// Randomness is the beacon output the panel sampling was keyed on.
+	Randomness string `json:"randomness,omitempty"`
+
+	// Signature is the beacon signature proving the randomness.
+	Signature string `json:"signature,omitempty"`
+}
+
+// ServiceBountyEscalation is one escalation round: a fresh, larger panel
+// re-evaluates the same submission with its own commit-reveal cycle and its
+// own eval budget.
+type ServiceBountyEscalation struct {
+	// Round is the escalation round number (1 = first escalation).
+	Round int `json:"round"`
+
+	// Reason records why the escalation opened (e.g. quorum divergence).
+	Reason string `json:"reason,omitempty"`
+
+	// Panel is the escalation-round seat assignment.
+	Panel []ServiceBountyPanelSeat `json:"panel,omitempty"`
+
+	// Evaluations are the escalation round's commit-reveal records.
+	Evaluations []ServiceBountyEvaluation `json:"evaluations,omitempty"`
+
+	// RevealDeadline is the escalation round's commit→reveal cutoff.
+	RevealDeadline *metav1.Time `json:"revealDeadline,omitempty"`
+
+	// VoucherDeadline is when the escalation eval-budget voucher expires.
+	VoucherDeadline *metav1.Time `json:"voucherDeadline,omitempty"`
+
+	// BudgetState tracks the escalation eval budget at the escrow gateway:
+	// Reserved | Captured | Voided.
+	BudgetState string `json:"budgetState,omitempty"`
 }
 
 // Panel seat kinds (design doc §11.4): full and probation seats count in the
@@ -368,6 +422,11 @@ type ServiceBountyEvaluation struct {
 	// transaction, recorded as provenance (the evaluator's OWN wallet signs;
 	// the controller never does).
 	ValidationTxHash string `json:"validationTxHash,omitempty"`
+
+	// Grounded marks a verdict backed by an on-chain ERC-8004 validation
+	// entry observed for this bounty's eval-request hash — the chain-anchored
+	// reputation signal, as opposed to an annotation-only reveal.
+	Grounded bool `json:"grounded,omitempty"`
 }
 
 type ServiceBountyClaim struct {
@@ -501,6 +560,37 @@ func (in *ServiceBountyStatus) DeepCopyInto(out *ServiceBountyStatus) {
 	}
 	if in.RevealDeadline != nil {
 		l, m := &in.RevealDeadline, &out.RevealDeadline
+		*m = (*l).DeepCopy()
+	}
+	if in.PanelSeed != nil {
+		out.PanelSeed = new(ServiceBountyPanelSeed)
+		*out.PanelSeed = *in.PanelSeed
+	}
+	if in.Escalation != nil {
+		out.Escalation = new(ServiceBountyEscalation)
+		in.Escalation.DeepCopyInto(out.Escalation)
+	}
+}
+
+func (in *ServiceBountyEscalation) DeepCopyInto(out *ServiceBountyEscalation) {
+	*out = *in
+	if in.Panel != nil {
+		out.Panel = make([]ServiceBountyPanelSeat, len(in.Panel))
+		copy(out.Panel, in.Panel)
+	}
+	if in.Evaluations != nil {
+		l, m := &in.Evaluations, &out.Evaluations
+		*m = make([]ServiceBountyEvaluation, len(*l))
+		for i := range *l {
+			(*l)[i].DeepCopyInto(&(*m)[i])
+		}
+	}
+	if in.RevealDeadline != nil {
+		l, m := &in.RevealDeadline, &out.RevealDeadline
+		*m = (*l).DeepCopy()
+	}
+	if in.VoucherDeadline != nil {
+		l, m := &in.VoucherDeadline, &out.VoucherDeadline
 		*m = (*l).DeepCopy()
 	}
 }

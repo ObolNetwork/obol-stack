@@ -119,8 +119,8 @@ func TestErrSafetyAborted_IsExported(t *testing.T) {
 
 func TestRawOffer_GateReadyRequiresBothConditions(t *testing.T) {
 	cases := []struct {
-		name    string
-		conds   [][2]string // (type, status)
+		name     string
+		conds    [][2]string // (type, status)
 		wantGate bool
 	}{
 		{"both true", [][2]string{{"PaymentGateReady", "True"}, {"RoutePublished", "True"}}, true},

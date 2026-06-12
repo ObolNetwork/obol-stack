@@ -58,6 +58,9 @@ eval:
     probationValueCap: "50.00"
     revealWindow: 10m
     nonRevealPenalty: outlier
+    decayHalfLife: 720h
+    escalationWindow: 30m
+    escalationEpsilon: 5
 
 hardwareProof: self-report
 

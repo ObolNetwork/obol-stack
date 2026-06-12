@@ -4,9 +4,11 @@ package serviceoffercontroller
 //
 // Selection is controller-side weighted sampling — the honest local-first
 // stand-in for VRF (the swap seam is exactly this function). It is
-// DETERMINISTIC per bounty: seeded from the bounty UID so every reconcile
-// computes the same panel (idempotence), and the poster cannot re-roll
-// evaluators by touching the spec.
+// DETERMINISTIC per bounty: seeded from the controller's seedSource (local:
+// sha256(UID); drand: a beacon that does not exist yet at posting time) so
+// every reconcile computes the same panel (idempotence), and the poster
+// cannot re-roll evaluators by touching the spec. The seed's provenance is
+// persisted into status.panelSeed so the draw is auditable.
 //
 // Seats: k counting seats (Full tier, plus at most ONE Probation seat on
 // value-capped bounties — the median absorbs one outlier, which is what makes
@@ -16,17 +18,26 @@ package serviceoffercontroller
 // address may evaluate), and ladder bookkeeping still applies to enrolled
 // participants — open-door participation is how the first evaluators climb
 // out of Shadow.
+//
+// Reputation is read through the decay lens (internal/bounty/decay.go): the
+// lottery weight uses the half-life-decayed completion count, a stored Full
+// tier reads as Probation once stale, and chain-grounded verdicts earn a
+// weight bonus. Stored counters are never mutated by decay.
 
 import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"log"
 	"math/rand"
 	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/ethereum/go-ethereum/common"
 
 	"github.com/ObolNetwork/obol-stack/internal/bounty"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
@@ -41,12 +52,26 @@ const (
 	// pairDiversityWeight down-weights an evaluator who recently judged the
 	// same fulfiller (anti-collusion: break up cozy evaluator↔fulfiller pairs).
 	pairDiversityWeight = 0.25
+
+	// escalationSeedSuffix derives the escalation-round seed from the round-0
+	// seed: sha256(round0seed || suffix). Same beacon, distinct lottery.
+	escalationSeedSuffix = "escalation-r1"
 )
 
 // evaluatorCandidate is one enrolled evaluator considered for selection.
 type evaluatorCandidate struct {
 	Address string
 	Record  monetizeapi.EvaluatorLadderRecord
+}
+
+// panelSeedSource returns the controller's seed source, defaulting to the
+// local deterministic seed when none was wired (tests construct Controller
+// literals).
+func (c *Controller) panelSeedSource() seedSource {
+	if c.seeds == nil {
+		return localSeedSource{}
+	}
+	return c.seeds
 }
 
 // listEnrollmentsForTask returns the enrolled evaluators for a task type in
@@ -81,17 +106,64 @@ func ladderRecordFor(enrollment *monetizeapi.EvaluatorEnrollment, taskRef string
 	return monetizeapi.EvaluatorLadderRecord{TaskType: taskRef, Tier: monetizeapi.EvaluatorTierShadow}
 }
 
+// ladderForTask resolves the task package's ladder for taskRef; zero Ladder
+// (with parse-time defaults applied by callees) when the type is unknown.
+func ladderForTask(taskRef string) bounty.Ladder {
+	if t, err := bounty.Resolve(taskRef); err == nil {
+		return t.Eval.Ladder
+	}
+	return bounty.Ladder{}
+}
+
+// ladderWeight is THE lottery weight: 1 + 0.1×(effectiveCompleted −
+// divergences) floored at 0.1, where effectiveCompleted is the half-life-
+// decayed completion count; ×0.25 pair-diversity penalty for a recently
+// judged fulfiller; ×(1 + min(1, grounded/completed)) bonus for verdicts
+// grounded by on-chain ERC-8004 validation entries.
+func ladderWeight(record monetizeapi.EvaluatorLadderRecord, fulfiller string, halfLife time.Duration, now time.Time) float64 {
+	var lastEval *time.Time
+	if record.LastEvalAt != nil {
+		lastEval = &record.LastEvalAt.Time
+	}
+	effective := bounty.EffectiveCompleted(int(record.Completed), lastEval, now, halfLife)
+	w := 1.0 + 0.1*(effective-float64(record.Divergences))
+	if w < 0.1 {
+		w = 0.1
+	}
+	if fulfiller != "" && slices.Contains(record.RecentFulfillers, fulfiller) {
+		w *= pairDiversityWeight
+	}
+	denom := record.Completed
+	if denom < 1 {
+		denom = 1
+	}
+	bonus := float64(record.GroundedEvals) / float64(denom)
+	if bonus > 1 {
+		bonus = 1
+	}
+	return w * (1 + bonus)
+}
+
+// rngFromSeed turns the 32-byte panel seed into the deterministic lottery RNG.
+func rngFromSeed(seed [32]byte) *rand.Rand {
+	return rand.New(rand.NewSource(int64(binary.BigEndian.Uint64(seed[:8])))) //nolint:gosec // deterministic-by-design selection, not crypto
+}
+
 // selectEvaluatorPanel performs the deterministic weighted sampling. Returns
-// nil when the counting pool (Full+Probation) cannot fill k seats — the
-// open-door fallback.
-func selectEvaluatorPanel(uid string, pool []monetizeapi.EvaluatorEnrollment, taskRef string, k int64, rewardAmount, probationValueCap, fulfiller string) []monetizeapi.ServiceBountyPanelSeat {
+// nil when the counting pool (Full+Probation, read through the decay lens)
+// cannot fill k seats — the open-door fallback.
+func selectEvaluatorPanel(seed [32]byte, pool []monetizeapi.EvaluatorEnrollment, taskRef string, k int64, rewardAmount string, ladder bounty.Ladder, fulfiller string, now time.Time) []monetizeapi.ServiceBountyPanelSeat {
+	halfLife := ladder.DecayHalfLifeDuration()
+
 	var full, probation, shadow []evaluatorCandidate
 	for i := range pool {
 		candidate := evaluatorCandidate{
 			Address: pool[i].Spec.Address,
 			Record:  ladderRecordFor(&pool[i], taskRef),
 		}
-		switch candidate.Record.Tier {
+		// Tier gating goes through the decay lens: a stale Full reads as
+		// Probation here without mutating the stored record.
+		switch bounty.EffectiveTier(candidate.Record, ladder, now) {
 		case monetizeapi.EvaluatorTierFull:
 			full = append(full, candidate)
 		case monetizeapi.EvaluatorTierProbation:
@@ -106,19 +178,9 @@ func selectEvaluatorPanel(uid string, pool []monetizeapi.EvaluatorEnrollment, ta
 		return nil // open-door fallback
 	}
 
-	// Deterministic seed: same bounty → same panel, every reconcile.
-	sum := sha256.Sum256([]byte(uid))
-	rng := rand.New(rand.NewSource(int64(binary.BigEndian.Uint64(sum[:8])))) //nolint:gosec // deterministic-by-design selection, not crypto
-
+	rng := rngFromSeed(seed)
 	weight := func(candidate evaluatorCandidate) float64 {
-		w := 1.0 + 0.1*float64(candidate.Record.Completed-candidate.Record.Divergences)
-		if w < 0.1 {
-			w = 0.1
-		}
-		if slices.Contains(candidate.Record.RecentFulfillers, fulfiller) {
-			w *= pairDiversityWeight
-		}
-		return w
+		return ladderWeight(candidate.Record, fulfiller, halfLife, now)
 	}
 
 	var seats []monetizeapi.ServiceBountyPanelSeat
@@ -127,7 +189,7 @@ func selectEvaluatorPanel(uid string, pool []monetizeapi.EvaluatorEnrollment, ta
 	// absorbs one outlier, so the newcomer seat is verdict-safe by
 	// construction — and only offered where the value cap allows.
 	remaining := k
-	if len(probation) > 0 && withinValueCap(rewardAmount, probationValueCap) && k >= 3 {
+	if len(probation) > 0 && withinValueCap(rewardAmount, ladder.ProbationValueCap) && k >= 3 {
 		pick := weightedPick(rng, probation, weight)
 		seats = append(seats, monetizeapi.ServiceBountyPanelSeat{Address: pick.Address, Seat: monetizeapi.PanelSeatProbation})
 		probation = removeCandidate(probation, pick.Address)
@@ -192,13 +254,25 @@ func withinValueCap(amount, cap string) bool {
 
 // ensurePanel runs selection exactly once per bounty (latched by the
 // PanelSelected condition so a growing pool can never re-gate a bounty whose
-// evaluation already started).
+// evaluation already started). A seed-source failure (drand relay down or a
+// beacon failing verification) does NOT latch: the panel stays unselected and
+// the bounty is requeued — never a silent fallback to the local seed.
 func (c *Controller) ensurePanel(ctx context.Context, sb *monetizeapi.ServiceBounty, status *monetizeapi.ServiceBountyStatus) {
 	for _, condition := range status.Conditions {
 		if condition.Type == "PanelSelected" {
 			return
 		}
 	}
+
+	seed, provenance, err := c.panelSeedSource().Seed(ctx, string(sb.UID), sb.CreationTimestamp.Time)
+	if err != nil {
+		log.Printf("bounty %s/%s: panel seed unavailable, retrying in %s: %v", sb.Namespace, sb.Name, seedRetryDelay, err)
+		if c.bountyQueue != nil {
+			c.bountyQueue.AddAfter(sb.Namespace+"/"+sb.Name, seedRetryDelay)
+		}
+		return
+	}
+	status.PanelSeed = &provenance
 
 	taskRef := sb.Spec.Task.TypeRef
 	pool, err := c.listEnrollmentsForTask(ctx, sb.Namespace, taskRef)
@@ -213,16 +287,12 @@ func (c *Controller) ensurePanel(ctx context.Context, sb *monetizeapi.ServiceBou
 	if k < 1 {
 		k = 1
 	}
-	cap := ""
-	if t, err := bounty.Resolve(taskRef); err == nil {
-		cap = t.Eval.Ladder.ProbationValueCap
-	}
 	fulfiller := ""
 	if len(status.Claims) > 0 {
 		fulfiller = status.Claims[0].FulfillerAddress
 	}
 
-	seats := selectEvaluatorPanel(string(sb.UID), pool, taskRef, k, sb.Spec.Reward.Amount, cap, fulfiller)
+	seats := selectEvaluatorPanel(seed, pool, taskRef, k, sb.Spec.Reward.Amount, ladderForTask(taskRef), fulfiller, time.Now())
 	if seats == nil {
 		setPurchaseCondition(&status.Conditions, "PanelSelected", "False", "OpenDoor",
 			fmt.Sprintf("Enrolled pool has fewer than %d counting evaluators — open-door evaluation", k))
@@ -233,9 +303,76 @@ func (c *Controller) ensurePanel(ctx context.Context, sb *monetizeapi.ServiceBou
 		fmt.Sprintf("%d counting seat(s) + %d shadow(s) selected from %d enrolled", k, len(seats)-int(k), len(pool)))
 }
 
+// selectEscalationPanel draws the second-round panel for an escalated verdict:
+// a FRESH, larger panel where every seat counts at full pay (no probation
+// discount, no shadows — escalation is the tiebreaker, not the on-ramp), and
+// every round-0 participant is excluded (keys of exclude are canonical EIP-55
+// addresses). The seed derives deterministically from the same round-0 seed
+// ensurePanel used — sha256(round0seed || "escalation-r1") — recomputed via
+// the seedSource (the provenance in status guarantees the same beacon), so
+// repeated reconciles draw the same escalation panel. A pool smaller than
+// size falls back to open-door (nil seats), same semantics as round 0.
+func (c *Controller) selectEscalationPanel(ctx context.Context, sb *unstructured.Unstructured, size int, exclude map[string]bool) ([]monetizeapi.ServiceBountyPanelSeat, error) {
+	taskRef, _, _ := unstructured.NestedString(sb.Object, "spec", "task", "typeRef")
+	pool, err := c.listEnrollmentsForTask(ctx, sb.GetNamespace(), taskRef)
+	if err != nil {
+		return nil, err
+	}
+
+	round0Seed, _, err := c.panelSeedSource().Seed(ctx, string(sb.GetUID()), sb.GetCreationTimestamp().Time)
+	if err != nil {
+		return nil, err
+	}
+	seed := sha256.Sum256(append(round0Seed[:], []byte(escalationSeedSuffix)...))
+
+	ladder := ladderForTask(taskRef)
+	halfLife := ladder.DecayHalfLifeDuration()
+	now := time.Now()
+
+	fulfiller := ""
+	if claims, _, _ := unstructured.NestedSlice(sb.Object, "status", "claims"); len(claims) > 0 {
+		if claim, ok := claims[0].(map[string]any); ok {
+			fulfiller, _ = claim["fulfillerAddress"].(string)
+		}
+	}
+
+	var counting []evaluatorCandidate
+	for i := range pool {
+		if exclude[common.HexToAddress(pool[i].Spec.Address).Hex()] {
+			continue // round-0 participants never re-judge their own divergence
+		}
+		candidate := evaluatorCandidate{
+			Address: pool[i].Spec.Address,
+			Record:  ladderRecordFor(&pool[i], taskRef),
+		}
+		switch bounty.EffectiveTier(candidate.Record, ladder, now) {
+		case monetizeapi.EvaluatorTierFull, monetizeapi.EvaluatorTierProbation:
+			counting = append(counting, candidate)
+		}
+	}
+	if len(counting) < size {
+		return nil, nil // open-door fallback, same as round 0's thin pool
+	}
+
+	rng := rngFromSeed(seed)
+	weight := func(candidate evaluatorCandidate) float64 {
+		return ladderWeight(candidate.Record, fulfiller, halfLife, now)
+	}
+
+	var seats []monetizeapi.ServiceBountyPanelSeat
+	for len(seats) < size && len(counting) > 0 {
+		pick := weightedPick(rng, counting, weight)
+		seats = append(seats, monetizeapi.ServiceBountyPanelSeat{Address: pick.Address, Seat: monetizeapi.PanelSeatFull})
+		counting = removeCandidate(counting, pick.Address)
+	}
+	sort.Slice(seats, func(i, j int) bool { return seats[i].Address < seats[j].Address })
+	return seats, nil
+}
+
 // recordLadder applies the one-shot cross-bounty bookkeeping after the quorum
 // settles: completion/divergence counters, shadow agreements, probation
-// progress, tier promotions, and the pair-diversity history.
+// progress, tier promotions, the decay anchor (lastEvalAt), grounded-verdict
+// counts, and the pair-diversity history.
 func (c *Controller) recordLadder(ctx context.Context, sb *monetizeapi.ServiceBounty, status *monetizeapi.ServiceBountyStatus) error {
 	taskRef := sb.Spec.Task.TypeRef
 	thresholds := bounty.Ladder{ShadowAgreements: 5, ProbationEvals: 10}
@@ -246,6 +383,7 @@ func (c *Controller) recordLadder(ctx context.Context, sb *monetizeapi.ServiceBo
 	if len(status.Claims) > 0 {
 		fulfiller = status.Claims[0].FulfillerAddress
 	}
+	now := metav1.Now()
 
 	for _, evaluation := range status.Evaluations {
 		raw, err := c.findEnrollmentByAddress(ctx, sb.Namespace, evaluation.Address)
@@ -259,6 +397,10 @@ func (c *Controller) recordLadder(ctx context.Context, sb *monetizeapi.ServiceBo
 
 		record := ladderRecordFor(&enrollment, taskRef)
 		record.Completed++
+		record.LastEvalAt = now.DeepCopy() // the decay anchor: every counted participation re-stamps it
+		if evaluation.Grounded {
+			record.GroundedEvals++
+		}
 		if !evaluation.WithinBand {
 			record.Divergences++
 		}
