@@ -202,6 +202,7 @@ func TestReconcileAgent_HappyPath_ProvisionsAndPins(t *testing.T) {
 		{"secrets", "agent-quant", "hermes-api-server"},
 		{"deployments", "agent-quant", "hermes"},
 		{"services", "agent-quant", "hermes"},
+		{"networkpolicies", "agent-quant", "agent-isolation"},
 	} {
 		if !resourceExists(t, c, kind.gvr, kind.ns, kind.name) {
 			t.Errorf("%s/%s/%s not applied", kind.gvr, kind.ns, kind.name)
@@ -426,6 +427,7 @@ func newProvisioningTestController(t *testing.T, agent *monetizeapi.Agent, seedO
 			monetizeapi.SecretGVR:         "SecretList",
 			monetizeapi.DeploymentGVR:     "DeploymentList",
 			monetizeapi.ServiceGVR:        "ServiceList",
+			monetizeapi.NetworkPolicyGVR:  "NetworkPolicyList",
 		},
 		objects...,
 	)
@@ -469,8 +471,11 @@ func litellmSecretObject(t *testing.T, masterKey string) *unstructured.Unstructu
 func resourceExists(t *testing.T, c *Controller, resource, namespace, name string) bool {
 	t.Helper()
 	gvr := schema.GroupVersionResource{Group: "", Version: "v1", Resource: resource}
-	if resource == "deployments" {
+	switch resource {
+	case "deployments":
 		gvr = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: resource}
+	case "networkpolicies":
+		gvr = schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: resource}
 	}
 	dyn := c.dynClient.Resource(gvr)
 	if namespace != "" {

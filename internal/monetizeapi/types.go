@@ -64,6 +64,7 @@ var (
 	NamespaceGVR      = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "namespaces"}
 	ServiceAccountGVR = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "serviceaccounts"}
 	PVCGVR            = schema.GroupVersionResource{Group: "", Version: "v1", Resource: "persistentvolumeclaims"}
+	NetworkPolicyGVR  = schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"}
 )
 
 // ── ServiceOffer ────────────────────────────────────────────────────────────

@@ -522,6 +522,8 @@ func (c *Controller) resourceFor(u *unstructured.Unstructured) dynamic.ResourceI
 		return c.client.Resource(monetizeapi.PVCGVR).Namespace(u.GetNamespace())
 	case "Deployment":
 		return c.deployments.Namespace(u.GetNamespace())
+	case "NetworkPolicy":
+		return c.client.Resource(monetizeapi.NetworkPolicyGVR).Namespace(u.GetNamespace())
 	default:
 		// Unknown kinds shouldn't reach this path — agentManifests is
 		// closed-set. Fall through to a sensible default so the eventual
