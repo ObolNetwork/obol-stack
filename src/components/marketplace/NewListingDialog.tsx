@@ -624,6 +624,7 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
     'idle'
   );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [cliCopied, setCliCopied] = useState(false);
 
   const paymentAsset = useMemo(
     () => resolveSellAsset(chain, priceToken, CLIENT_SELL_ASSET_ENV),
@@ -645,6 +646,7 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
       setSubmitting(false);
       setSubmitState('idle');
       setErrorMessage(null);
+      setCliCopied(false);
     }
   }, [open]);
 
@@ -659,17 +661,25 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
   }, [open, submitting, onClose]);
 
   const cli = useMemo(() => {
-    const cmd = type === 'inference' ? 'obol sell inference' : 'obol sell http';
+    const payTo = sellerWallet ?? '<agent wallet>';
+    if (type === 'inference') {
+      return [
+        `obol sell inference ${name.trim() || '<name>'} \\`,
+        `  --model ${model.trim() || '<model>'} \\`,
+        `  --per-request ${priceAmount} \\`,
+        `  --token ${priceToken} \\`,
+        `  --chain ${chain} \\`,
+        `  --pay-to ${payTo}`,
+      ].join('\n');
+    }
     return [
-      `${cmd} \\`,
-      `  --name ${name} \\`,
-      type === 'inference'
-        ? `  --model ${model} \\`
-        : `  --upstream ${upstream} \\`,
+      `obol sell http ${name.trim() || '<name>'} \\`,
+      `  --upstream ${upstream.split(':')[0]} \\`,
+      `  --port ${upstream.split(':')[1] ?? '8080'} \\`,
       `  --per-request ${priceAmount} \\`,
       `  --token ${priceToken} \\`,
       `  --chain ${chain} \\`,
-      `  --wallet ${sellerWallet ?? '<agent wallet>'}`,
+      `  --pay-to ${payTo}`,
     ].join('\n');
   }, [
     type,
@@ -684,12 +694,20 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
 
   if (!open) return null;
 
-  const canSubmit =
+  // Inference needs a host gateway — only the CLI can start that today.
+  const canSubmitHttp =
+    type === 'route' &&
     Boolean(sellerWallet) &&
     !submitting &&
     name.trim().length > 0 &&
-    !paymentError &&
-    (type !== 'inference' || model.trim().length > 0);
+    !paymentError;
+
+  const canCopyInferenceCli =
+    type === 'inference' &&
+    Boolean(sellerWallet) &&
+    name.trim().length > 0 &&
+    model.trim().length > 0 &&
+    !paymentError;
 
   const handleTokenChange = (token: PaymentToken) => {
     const next = reconcileSellPaymentSelection(
@@ -723,11 +741,6 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
       setSubmitState('error');
       return;
     }
-    if (type === 'inference' && !model.trim()) {
-      setErrorMessage('Model name is required for inference listings.');
-      setSubmitState('error');
-      return;
-    }
     if (paymentError) {
       setErrorMessage(paymentError);
       setSubmitState('error');
@@ -744,19 +757,14 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
         body: JSON.stringify({
           name,
           namespace: 'llm',
-          type: type === 'inference' ? 'inference' : 'http',
+          type: 'http',
           wallet: sellerWallet,
           chain,
           token: priceToken,
           pricePerRequest: priceAmount,
-          // Model + upstream are set server-side for inference; model must be sent here.
-          model: type === 'inference' ? model.trim() : undefined,
-          upstream: type === 'inference' ? name.trim() : upstream.split(':')[0],
-          port:
-            type === 'inference'
-              ? 8402
-              : Number(upstream.split(':')[1] ?? '8080') || 8080,
-          healthPath: type === 'inference' ? '/health' : '/health',
+          upstream: upstream.split(':')[0],
+          port: Number(upstream.split(':')[1] ?? '8080') || 8080,
+          healthPath: '/health',
         }),
       });
 
@@ -773,6 +781,19 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
       );
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleCopyInferenceCli = async () => {
+    if (!canCopyInferenceCli) return;
+    try {
+      await navigator.clipboard.writeText(cli);
+      setCliCopied(true);
+      setSubmitState('idle');
+      setErrorMessage(null);
+    } catch {
+      setErrorMessage('Could not copy — select the command below manually.');
+      setSubmitState('error');
     }
   };
 
@@ -829,7 +850,7 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
             label="Service type"
             hint={
               type === 'inference'
-                ? 'Ollama model sold via a host inference gateway (port 8402). Run the CLI below to start the gateway after creating.'
+                ? 'Starts a host gateway on your Mac, then publishes the route. The form fills in the CLI — run it in Terminal.'
                 : "Any HTTP upstream — REST, MCP, webhook. Routed through the cluster's x402 verifier."
             }
           >
@@ -969,6 +990,14 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
             </VisibilityGrid>
           </FormField>
 
+          {type === 'inference' ? (
+            <Banner tone="info">
+              Inference cannot be created from the browser yet — it needs a
+              process on your Mac. Copy the command below and run it in
+              Terminal, then check{' '}
+              <Mono css={{ color: '$obolGreen' }}>obol sell status</Mono>.
+            </Banner>
+          ) : null}
           {paymentError || (submitState === 'error' && errorMessage) ? (
             <Banner tone="error">{paymentError ?? errorMessage}</Banner>
           ) : null}
@@ -976,6 +1005,14 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
             <Banner tone="success">
               Created. Reload the marketplace to see it appear once the
               controller reconciles.
+            </Banner>
+          ) : null}
+          {cliCopied ? (
+            <Banner tone="success">
+              Copied. Run it in Terminal on this Mac, then reload the
+              marketplace once{' '}
+              <Mono css={{ color: '$obolGreen' }}>obol sell status</Mono> shows
+              Ready.
             </Banner>
           ) : null}
         </Body>
@@ -991,10 +1028,18 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
           </SecondaryBtn>
           <PrimaryBtn
             type="button"
-            disabled={!canSubmit}
-            onClick={handleSubmit}
+            disabled={
+              type === 'inference' ? !canCopyInferenceCli : !canSubmitHttp
+            }
+            onClick={
+              type === 'inference' ? handleCopyInferenceCli : handleSubmit
+            }
           >
-            {submitting ? 'Creating…' : 'Create listing'}
+            {type === 'inference'
+              ? 'Copy CLI command'
+              : submitting
+                ? 'Creating…'
+                : 'Create listing'}
             {!submitting ? (
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
                 <path
