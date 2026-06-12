@@ -1,11 +1,13 @@
 package serviceoffercontroller
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // TestBuildAgentNetworkPolicy_IsolationInvariants pins the security shape
@@ -120,5 +122,34 @@ func TestAgentManifests_IncludesNetworkPolicy(t *testing.T) {
 	}
 	if !found {
 		t.Error("agentManifests must include the agent-isolation NetworkPolicy")
+	}
+}
+
+// TestResourceFor_NetworkPolicyUsesNetworkPolicyGVR guards the rc16 regression:
+// buildAgentNetworkPolicy added a NetworkPolicy to the agent manifest set, but
+// resourceFor had no case for it and fell through to the ConfigMap default. On
+// a real apiserver that fails ("NetworkPolicy cannot be handled as a
+// ConfigMap") and wedges every agent reconcile, so the remote-signer (and the
+// agent's wallet) never provision. A fake client tolerates the wrong GVR, so
+// the regression hid in unit tests — this asserts the object lands under the
+// NetworkPolicy GVR, not ConfigMap.
+func TestResourceFor_NetworkPolicyUsesNetworkPolicyGVR(t *testing.T) {
+	agent := &monetizeapi.Agent{}
+	agent.Name = "quant"
+	agent.Namespace = "agent-quant"
+	c := newProvisioningTestController(t, agent)
+
+	np := buildAgentNetworkPolicy(agent)
+	if _, err := c.resourceFor(np).Create(context.Background(), np, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create agent NetworkPolicy via resourceFor: %v", err)
+	}
+
+	if _, err := c.client.Resource(monetizeapi.NetworkPolicyGVR).Namespace("agent-quant").
+		Get(context.Background(), "agent-isolation", metav1.GetOptions{}); err != nil {
+		t.Fatalf("agent-isolation not stored under NetworkPolicyGVR — resourceFor mis-mapped it: %v", err)
+	}
+	if _, err := c.client.Resource(monetizeapi.ConfigMapGVR).Namespace("agent-quant").
+		Get(context.Background(), "agent-isolation", metav1.GetOptions{}); err == nil {
+		t.Fatal("agent-isolation was created as a ConfigMap — resourceFor regressed to the ConfigMap default")
 	}
 }

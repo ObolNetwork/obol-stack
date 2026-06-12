@@ -724,8 +724,7 @@ type AgentIdentityList struct {
 	Items           []AgentIdentity `json:"items"`
 }
 
-type AgentIdentitySpec struct {
-}
+type AgentIdentitySpec struct{}
 
 type AgentIdentityStatus struct {
 	// Per-chain ERC-8004 registrations for this identity document.

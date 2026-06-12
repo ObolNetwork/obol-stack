@@ -520,14 +520,19 @@ func (c *Controller) resourceFor(u *unstructured.Unstructured) dynamic.ResourceI
 		return c.client.Resource(monetizeapi.SecretGVR).Namespace(u.GetNamespace())
 	case "PersistentVolumeClaim":
 		return c.client.Resource(monetizeapi.PVCGVR).Namespace(u.GetNamespace())
+	case "NetworkPolicy":
+		return c.client.Resource(monetizeapi.NetworkPolicyGVR).Namespace(u.GetNamespace())
 	case "Deployment":
 		return c.deployments.Namespace(u.GetNamespace())
 	case "NetworkPolicy":
 		return c.client.Resource(monetizeapi.NetworkPolicyGVR).Namespace(u.GetNamespace())
 	default:
-		// Unknown kinds shouldn't reach this path — agentManifests is
-		// closed-set. Fall through to a sensible default so the eventual
-		// apply call surfaces a clear error rather than panicking.
+		// Unknown kinds shouldn't reach this path — agentManifests is a
+		// closed set, guarded by TestResourceFor_CoversEveryAgentManifestKind
+		// so a newly-added kind can't silently fall through here. (A missing
+		// case is how the agent-isolation NetworkPolicy got mis-mapped to a
+		// ConfigMap — "NetworkPolicy cannot be handled as a ConfigMap" — and
+		// wedged every agent reconcile in rc16.)
 		return c.client.Resource(monetizeapi.ConfigMapGVR).Namespace(u.GetNamespace())
 	}
 }
