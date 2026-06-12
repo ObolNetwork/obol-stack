@@ -58,6 +58,21 @@ type Ladder struct {
 	// NonRevealPenalty grades a missing reveal; "outlier" treats it as a
 	// worst-case divergence so silent abstention is never the cheap exit.
 	NonRevealPenalty string `yaml:"nonRevealPenalty"`
+
+	// DecayHalfLife is the reputation half-life: ladder weight earned by an
+	// evaluator halves every window of inactivity past lastEvalAt.
+	DecayHalfLife string `yaml:"decayHalfLife"`
+
+	// EscalationWindow is the second-round commit→reveal duration when a
+	// diverged quorum escalates to a fresh, larger panel.
+	EscalationWindow string `yaml:"escalationWindow"`
+
+	// EscalationEpsilon is the knife-edge band: when the quorum median lands
+	// within epsilon score points of the pass threshold, the verdict
+	// escalates to a fresh 2k+1 panel instead of settling. 0 means "unset"
+	// and backfills to the default (5); use a NEGATIVE value to disable the
+	// knife-edge trigger for a task package.
+	EscalationEpsilon int `yaml:"escalationEpsilon"`
 }
 
 type Eval struct {
@@ -144,7 +159,23 @@ func Load(name string) (TaskType, error) {
 		return TaskType{}, fmt.Errorf("task type %q: missing id", name)
 	}
 
+	applyLadderDefaults(&t.Eval.Ladder)
+
 	return t, nil
+}
+
+// applyLadderDefaults backfills ladder knobs a task package omits, so older
+// packages keep working when the ladder grows a field.
+func applyLadderDefaults(l *Ladder) {
+	if l.DecayHalfLife == "" {
+		l.DecayHalfLife = "720h"
+	}
+	if l.EscalationWindow == "" {
+		l.EscalationWindow = "30m"
+	}
+	if l.EscalationEpsilon == 0 {
+		l.EscalationEpsilon = 5
+	}
 }
 
 // Available returns every embedded task type (enabled or not), sorted by id.

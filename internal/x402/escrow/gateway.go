@@ -37,6 +37,33 @@ const (
 	StateVoided   = "Voided"
 )
 
+// Permit2Voucher is a Uniswap Permit2 SignatureTransfer
+// PermitBatchTransferFrom authorization signed by Owner, executable only by
+// Spender (the escrow facilitator), with the recipients declared at signing
+// time. The voucher binds owner, token, spender, nonce, deadline, and every
+// recipient seat into one EIP-712 signature, so whoever holds it can only
+// move the signed amounts to the signed recipients — or nothing.
+type Permit2Voucher struct {
+	// Owner is the signer whose funds the voucher moves.
+	Owner string `json:"owner"`
+	// Token is the ERC-20 token contract address.
+	Token string `json:"token"`
+	// Network is the chain alias the voucher settles on (e.g. base-sepolia).
+	Network string `json:"network"`
+	// Spender is the only address allowed to execute the transfer — the
+	// escrow facilitator.
+	Spender string `json:"spender"`
+	// Nonce is the Permit2 unordered nonce as a uint256 decimal string.
+	Nonce string `json:"nonce"`
+	// Deadline is the unix timestamp the voucher expires at.
+	Deadline int64 `json:"deadline"`
+	// Recipients are the payout seats, amounts in atomic token units — one
+	// permitted entry per recipient seat.
+	Recipients []BatchRecipient `json:"recipients"`
+	// Signature is the 0x-hex 65-byte EIP-712 signature over the permit.
+	Signature string `json:"signature"`
+}
+
 // ReserveRequest identifies the reward authorization the facilitator should
 // verify and hold for a bounty.
 type ReserveRequest struct {
@@ -51,12 +78,19 @@ type ReserveRequest struct {
 	Amount  string `json:"amount"`
 	// Scheme is the x402 settlement scheme (upto today, authCapture later).
 	Scheme string `json:"scheme"`
+	// Voucher is the optional Permit2 batch-transfer authorization backing
+	// the reservation (real escrow). Gateways that hold nothing (the dev
+	// ledger) may ignore it.
+	Voucher *Permit2Voucher `json:"voucher,omitempty"`
 }
 
 // Receipt is the gateway's record of an escrow operation.
 type Receipt struct {
 	State  string `json:"state"`
 	TxHash string `json:"txHash,omitempty"`
+	// Spender is the facilitator address vouchers must name as the only
+	// executor; surfaced so signers can bind it before reserving.
+	Spender string `json:"spender,omitempty"`
 }
 
 // Gateway is the Hold/Release/Refund seam. Implementations must be safe for

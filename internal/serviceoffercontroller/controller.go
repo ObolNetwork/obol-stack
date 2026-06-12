@@ -83,6 +83,11 @@ type Controller struct {
 	// newBountyEscrowGateway for why.
 	bountyEscrow escrow.Gateway
 
+	// seeds produces the evaluator panel-lottery seed (local sha256(UID) or
+	// drand quicknet, selected by OBOL_BOUNTY_SEED at construction — never
+	// from a bounty's spec). Nil falls back to the local source (tests).
+	seeds seedSource
+
 	pendingAuths sync.Map // key: "ns/name" → []map[string]string
 
 	httpClient *http.Client
@@ -169,6 +174,7 @@ func New(cfg *rest.Config) (*Controller, error) {
 		agentQueue:           workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		bountyQueue:          workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		bountyEscrow:         newBountyEscrowGateway(),
+		seeds:                newSeedSource(),
 		httpClient:           &http.Client{Timeout: 3 * time.Second},
 		registrationRPCBase:  getenvDefault("ERC8004_RPC_BASE", erc8004.DefaultRPCBase),
 		baseURLOverride:      strings.TrimRight(os.Getenv("AGENT_BASE_URL"), "/"),

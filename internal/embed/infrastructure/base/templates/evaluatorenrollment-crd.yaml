@@ -108,6 +108,17 @@ spec:
                         reveals) — the negative reputation signal.
                       format: int64
                       type: integer
+                    groundedEvals:
+                      description: |-
+                        GroundedEvals counts settled seats whose verdict was grounded by an
+                        on-chain ERC-8004 validation entry.
+                      type: integer
+                    lastEvalAt:
+                      description: |-
+                        LastEvalAt is when this evaluator's most recent seat settled — the
+                        anchor for reputation decay (decayHalfLife).
+                      format: date-time
+                      type: string
                     probationEvals:
                       description: |-
                         ProbationEvals counts paid in-band evals while on Probation (promotion

@@ -344,8 +344,8 @@ func (k *seKey) Sign(digest []byte) ([]byte, error) {
 	)
 	if n == 0 {
 		msg := cfStringToGo(errStr)
-		if unsafe.Pointer(errStr) != nil {
-			C.CFRelease(C.CFTypeRef(unsafe.Pointer(errStr)))
+		if errStr != 0 {
+			C.CFRelease(C.CFTypeRef(errStr))
 		}
 		return nil, fmt.Errorf("enclave: Sign failed: %s", msg)
 	}
@@ -370,8 +370,8 @@ func (k *seKey) ECDH(peerPubKeyBytes []byte) ([]byte, error) {
 	)
 	if n == 0 {
 		msg := cfStringToGo(errStr)
-		if unsafe.Pointer(errStr) != nil {
-			C.CFRelease(C.CFTypeRef(unsafe.Pointer(errStr)))
+		if errStr != 0 {
+			C.CFRelease(C.CFTypeRef(errStr))
 		}
 		return nil, fmt.Errorf("enclave: ECDH failed: %s", msg)
 	}
@@ -413,14 +413,14 @@ func newKey(tag string) (Key, error) {
 	var errStr C.CFStringRef
 	privRef := C.create_se_key(ctag, C.int(1), &errCode, &errStr) //nolint:gocritic // CGo pointer arguments, not duplicate subexpressions
 
-	if unsafe.Pointer(privRef) != nil {
+	if privRef != 0 {
 		// Success — key is in keychain.
-		if unsafe.Pointer(errStr) != nil {
-			C.CFRelease(C.CFTypeRef(unsafe.Pointer(errStr)))
+		if errStr != 0 {
+			C.CFRelease(C.CFTypeRef(errStr))
 		}
 		pub, err := extractPublicKey(privRef)
 		if err != nil {
-			C.CFRelease(C.CFTypeRef(unsafe.Pointer(privRef)))
+			C.CFRelease(C.CFTypeRef(privRef))
 			return nil, err
 		}
 		return &seKey{privRef: privRef, tag: tag, pubKey: pub, persistent: true}, nil
@@ -430,32 +430,32 @@ func newKey(tag string) (Key, error) {
 	// fall back to an ephemeral key (dev/test use without code-signing).
 	if C.int(errCode) != C.OBOL_ERR_SEC_MISSING_ENTITLEMENT {
 		msg := cfStringToGo(errStr)
-		if unsafe.Pointer(errStr) != nil {
-			C.CFRelease(C.CFTypeRef(unsafe.Pointer(errStr)))
+		if errStr != 0 {
+			C.CFRelease(C.CFTypeRef(errStr))
 		}
 		return nil, fmt.Errorf("enclave: create_se_key (persistent): %s", msg)
 	}
-	if unsafe.Pointer(errStr) != nil {
-		C.CFRelease(C.CFTypeRef(unsafe.Pointer(errStr)))
+	if errStr != 0 {
+		C.CFRelease(C.CFTypeRef(errStr))
 	}
 
 	// Ephemeral fallback.
 	var errStr2 C.CFStringRef
 	privRef = C.create_se_key(ctag, C.int(0), &errCode, &errStr2) //nolint:gocritic // CGo pointer arguments, not duplicate subexpressions
-	if unsafe.Pointer(privRef) == nil {
+	if privRef == 0 {
 		msg := cfStringToGo(errStr2)
-		if unsafe.Pointer(errStr2) != nil {
-			C.CFRelease(C.CFTypeRef(unsafe.Pointer(errStr2)))
+		if errStr2 != 0 {
+			C.CFRelease(C.CFTypeRef(errStr2))
 		}
 		return nil, fmt.Errorf("enclave: create_se_key (ephemeral fallback): %s", msg)
 	}
-	if unsafe.Pointer(errStr2) != nil {
-		C.CFRelease(C.CFTypeRef(unsafe.Pointer(errStr2)))
+	if errStr2 != 0 {
+		C.CFRelease(C.CFTypeRef(errStr2))
 	}
 
 	pub, err := extractPublicKey(privRef)
 	if err != nil {
-		C.CFRelease(C.CFTypeRef(unsafe.Pointer(privRef)))
+		C.CFRelease(C.CFTypeRef(privRef))
 		return nil, err
 	}
 	k := &seKey{privRef: privRef, tag: tag, pubKey: pub, persistent: false}
@@ -475,23 +475,23 @@ func loadKey(tag string) (Key, error) {
 	privRef := C.load_se_key(ctag, &found, &errStr) //nolint:gocritic // CGo pointer arguments, not duplicate subexpressions
 
 	if found == 0 {
-		if unsafe.Pointer(errStr) != nil {
+		if errStr != 0 {
 			msg := cfStringToGo(errStr)
-			C.CFRelease(C.CFTypeRef(unsafe.Pointer(errStr)))
+			C.CFRelease(C.CFTypeRef(errStr))
 			return nil, fmt.Errorf("enclave: load_se_key: %s", msg)
 		}
 		return nil, ErrKeyNotFound
 	}
-	if unsafe.Pointer(privRef) == nil {
+	if privRef == 0 {
 		return nil, ErrKeyNotFound
 	}
-	if unsafe.Pointer(errStr) != nil {
-		C.CFRelease(C.CFTypeRef(unsafe.Pointer(errStr)))
+	if errStr != 0 {
+		C.CFRelease(C.CFTypeRef(errStr))
 	}
 
 	pub, err := extractPublicKey(privRef)
 	if err != nil {
-		C.CFRelease(C.CFTypeRef(unsafe.Pointer(privRef)))
+		C.CFRelease(C.CFTypeRef(privRef))
 		return nil, err
 	}
 
@@ -590,7 +590,7 @@ func extractPublicKey(privRef C.SecKeyRef) ([]byte, error) {
 
 // cfStringToGo converts a CFStringRef to a Go string.
 func cfStringToGo(s C.CFStringRef) string {
-	if unsafe.Pointer(s) == nil {
+	if s == 0 {
 		return "(no error description)"
 	}
 	cstr := C.cfstring_to_c(s)

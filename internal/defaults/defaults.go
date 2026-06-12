@@ -138,6 +138,7 @@ var devLocallyBuiltImageBases = []string{
 	"ghcr.io/obolnetwork/x402-verifier",
 	"ghcr.io/obolnetwork/serviceoffer-controller",
 	"ghcr.io/obolnetwork/x402-buyer",
+	"ghcr.io/obolnetwork/x402-escrow",
 	"ghcr.io/obolnetwork/demo-server",
 	"ghcr.io/obolnetwork/obol-stack-public-storefront",
 }

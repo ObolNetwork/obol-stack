@@ -2,6 +2,9 @@
 # x402 runtime components:
 # - x402-verifier: shared seller-owned x402 gateway (and legacy /verify endpoint)
 # - serviceoffer-controller: control-plane reconciler for ServiceOffer child resources
+# - x402-escrow: ServiceBounty escrow facilitator (verify/hold Permit2 vouchers,
+#   settle permitTransferFrom on capture). ClusterIP-internal ONLY — never
+#   routed through Traefik or the tunnel.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -391,6 +394,18 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            # ServiceBounty escrow seam. The escrow endpoint + credential come
+            # ONLY from controller env (never from CR spec or annotations) —
+            # see newBountyEscrowGateway. The controller holds no keys: it is
+            # a bounded release trigger against the escrow facilitator.
+            - name: OBOL_BOUNTY_ESCROW_URL
+              value: "http://x402-escrow.x402.svc.cluster.local:8403"
+            - name: OBOL_BOUNTY_ESCROW_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: x402-escrow
+                  key: token
+                  optional: true
           args: []
           resources:
             requests:
@@ -403,6 +418,144 @@ spec:
               # in-controller keystore generation pushed steady-state past
               # 256Mi and triggered OOMKilled restart loops.
               memory: 512Mi
+
+---
+# x402-escrow: the ServiceBounty escrow facilitator. Holds poster-signed
+# Permit2 batch-transfer vouchers (reserve), settles permitTransferFrom
+# on-chain (capture), drops holds store-only (void).
+#
+# Security posture:
+#   - ClusterIP-internal ONLY. No Traefik HTTPRoute, no Middleware, no tunnel
+#     exposure — the only callers are the serviceoffer-controller (via
+#     OBOL_BOUNTY_ESCROW_URL) and in-cluster operators.
+#   - The serviceoffer-controller never signs and holds no keys; the escrow
+#     settlement key/credentials live ONLY in the optional `x402-escrow`
+#     Secret consumed here (keys: `token` = bearer auth for POST /escrow/*,
+#     `key` = hex settlement private key). Both are optional: with no token
+#     the routes are unauthenticated (dev); with no key, capture returns 503
+#     while reserve/void keep working.
+#   - State is an emptyDir: escrow entries are vouchers + receipts, and a
+#     voucher lost PRE-capture only means the poster re-attaches it (reserve
+#     is idempotent and re-runs from the obol.org/*-voucher annotations).
+#     Captured receipts are also recorded on-chain, so replay after pod churn
+#     re-converges from the chain + annotation channel.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: x402-escrow
+  namespace: x402
+  labels:
+    app: x402-escrow
+spec:
+  # Single replica: the file-backed store serializes per-id operations
+  # in-process; multiple replicas would race reserve/capture on the same id.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: x402-escrow
+  template:
+    metadata:
+      labels:
+        app: x402-escrow
+    spec:
+      # PSS Restricted: pod-level identity, same posture as the verifier.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: escrow
+          # Pinned like the sibling images in this file. The publish workflow
+          # adds the @sha256 digest on the first image-bump PR (Renovate);
+          # under OBOL_DEVELOPMENT the pin is rewritten to the local dev tag
+          # (internal/defaults.rewriteDevDigestPins, lockstep with
+          # internal/stack.baseLocalImages).
+          image: ghcr.io/obolnetwork/x402-escrow:04bebbc
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: 8403
+              protocol: TCP
+          args:
+            - --listen=:8403
+          env:
+            # Bearer token for POST /escrow/* (reserve/capture/void). Empty =
+            # unauthenticated (dev-only; the controller gateway symmetrically
+            # omits the Authorization header when its token is empty).
+            - name: OBOL_ESCROW_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: x402-escrow
+                  key: token
+                  optional: true
+            # Hex settlement key (the Permit2 voucher spender). Optional:
+            # without it capture returns 503 and vouchers cannot be
+            # spender-bound, but voucher-less reserve/void still work.
+            - name: OBOL_ESCROW_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: x402-escrow
+                  key: key
+                  optional: true
+            - name: OBOL_ESCROW_RPC_BASE
+              value: "http://erpc.erpc.svc.cluster.local/rpc"
+            # File-backed JSON store on an emptyDir: losing it pre-capture
+            # only means re-attaching the voucher (see header comment).
+            - name: OBOL_ESCROW_STATE_DIR
+              value: "/data"
+          volumeMounts:
+            - name: escrow-state
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 256Mi
+      volumes:
+        - name: escrow-state
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: x402-escrow
+  namespace: x402
+  labels:
+    app: x402-escrow
+spec:
+  type: ClusterIP
+  selector:
+    app: x402-escrow
+  ports:
+    - name: http
+      port: 8403
+      targetPort: http
+      protocol: TCP
 
 ---
 apiVersion: v1

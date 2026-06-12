@@ -132,6 +132,11 @@ func (c *Controller) reconcileBounty(ctx context.Context, key string) error {
 				log.Printf("serviceoffer-controller: void eval budget for deleting bounty %s: %v", key, err)
 			}
 		}
+		if sb.Status.Escalation != nil && sb.Status.Escalation.BudgetState == escrow.StateReserved {
+			if _, err := c.escrowGateway().Void(ctx, string(sb.UID)+"-eval-r1"); err != nil {
+				log.Printf("serviceoffer-controller: void escalation budget for deleting bounty %s: %v", key, err)
+			}
+		}
 		return c.removeBountyFinalizer(ctx, raw)
 	}
 
@@ -170,8 +175,12 @@ func (c *Controller) reconcileBounty(ctx context.Context, key string) error {
 	}
 
 	// 3. Escrow reserve — hold the reward before any claim is admitted, so a
-	// fulfiller never starts work against an unfunded bounty.
-	if status.EscrowState == "" {
+	// fulfiller never starts work against an unfunded bounty. A facilitator
+	// that needs the poster's Permit2 voucher answers AwaitingVoucher; the
+	// voucher ferries in on the obol.org/reward-voucher annotation and the
+	// reserve re-runs (idempotent at the facilitator) until it holds.
+	annotations := raw.GetAnnotations()
+	if status.EscrowState == "" || status.EscrowState == escrowStateAwaitingVoucher {
 		receipt, err := c.escrowGateway().Reserve(ctx, escrow.ReserveRequest{
 			ID:      string(sb.UID),
 			Network: sb.Spec.Reward.Network,
@@ -179,6 +188,7 @@ func (c *Controller) reconcileBounty(ctx context.Context, key string) error {
 			Asset:   sb.Spec.Reward.Asset.Symbol,
 			Amount:  sb.Spec.Reward.Amount,
 			Scheme:  sb.Spec.Reward.Escrow.Scheme,
+			Voucher: voucherFromAnnotations(annotations, bountyRewardVoucherAnnotation),
 		})
 		if err != nil {
 			setPurchaseCondition(&status.Conditions, "EscrowReserved", "False", "FacilitatorError", truncateMessage(err.Error()))
@@ -189,11 +199,16 @@ func (c *Controller) reconcileBounty(ctx context.Context, key string) error {
 			return err // rate-limited retry
 		}
 		status.EscrowState = receipt.State
+		ferryEscrowSpender(&status, receipt)
 	}
-	setPurchaseCondition(&status.Conditions, "EscrowReserved", "True", "Reserved", escrowReason(c.escrowGateway()))
+	if status.EscrowState == escrowStateAwaitingVoucher {
+		setPurchaseCondition(&status.Conditions, "EscrowReserved", "False", "EscrowAwaitingVoucher",
+			fmt.Sprintf("Reward hold awaits the poster's Permit2 voucher (%s annotation)", bountyRewardVoucherAnnotation))
+	} else {
+		setPurchaseCondition(&status.Conditions, "EscrowReserved", "True", "Reserved", escrowReason(c.escrowGateway()))
+	}
 
 	// 4. Claim — promote the claim annotation into controller-owned status.
-	annotations := raw.GetAnnotations()
 	if claim := strings.TrimSpace(annotations[bountyClaimAnnotation]); claim != "" && len(status.Claims) == 0 {
 		if !common.IsHexAddress(claim) {
 			setPurchaseCondition(&status.Conditions, "Claimed", "False", "InvalidAddress",
@@ -223,7 +238,8 @@ func (c *Controller) reconcileBounty(ctx context.Context, key string) error {
 	// 4b. Self-bond — held at the escrow gateway against the fulfiller's own
 	// funds at claim time (anti-griefing: returned on success or honest
 	// timeout, forfeited on rejected work to offset the poster's eval spend).
-	if sb.Spec.Trust.SelfBond.Required && len(status.Claims) > 0 && status.BondState == "" {
+	if sb.Spec.Trust.SelfBond.Required && len(status.Claims) > 0 &&
+		(status.BondState == "" || status.BondState == escrowStateAwaitingVoucher) {
 		receipt, err := c.escrowGateway().Reserve(ctx, escrow.ReserveRequest{
 			ID:      string(sb.UID) + "-bond",
 			Network: sb.Spec.Reward.Network,
@@ -231,6 +247,7 @@ func (c *Controller) reconcileBounty(ctx context.Context, key string) error {
 			Asset:   sb.Spec.Trust.SelfBond.Token,
 			Amount:  sb.Spec.Trust.SelfBond.Amount,
 			Scheme:  sb.Spec.Reward.Escrow.Scheme,
+			Voucher: voucherFromAnnotations(annotations, bountyBondVoucherAnnotation),
 		})
 		if err != nil {
 			if statusErr := c.updateBountyStatus(ctx, raw, status); statusErr != nil {
@@ -239,6 +256,7 @@ func (c *Controller) reconcileBounty(ctx context.Context, key string) error {
 			return err // rate-limited retry
 		}
 		status.BondState = receipt.State
+		ferryEscrowSpender(&status, receipt)
 	}
 
 	// 5. Submit — parse the submission annotation, advance the claim.
@@ -322,6 +340,15 @@ func (c *Controller) reconcileBounty(ctx context.Context, key string) error {
 	if bountyConditionIsTrue(status.Conditions, "Verified") && status.EscrowState == escrow.StateReserved {
 		receipt, err := c.escrowGateway().Capture(ctx, string(sb.UID))
 		if err != nil {
+			if isEscrowVoucherRefusal(err) {
+				// The facilitator wants a (fresh) Permit2 voucher before it
+				// settles — a poster-side signing gap, not a controller
+				// failure. Park as a condition + requeue; never fail the loop.
+				setPurchaseCondition(&status.Conditions, "Paid", "False", "EscrowAwaitingVoucher", truncateMessage(err.Error()))
+				c.bountyQueue.AddAfter(key, 30*time.Second)
+				status.Phase = bountyPhaseRollup(status)
+				return c.updateBountyStatus(ctx, raw, status)
+			}
 			setPurchaseCondition(&status.Conditions, "Paid", "False", "CaptureFailed", truncateMessage(err.Error()))
 			if statusErr := c.updateBountyStatus(ctx, raw, status); statusErr != nil {
 				return statusErr
@@ -330,6 +357,7 @@ func (c *Controller) reconcileBounty(ctx context.Context, key string) error {
 		}
 		status.EscrowState = receipt.State
 		status.CaptureTxHash = receipt.TxHash
+		ferryEscrowSpender(&status, receipt)
 	}
 	if status.EscrowState == escrow.StateCaptured {
 		setPurchaseCondition(&status.Conditions, "Paid", "True", "Captured", "Reward released to fulfiller")
@@ -356,6 +384,11 @@ func (c *Controller) refundBounty(ctx context.Context, raw *unstructured.Unstruc
 	if status.EvalBudgetState == escrow.StateReserved {
 		if _, err := c.escrowGateway().Void(ctx, string(sb.UID)+"-eval"); err == nil {
 			status.EvalBudgetState = escrow.StateVoided
+		}
+	}
+	if status.Escalation != nil && status.Escalation.BudgetState == escrow.StateReserved {
+		if _, err := c.escrowGateway().Void(ctx, string(sb.UID)+"-eval-r1"); err == nil {
+			status.Escalation.BudgetState = escrow.StateVoided
 		}
 	}
 	if status.EscrowState == escrow.StateReserved {

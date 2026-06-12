@@ -2,6 +2,7 @@ package serviceoffercontroller
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -311,5 +312,229 @@ func TestBountyLifecycle_InvalidClaimAddress(t *testing.T) {
 	}
 	if got.Status.Phase != bountyPhaseOpen {
 		t.Fatalf("phase = %q, want Open", got.Status.Phase)
+	}
+}
+
+// ── voucher ferry (Permit2 vouchers ride annotations into ReserveRequests) ──
+
+func TestBountyLifecycle_RewardVoucherFerry(t *testing.T) {
+	fake := newFakeEscrow()
+	fake.spender = "0xFAC0000000000000000000000000000000000FAC"
+	fake.requireVoucher["uid-ferry"] = true
+	c := newBountyTestController(t, testBounty("ferry"))
+	c.bountyEscrow = fake
+	ns := "hermes-obol-agent"
+	key := ns + "/ferry"
+
+	// No voucher yet: the hold parks in AwaitingVoucher — surfaced as a
+	// condition, never a reconcile error — and the facilitator's spender is
+	// ferried into status for the poster-side signer.
+	reconcileBountyUntilSettled(t, c, key)
+	sb := getBounty(t, c, ns, "ferry")
+	if sb.Status.EscrowState != escrowStateAwaitingVoucher {
+		t.Fatalf("EscrowState = %q, want AwaitingVoucher", sb.Status.EscrowState)
+	}
+	if reason := conditionReason(sb.Status.Conditions, "EscrowReserved"); reason != "EscrowAwaitingVoucher" {
+		t.Fatalf("EscrowReserved reason = %q, want EscrowAwaitingVoucher", reason)
+	}
+	if sb.Status.EscrowSpender != fake.spender {
+		t.Fatalf("EscrowSpender = %q, want %q ferried from the receipt", sb.Status.EscrowSpender, fake.spender)
+	}
+
+	// The signed voucher ferries in → re-reserve picks it up → Reserved.
+	annotateBounty(t, c, ns, "ferry", map[string]string{
+		bountyRewardVoucherAnnotation: `{"owner":"0x1111111111111111111111111111111111111111","token":"0x036CbD53842c5426634e7929541eC2318f3dCF7e","network":"base","spender":"0xFAC0000000000000000000000000000000000FAC","nonce":"7","deadline":1893456000,"recipients":[{"address":"0x2222222222222222222222222222222222222222","amount":"500000000"}],"signature":"0xabcd"}`,
+	})
+	reconcileBountyUntilSettled(t, c, key)
+	sb = getBounty(t, c, ns, "ferry")
+	if sb.Status.EscrowState != escrow.StateReserved {
+		t.Fatalf("EscrowState = %q, want Reserved after the voucher arrived", sb.Status.EscrowState)
+	}
+	if !bountyConditionIsTrue(sb.Status.Conditions, "EscrowReserved") {
+		t.Fatal("EscrowReserved must be true once the voucher-backed hold lands")
+	}
+	req := fake.lastReserve(t, "uid-ferry")
+	if req.Voucher == nil || req.Voucher.Nonce != "7" || len(req.Voucher.Recipients) != 1 {
+		t.Fatalf("voucher not ferried intact: %+v", req.Voucher)
+	}
+
+	// Claim → submit → accept → capture: the full transition chain
+	// AwaitingVoucher → Reserved → Captured.
+	annotateBounty(t, c, ns, "ferry", map[string]string{
+		bountyClaimAnnotation: "0x2222222222222222222222222222222222222222",
+	})
+	reconcileBountyUntilSettled(t, c, key)
+	annotateBounty(t, c, ns, "ferry", map[string]string{
+		bountySubmitAnnotation:  `{"resultHash":"0xbeef","reportURI":"http://x"}`,
+		bountyVerdictAnnotation: "accept",
+	})
+	reconcileBountyUntilSettled(t, c, key)
+	sb = getBounty(t, c, ns, "ferry")
+	if sb.Status.EscrowState != escrow.StateCaptured {
+		t.Fatalf("EscrowState = %q, want Captured", sb.Status.EscrowState)
+	}
+	if sb.Status.Phase != bountyPhasePaid {
+		t.Fatalf("phase = %q, want Paid", sb.Status.Phase)
+	}
+}
+
+func TestBountyLifecycle_BondAndEvalVoucherFerry(t *testing.T) {
+	fake := newFakeEscrow()
+	fake.requireVoucher["uid-legs-bond"] = true
+	fake.requireVoucher["uid-legs-eval"] = true
+	sb := testEvalBounty("legs")
+	sb.Spec.Trust.SelfBond = monetizeapi.ServiceBountySelfBond{Required: true, Amount: "10.00", Token: "OBOL"}
+	c := newBountyTestController(t, sb)
+	c.bountyEscrow = fake
+	ns := "hermes-obol-agent"
+	key := ns + "/legs"
+
+	claimAndSubmit(t, c, ns, "legs")
+	got := getBounty(t, c, ns, "legs")
+	if got.Status.BondState != escrowStateAwaitingVoucher {
+		t.Fatalf("BondState = %q, want AwaitingVoucher (parked, not an error)", got.Status.BondState)
+	}
+	if got.Status.EvalBudgetState != escrowStateAwaitingVoucher {
+		t.Fatalf("EvalBudgetState = %q, want AwaitingVoucher", got.Status.EvalBudgetState)
+	}
+
+	annotateBounty(t, c, ns, "legs", map[string]string{
+		bountyBondVoucherAnnotation: `{"owner":"0x2222222222222222222222222222222222222222","token":"0xOB","network":"base","nonce":"1","deadline":1,"signature":"0x01"}`,
+		bountyEvalVoucherAnnotation: `{"owner":"0x1111111111111111111111111111111111111111","token":"0xOB","network":"base","nonce":"2","deadline":1,"signature":"0x02"}`,
+	})
+	reconcileBountyUntilSettled(t, c, key)
+	got = getBounty(t, c, ns, "legs")
+	if got.Status.BondState != escrow.StateReserved {
+		t.Fatalf("BondState = %q, want Reserved after bond voucher", got.Status.BondState)
+	}
+	if got.Status.EvalBudgetState != escrow.StateReserved {
+		t.Fatalf("EvalBudgetState = %q, want Reserved after eval voucher", got.Status.EvalBudgetState)
+	}
+	if fake.lastReserve(t, "uid-legs-bond").Voucher.Nonce != "1" {
+		t.Fatal("bond voucher not attached to the bond reserve")
+	}
+	if fake.lastReserve(t, "uid-legs-eval").Voucher.Nonce != "2" {
+		t.Fatal("eval voucher not attached to the eval-budget reserve")
+	}
+}
+
+func TestBountyLifecycle_EscrowSpenderFerriedOnce(t *testing.T) {
+	fake := newFakeEscrow()
+	fake.spender = "0xFAC0000000000000000000000000000000000001"
+	sb := testBounty("spender")
+	sb.Spec.Trust.SelfBond = monetizeapi.ServiceBountySelfBond{Required: true, Amount: "10.00", Token: "OBOL"}
+	c := newBountyTestController(t, sb)
+	c.bountyEscrow = fake
+	ns := "hermes-obol-agent"
+	key := ns + "/spender"
+
+	reconcileBountyUntilSettled(t, c, key)
+	got := getBounty(t, c, ns, "spender")
+	if got.Status.EscrowSpender != "0xFAC0000000000000000000000000000000000001" {
+		t.Fatalf("EscrowSpender = %q, want first receipt's spender", got.Status.EscrowSpender)
+	}
+
+	// A later receipt reporting a different spender must NOT overwrite the
+	// first — signers bind vouchers to one executor.
+	fake.mu.Lock()
+	fake.spender = "0xFAC0000000000000000000000000000000000002"
+	fake.mu.Unlock()
+	annotateBounty(t, c, ns, "spender", map[string]string{
+		bountyClaimAnnotation: "0x2222222222222222222222222222222222222222",
+	})
+	reconcileBountyUntilSettled(t, c, key)
+	got = getBounty(t, c, ns, "spender")
+	if got.Status.EscrowSpender != "0xFAC0000000000000000000000000000000000001" {
+		t.Fatalf("EscrowSpender = %q, want the FIRST spender preserved", got.Status.EscrowSpender)
+	}
+}
+
+func TestBountyLifecycle_CaptureVoucherRefusalParksNotFails(t *testing.T) {
+	fake := newFakeEscrow()
+	fake.captureErr["uid-refuse"] = fmt.Errorf("escrow capture uid-refuse: facilitator returned 409: AwaitingVoucher: settlement voucher missing")
+	c := newBountyTestController(t, testBounty("refuse"))
+	c.bountyEscrow = fake
+	ns := "hermes-obol-agent"
+	key := ns + "/refuse"
+
+	reconcileBountyUntilSettled(t, c, key)
+	annotateBounty(t, c, ns, "refuse", map[string]string{
+		bountyClaimAnnotation:   "0x2222222222222222222222222222222222222222",
+		bountySubmitAnnotation:  `{"resultHash":"0x1","reportURI":"http://x"}`,
+		bountyVerdictAnnotation: "accept",
+	})
+	// reconcileBountyUntilSettled fails the test on a reconcile error — a
+	// voucher-refused capture must park as a condition instead.
+	reconcileBountyUntilSettled(t, c, key)
+
+	got := getBounty(t, c, ns, "refuse")
+	if reason := conditionReason(got.Status.Conditions, "Paid"); reason != "EscrowAwaitingVoucher" {
+		t.Fatalf("Paid reason = %q, want EscrowAwaitingVoucher", reason)
+	}
+	if got.Status.EscrowState != escrow.StateReserved {
+		t.Fatalf("EscrowState = %q, want still Reserved", got.Status.EscrowState)
+	}
+	if got.Status.Phase != bountyPhaseVerified {
+		t.Fatalf("phase = %q, want Verified (accepted, awaiting settlement voucher)", got.Status.Phase)
+	}
+
+	// Once the facilitator stops refusing (voucher arrived on its side), the
+	// next reconcile captures.
+	fake.mu.Lock()
+	delete(fake.captureErr, "uid-refuse")
+	fake.mu.Unlock()
+	reconcileBountyUntilSettled(t, c, key)
+	got = getBounty(t, c, ns, "refuse")
+	if got.Status.Phase != bountyPhasePaid {
+		t.Fatalf("phase = %q, want Paid after the refusal clears", got.Status.Phase)
+	}
+}
+
+func TestBountyLifecycle_RefundVoidsEscalationBudget(t *testing.T) {
+	fake := newFakeEscrow()
+	sb := testEvalBounty("evict")
+	past := metav1.NewTime(time.Now().Add(time.Hour))
+	sb.Spec.Deadline = &past
+	c := newBountyTestController(t, sb)
+	c.bountyEscrow = fake
+	stubEscalationPanel(t, r1Panel(7), nil)
+	ns := "hermes-obol-agent"
+	key := ns + "/evict"
+
+	claimAndSubmit(t, c, ns, "evict")
+	commitAndReveal(t, c, ns, "evict", map[string]int64{evalA: 10, evalB: 45, evalC: 100})
+
+	got := getBounty(t, c, ns, "evict")
+	if got.Status.Escalation == nil || got.Status.Escalation.BudgetState != escrow.StateReserved {
+		t.Fatalf("escalation = %+v, want a funded escalation", got.Status.Escalation)
+	}
+
+	// Deadline passes with the escalation still unresolved → refund returns
+	// every held leg, including the round-1 eval budget.
+	expired := metav1.NewTime(time.Now().Add(-time.Minute))
+	raw, err := c.dynClient.Resource(monetizeapi.ServiceBountyGVR).Namespace(ns).Get(context.Background(), "evict", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get bounty: %v", err)
+	}
+	if err := unstructured.SetNestedField(raw.Object, expired.UTC().Format(time.RFC3339), "spec", "deadline"); err != nil {
+		t.Fatalf("set deadline: %v", err)
+	}
+	if _, err := c.dynClient.Resource(monetizeapi.ServiceBountyGVR).Namespace(ns).Update(context.Background(), raw, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("update bounty: %v", err)
+	}
+	reconcileBountyUntilSettled(t, c, key)
+
+	got = getBounty(t, c, ns, "evict")
+	if got.Status.Phase != bountyPhaseRefunded {
+		t.Fatalf("phase = %q, want Refunded", got.Status.Phase)
+	}
+	if got.Status.Escalation.BudgetState != escrow.StateVoided {
+		t.Fatalf("escalation budget = %q, want Voided on refund", got.Status.Escalation.BudgetState)
+	}
+	fake.mu.Lock()
+	state := fake.states["uid-evict-eval-r1"]
+	fake.mu.Unlock()
+	if state != escrow.StateVoided {
+		t.Fatalf("facilitator state for eval-r1 = %q, want Voided", state)
 	}
 }

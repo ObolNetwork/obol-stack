@@ -41,7 +41,7 @@ func TestResolveNetworks(t *testing.T) {
 		{"base-sepolia", 1, false},
 		{"mainnet,base", 2, false},
 		{"base-sepolia,base,ethereum", 3, false},
-		{"base,base", 1, false}, // deduplicate
+		{"base,base", 1, false},        // deduplicate
 		{"mainnet,ethereum", 1, false}, // same network, different aliases
 		{"", 0, true},
 		{"unknown", 0, true},
