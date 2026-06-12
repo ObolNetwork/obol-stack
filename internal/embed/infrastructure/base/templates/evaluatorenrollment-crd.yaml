@@ -26,77 +26,117 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: |-
-          EvaluatorEnrollment opts an evaluator into the OBOL eval market: an
-          address + task types it can re-run + optional device attestation.
-          Ladder state in status is controller-owned (Shadow → Probation →
-          Full per task type). No staking — the only collateral is the future
-          income a reputation earns.
-        type: object
+        description: EvaluatorEnrollment opts an evaluator into the eval market.
         properties:
           apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
             type: string
           kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
             type: string
           metadata:
             type: object
           spec:
-            type: object
-            required:
-            - address
-            - taskTypes
             properties:
               address:
-                description: Evaluator payout/identity address (bound into commitments).
-                type: string
+                description: |-
+                  Address is the evaluator's payout/identity address — the same address
+                  used in eval-commit/eval-reveal annotations and bound into commitments.
                 pattern: ^0x[a-fA-F0-9]{40}$
-              taskTypes:
-                description: Versioned task-type refs this evaluator can re-run.
-                type: array
-                items:
-                  type: string
+                type: string
               attestation:
-                type: object
+                description: |-
+                  Attestation is the device-binding claim. v1 RECORDS it (sybil cost is
+                  real hardware per identity once verification lands with the Secure
+                  Enclave wiring); scheme "none" is honest-unattested.
                 properties:
-                  scheme:
+                  publicKey:
+                    description: PublicKey is the attestation public key (secure-enclave
+                      scheme).
                     type: string
+                  scheme:
+                    description: 'Scheme: none (unattested) | secure-enclave (device-bound
+                      P-256 key).'
                     enum:
                     - none
                     - secure-enclave
-                  publicKey:
                     type: string
                   signature:
+                    description: Signature is the enrollment signature over the address
+                      (scheme-defined).
                     type: string
-          status:
+                type: object
+              taskTypes:
+                description: TaskTypes this evaluator can re-run (versioned refs,
+                  e.g. benchmark@v1).
+                items:
+                  type: string
+                type: array
+            required:
+            - address
+            - taskTypes
             type: object
+          status:
+            description: EvaluatorEnrollmentStatus is controller-owned ladder state.
             properties:
               observedGeneration:
-                type: integer
                 format: int64
+                type: integer
               records:
-                description: Per-task-type ladder progress (controller-owned).
-                type: array
+                description: |-
+                  Records hold per-task-type ladder progress (reputation is per task
+                  type — benchmark@v1 rep says nothing about finetune@v1).
                 items:
-                  type: object
+                  description: EvaluatorLadderRecord is one task type's ladder progress.
                   properties:
+                    completed:
+                      description: Completed counts all settled panel seats (any tier).
+                      format: int64
+                      type: integer
+                    divergences:
+                      description: |-
+                        Divergences counts settled seats graded out of band (incl. non/bad
+                        reveals) — the negative reputation signal.
+                      format: int64
+                      type: integer
+                    probationEvals:
+                      description: |-
+                        ProbationEvals counts paid in-band evals while on Probation (promotion
+                        to Full at the package threshold).
+                      format: int64
+                      type: integer
+                    recentFulfillers:
+                      description: |-
+                        RecentFulfillers are the last few fulfiller addresses this evaluator
+                        judged — the pair-diversity rule down-weights repeat pairings.
+                      items:
+                        type: string
+                      type: array
+                    shadowAgreements:
+                      description: |-
+                        ShadowAgreements counts shadow verdicts within tolerance of the quorum
+                        median (promotion to Probation at the task package's threshold).
+                      format: int64
+                      type: integer
                     taskType:
                       type: string
                     tier:
+                      description: 'Tier: Shadow | Probation | Full. New enrollments
+                        start Shadow.'
                       type: string
-                    shadowAgreements:
-                      type: integer
-                    probationEvals:
-                      type: integer
-                    completed:
-                      type: integer
-                    divergences:
-                      type: integer
-                    recentFulfillers:
-                      type: array
-                      items:
-                        type: string
-        required:
-        - spec
+                  type: object
+                type: array
+            type: object
+        type: object
     served: true
     storage: true
     subresources:
