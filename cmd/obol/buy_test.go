@@ -8,6 +8,8 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/buy"
+	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 )
 
@@ -598,5 +600,38 @@ func TestLooksLikeURL(t *testing.T) {
 		if got := looksLikeURL(in); got != want {
 			t.Errorf("looksLikeURL(%q) = %v, want %v", in, got, want)
 		}
+	}
+}
+
+// TestBuyInference_BYOKFrontDoor pins the BYOK onboarding surface on
+// `obol buy inference`: the command exposes --api-key/--free/--model, and
+// every registry provider that isn't local Ollama is recognized as a
+// hosted-provider argument (the dispatch the Action keys on).
+func TestBuyInference_BYOKFrontDoor(t *testing.T) {
+	cmd := buyInferenceCommand(&config.Config{})
+
+	want := map[string]bool{"api-key": false, "free": false, "model": false, "seller": false}
+	for _, f := range cmd.Flags {
+		for _, n := range f.Names() {
+			if _, ok := want[n]; ok {
+				want[n] = true
+			}
+		}
+	}
+	for n, found := range want {
+		if !found {
+			t.Errorf("buy inference missing --%s flag", n)
+		}
+	}
+
+	// Hosted providers route to BYOK onboarding; ollama does not (local).
+	for _, id := range []string{"venice", "openrouter", "nvidia", "gmi", "novita", "huggingface"} {
+		p, ok := model.ProviderByID(id)
+		if !ok || p.ID == model.ProviderOllama {
+			t.Errorf("provider %q should be a BYOK buy-inference target", id)
+		}
+	}
+	if p, ok := model.ProviderByID("ollama"); !ok || p.ID != model.ProviderOllama {
+		t.Errorf("ollama must remain a local (non-buy) provider")
 	}
 }
