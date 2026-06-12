@@ -191,6 +191,17 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 		rule.Model = offer.Spec.Model.Name
 	}
 
+	// Skill offers advertise the bundle identity + integrity hash so the
+	// 402 response carries extra.skill (mirrors the agent extras above).
+	// Upstream URL/auth need no special-casing: spec.upstream points at
+	// the controller-rendered bundle server and effectiveUpstreamAuth
+	// returns "" for non-litellm services.
+	if offer.IsSkill() {
+		rule.SkillName = offer.Spec.Skill.Name
+		rule.SkillVersion = offer.Spec.Skill.Version
+		rule.SkillSHA256 = strings.ToLower(offer.Spec.Skill.SHA256)
+	}
+
 	return rule, nil
 }
 

@@ -116,6 +116,7 @@ python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/discovery/scripts/discovery.p
 | LLM inference (large, >14B) | 0.005–0.02 USDC/req | High quality, slower |
 | Data API / indexer | 0.0001–0.001 USDC/req | Depends on query complexity |
 | Compute-heavy (GPU hours) | 0.10–1.00 USDC/hour | Fine-tuning, training |
+| Skill bundle (one-shot download) | 0.05–5 USDC/download | Priced per download, not per use |
 
 **Always present your research and recommendation to the user and ask them to confirm the price before proceeding.**
 
@@ -165,6 +166,43 @@ obol sell http <name> \
 The `--endpoint` must include `/v1` if the upstream is an OpenAI-compatible server (vLLM, TGI, etc.) — LiteLLM does not append it automatically.
 
 LAN IPs (e.g., `http://192.168.0.202:8000/v1`) are reachable from inside the k3d cluster without any additional network configuration.
+
+#### Skill Bundle (paid download of one of your skills)
+
+A skill directory (`SKILL.md` + scripts) can be sold as a single hash-pinned
+gzipped bundle behind x402 (`type=skill` ServiceOffer):
+
+```bash
+# --from-embedded <skill-name>, or --from <dir> for a custom skill
+obol sell skill <name> \
+  --from-embedded <skill-name> \
+  --skill-version 0.1.0 \
+  --per-request <confirmed_price> \
+  --chain base-sepolia \
+  --pay-to <wallet_address>
+```
+
+The CLI packs the bundle deterministically (compressed cap 900000 bytes),
+pins its sha256 in the offer, and the controller serves it from a tiny
+bundle server at `/services/<name>/bundle.tar.gz` (+ `/skill.json`
+metadata). Buyers verify the download against the sha256 advertised in the
+402 response's `extra.skill` block before AND after paying.
+
+When you (the agent) need to publish a skill yourself without the host CLI,
+use raw K8s objects — see the `sell` skill's "Selling a Skill Bundle
+(type=skill)" section. Your ConfigMap write RBAC is limited to your own
+namespace, so both the bundle ConfigMap and the ServiceOffer must be
+created there.
+
+On-chain hash pinning and ratings (`obol skills calldata set-hash` /
+`obol skills calldata feedback`, tag1=`asr:skill`) only PRINT calldata —
+the OPERATOR submits it with their own wallet. Never sign or submit these
+transactions yourself; present the printed command and calldata to the user.
+
+To instead sell the skill as a live, invocable service, wrap your agent:
+`obol sell skill <name> --as-service --agent <agent-name> --skill-name
+<skill> --skill-version <ver>` (sugar over the `type=agent` path; the skill
+must already be in the Agent CR's skill list).
 
 #### HTTP Service (in-cluster)
 

@@ -117,6 +117,20 @@ type RouteRule struct {
 	// Surfaced as `accepts[].extra.agentRuntime`.
 	AgentRuntime string `yaml:"agentRuntime,omitempty"`
 
+	// SkillName is the skill bundle identifier for type=skill offers.
+	// Surfaced as `accepts[].extra.skill.name` in the 402 response so
+	// buyers see which artifact they are paying to download.
+	SkillName string `yaml:"skillName,omitempty"`
+
+	// SkillVersion is the skill bundle version (e.g. "0.1.0"). Surfaced
+	// as `accepts[].extra.skill.version`.
+	SkillVersion string `yaml:"skillVersion,omitempty"`
+
+	// SkillSHA256 is the lowercase hex sha256 of the gzipped bundle bytes.
+	// Surfaced as `accepts[].extra.skill.sha256` so buyers can verify the
+	// downloaded artifact offline against what the 402 advertised.
+	SkillSHA256 string `yaml:"skillSha256,omitempty"`
+
 	// OfferType records the originating ServiceOffer.spec.type
 	// (inference, http, agent, fine-tuning). The HTML 402 renderer uses
 	// this to pick type-appropriate copy and Buy CTAs.

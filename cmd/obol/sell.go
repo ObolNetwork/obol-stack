@@ -53,6 +53,7 @@ func sellCommand(cfg *config.Config) *cli.Command {
 			sellHTTPCommand(cfg),
 			sellMCPCommand(cfg),
 			sellAgentCommand(cfg),
+			sellSkillCommand(cfg),
 			sellDemoCommand(cfg),
 			sellListCommand(cfg),
 			sellStatusCommand(cfg),
@@ -2811,8 +2812,28 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 			// controller renders an active:false / x402Support:false tombstone
 			// document while keeping the agentId.
 
+			// For type=skill offers the bundle ConfigMap is CLI/agent-created
+			// (not controller-owned, so no ownerRef GC). Capture its name
+			// before the offer disappears and delete it afterwards.
+			bundleCM := ""
+			{
+				bin, kubeconfig := kubectl.Paths(cfg)
+				if out, err := kubectl.Output(bin, kubeconfig, "get", "serviceoffers.obol.org", name, "-n", ns,
+					"-o", "jsonpath={.spec.type}/{.spec.skill.bundleConfigMap}"); err == nil {
+					if typ, cm, ok := strings.Cut(strings.TrimSpace(out), "/"); ok && typ == "skill" && cm != "" {
+						bundleCM = cm
+					}
+				}
+			}
+
 			if err := kubectlRun(cfg, "delete", "serviceoffers.obol.org", name, "-n", ns); err != nil {
 				return err
+			}
+
+			if bundleCM != "" {
+				if err := kubectlRun(cfg, "delete", "configmap", bundleCM, "-n", ns, "--ignore-not-found"); err != nil {
+					u.Warnf("could not delete skill bundle ConfigMap %s/%s: %v", ns, bundleCM, err)
+				}
 			}
 
 			// Drop the offer's manifest from the resume ledger so the next
@@ -4793,7 +4814,10 @@ func resumePersistedServiceOffers(cfg *config.Config, u *ui.UI) error {
 	u.Blank()
 	u.Infof("Resuming %d locally-persisted sell offer(s)...", len(manifests))
 	for _, m := range manifests {
-		if err := kubectlApply(cfg, m.Manifest); err != nil {
+		// resumeApplyManifest (sell_skill.go) routes ConfigMap items in
+		// List bundles through server-side apply; skill bundle payloads
+		// overflow the client-side last-applied annotation otherwise.
+		if err := resumeApplyManifest(cfg, m.Manifest); err != nil {
 			u.Warnf("resume %s %s/%s: %v", m.label(), m.Namespace, m.Name, err)
 			continue
 		}

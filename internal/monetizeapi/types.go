@@ -1,6 +1,7 @@
 package monetizeapi
 
 import (
+	"crypto/md5"
 	"fmt"
 	"strings"
 	"time"
@@ -42,6 +43,16 @@ const (
 	AgentPhaseProvisioning = "Provisioning"
 	AgentPhaseReady        = "Ready"
 	AgentPhaseFailed       = "Failed"
+
+	// SkillBundleKey is the binaryData key in a type=skill offer's bundle
+	// ConfigMap that holds the gzipped skill bundle bytes.
+	SkillBundleKey = "bundle.tar.gz"
+	// MaxSkillBundleBytes caps the gzipped skill bundle size. The artifact
+	// rides a ConfigMap (1MiB object cap) and must leave room for base64
+	// expansion plus object metadata, so the cap applies to the compressed
+	// bytes. Enforced at the CLI before the ConfigMap is written and at
+	// the controller before the bundle server is published.
+	MaxSkillBundleBytes = 900000
 )
 
 var (
@@ -98,18 +109,34 @@ type ServiceOfferList struct {
 	Items           []ServiceOffer `json:"items"`
 }
 
+// The spec-level CEL rule below mirrors the per-method payment rules: a
+// type=skill offer without spec.skill is rejected at admission time,
+// independent of the CLI. (Kept detached from the type's doc comment so
+// it does not leak into the generated schema description.)
+
+// +kubebuilder:validation:XValidation:rule="self.type != 'skill' || has(self.skill)",message="spec.skill is required when type=skill"
 type ServiceOfferSpec struct {
 	// Service type. 'inference' enables model management; 'http' for any HTTP
 	// service; 'agent' references an Agent CR via spec.agent.ref and the
-	// controller derives upstream + model + skills from the agent's status.
+	// controller derives upstream + model + skills from the agent's status;
+	// 'skill' sells a downloadable skill bundle described by spec.skill and
+	// served from a controller-rendered bundle server.
 	// +kubebuilder:default="http"
-	// +kubebuilder:validation:Enum=inference;fine-tuning;http;agent
+	// +kubebuilder:validation:Enum=inference;fine-tuning;http;agent;skill
 	Type string `json:"type,omitempty"`
 
 	// Required when type='agent'. The controller resolves spec.agent.ref to
 	// the referenced Agent CR, derives upstream from Agent.status.endpoint,
 	// and surfaces the agent's pinned model + skills in the 402 response.
 	Agent ServiceOfferAgent `json:"agent,omitempty"`
+
+	// Required when type='skill' (enforced by the spec-level XValidation
+	// rule). Describes the downloadable skill bundle being sold: identity
+	// (name@version), integrity hash, and the ConfigMap carrying the
+	// artifact. The controller renders a static bundle server from this
+	// block and refuses to publish when the ConfigMap bytes do not match
+	// sha256.
+	Skill ServiceOfferSkill `json:"skill,omitempty"`
 
 	// LLM model metadata. Required when the upstream serves an LLM.
 	Model ServiceOfferModel `json:"model,omitempty"`
@@ -162,6 +189,43 @@ type ServiceOfferAgentRef struct {
 	Name string `json:"name"`
 	// +kubebuilder:validation:Required
 	Namespace string `json:"namespace"`
+}
+
+// ServiceOfferSkill is populated when Spec.Type == "skill". It pins the
+// exact artifact being sold: the bundle identity (name@version), the
+// sha256 of the gzipped tar bytes, and the ConfigMap — in the offer's
+// namespace — whose binaryData[SkillBundleKey] holds those bytes. The
+// controller verifies the hash before publishing the bundle server and
+// the verifier surfaces name/version/sha256 in the 402 response's
+// extra.skill block so buyers can check the download offline.
+type ServiceOfferSkill struct {
+	// Skill name (e.g. buy-x402). Combined with Version it forms the
+	// skill ref <name>@<version> used by ERC-8004 feedback tags.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9-]*$`
+	// +kubebuilder:validation:MaxLength=64
+	Name string `json:"name"`
+	// Skill version (e.g. 0.1.0).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]*$`
+	// +kubebuilder:validation:MaxLength=64
+	Version string `json:"version"`
+	// Lowercase hex sha256 of the gzipped bundle bytes (the exact bytes
+	// stored in the bundle ConfigMap and served to buyers).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[a-f0-9]{64}$`
+	SHA256 string `json:"sha256"`
+	// Name of a ConfigMap in the offer's namespace whose
+	// binaryData["bundle.tar.gz"] is the artifact (key: SkillBundleKey).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=253
+	BundleConfigMap string `json:"bundleConfigMap"`
+	// Human-friendly display name for catalog surfaces.
+	// +kubebuilder:validation:MaxLength=128
+	DisplayName string `json:"displayName,omitempty"`
+	// Short human-readable description for catalog surfaces.
+	// +kubebuilder:validation:MaxLength=1024
+	Description string `json:"description,omitempty"`
 }
 
 type ServiceOfferModel struct {
@@ -423,6 +487,14 @@ func (o *ServiceOffer) IsAgent() bool {
 	return o.Spec.Type == "agent"
 }
 
+// IsSkill reports whether the offer sells a downloadable skill bundle.
+// Type=="skill" is the only signal — Spec.Skill must also be populated
+// for a usable offer, but admission validation (the spec-level CEL rule)
+// enforces that.
+func (o *ServiceOffer) IsSkill() bool {
+	return o.Spec.Type == "skill"
+}
+
 // IsDraining reports whether spec.drainAt has been set. Drained offers
 // transition through three phases: pre-drain (DrainAt nil), draining
 // (DrainAt set, now < DrainEndsAt), and drain-expired (DrainAt set,
@@ -458,6 +530,42 @@ func (o *ServiceOffer) DrainExpired(now time.Time) bool {
 	}
 	end := o.DrainEndsAt()
 	return !now.Before(end)
+}
+
+// maxK8sNameLen is the maximum length for a Kubernetes resource name
+// (DNS subdomain).
+const maxK8sNameLen = 253
+
+// maxK8sServiceNameLen is the maximum length for a Kubernetes Service
+// name (RFC 1035 label) and for label VALUES (the workload name doubles
+// as the children's "app" label).
+const maxK8sServiceNameLen = 63
+
+// SkillBundleWorkloadName returns the deterministic name of the bundle
+// server children (Deployment/Service/meta ConfigMap) rendered for a
+// type=skill offer: "so-<offer>-bundle". It lives in monetizeapi so the
+// CLI (which pins spec.upstream.service to it), the controller (which
+// renders the children and rejects spoofed upstreams), and the x402
+// route source share one definition without an import cycle. Mirrors
+// serviceoffercontroller.safeName, but caps at the 63-char RFC 1035
+// Service-name/label limit (not the 253-char object-name limit — the
+// name is also a Service name and an "app" label value): longer offer
+// names are truncated with a short hash appended to avoid collisions.
+func SkillBundleWorkloadName(offerName string) string {
+	const (
+		prefix = "so-"
+		suffix = "-bundle"
+	)
+	full := prefix + offerName + suffix
+	if len(full) <= maxK8sServiceNameLen {
+		return full
+	}
+	hash := fmt.Sprintf("%x", md5.Sum([]byte(offerName)))[:8]
+	maxName := maxK8sServiceNameLen - len(prefix) - len(suffix) - 1 - len(hash) // 1 for the dash before hash
+	if maxName < 1 {
+		maxName = 1
+	}
+	return prefix + offerName[:maxName] + "-" + hash + suffix
 }
 
 // ── PurchaseRequest ─────────────────────────────────────────────────────────
