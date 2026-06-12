@@ -321,6 +321,7 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 			updateCommand(cfg),
 			upgradeCommand(cfg),
 			networkCommand(cfg),
+			nodeCommand(cfg),
 			hermesCommand(cfg),
 			openclawCommand(cfg),
 			sellCommand(cfg),
