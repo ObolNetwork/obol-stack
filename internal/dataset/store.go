@@ -18,6 +18,10 @@ type State struct {
 	GroupID      string           `json:"groupID"`
 	Versions     []DatasetVersion `json:"versions"`
 	Entitlements []Entitlement    `json:"entitlements"`
+	// Artifacts maps a version Seq to the operator-local file path serving
+	// its bytes. It is local-only metadata (not part of the signed log), so a
+	// `publish` can rebuild its file-backed artifact source from disk.
+	Artifacts map[int]string `json:"artifacts,omitempty"`
 }
 
 // Store persists State to a JSON file using an atomic temp-file + rename, so a

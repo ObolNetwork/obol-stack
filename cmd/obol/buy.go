@@ -59,6 +59,7 @@ func buyCommand(cfg *config.Config) *cli.Command {
 		Usage: "Buy access to remote services via x402 micropayments",
 		Commands: []*cli.Command{
 			buyInferenceCommand(cfg),
+			buyDatasetCommand(cfg),
 		},
 	}
 }

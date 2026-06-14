@@ -326,6 +326,7 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 			sellCommand(cfg),
 			buyCommand(cfg),
 			researchCommand(cfg),
+			datasetCommand(cfg),
 			modelCommand(cfg),
 			{
 				Name:  "app",
