@@ -234,6 +234,13 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// MPP credit-card offers gate through Stripe (authorize -> capture/cancel)
+	// instead of the x402 facilitator ForwardAuth path.
+	if rule.IsCard() {
+		v.serveCardGated(w, r, rule, requirement, extensions, proxy, defaultCardGateway, defaultSPTGuard)
+		return
+	}
+
 	wallet := cfg.Wallet
 	if rule.PayTo != "" {
 		wallet = rule.PayTo
@@ -313,6 +320,12 @@ func (v *Verifier) matchPaidRouteFull(cfg *PricingConfig, uri string) (*RouteRul
 		return nil, x402types.PaymentRequirements{}, nil, nil, ChainInfo{}, AssetInfo{}, false
 	}
 
+	// Card routes settle off-chain via Stripe; skip chain/asset resolution
+	// and emit the MPP credit-card 402 option instead.
+	if rule.IsCard() {
+		return rule, buildCardRequirement(rule), nil, prometheusLabels(rule), ChainInfo{}, AssetInfo{}, true
+	}
+
 	wallet := cfg.Wallet
 	if rule.PayTo != "" {
 		wallet = rule.PayTo
@@ -334,6 +347,7 @@ func (v *Verifier) matchPaidRouteFull(cfg *PricingConfig, uri string) (*RouteRul
 	requirement := BuildV2RequirementWithAsset(chain, asset, rule.Price, wallet, rule.MaxTimeoutSeconds)
 	mergeAgentExtras(&requirement, rule)
 	mergeDatasetExtras(&requirement, rule)
+	mergeSkillExtras(&requirement, rule)
 	extensions := WithBazaar(BuildExtensionsForAsset(asset), rule.OfferType, rule.Model)
 	return rule, requirement, extensions, prometheusLabels(rule), chain, asset, true
 }
@@ -423,6 +437,28 @@ func mergeDatasetExtras(req *x402types.PaymentRequirements, rule *RouteRule) {
 		dataset["sizeBytes"] = rule.DatasetSizeBytes
 	}
 	req.Extra["dataset"] = dataset
+}
+
+// mergeSkillExtras adds the skill bundle identity from a RouteRule to the
+// requirement's Extra map as extra.skill = {name, version, sha256} so
+// buyers probing a 402 on a type=skill offer can verify the artifact they
+// are about to pay for. No-op for non-skill rules (SkillName empty).
+// Strictly additive — mirrors mergeAgentExtras above.
+func mergeSkillExtras(req *x402types.PaymentRequirements, rule *RouteRule) {
+	if rule.SkillName == "" {
+		return
+	}
+	if req.Extra == nil {
+		req.Extra = make(map[string]interface{})
+	}
+	skill := map[string]any{"name": rule.SkillName}
+	if rule.SkillVersion != "" {
+		skill["version"] = rule.SkillVersion
+	}
+	if rule.SkillSHA256 != "" {
+		skill["sha256"] = rule.SkillSHA256
+	}
+	req.Extra["skill"] = skill
 }
 
 // buildPaymentDisplay turns the matched rule + chain + asset into pre-formatted

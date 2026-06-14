@@ -285,14 +285,117 @@ func TestSellHTTP_Flags(t *testing.T) {
 		"namespace", "upstream", "port", "health-path", "path",
 		"max-timeout",
 		"register", "no-register", "register-name", "register-description", "register-image",
+		"pay-with", "stripe-account", "card-currency", "stripe-network-id",
 	)
 
 	assertStringDefault(t, flags, "chain", "base")
 	assertStringDefault(t, flags, "token", "USDC")
 	assertStringDefault(t, flags, "namespace", "default")
 	assertStringDefault(t, flags, "health-path", "/health")
+	assertStringDefault(t, flags, "pay-with", "crypto")
+	assertStringDefault(t, flags, "card-currency", "usd")
 	assertIntDefault(t, flags, "port", 8080)
 	assertIntDefault(t, flags, "max-timeout", 300)
+}
+
+func TestNormalizePayWith(t *testing.T) {
+	cases := map[string]string{
+		"":        payMethodCrypto,
+		"  ":      payMethodCrypto,
+		"crypto":  payMethodCrypto,
+		"CRYPTO":  payMethodCrypto,
+		"card":    payMethodCard,
+		" Card ":  payMethodCard,
+		"unknown": "unknown", // passthrough; caller rejects
+	}
+	for in, want := range cases {
+		if got := normalizePayWith(in); got != want {
+			t.Errorf("normalizePayWith(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// runCardResolve builds a minimal cli.Command carrying the card flags,
+// parses args, and returns resolveCardPayment's result.
+func runCardResolve(t *testing.T, args ...string) (map[string]any, error) {
+	t.Helper()
+	var (
+		out  map[string]any
+		rerr error
+	)
+	cmd := &cli.Command{
+		Name: "http",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "pay-with", Value: payMethodCard},
+			&cli.StringFlag{Name: "stripe-account"},
+			&cli.StringFlag{Name: "card-currency", Value: "usd"},
+			&cli.StringFlag{Name: "stripe-network-id"},
+			&cli.IntFlag{Name: "max-timeout", Value: 300},
+		},
+		Action: func(_ context.Context, c *cli.Command) error {
+			out, rerr = resolveCardPayment(c, map[string]any{"perRequest": "0.01"})
+			return nil
+		},
+	}
+	if err := cmd.Run(context.Background(), append([]string{"http"}, args...)); err != nil {
+		t.Fatalf("cmd.Run: %v", err)
+	}
+	return out, rerr
+}
+
+func TestResolveCardPayment_Valid(t *testing.T) {
+	out, err := runCardResolve(t, "--stripe-account", "acct_1A2b3C4d", "--card-currency", "eur", "--stripe-network-id", "stripenet_test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out["method"] != payMethodCard {
+		t.Errorf("method = %v, want card", out["method"])
+	}
+	card, ok := out["card"].(map[string]any)
+	if !ok {
+		t.Fatalf("card block missing/not a map: %v", out["card"])
+	}
+	if card["account"] != "acct_1A2b3C4d" {
+		t.Errorf("card.account = %v, want acct_1A2b3C4d", card["account"])
+	}
+	if card["provider"] != "stripe" {
+		t.Errorf("card.provider = %v, want stripe", card["provider"])
+	}
+	if card["currency"] != "eur" {
+		t.Errorf("card.currency = %v, want eur", card["currency"])
+	}
+	if card["networkId"] != "stripenet_test" {
+		t.Errorf("card.networkId = %v, want stripenet_test", card["networkId"])
+	}
+	if _, ok := out["price"].(map[string]any); !ok {
+		t.Errorf("price block missing: %v", out["price"])
+	}
+	// payTo / network must NOT leak into a card payment.
+	if _, ok := out["payTo"]; ok {
+		t.Error("card payment must not contain payTo")
+	}
+	if _, ok := out["network"]; ok {
+		t.Error("card payment must not contain network")
+	}
+}
+
+func TestResolveCardPayment_Invalid(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"missing account", []string{"--card-currency", "usd"}},
+		{"bad account prefix", []string{"--stripe-account", "0xdeadbeef"}},
+		{"bad currency", []string{"--stripe-account", "acct_x1", "--card-currency", "US"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := runCardResolve(t, tc.args...)
+			if err == nil {
+				t.Fatalf("expected error for %s", tc.name)
+			}
+		})
+	}
 }
 
 func TestBuildSellRegistrationConfig_DefaultEnabled(t *testing.T) {

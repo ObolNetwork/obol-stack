@@ -117,6 +117,20 @@ type RouteRule struct {
 	// Surfaced as `accepts[].extra.agentRuntime`.
 	AgentRuntime string `yaml:"agentRuntime,omitempty"`
 
+	// SkillName is the skill bundle identifier for type=skill offers.
+	// Surfaced as `accepts[].extra.skill.name` in the 402 response so
+	// buyers see which artifact they are paying to download.
+	SkillName string `yaml:"skillName,omitempty"`
+
+	// SkillVersion is the skill bundle version (e.g. "0.1.0"). Surfaced
+	// as `accepts[].extra.skill.version`.
+	SkillVersion string `yaml:"skillVersion,omitempty"`
+
+	// SkillSHA256 is the lowercase hex sha256 of the gzipped bundle bytes.
+	// Surfaced as `accepts[].extra.skill.sha256` so buyers can verify the
+	// downloaded artifact offline against what the 402 advertised.
+	SkillSHA256 string `yaml:"skillSha256,omitempty"`
+
 	// OfferType records the originating ServiceOffer.spec.type
 	// (inference, http, agent, fine-tuning). The HTML 402 renderer uses
 	// this to pick type-appropriate copy and Buy CTAs.
@@ -145,6 +159,33 @@ type RouteRule struct {
 	// minutes-to-hours here — operator-set values up to
 	// MaxMaxTimeoutSeconds are honored verbatim.
 	MaxTimeoutSeconds int64 `yaml:"maxTimeoutSeconds,omitempty"`
+
+	// Card, when non-nil, marks this route as gated by the MPP credit-card
+	// method (Stripe stripe.charge) instead of x402 on-chain settlement.
+	// Mirrors ServiceOffer.spec.payment.card. SPIKE: the serviceoffer route
+	// source does not yet populate this from the CRD — see card.go.
+	Card *CardRoute `yaml:"card,omitempty"`
+}
+
+// CardRoute carries the per-route MPP credit-card (Stripe) terms used when
+// RouteRule.Card is non-nil. It is the card-method analog of the
+// PayTo/Network/Asset fields above.
+type CardRoute struct {
+	// Provider is the card payment provider (only "stripe" today).
+	Provider string `yaml:"provider,omitempty"`
+	// Account is the Stripe destination account id (acct_...) that receives
+	// settled funds — the card analog of PayTo.
+	Account string `yaml:"account,omitempty"`
+	// Currency is the ISO-4217 charge currency (e.g. "usd").
+	Currency string `yaml:"currency,omitempty"`
+	// Decimals is the currency's minor-unit precision (2 for usd/eur).
+	Decimals int `yaml:"decimals,omitempty"`
+	// NetworkID is the Stripe "machine payments" Business Network id,
+	// advertised in the 402 challenge so MPP clients can mint an SPT.
+	NetworkID string `yaml:"networkId,omitempty"`
+	// PaymentMethodTypes are the accepted Stripe payment-method types,
+	// advertised in the challenge (defaults to ["card"]).
+	PaymentMethodTypes []string `yaml:"paymentMethodTypes,omitempty"`
 }
 
 // LoadConfig reads and parses a pricing configuration YAML file.

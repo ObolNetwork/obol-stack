@@ -63,7 +63,10 @@ ARTIFACT_DIR="${FLOW12_ARTIFACT_DIR:-$OBOL_ROOT/.tmp/flow-12-$(date +%Y%m%d-%H%M
 mkdir -p "$ARTIFACT_DIR"
 LOG="$ARTIFACT_DIR/test-output.log"
 set +e
-go test -tags integration -v \
+# -count=1 forbids the Go test cache: this test's prerequisites (Ollama
+# models, cluster state, facilitator image) live outside the build graph, so
+# a cached result silently replays a stale verdict.
+go test -tags integration -count=1 -v \
     -run '^TestIntegration_SellBuySidecar_OBOLPermit2$' \
     -timeout "${FLOW12_TIMEOUT:-30m}" \
     ./internal/openclaw/ 2>&1 | tee "$LOG"

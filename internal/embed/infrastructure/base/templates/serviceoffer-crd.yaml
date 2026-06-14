@@ -148,11 +148,25 @@ spec:
                 pattern: ^/[a-zA-Z0-9/_.-]*$
                 type: string
               payment:
+                description: |-
+                  ServiceOfferPayment describes how buyers pay for the offer. Two methods
+                  are supported, selected by Method:
+
+                    - "crypto" (default): x402 on-chain stablecoin settlement. Network and
+                      PayTo are required and PayTo must be a 0x EVM address.
+                    - "card": an MPP credit-card method (Stripe stripe.charge). Card is
+                      required; funds settle off-chain into the configured Stripe account
+                      and Network/PayTo do not apply.
+
+                  The per-method required fields are enforced by the XValidation rules
+                  below so the API server rejects malformed offers at admission time,
+                  independent of the CLI. The CEL guards short-circuit on Method so the
+                  0x/account checks are only evaluated for the relevant method.
                 properties:
                   asset:
                     description: |-
                       Optional token metadata override for x402 settlement. When omitted,
-                      the verifier uses the chain default asset.
+                      the verifier uses the chain default asset. Crypto only.
                     properties:
                       address:
                         description: ERC-20 contract address.
@@ -180,24 +194,81 @@ spec:
                         - permit2
                         type: string
                     type: object
+                  card:
+                    description: Card payment terms. Required when method=card; ignored
+                      otherwise.
+                    properties:
+                      account:
+                        description: |-
+                          Destination account that receives settled card funds. For Stripe this
+                          is the connected/destination account id (e.g. "acct_1A2b3C4d5E6f7G").
+                        pattern: ^acct_[A-Za-z0-9]+$
+                        type: string
+                      currency:
+                        default: usd
+                        description: ISO-4217 currency the card is charged in. Default
+                          "usd".
+                        pattern: ^[a-z]{3}$
+                        type: string
+                      networkId:
+                        description: |-
+                          Optional Stripe "machine payments" network id, surfaced in the 402
+                          challenge's extra block so MPP card clients know where to mint a
+                          Shared Payment Token.
+                        type: string
+                      paymentMethodTypes:
+                        description: |-
+                          Accepted payment-method types advertised to the client. Defaults to
+                          ["card"] at the gateway when empty.
+                        items:
+                          type: string
+                        maxItems: 16
+                        type: array
+                      provider:
+                        default: stripe
+                        description: |-
+                          Card payment provider. Only "stripe" is supported today (MPP
+                          stripe.charge via Shared Payment Tokens).
+                        enum:
+                        - stripe
+                        type: string
+                    type: object
                   maxTimeoutSeconds:
                     default: 300
                     description: 'Payment validity window in seconds (x402: maxTimeoutSeconds).'
                     format: int64
                     type: integer
+                  method:
+                    default: crypto
+                    description: |-
+                      Payment method. "crypto" gates with x402 on-chain stablecoin
+                      settlement (default; preserves existing behavior). "card" gates with
+                      an MPP credit-card method (Stripe) that settles off-chain into
+                      spec.payment.card.account.
+                    enum:
+                    - crypto
+                    - card
+                    type: string
                   network:
                     description: |-
                       Chain identifier for payments (human-friendly). Reconciler resolves
-                      to CAIP-2 format (e.g., "base-sepolia" → "eip155:84532").
+                      to CAIP-2 format (e.g., "base-sepolia" → "eip155:84532"). Required
+                      when method=crypto (enforced by the payment XValidation rules);
+                      unused for card payments.
                     type: string
                   payTo:
-                    description: 'USDC recipient wallet address (x402: payTo).'
+                    description: |-
+                      USDC recipient wallet address (x402: payTo). Required and 0x-format
+                      when method=crypto (enforced by the payment XValidation rules);
+                      unused for card payments.
                     pattern: ^0x[0-9a-fA-F]{40}$
                     type: string
                   price:
                     description: |-
-                      Pricing table with per-unit prices in USDC (human-readable decimals).
-                      Which fields are applicable depends on the workload type.
+                      Pricing table with per-unit prices (human-readable decimals). For
+                      crypto the unit is the settlement token (USDC by default); for card
+                      the unit is payment.card.currency. Which fields are applicable
+                      depends on the workload type.
                     properties:
                       perEpoch:
                         description: Per-training-epoch price in USDC. Fine-tuning
@@ -219,15 +290,23 @@ spec:
                     type: object
                   scheme:
                     default: exact
-                    description: x402 payment scheme.
+                    description: x402 payment scheme. Only meaningful when method=crypto.
                     enum:
                     - exact
                     type: string
                 required:
-                - network
-                - payTo
                 - price
                 type: object
+                x-kubernetes-validations:
+                - message: payment.payTo is required when payment.method is crypto
+                  rule: 'self.method != ''card'' ? has(self.payTo) : true'
+                - message: payment.network is required when payment.method is crypto
+                  rule: 'self.method != ''card'' ? (has(self.network) && size(self.network)
+                    > 0) : true'
+                - message: payment.card.account is required when payment.method is
+                    card
+                  rule: 'self.method == ''card'' ? (has(self.card) && has(self.card.account))
+                    : true'
               provenance:
                 additionalProperties:
                   type: string
@@ -304,19 +383,68 @@ spec:
                       type: string
                     type: array
                 type: object
+              skill:
+                description: |-
+                  Required when type='skill' (enforced by the spec-level XValidation
+                  rule). Describes the downloadable skill bundle being sold: identity
+                  (name@version), integrity hash, and the ConfigMap carrying the
+                  artifact. The controller renders a static bundle server from this
+                  block and refuses to publish when the ConfigMap bytes do not match
+                  sha256.
+                properties:
+                  bundleConfigMap:
+                    description: |-
+                      Name of a ConfigMap in the offer's namespace whose
+                      binaryData["bundle.tar.gz"] is the artifact (key: SkillBundleKey).
+                    maxLength: 253
+                    type: string
+                  description:
+                    description: Short human-readable description for catalog surfaces.
+                    maxLength: 1024
+                    type: string
+                  displayName:
+                    description: Human-friendly display name for catalog surfaces.
+                    maxLength: 128
+                    type: string
+                  name:
+                    description: |-
+                      Skill name (e.g. buy-x402). Combined with Version it forms the
+                      skill ref <name>@<version> used by ERC-8004 feedback tags.
+                    maxLength: 64
+                    pattern: ^[a-z0-9][a-z0-9-]*$
+                    type: string
+                  sha256:
+                    description: |-
+                      Lowercase hex sha256 of the gzipped bundle bytes (the exact bytes
+                      stored in the bundle ConfigMap and served to buyers).
+                    pattern: ^[a-f0-9]{64}$
+                    type: string
+                  version:
+                    description: Skill version (e.g. 0.1.0).
+                    maxLength: 64
+                    pattern: ^[A-Za-z0-9][A-Za-z0-9._-]*$
+                    type: string
+                required:
+                - bundleConfigMap
+                - name
+                - sha256
+                - version
+                type: object
               type:
                 default: http
                 description: |-
                   Service type. 'inference' enables model management; 'http' for any HTTP
                   service; 'agent' references an Agent CR via spec.agent.ref and the
                   controller derives upstream + model + skills from the agent's status;
-                  'dataset' sells a versioned dataset artifact via spec.dataset.
+                  'dataset' sells a versioned dataset artifact via spec.dataset;
+                  'skill' sells a downloadable skill bundle via spec.skill.
                 enum:
                 - inference
                 - fine-tuning
                 - http
                 - agent
                 - dataset
+                - skill
                 type: string
               upstream:
                 description: In-cluster service that handles the actual workload.
@@ -346,6 +474,9 @@ spec:
             required:
             - payment
             type: object
+            x-kubernetes-validations:
+            - message: spec.skill is required when type=skill
+              rule: self.type != 'skill' || has(self.skill)
           status:
             properties:
               agentId:

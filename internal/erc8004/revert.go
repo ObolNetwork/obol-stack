@@ -19,8 +19,8 @@ import (
 //   - revert("message")          → ABI-encoded Error(string) → "message"
 //   - panic(N)                   → ABI-encoded Panic(uint256) → "panic: <N>"
 //   - revert CustomError(...)    → 4-byte selector with no public ABI →
-//                                  "custom error 0x<selector>" (so an
-//                                  operator can grep the contract source)
+//     "custom error 0x<selector>" (so an
+//     operator can grep the contract source)
 //
 // The whole point: when an ERC-8004 setMetadata reverts at gas-estimation
 // time, the Geth/Reth node returns the revert payload as the `data` field of

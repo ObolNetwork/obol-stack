@@ -1,6 +1,7 @@
 package monetizeapi
 
 import (
+	"crypto/md5"
 	"fmt"
 	"strings"
 	"time"
@@ -20,16 +21,20 @@ const (
 	Version = "v1alpha1"
 
 	ServiceOfferKind        = "ServiceOffer"
+	ServiceBountyKind       = "ServiceBounty"
 	RegistrationRequestKind = "RegistrationRequest"
 	PurchaseRequestKind     = "PurchaseRequest"
 	AgentKind               = "Agent"
 	AgentIdentityKind       = "AgentIdentity"
+	EvaluatorEnrollmentKind = "EvaluatorEnrollment"
 
 	ServiceOfferResource        = "serviceoffers"
+	ServiceBountyResource       = "servicebounties"
 	RegistrationRequestResource = "registrationrequests"
 	PurchaseRequestResource     = "purchaserequests"
 	AgentResource               = "agents"
 	AgentIdentityResource       = "agentidentities"
+	EvaluatorEnrollmentResource = "evaluatorenrollments"
 
 	// Default identity used for the operator's public ERC-8004 registration
 	// file. The registration file can contain multiple per-chain registrations.
@@ -42,10 +47,22 @@ const (
 	AgentPhaseProvisioning = "Provisioning"
 	AgentPhaseReady        = "Ready"
 	AgentPhaseFailed       = "Failed"
+
+	// SkillBundleKey is the binaryData key in a type=skill offer's bundle
+	// ConfigMap that holds the gzipped skill bundle bytes.
+	SkillBundleKey = "bundle.tar.gz"
+	// MaxSkillBundleBytes caps the gzipped skill bundle size. The artifact
+	// rides a ConfigMap (1MiB object cap) and must leave room for base64
+	// expansion plus object metadata, so the cap applies to the compressed
+	// bytes. Enforced at the CLI before the ConfigMap is written and at
+	// the controller before the bundle server is published.
+	MaxSkillBundleBytes = 900000
 )
 
 var (
 	ServiceOfferGVR        = schema.GroupVersionResource{Group: Group, Version: Version, Resource: ServiceOfferResource}
+	ServiceBountyGVR       = schema.GroupVersionResource{Group: Group, Version: Version, Resource: ServiceBountyResource}
+	EvaluatorEnrollmentGVR = schema.GroupVersionResource{Group: Group, Version: Version, Resource: EvaluatorEnrollmentResource}
 	RegistrationRequestGVR = schema.GroupVersionResource{Group: Group, Version: Version, Resource: RegistrationRequestResource}
 	PurchaseRequestGVR     = schema.GroupVersionResource{Group: Group, Version: Version, Resource: PurchaseRequestResource}
 	AgentGVR               = schema.GroupVersionResource{Group: Group, Version: Version, Resource: AgentResource}
@@ -98,13 +115,20 @@ type ServiceOfferList struct {
 	Items           []ServiceOffer `json:"items"`
 }
 
+// The spec-level CEL rule below mirrors the per-method payment rules: a
+// type=skill offer without spec.skill is rejected at admission time,
+// independent of the CLI. (Kept detached from the type's doc comment so
+// it does not leak into the generated schema description.)
+
+// +kubebuilder:validation:XValidation:rule="self.type != 'skill' || has(self.skill)",message="spec.skill is required when type=skill"
 type ServiceOfferSpec struct {
 	// Service type. 'inference' enables model management; 'http' for any HTTP
 	// service; 'agent' references an Agent CR via spec.agent.ref and the
 	// controller derives upstream + model + skills from the agent's status;
-	// 'dataset' sells a versioned dataset artifact via spec.dataset.
+	// 'dataset' sells a versioned dataset artifact via spec.dataset;
+	// 'skill' sells a downloadable skill bundle via spec.skill.
 	// +kubebuilder:default="http"
-	// +kubebuilder:validation:Enum=inference;fine-tuning;http;agent;dataset
+	// +kubebuilder:validation:Enum=inference;fine-tuning;http;agent;dataset;skill
 	Type string `json:"type,omitempty"`
 
 	// Required when type='agent'. The controller resolves spec.agent.ref to
@@ -117,6 +141,14 @@ type ServiceOfferSpec struct {
 	// (manifestHash), the published version, and the artifact size. The
 	// controller surfaces these in the 402 response's extra.dataset block.
 	Dataset ServiceOfferDataset `json:"dataset,omitempty"`
+
+	// Required when type='skill' (enforced by the spec-level XValidation
+	// rule). Describes the downloadable skill bundle being sold: identity
+	// (name@version), integrity hash, and the ConfigMap carrying the
+	// artifact. The controller renders a static bundle server from this
+	// block and refuses to publish when the ConfigMap bytes do not match
+	// sha256.
+	Skill ServiceOfferSkill `json:"skill,omitempty"`
 
 	// LLM model metadata. Required when the upstream serves an LLM.
 	Model ServiceOfferModel `json:"model,omitempty"`
@@ -189,6 +221,43 @@ type ServiceOfferDataset struct {
 	SizeBytes int64 `json:"sizeBytes,omitempty"`
 }
 
+// ServiceOfferSkill is populated when Spec.Type == "skill". It pins the
+// exact artifact being sold: the bundle identity (name@version), the
+// sha256 of the gzipped tar bytes, and the ConfigMap — in the offer's
+// namespace — whose binaryData[SkillBundleKey] holds those bytes. The
+// controller verifies the hash before publishing the bundle server and
+// the verifier surfaces name/version/sha256 in the 402 response's
+// extra.skill block so buyers can check the download offline.
+type ServiceOfferSkill struct {
+	// Skill name (e.g. buy-x402). Combined with Version it forms the
+	// skill ref <name>@<version> used by ERC-8004 feedback tags.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9-]*$`
+	// +kubebuilder:validation:MaxLength=64
+	Name string `json:"name"`
+	// Skill version (e.g. 0.1.0).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]*$`
+	// +kubebuilder:validation:MaxLength=64
+	Version string `json:"version"`
+	// Lowercase hex sha256 of the gzipped bundle bytes (the exact bytes
+	// stored in the bundle ConfigMap and served to buyers).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^[a-f0-9]{64}$`
+	SHA256 string `json:"sha256"`
+	// Name of a ConfigMap in the offer's namespace whose
+	// binaryData["bundle.tar.gz"] is the artifact (key: SkillBundleKey).
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=253
+	BundleConfigMap string `json:"bundleConfigMap"`
+	// Human-friendly display name for catalog surfaces.
+	// +kubebuilder:validation:MaxLength=128
+	DisplayName string `json:"displayName,omitempty"`
+	// Short human-readable description for catalog surfaces.
+	// +kubebuilder:validation:MaxLength=1024
+	Description string `json:"description,omitempty"`
+}
+
 type ServiceOfferModel struct {
 	// Model identifier (e.g. qwen3.5:35b).
 	// +kubebuilder:validation:Required
@@ -217,29 +286,88 @@ type ServiceOfferUpstream struct {
 	HealthPath string `json:"healthPath,omitempty"`
 }
 
+// ServiceOfferPayment describes how buyers pay for the offer. Two methods
+// are supported, selected by Method:
+//
+//   - "crypto" (default): x402 on-chain stablecoin settlement. Network and
+//     PayTo are required and PayTo must be a 0x EVM address.
+//   - "card": an MPP credit-card method (Stripe stripe.charge). Card is
+//     required; funds settle off-chain into the configured Stripe account
+//     and Network/PayTo do not apply.
+//
+// The per-method required fields are enforced by the XValidation rules
+// below so the API server rejects malformed offers at admission time,
+// independent of the CLI. The CEL guards short-circuit on Method so the
+// 0x/account checks are only evaluated for the relevant method.
+//
+// +kubebuilder:validation:XValidation:rule="self.method != 'card' ? has(self.payTo) : true",message="payment.payTo is required when payment.method is crypto"
+// +kubebuilder:validation:XValidation:rule="self.method != 'card' ? (has(self.network) && size(self.network) > 0) : true",message="payment.network is required when payment.method is crypto"
+// +kubebuilder:validation:XValidation:rule="self.method == 'card' ? (has(self.card) && has(self.card.account)) : true",message="payment.card.account is required when payment.method is card"
 type ServiceOfferPayment struct {
-	// x402 payment scheme.
+	// Payment method. "crypto" gates with x402 on-chain stablecoin
+	// settlement (default; preserves existing behavior). "card" gates with
+	// an MPP credit-card method (Stripe) that settles off-chain into
+	// spec.payment.card.account.
+	// +kubebuilder:default="crypto"
+	// +kubebuilder:validation:Enum=crypto;card
+	Method string `json:"method,omitempty"`
+	// x402 payment scheme. Only meaningful when method=crypto.
 	// +kubebuilder:default="exact"
 	// +kubebuilder:validation:Enum=exact
 	Scheme string `json:"scheme,omitempty"`
 	// Chain identifier for payments (human-friendly). Reconciler resolves
-	// to CAIP-2 format (e.g., "base-sepolia" → "eip155:84532").
-	// +kubebuilder:validation:Required
-	Network string `json:"network"`
-	// USDC recipient wallet address (x402: payTo).
-	// +kubebuilder:validation:Required
+	// to CAIP-2 format (e.g., "base-sepolia" → "eip155:84532"). Required
+	// when method=crypto (enforced by the payment XValidation rules);
+	// unused for card payments.
+	Network string `json:"network,omitempty"`
+	// USDC recipient wallet address (x402: payTo). Required and 0x-format
+	// when method=crypto (enforced by the payment XValidation rules);
+	// unused for card payments.
 	// +kubebuilder:validation:Pattern=`^0x[0-9a-fA-F]{40}$`
-	PayTo string `json:"payTo"`
+	PayTo string `json:"payTo,omitempty"`
 	// Payment validity window in seconds (x402: maxTimeoutSeconds).
 	// +kubebuilder:default=300
 	MaxTimeoutSeconds int64 `json:"maxTimeoutSeconds,omitempty"`
 	// Optional token metadata override for x402 settlement. When omitted,
-	// the verifier uses the chain default asset.
+	// the verifier uses the chain default asset. Crypto only.
 	Asset ServiceOfferAsset `json:"asset,omitempty"`
-	// Pricing table with per-unit prices in USDC (human-readable decimals).
-	// Which fields are applicable depends on the workload type.
+	// Card payment terms. Required when method=card; ignored otherwise.
+	Card *ServiceOfferCardPayment `json:"card,omitempty"`
+	// Pricing table with per-unit prices (human-readable decimals). For
+	// crypto the unit is the settlement token (USDC by default); for card
+	// the unit is payment.card.currency. Which fields are applicable
+	// depends on the workload type.
 	// +kubebuilder:validation:Required
 	Price ServiceOfferPriceTable `json:"price"`
+}
+
+// ServiceOfferCardPayment holds the off-chain credit-card settlement terms
+// used when ServiceOfferPayment.Method == "card". It is the card-method
+// analog of Network/PayTo: instead of a chain plus a 0x recipient, funds
+// settle through a payment provider (Stripe today, via the MPP
+// stripe.charge method) into Account.
+type ServiceOfferCardPayment struct {
+	// Card payment provider. Only "stripe" is supported today (MPP
+	// stripe.charge via Shared Payment Tokens).
+	// +kubebuilder:default="stripe"
+	// +kubebuilder:validation:Enum=stripe
+	Provider string `json:"provider,omitempty"`
+	// Destination account that receives settled card funds. For Stripe this
+	// is the connected/destination account id (e.g. "acct_1A2b3C4d5E6f7G").
+	// +kubebuilder:validation:Pattern=`^acct_[A-Za-z0-9]+$`
+	Account string `json:"account,omitempty"`
+	// ISO-4217 currency the card is charged in. Default "usd".
+	// +kubebuilder:default="usd"
+	// +kubebuilder:validation:Pattern=`^[a-z]{3}$`
+	Currency string `json:"currency,omitempty"`
+	// Optional Stripe "machine payments" network id, surfaced in the 402
+	// challenge's extra block so MPP card clients know where to mint a
+	// Shared Payment Token.
+	NetworkID string `json:"networkId,omitempty"`
+	// Accepted payment-method types advertised to the client. Defaults to
+	// ["card"] at the gateway when empty.
+	// +kubebuilder:validation:MaxItems=16
+	PaymentMethodTypes []string `json:"paymentMethodTypes,omitempty"`
 }
 
 type ServiceOfferAsset struct {
@@ -457,6 +585,14 @@ func (o *ServiceOffer) IsDataset() bool {
 	return o.Spec.Type == "dataset"
 }
 
+// IsSkill reports whether the offer sells a downloadable skill bundle.
+// Type=="skill" is the only signal — Spec.Skill must also be populated
+// for a usable offer, but admission validation (the spec-level CEL rule)
+// enforces that.
+func (o *ServiceOffer) IsSkill() bool {
+	return o.Spec.Type == "skill"
+}
+
 // IsDraining reports whether spec.drainAt has been set. Drained offers
 // transition through three phases: pre-drain (DrainAt nil), draining
 // (DrainAt set, now < DrainEndsAt), and drain-expired (DrainAt set,
@@ -492,6 +628,42 @@ func (o *ServiceOffer) DrainExpired(now time.Time) bool {
 	}
 	end := o.DrainEndsAt()
 	return !now.Before(end)
+}
+
+// maxK8sNameLen is the maximum length for a Kubernetes resource name
+// (DNS subdomain).
+const maxK8sNameLen = 253
+
+// maxK8sServiceNameLen is the maximum length for a Kubernetes Service
+// name (RFC 1035 label) and for label VALUES (the workload name doubles
+// as the children's "app" label).
+const maxK8sServiceNameLen = 63
+
+// SkillBundleWorkloadName returns the deterministic name of the bundle
+// server children (Deployment/Service/meta ConfigMap) rendered for a
+// type=skill offer: "so-<offer>-bundle". It lives in monetizeapi so the
+// CLI (which pins spec.upstream.service to it), the controller (which
+// renders the children and rejects spoofed upstreams), and the x402
+// route source share one definition without an import cycle. Mirrors
+// serviceoffercontroller.safeName, but caps at the 63-char RFC 1035
+// Service-name/label limit (not the 253-char object-name limit — the
+// name is also a Service name and an "app" label value): longer offer
+// names are truncated with a short hash appended to avoid collisions.
+func SkillBundleWorkloadName(offerName string) string {
+	const (
+		prefix = "so-"
+		suffix = "-bundle"
+	)
+	full := prefix + offerName + suffix
+	if len(full) <= maxK8sServiceNameLen {
+		return full
+	}
+	hash := fmt.Sprintf("%x", md5.Sum([]byte(offerName)))[:8]
+	maxName := maxK8sServiceNameLen - len(prefix) - len(suffix) - 1 - len(hash) // 1 for the dash before hash
+	if maxName < 1 {
+		maxName = 1
+	}
+	return prefix + offerName[:maxName] + "-" + hash + suffix
 }
 
 // ── PurchaseRequest ─────────────────────────────────────────────────────────

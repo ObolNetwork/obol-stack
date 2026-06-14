@@ -62,13 +62,74 @@ spec:
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `spec.type` | string | No | `http` | Workload type: `inference`, `fine-tuning`, or `http` |
+| `spec.type` | string | No | `http` | Workload type: `inference`, `fine-tuning`, `http`, `agent`, or `skill` |
+| `spec.skill` | object | Required when `type=skill` | — | Skill bundle identity, integrity hash, and artifact ConfigMap (CEL-validated at admission) |
 | `spec.model` | object | No | — | Model metadata for LLM-backed offers |
 | `spec.upstream` | object | Yes | — | In-cluster Service that handles the workload |
 | `spec.payment` | object | Yes | — | x402-aligned payment terms |
 | `spec.path` | string | No | `/services/<name>` | Public HTTPRoute path prefix |
 | `spec.provenance` | object | No | — | Optional experiment or training provenance metadata |
 | `spec.registration` | object | No | — | ERC-8004 publication metadata |
+
+### `spec.skill`
+
+Populated when `spec.type == "skill"` — sells a downloadable skill bundle
+(gzipped tar of a `SKILL.md` + scripts directory). The controller verifies
+that the ConfigMap bytes hash to `sha256` before rendering the bundle server
+(`so-<offer>-bundle`: busybox httpd, port 8080, serving `/bundle.tar.gz` and
+`/skill.json`), and the x402-verifier surfaces name/version/sha256 in the 402
+response's `extra.skill` block for pre-purchase verification.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `spec.skill.name` | string | Yes | Skill name, `^[a-z0-9][a-z0-9-]*$`, max 64. With `version` it forms the skill ref `<name>@<version>` used by ERC-8004 skill tags |
+| `spec.skill.version` | string | Yes | Skill version, `^[A-Za-z0-9][A-Za-z0-9._-]*$`, max 64 |
+| `spec.skill.sha256` | string | Yes | Lowercase hex SHA-256 of the gzipped bundle bytes, `^[a-f0-9]{64}$` |
+| `spec.skill.bundleConfigMap` | string | Yes | Name of a ConfigMap in the **offer's namespace** whose `binaryData["bundle.tar.gz"]` is the artifact (compressed size <= 900000 bytes) |
+| `spec.skill.displayName` | string | No | Human-friendly display name, max 128 |
+| `spec.skill.description` | string | No | Short description for catalog surfaces, max 1024 |
+
+Constraints enforced by the controller for `type=skill`:
+
+- `spec.upstream` MUST be `{service: so-<offer-name>-bundle, namespace:
+  <offer namespace>, port: 8080}` — anything else is rejected with
+  `UpstreamHealthy=False reason=InvalidSkillUpstream` (a skill offer may only
+  advertise its own controller-rendered bundle server).
+- Bundle gate reasons on `UpstreamHealthy=False`: `BundleMissing`,
+  `BundleTooLarge` (compressed bytes > 900000), `BundleHashMismatch`.
+- A spec-level CEL rule rejects `type=skill` offers without `spec.skill` at
+  admission time.
+
+Skill example:
+
+```yaml
+apiVersion: obol.org/v1alpha1
+kind: ServiceOffer
+metadata:
+  name: my-skill
+  namespace: hermes-obol-agent
+spec:
+  type: skill
+  skill:
+    name: my-skill
+    version: "0.1.0"
+    sha256: "<64-char lowercase hex of the gzipped bundle bytes>"
+    bundleConfigMap: my-skill-skill-bundle
+    displayName: "My Skill"
+    description: "What the skill does."
+  upstream:
+    service: so-my-skill-bundle
+    namespace: hermes-obol-agent
+    port: 8080
+    healthPath: /skill.json
+  payment:
+    scheme: exact
+    network: base-sepolia
+    payTo: "0xYourWalletAddress"
+    maxTimeoutSeconds: 300
+    price:
+      perRequest: "0.25"
+```
 
 ### `spec.model`
 

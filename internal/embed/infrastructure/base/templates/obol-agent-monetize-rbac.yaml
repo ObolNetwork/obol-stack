@@ -156,3 +156,76 @@ subjects:
   - kind: ServiceAccount
     name: openclaw
     namespace: openclaw-obol-agent
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: hermes-skill-publish
+  namespace: hermes-obol-agent
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create", "get", "update", "patch"]
+
+---
+#------------------------------------------------------------------------------
+# Role (NAMESPACED) - ServiceBounty demand-side write, hermes mother ns only
+#
+# Deliberately NOT added to the cluster-wide openclaw-monetize-write
+# ClusterRole: that would hand every agent write access to every namespace's
+# bounties (and therefore their claim/submit/verdict annotation channel and
+# escrow lifecycle). The poster agent only ever needs to manage bounties in
+# its own namespace. See plans/bounty-ane-marketplace-design.md (review fix #2).
+#------------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: hermes-bounty-write
+  namespace: hermes-obol-agent
+rules:
+  - apiGroups: ["obol.org"]
+    resources: ["servicebounties"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["obol.org"]
+    resources: ["servicebounties/status"]
+    verbs: ["get"]
+  # Evaluator enrollment is namespaced for the same reason bounty writes are:
+  # an agent manages its OWN enrollment, never the cluster's pool. Ladder
+  # state (status) stays controller-owned — read-only here.
+  - apiGroups: ["obol.org"]
+    resources: ["evaluatorenrollments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["obol.org"]
+    resources: ["evaluatorenrollments/status"]
+    verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hermes-skill-publish-binding
+  namespace: hermes-obol-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: hermes-skill-publish
+subjects:
+  - kind: ServiceAccount
+    name: hermes
+    namespace: hermes-obol-agent
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: hermes-bounty-write-binding
+  namespace: hermes-obol-agent
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: hermes-bounty-write
+subjects:
+  - kind: ServiceAccount
+    name: hermes
+    namespace: hermes-obol-agent

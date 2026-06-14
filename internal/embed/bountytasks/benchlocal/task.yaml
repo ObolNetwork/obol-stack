@@ -1,0 +1,94 @@
+# benchlocal@v1 — a ServiceBounty task type wrapping BenchLocal bench packs
+# (github.com/stevibe/BenchLocal): installable TypeScript packs (ToolCall-15,
+# CLI-40, BugFind-15, …) run against any OpenAI-compatible endpoint, emitting
+# per-scenario pass|partial|fail and an aggregated BenchmarkScore
+# {totalScore, categories[{id,label,score,weight}]}.
+#
+# Integrity note (the reason packCommit is REQUIRED): the BenchLocal registry
+# resolves packs as {id, version, source:{repo, tag}} with NO checksums or
+# signatures, and a git tag is mutable. A pack is CODE — the scorer ships
+# inside it — so rerun-tolerance verification is meaningless unless poster,
+# fulfiller, and evaluators all run byte-identical pack bytes. The commit SHA
+# (or archive sha256) is that pin.
+id: benchlocal
+version: 1
+runner: benchlocal       # host-side runner drives the BenchLocal agent control API
+enabled: true
+summary: Run a pinned BenchLocal bench pack against a model on declared hardware; verified by independent re-run within tolerance.
+
+requires:
+  - benchlocal
+
+params:
+  - name: pack
+    type: string
+    required: true
+    description: BenchLocal pack id from the registry (e.g. toolcall-15, cli-40, bugfind-15).
+  - name: packVersion
+    type: string
+    required: true
+    description: Pack version (the registry source.tag, e.g. 1.0.0).
+  - name: packCommit
+    type: string
+    required: true
+    description: Git commit SHA (or archive sha256) pinning the pack bytes — the registry has no checksums and tags are mutable; evaluators must re-run identical scoring code.
+  - name: scenarios
+    type: string
+    description: Optional comma-separated scenario-id filter (default = the whole pack).
+  - name: hardwareClass
+    type: string
+    default: any
+    description: Declared hardware class — free-form so specific GPUs are expressible (e.g. RTX-4090, H100, M4-Max).
+  - name: temperature
+    type: string
+    default: "0"
+    description: Sampling temperature; BenchLocal packs default to 0 (greedy) — keep 0 for reproducible scoring. There is no seed surface in the bench protocol.
+
+# BenchmarkScore.totalScore is the primary gate; per-category bands (metric =
+# the category id, e.g. overall) can be added per-bounty via --tolerance.
+acceptance:
+  method: rerun-tolerance
+  commitReveal: true
+  tolerance:
+    totalScore: "0.05"
+
+eval:
+  defaultK: 3           # median-of-k; k>=3 whenever a probation seat is occupied
+  selection: vrf-reputation-weighted
+  payment:
+    asset: OBOL
+    perEvaluator: "2.00"
+    fundedBy: poster
+    settle: batch-settlement
+  ladder:
+    shadowAgreements: 5
+    probationEvals: 10
+    probationValueCap: "50.00"
+    revealWindow: 10m
+    nonRevealPenalty: outlier
+    decayHalfLife: 720h
+    escalationWindow: 30m
+    escalationEpsilon: 5
+
+# Pack scores are hardware-agnostic (pass/fail scoring), so self-report is the
+# honest default; bounties pinning a specific GPU should post with
+# --hardware-proof gpu-attestation or evaluator-measured.
+hardwareProof: self-report
+
+deliverable:
+  report:
+    variants:
+      - kind: declarative
+        surface: report.a2ui.json
+        catalogId: https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json
+      - kind: mcp-app
+        surface: report.app.html
+        catalogId: obol.org:mcp-app/v1
+  gate: local            # local | mcp-x402 | sign-in-with-x
+  artifacts:
+    - name: results.json
+      kind: eval-report
+      required: true
+    - name: run.manifest
+      kind: provenance
+      required: true

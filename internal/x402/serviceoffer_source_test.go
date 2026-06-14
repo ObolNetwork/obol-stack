@@ -407,3 +407,65 @@ func mustSecretObject(t *testing.T, namespace, name string, data map[string]stri
 	}}
 	return obj
 }
+
+func TestRouteRuleFromOffer_CardPaymentPopulatesCardRoute(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "card-svc", Namespace: "shop"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type:     "http",
+			Upstream: monetizeapi.ServiceOfferUpstream{Service: "api", Namespace: "shop", Port: 8080},
+			Payment: monetizeapi.ServiceOfferPayment{
+				Method: "card",
+				Card: &monetizeapi.ServiceOfferCardPayment{
+					Provider:  "stripe",
+					Account:   "acct_shop1",
+					Currency:  "jpy",
+					NetworkID: "stripenet_1",
+				},
+				Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "100"},
+			},
+		},
+	}
+
+	route, err := routeRuleFromOffer(offer, "")
+	if err != nil {
+		t.Fatalf("routeRuleFromOffer: %v", err)
+	}
+	if !route.IsCard() {
+		t.Fatal("expected a card route")
+	}
+	if route.Card.Account != "acct_shop1" || route.Card.Provider != "stripe" {
+		t.Errorf("card = %+v", route.Card)
+	}
+	// jpy currency derives 0 minor-unit decimals.
+	if route.Card.Currency != "jpy" || route.Card.Decimals != 0 {
+		t.Errorf("currency/decimals = %q/%d, want jpy/0", route.Card.Currency, route.Card.Decimals)
+	}
+	if route.Card.NetworkID != "stripenet_1" {
+		t.Errorf("networkId = %q, want stripenet_1", route.Card.NetworkID)
+	}
+	// The built requirement uses jpy minor units: ¥100 -> "100".
+	if amt := buildCardRequirement(&route).Amount; amt != "100" {
+		t.Errorf("card requirement amount = %q, want 100", amt)
+	}
+
+	// A crypto offer must NOT produce a card route.
+	cryptoOffer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "c", Namespace: "n"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "http",
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base",
+				PayTo:   "0x1111111111111111111111111111111111111111",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.01"},
+			},
+		},
+	}
+	cr, err := routeRuleFromOffer(cryptoOffer, "")
+	if err != nil {
+		t.Fatalf("routeRuleFromOffer(crypto): %v", err)
+	}
+	if cr.IsCard() {
+		t.Error("crypto offer must not produce a card route")
+	}
+}

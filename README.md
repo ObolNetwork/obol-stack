@@ -232,6 +232,60 @@ obol openclaw skills remove <name>          # remove via openclaw CLI in pod
 
 Skills are delivered via host-path PVC injection — no ConfigMap size limits, works before pod readiness, and survives pod restarts.
 
+## Credit-card payments (MPP)
+
+Alongside the default x402 on-chain (stablecoin) payment path, sellers can accept
+**credit-card** payments via the [Machine Payments Protocol](https://mpp.dev) (MPP,
+the Stripe + Tempo HTTP-402 standard). A card offer is gated on the same
+`/services/<name>/*` route as a crypto offer — the payment method is selected per
+offer.
+
+```bash
+# Expose an upstream as a card-paid endpoint (Stripe stripe.charge).
+obol sell http my-api \
+  --pay-with card \
+  --stripe-account acct_1A2b3C4d \      # Stripe destination account (card analog of --pay-to)
+  --stripe-network-id stripenet_...\    # Stripe "machine payments" network id (or STRIPE_NETWORK_ID)
+  --card-currency usd \
+  --upstream my-svc --port 8080 --price 0.01
+```
+
+How it works:
+
+- The offer advertises a `card` option in its `402` challenge (amount in the
+  currency's **minor units** — cents for `usd`, whole yen for `jpy`, etc.).
+- A card-capable buyer presents a Stripe **Shared Payment Token** (`spt_…`) in the
+  `X-PAYMENT` header.
+- The verifier **authorizes** a manual-capture Stripe PaymentIntent before serving,
+  proxies to the upstream, then **captures** only after a successful (`<400`)
+  response — a failed upstream **cancels** the hold, so a buyer is never charged for
+  nothing. Each SPT is single-use (replay-guarded).
+
+### Requirements & configuration
+
+- A **Stripe account with "Machine payments" enabled** (a gated Stripe feature).
+- `STRIPE_SECRET_KEY` — used by the `x402-verifier` to authorize/capture
+  PaymentIntents. It is read from the `x402-secrets` Secret in the `x402` namespace;
+  populate it before taking card payments:
+
+  ```bash
+  kubectl -n x402 patch secret x402-secrets --type merge \
+    -p '{"stringData":{"STRIPE_SECRET_KEY":"sk_live_..."}}'
+  kubectl -n x402 rollout restart deploy/x402-verifier
+  ```
+
+- `STRIPE_NETWORK_ID` — your Stripe "machine payments" network id, advertised in the
+  402 challenge so clients can mint an SPT. It is a host/CLI value (default for
+  `--stripe-network-id`); add both to your `.env` from `.env.example`.
+
+> **Note on scope.** Card offers are not ERC-8004 registered (no on-chain identity).
+> The Stripe key is currently a single cluster-wide value in `x402-secrets`; a
+> per-offer/per-namespace Secret is the production direction but is gated on widening
+> the verifier's deliberately `resourceName`-scoped Secret RBAC. The SPT replay guard
+> is per-pod (the verifier runs single-replica). The SPT is passed as the top-level
+> Stripe form field `shared_payment_granted_token` per the `cp0x-org/mppx` reference —
+> validate against your live Stripe account before relying on it in production.
+
 ## Public Access (Cloudflare Tunnel)
 
 Expose your stack to the internet via Cloudflare Tunnel:

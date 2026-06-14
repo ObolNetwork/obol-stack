@@ -262,6 +262,18 @@ Caveats:
 
 **Auto-configuration**: `obol stack up` → `autoConfigureLLM()` detects host Ollama models, patches LiteLLM config. `obolup.sh` → `check_agent_model_api_key()` reads `~/.openclaw/openclaw.json`, resolves API key from `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` (Anthropic) or `OPENAI_API_KEY` (OpenAI), exports for downstream.
 
+**BYOK cloud providers** (easiest getting-started path) — provider knowledge is a single registry in `internal/model/model.go` (`knownProviders` / `ProviderInfo` with `Mode`/`BaseURL`/`Default`/`SignupURL`/`Free`); adding a provider is one row, no per-provider switch. Built-in: `anthropic`, `openai`, `ollama` (native/local) + OpenAI-compatible aggregators `venice`, `openrouter`, `nvidia`, `gmi`, `novita`, `huggingface` (`Mode=openai-compatible` → `model_list` entry `openai/<id>` + explicit `api_base` + key from the provider's env var; no wildcard). When `--model` is omitted, setup uses the registry `Default` or lists the live `GET <base>/v1/models` (TTY picker / non-TTY error naming real ids). `--free` seeds only the curated free-tier model snapshot (OpenRouter).
+
+Two front doors share one engine (`setupCloudProvider` in `cmd/obol/model.go`):
+- `obol buy inference <provider>` — friendly onboarding: opens the provider's `SignupURL` in the browser (`openBrowser`, hermes-style), takes the key (`--api-key` → env var → prompt), wires LiteLLM + syncs agents. `obol buy inference` with a URL/no-arg is still the **x402 crypto-paid seller** path — dispatch keys on whether the positional arg matches a registry provider id.
+- `obol model setup <provider> --api-key <key>` — the scriptable, no-browser equivalent. Unlisted endpoints still use `obol model setup custom`.
+
+```bash
+obol buy inference venice                 # opens venice key page, prompts, wires up
+obol buy inference openrouter --free      # seeds curated free models
+obol model setup venice --api-key $VENICE_API_KEY   # scriptable / CI
+```
+
 **External OpenAI-compatible LLM** (vLLM / sglang / mlx-lm / remote GPU) — canonical user flow, no ConfigMap surgery:
 
 ```bash

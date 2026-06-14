@@ -29,6 +29,9 @@ var networksFS embed.FS
 //go:embed all:skills
 var skillsFS embed.FS
 
+//go:embed all:bountytasks
+var bountyTasksFS embed.FS
+
 // InfrastructureDigest returns a stable digest of the embedded infrastructure
 // assets. Callers use this to decide whether an existing copied defaults tree
 // needs to be refreshed from the current binary.
@@ -140,6 +143,40 @@ func ReadEmbeddedNetworkFile(networkName, filename string) ([]byte, error) {
 	content, err := networksFS.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read %s from network %s: %w", filename, networkName, err)
+	}
+
+	return content, nil
+}
+
+// GetAvailableBountyTasks returns the names of all embedded ServiceBounty
+// task-type packages (one directory per type under bountytasks/), e.g.
+// "benchmark". Mirrors GetAvailableNetworks — drop in a directory to add a
+// task type.
+func GetAvailableBountyTasks() ([]string, error) {
+	entries, err := fs.ReadDir(bountyTasksFS, "bountytasks")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read embedded bountytasks directory: %w", err)
+	}
+
+	var tasks []string
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			tasks = append(tasks, entry.Name())
+		}
+	}
+
+	return tasks, nil
+}
+
+// ReadEmbeddedBountyTaskFile reads a file (e.g. "task.yaml",
+// "report.a2ui.json") from an embedded task-type package.
+func ReadEmbeddedBountyTaskFile(taskName, filename string) ([]byte, error) {
+	path := filepath.Join("bountytasks", taskName, filename)
+
+	content, err := bountyTasksFS.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read %s from bounty task %s: %w", filename, taskName, err)
 	}
 
 	return content, nil

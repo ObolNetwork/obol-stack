@@ -41,10 +41,14 @@ func TestCopyInfrastructure_DevModeRewritesDigestPins(t *testing.T) {
 	for _, base := range []string{
 		"ghcr.io/obolnetwork/x402-verifier",
 		"ghcr.io/obolnetwork/serviceoffer-controller",
+		"ghcr.io/obolnetwork/x402-escrow",
 	} {
 		want := base + ":" + devTag
 		if !strings.Contains(out, want) {
 			t.Errorf("dev mode did not rewrite to %q in %s", want, x402Path)
+		}
+		if strings.Contains(out, base+":"+devTag+"@sha256:") {
+			t.Errorf("dev mode left orphan @sha256: suffix on %s:%s in %s — regex missed the combo form", base, devTag, x402Path)
 		}
 	}
 
@@ -76,6 +80,51 @@ func TestCopyInfrastructure_DevModeRewritesDigestPins(t *testing.T) {
 	}
 	if strings.Contains(llmOut, buyer+"@sha256:") {
 		t.Errorf("dev mode left @sha256: digest pin on x402-buyer in %s — regex missed it", llmPath)
+	}
+}
+
+// TestRewriteDevDigestPins_ComboFormAllBases pins the rewrite behaviour for
+// every locally-built base — including ghcr.io/obolnetwork/x402-escrow —
+// against all three pin styles, with the combo `<tag>@sha256:<digest>` form
+// exercised explicitly. The embedded manifests don't carry every base in
+// every style (x402-escrow ships tag-only until the first publish), so this
+// synthetic file guarantees a future digest bump can't resurrect the
+// orphan-@sha256 bug for a base the real tree happens not to cover today.
+func TestRewriteDevDigestPins_ComboFormAllBases(t *testing.T) {
+	dir := t.TempDir()
+
+	digest := strings.Repeat("ab12", 16) // 64 hex chars
+	var lines []string
+	for _, base := range devLocallyBuiltImageBases {
+		lines = append(lines,
+			"image: "+base+":b13254e@sha256:"+digest, // combo tag+digest
+			"image: "+base+"@sha256:"+digest,         // digest-only
+			"image: "+base+":b13254e",                // short-SHA tag
+		)
+	}
+	path := filepath.Join(dir, "synthetic.yaml")
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("write synthetic manifest: %v", err)
+	}
+
+	if err := rewriteDevDigestPins(dir, "dev-test"); err != nil {
+		t.Fatalf("rewriteDevDigestPins: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read rewritten manifest: %v", err)
+	}
+	out := string(data)
+
+	if strings.Contains(out, "@sha256:") {
+		t.Errorf("rewrite left a @sha256: pin behind (orphan-suffix combo bug):\n%s", out)
+	}
+	for _, base := range devLocallyBuiltImageBases {
+		want := "image: " + base + ":dev-test"
+		if got := strings.Count(out, want); got != 3 {
+			t.Errorf("base %s: %d of 3 pin styles rewritten to %q:\n%s", base, got, want, out)
+		}
 	}
 }
 

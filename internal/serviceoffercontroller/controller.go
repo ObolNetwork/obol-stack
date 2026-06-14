@@ -16,6 +16,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	"github.com/ObolNetwork/obol-stack/internal/x402/escrow"
 	"github.com/ethereum/go-ethereum/common"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -67,13 +68,25 @@ type Controller struct {
 	identityInformer     cache.SharedIndexInformer
 	purchaseInformer     cache.SharedIndexInformer
 	agentInformer        cache.SharedIndexInformer
+	bountyInformer       cache.SharedIndexInformer
 	configMapInformer    cache.SharedIndexInformer
 	offerQueue           workqueue.TypedRateLimitingInterface[string]
 	registrationQueue    workqueue.TypedRateLimitingInterface[string]
 	identityQueue        workqueue.TypedRateLimitingInterface[string]
 	purchaseQueue        workqueue.TypedRateLimitingInterface[string]
 	agentQueue           workqueue.TypedRateLimitingInterface[string]
+	bountyQueue          workqueue.TypedRateLimitingInterface[string]
 	catalogMu            sync.Mutex
+
+	// bountyEscrow is the Hold/Release/Refund seam for ServiceBounty rewards.
+	// Configured at construction (env), never from a bounty's spec — see
+	// newBountyEscrowGateway for why.
+	bountyEscrow escrow.Gateway
+
+	// seeds produces the evaluator panel-lottery seed (local sha256(UID) or
+	// drand quicknet, selected by OBOL_BOUNTY_SEED at construction — never
+	// from a bounty's spec). Nil falls back to the local source (tests).
+	seeds seedSource
 
 	pendingAuths sync.Map // key: "ns/name" → []map[string]string
 
@@ -107,6 +120,27 @@ func New(cfg *rest.Config) (*Controller, error) {
 	identityInformer := factory.ForResource(monetizeapi.AgentIdentityGVR).Informer()
 	purchaseInformer := factory.ForResource(monetizeapi.PurchaseRequestGVR).Informer()
 	agentInformer := factory.ForResource(monetizeapi.AgentGVR).Informer()
+
+	// ServiceBounty is newer than the other CRDs. Guard on discovery so a
+	// controller image rolled onto a cluster that hasn't applied the CRD yet
+	// degrades to a log line instead of blocking every informer cache sync.
+	// Only a definitive "group served, resource absent" answer disables the
+	// pass — a transient discovery error keeps it on (the CRD ships in the
+	// same release train).
+	var bountyInformer cache.SharedIndexInformer
+	if resources, err := kubeClient.Discovery().ServerResourcesForGroupVersion(monetizeapi.Group + "/" + monetizeapi.Version); err == nil {
+		for _, r := range resources.APIResources {
+			if r.Name == monetizeapi.ServiceBountyResource {
+				bountyInformer = factory.ForResource(monetizeapi.ServiceBountyGVR).Informer()
+				break
+			}
+		}
+		if bountyInformer == nil {
+			log.Printf("serviceoffer-controller: ServiceBounty CRD not installed; bounty reconcile disabled")
+		}
+	} else {
+		bountyInformer = factory.ForResource(monetizeapi.ServiceBountyGVR).Informer()
+	}
 	configMapFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 0, "obol-frontend", func(options *metav1.ListOptions) {
 		options.FieldSelector = fields.OneTermEqualSelector("metadata.name", "obol-stack-config").String()
 	})
@@ -131,12 +165,16 @@ func New(cfg *rest.Config) (*Controller, error) {
 		identityInformer:     identityInformer,
 		purchaseInformer:     purchaseInformer,
 		agentInformer:        agentInformer,
+		bountyInformer:       bountyInformer,
 		configMapInformer:    configMapInformer,
 		offerQueue:           workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		registrationQueue:    workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		identityQueue:        workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		purchaseQueue:        workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		agentQueue:           workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		bountyQueue:          workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		bountyEscrow:         newBountyEscrowGateway(),
+		seeds:                newSeedSource(),
 		httpClient:           &http.Client{Timeout: 3 * time.Second},
 		registrationRPCBase:  getenvDefault("ERC8004_RPC_BASE", erc8004.DefaultRPCBase),
 		baseURLOverride:      strings.TrimRight(os.Getenv("AGENT_BASE_URL"), "/"),
@@ -201,6 +239,13 @@ func New(cfg *rest.Config) (*Controller, error) {
 		UpdateFunc: func(_, newObj any) { controller.enqueueDiscoveryRefresh(newObj) },
 		DeleteFunc: controller.enqueueDiscoveryRefresh,
 	})
+	if bountyInformer != nil {
+		bountyInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+			AddFunc:    controller.enqueueBounty,
+			UpdateFunc: func(_, newObj any) { controller.enqueueBounty(newObj) },
+			DeleteFunc: controller.enqueueBounty,
+		})
+	}
 
 	return controller, nil
 }
@@ -211,6 +256,7 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 	defer c.identityQueue.ShutDown()
 	defer c.purchaseQueue.ShutDown()
 	defer c.agentQueue.ShutDown()
+	defer c.bountyQueue.ShutDown()
 
 	go c.offerInformer.Run(ctx.Done())
 	go c.registrationInformer.Run(ctx.Done())
@@ -218,14 +264,19 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 	go c.purchaseInformer.Run(ctx.Done())
 	go c.agentInformer.Run(ctx.Done())
 	go c.configMapInformer.Run(ctx.Done())
-	if !cache.WaitForCacheSync(ctx.Done(),
+	syncs := []cache.InformerSynced{
 		c.offerInformer.HasSynced,
 		c.registrationInformer.HasSynced,
 		c.identityInformer.HasSynced,
 		c.purchaseInformer.HasSynced,
 		c.agentInformer.HasSynced,
 		c.configMapInformer.HasSynced,
-	) {
+	}
+	if c.bountyInformer != nil {
+		go c.bountyInformer.Run(ctx.Done())
+		syncs = append(syncs, c.bountyInformer.HasSynced)
+	}
+	if !cache.WaitForCacheSync(ctx.Done(), syncs...) {
 		return fmt.Errorf("wait for informer sync")
 	}
 
@@ -257,6 +308,12 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 			for c.processNextAgent(ctx) {
 			}
 		}()
+		if c.bountyInformer != nil {
+			go func() {
+				for c.processNextBounty(ctx) {
+				}
+			}()
+		}
 	}
 
 	<-ctx.Done()
@@ -452,6 +509,42 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 			}
 			setCondition(&status, "Ready", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
 			return c.updateOfferStatus(ctx, raw, status)
+		}
+	}
+
+	if offer.IsSkill() {
+		ok, skillErr := c.reconcileSkillBundle(ctx, &status, offer)
+		if skillErr != nil {
+			return skillErr
+		}
+		if !ok {
+			// reconcileSkillBundle already set UpstreamHealthy=False with a
+			// specific reason (BundleMissing / BundleTooLarge /
+			// BundleHashMismatch / InvalidSkillUpstream / ...). Mirror the
+			// WaitingForAgent early return: park the downstream gates, commit
+			// status, refresh the catalog, and poll — no informer watches the
+			// operator's bundle ConfigMap, so a later kubectl apply of the
+			// bundle would otherwise never re-enqueue this offer.
+			setCondition(&status, "ModelReady", "True", "Skipped", "Skill offer does not require model preparation")
+			if offer.DrainExpired(time.Now()) {
+				if err := c.deleteRouteChildren(ctx, offer); err != nil {
+					return err
+				}
+				setCondition(&status, "Draining", "False", "Drained", fmt.Sprintf("Drain ended at %s; route torn down", offer.DrainEndsAt().UTC().Format(time.RFC3339)))
+				setCondition(&status, "PaymentGateReady", "False", "Drained", "Offer drained; payment gate removed")
+				setCondition(&status, "RoutePublished", "False", "Drained", "Offer drained; route removed")
+			} else {
+				setCondition(&status, "PaymentGateReady", "False", "WaitingForUpstream", "Waiting for a valid skill bundle before publishing payment gate")
+				setCondition(&status, "RoutePublished", "False", "WaitingForPaymentGate", "Waiting for payment gate before publishing route")
+			}
+			setCondition(&status, "Ready", "False", "Reconciling", "Offer is not fully reconciled yet")
+			if err := c.updateOfferStatus(ctx, raw, status); err != nil {
+				return err
+			}
+			c.offerQueue.AddAfter(offer.Namespace+"/"+offer.Name, 5*time.Second)
+			freshOffer := *offer
+			freshOffer.Status = status
+			return c.reconcileSkillCatalog(ctx, &freshOffer)
 		}
 	}
 

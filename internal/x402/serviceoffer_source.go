@@ -181,6 +181,30 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 		MaxTimeoutSeconds:      offer.Spec.Payment.MaxTimeoutSeconds,
 	}
 
+	// MPP credit-card offers carry off-chain Stripe settlement terms instead
+	// of the crypto payTo/network/asset. Populate the card route so the
+	// verifier gates this offer through serveCardGated (matchPaidRouteFull /
+	// HandleProxy dispatch on rule.IsCard()).
+	if strings.EqualFold(offer.Spec.Payment.Method, "card") && offer.Spec.Payment.Card != nil {
+		c := offer.Spec.Payment.Card
+		currency := strings.ToLower(strings.TrimSpace(c.Currency))
+		if currency == "" {
+			currency = defaultCardCurrency
+		}
+		provider := c.Provider
+		if provider == "" {
+			provider = cardNetworkStripe
+		}
+		rule.Card = &CardRoute{
+			Provider:           provider,
+			Account:            c.Account,
+			Currency:           currency,
+			Decimals:           currencyMinorUnits(currency),
+			NetworkID:          c.NetworkID,
+			PaymentMethodTypes: append([]string(nil), c.PaymentMethodTypes...),
+		}
+	}
+
 	if offer.IsAgent() && offer.Status.AgentResolution != nil {
 		res := offer.Status.AgentResolution
 		rule.AgentModel = res.Model
@@ -198,6 +222,16 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 		rule.DatasetVersion = offer.Spec.Dataset.Version
 		rule.DatasetFileHash = strings.ToLower(offer.Spec.Dataset.FileHash)
 		rule.DatasetSizeBytes = offer.Spec.Dataset.SizeBytes
+	}
+	// Skill offers advertise the bundle identity + integrity hash so the
+	// 402 response carries extra.skill (mirrors the agent extras above).
+	// Upstream URL/auth need no special-casing: spec.upstream points at
+	// the controller-rendered bundle server and effectiveUpstreamAuth
+	// returns "" for non-litellm services.
+	if offer.IsSkill() {
+		rule.SkillName = offer.Spec.Skill.Name
+		rule.SkillVersion = offer.Spec.Skill.Version
+		rule.SkillSHA256 = strings.ToLower(offer.Spec.Skill.SHA256)
 	}
 
 	return rule, nil
