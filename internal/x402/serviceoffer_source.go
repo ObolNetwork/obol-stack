@@ -191,6 +191,15 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 		rule.Model = offer.Spec.Model.Name
 	}
 
+	if offer.IsDataset() {
+		// Normalize the hex digests so buyers can byte-compare the advertised
+		// values against a freshly computed SHA-256 regardless of operator casing.
+		rule.DatasetManifestHash = strings.ToLower(offer.Spec.Dataset.ManifestHash)
+		rule.DatasetVersion = offer.Spec.Dataset.Version
+		rule.DatasetFileHash = strings.ToLower(offer.Spec.Dataset.FileHash)
+		rule.DatasetSizeBytes = offer.Spec.Dataset.SizeBytes
+	}
+
 	return rule, nil
 }
 
@@ -206,6 +215,8 @@ func effectivePrice(offer *monetizeapi.ServiceOffer) (price, priceModel, perMTok
 		return price, "perMTok", offer.Spec.Payment.Price.PerMTok, schemas.ApproxTokensPerRequest, nil
 	case offer.Spec.Payment.Price.PerHour != "":
 		return offer.Spec.Payment.Price.PerHour, "perHour", "", 0, nil
+	case offer.Spec.Payment.Price.PerMB != "":
+		return offer.Spec.Payment.Price.PerMB, "perMB", "", 0, nil
 	default:
 		return "0", "", "", 0, nil
 	}

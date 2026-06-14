@@ -36,7 +36,8 @@ func TestBuildBazaarExtension(t *testing.T) {
 		{"agent", "qwen3.5:9b", "qwen3.5:9b"},
 		{"inference", "", "your-model-id"},
 		{"http", "", ""},
-		{"", "", ""}, // static config routes fall back to the generic shape
+		{"dataset", "training-v1", ""}, // dataset is a download → generic shape, no chat model
+		{"", "", ""},                   // static config routes fall back to the generic shape
 	} {
 		ext := BuildBazaarExtension(tc.offerType, tc.model)
 

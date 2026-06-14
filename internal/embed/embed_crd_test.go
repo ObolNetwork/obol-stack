@@ -149,8 +149,9 @@ func TestServiceOfferCRD_Fields(t *testing.T) {
 	}
 
 	// Required fields in spec (aligned with x402/ERC-8004 schema). agent
-	// joins this list as part of the type=agent offer flow.
-	for _, field := range []string{"type", "agent", "model", "upstream", "payment", "path", "registration"} {
+	// joins this list as part of the type=agent offer flow; dataset joins
+	// it for the type=dataset offer flow.
+	for _, field := range []string{"type", "agent", "dataset", "model", "upstream", "payment", "path", "registration"} {
 		if _, exists := pm[field]; !exists {
 			t.Errorf("spec.properties missing field %q", field)
 		}
@@ -162,10 +163,61 @@ func TestServiceOfferCRD_Fields(t *testing.T) {
 	for _, v := range enum {
 		got[v.(string)] = true
 	}
-	for _, want := range []string{"inference", "fine-tuning", "http", "agent"} {
+	for _, want := range []string{"inference", "fine-tuning", "http", "agent", "dataset"} {
 		if !got[want] {
 			t.Errorf("spec.type.enum missing %q", want)
 		}
+	}
+}
+
+// TestServiceOfferCRD_DatasetFields pins the type=dataset schema surface:
+// the spec.dataset block carries the pinned artifact metadata (mirroring
+// spec.agent), and price.perMB enables per-megabyte pricing. Mirrors
+// TestServiceOfferCRD_Fields' navigation.
+func TestServiceOfferCRD_DatasetFields(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/serviceoffer-crd.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+
+	crd := findDoc(multiDoc(data), "CustomResourceDefinition")
+	if crd == nil {
+		t.Fatal("no CRD document found")
+	}
+
+	versions, ok := nested(crd, "spec", "versions").([]any)
+	if !ok || len(versions) == 0 {
+		t.Fatal("spec.versions is empty or wrong type")
+	}
+	v0, ok := versions[0].(map[string]any)
+	if !ok {
+		t.Fatal("versions[0] is not a map")
+	}
+
+	specProps, ok := nested(v0, "schema", "openAPIV3Schema", "properties", "spec", "properties").(map[string]any)
+	if !ok {
+		t.Fatal("spec.properties is not a map")
+	}
+
+	datasetProps, ok := nested(specProps, "dataset", "properties").(map[string]any)
+	if !ok {
+		t.Fatal("spec.dataset.properties missing — type=dataset offers can't pin a version")
+	}
+	for _, field := range []string{"manifestHash", "version", "fileHash", "sizeBytes"} {
+		if _, exists := datasetProps[field]; !exists {
+			t.Errorf("spec.dataset.properties missing field %q", field)
+		}
+	}
+	if sb, ok := datasetProps["sizeBytes"].(map[string]any); ok && sb["type"] != "integer" {
+		t.Errorf("spec.dataset.sizeBytes type = %v, want integer", sb["type"])
+	}
+
+	priceProps, ok := nested(specProps, "payment", "properties", "price", "properties").(map[string]any)
+	if !ok {
+		t.Fatal("spec.payment.price.properties missing")
+	}
+	if _, exists := priceProps["perMB"]; !exists {
+		t.Error("spec.payment.price.properties missing perMB — dataset offers can't price per-MB")
 	}
 }
 

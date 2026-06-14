@@ -287,6 +287,28 @@ func TestHTMLAware_HTTPKeepsLegacyCopy(t *testing.T) {
 	}
 }
 
+// Dataset offers have no bespoke 402 copy in P1: normalizeOfferType folds
+// "dataset" into the "http" render branch, so the page shows the generic
+// Pay-with-Obol CTA, not the inference CLI card. Dataset version metadata
+// reaches buyers via accepts[].extra.dataset, not the HTML copy.
+func TestHTMLAware_DatasetUsesGenericHTTPCopy(t *testing.T) {
+	d := sampleDisplay()
+	d.OfferType = "dataset"
+
+	render := NewHTMLAwarePaymentRequired(d)
+	r := httptest.NewRequest("GET", "/services/pi-sessions", nil)
+	r.Header.Set("Accept", "text/html")
+	w := httptest.NewRecorder()
+	render(w, r, []x402types.PaymentRequirements{sampleRequirement()}, nil)
+
+	body := w.Body.String()
+	mustContain(t, body, "Pay with your Obol Agent")
+	mustContain(t, body, "buy-x402 skill")
+	if strings.Contains(body, "obol buy inference") {
+		t.Errorf("dataset-type 402 page should NOT show the inference CLI primary card")
+	}
+}
+
 func TestFormatAmount(t *testing.T) {
 	cases := []struct {
 		atomic   string

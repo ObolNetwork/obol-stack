@@ -333,6 +333,7 @@ func (v *Verifier) matchPaidRouteFull(cfg *PricingConfig, uri string) (*RouteRul
 	asset := ResolveAssetInfo(chain, rule)
 	requirement := BuildV2RequirementWithAsset(chain, asset, rule.Price, wallet, rule.MaxTimeoutSeconds)
 	mergeAgentExtras(&requirement, rule)
+	mergeDatasetExtras(&requirement, rule)
 	extensions := WithBazaar(BuildExtensionsForAsset(asset), rule.OfferType, rule.Model)
 	return rule, requirement, extensions, prometheusLabels(rule), chain, asset, true
 }
@@ -395,6 +396,33 @@ func mergeAgentExtras(req *x402types.PaymentRequirements, rule *RouteRule) {
 	if rule.AgentRuntime != "" {
 		req.Extra["agentRuntime"] = rule.AgentRuntime
 	}
+}
+
+// mergeDatasetExtras adds the dataset fields from a RouteRule to the
+// requirement's Extra map under "dataset" so buyers probing a 402 see
+// exactly which content-addressed dataset version they're paying for. No-op
+// for non-dataset rules.
+func mergeDatasetExtras(req *x402types.PaymentRequirements, rule *RouteRule) {
+	if rule.DatasetManifestHash == "" && rule.DatasetVersion == "" && rule.DatasetFileHash == "" && rule.DatasetSizeBytes == 0 {
+		return
+	}
+	if req.Extra == nil {
+		req.Extra = make(map[string]interface{})
+	}
+	dataset := make(map[string]interface{})
+	if rule.DatasetManifestHash != "" {
+		dataset["manifestHash"] = rule.DatasetManifestHash
+	}
+	if rule.DatasetVersion != "" {
+		dataset["version"] = rule.DatasetVersion
+	}
+	if rule.DatasetFileHash != "" {
+		dataset["fileHash"] = rule.DatasetFileHash
+	}
+	if rule.DatasetSizeBytes > 0 {
+		dataset["sizeBytes"] = rule.DatasetSizeBytes
+	}
+	req.Extra["dataset"] = dataset
 }
 
 // buildPaymentDisplay turns the matched rule + chain + asset into pre-formatted

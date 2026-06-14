@@ -101,15 +101,22 @@ type ServiceOfferList struct {
 type ServiceOfferSpec struct {
 	// Service type. 'inference' enables model management; 'http' for any HTTP
 	// service; 'agent' references an Agent CR via spec.agent.ref and the
-	// controller derives upstream + model + skills from the agent's status.
+	// controller derives upstream + model + skills from the agent's status;
+	// 'dataset' sells a versioned dataset artifact via spec.dataset.
 	// +kubebuilder:default="http"
-	// +kubebuilder:validation:Enum=inference;fine-tuning;http;agent
+	// +kubebuilder:validation:Enum=inference;fine-tuning;http;agent;dataset
 	Type string `json:"type,omitempty"`
 
 	// Required when type='agent'. The controller resolves spec.agent.ref to
 	// the referenced Agent CR, derives upstream from Agent.status.endpoint,
 	// and surfaces the agent's pinned model + skills in the 402 response.
 	Agent ServiceOfferAgent `json:"agent,omitempty"`
+
+	// Populated when type='dataset'. Pins the versioned dataset artifact
+	// (an export bundle) the offer sells: the content-address anchor
+	// (manifestHash), the published version, and the artifact size. The
+	// controller surfaces these in the 402 response's extra.dataset block.
+	Dataset ServiceOfferDataset `json:"dataset,omitempty"`
 
 	// LLM model metadata. Required when the upstream serves an LLM.
 	Model ServiceOfferModel `json:"model,omitempty"`
@@ -162,6 +169,24 @@ type ServiceOfferAgentRef struct {
 	Name string `json:"name"`
 	// +kubebuilder:validation:Required
 	Namespace string `json:"namespace"`
+}
+
+// ServiceOfferDataset is populated when Spec.Type == "dataset". It pins the
+// versioned dataset artifact (an export bundle) the offer sells. The
+// controller surfaces these fields in the 402 response's extra.dataset block
+// so buyers see exactly which content-addressed version they're paying for.
+type ServiceOfferDataset struct {
+	// Content-address anchor of the artifact: the export bundle
+	// manifestHash (SHA-256 over the artifact contents).
+	ManifestHash string `json:"manifestHash,omitempty"`
+	// Monotonic published version tag of the dataset (e.g. "1", "2").
+	Version string `json:"version,omitempty"`
+	// SHA-256 of the served file, for whole-file integrity verification
+	// after download.
+	FileHash string `json:"fileHash,omitempty"`
+	// Size of the served artifact in bytes. Drives per-MB pricing.
+	// +kubebuilder:validation:Minimum=0
+	SizeBytes int64 `json:"sizeBytes,omitempty"`
 }
 
 type ServiceOfferModel struct {
@@ -245,6 +270,8 @@ type ServiceOfferPriceTable struct {
 	PerHour string `json:"perHour,omitempty"`
 	// Per-training-epoch price in USDC. Fine-tuning only.
 	PerEpoch string `json:"perEpoch,omitempty"`
+	// Per-megabyte price in USDC. Dataset only.
+	PerMB string `json:"perMB,omitempty"`
 }
 
 type ServiceOfferRegistration struct {
@@ -421,6 +448,13 @@ func (o *ServiceOffer) IsInference() bool {
 // for a usable offer, but admission validation enforces that.
 func (o *ServiceOffer) IsAgent() bool {
 	return o.Spec.Type == "agent"
+}
+
+// IsDataset reports whether the offer sells a versioned dataset artifact.
+// Type=="dataset" is the only signal; spec.dataset carries the pinned
+// version metadata surfaced in the 402 extra block.
+func (o *ServiceOffer) IsDataset() bool {
+	return o.Spec.Type == "dataset"
 }
 
 // IsDraining reports whether spec.drainAt has been set. Drained offers
@@ -724,8 +758,7 @@ type AgentIdentityList struct {
 	Items           []AgentIdentity `json:"items"`
 }
 
-type AgentIdentitySpec struct {
-}
+type AgentIdentitySpec struct{}
 
 type AgentIdentityStatus struct {
 	// Per-chain ERC-8004 registrations for this identity document.

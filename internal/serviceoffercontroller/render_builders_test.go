@@ -312,6 +312,37 @@ func TestDescribeOfferPrice(t *testing.T) {
 			},
 			want: "0.001 USDC/request",
 		},
+		{
+			name: "per-mb label for dataset offers",
+			spec: monetizeapi.ServiceOfferSpec{
+				Payment: monetizeapi.ServiceOfferPayment{
+					Price: monetizeapi.ServiceOfferPriceTable{PerMB: "0.01"},
+				},
+			},
+			want: "0.01 USDC/MB",
+		},
+		{
+			// perMB is last in the precedence chain
+			// (perRequest > perMTok > perHour > perMB): a malformed offer
+			// with both set must surface the higher-priority unit.
+			name: "per-hour wins over per-mb",
+			spec: monetizeapi.ServiceOfferSpec{
+				Payment: monetizeapi.ServiceOfferPayment{
+					Price: monetizeapi.ServiceOfferPriceTable{PerHour: "2.5", PerMB: "0.01"},
+				},
+			},
+			want: "2.5 USDC/hour",
+		},
+		{
+			name: "per-mb surfaces the OBOL symbol",
+			spec: monetizeapi.ServiceOfferSpec{
+				Payment: monetizeapi.ServiceOfferPayment{
+					Asset: monetizeapi.ServiceOfferAsset{Symbol: "OBOL"},
+					Price: monetizeapi.ServiceOfferPriceTable{PerMB: "0.01"},
+				},
+			},
+			want: "0.01 OBOL/MB",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -401,6 +432,8 @@ func TestFallbackOfferType(t *testing.T) {
 		{"inference", "inference"},
 		{"http", "http"},
 		{"fine-tuning", "fine-tuning"},
+		{"agent", "agent"},
+		{"dataset", "dataset"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {

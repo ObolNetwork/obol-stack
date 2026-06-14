@@ -1162,6 +1162,14 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 			}
 		}
 
+		// type=dataset offers surface the pinned, content-addressed version
+		// on discovery, mirroring how Model is surfaced for inference/agent.
+		if offer.IsDataset() {
+			svc.DatasetManifestHash = offer.Spec.Dataset.ManifestHash
+			svc.DatasetVersion = offer.Spec.Dataset.Version
+			svc.DatasetSizeBytes = offer.Spec.Dataset.SizeBytes
+		}
+
 		services = append(services, svc)
 	}
 
@@ -1173,8 +1181,8 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 }
 
 // offerPriceRawAndUnit returns the raw decimal price string and which slot it
-// occupies in the price table. Only one of perRequest / perMTok / perHour is
-// expected to be set on a given offer.
+// occupies in the price table. Only one of perRequest / perMTok / perHour /
+// perMB is expected to be set on a given offer.
 func offerPriceRawAndUnit(offer *monetizeapi.ServiceOffer) (string, string) {
 	switch {
 	case offer.Spec.Payment.Price.PerRequest != "":
@@ -1183,6 +1191,8 @@ func offerPriceRawAndUnit(offer *monetizeapi.ServiceOffer) (string, string) {
 		return offer.Spec.Payment.Price.PerMTok, "perMTok"
 	case offer.Spec.Payment.Price.PerHour != "":
 		return offer.Spec.Payment.Price.PerHour, "perHour"
+	case offer.Spec.Payment.Price.PerMB != "":
+		return offer.Spec.Payment.Price.PerMB, "perMB"
 	default:
 		return "", ""
 	}
@@ -1352,6 +1362,8 @@ func describeOfferPrice(offer *monetizeapi.ServiceOffer) string {
 		return offer.Spec.Payment.Price.PerMTok + " " + symbol + "/MTok"
 	case offer.Spec.Payment.Price.PerHour != "":
 		return offer.Spec.Payment.Price.PerHour + " " + symbol + "/hour"
+	case offer.Spec.Payment.Price.PerMB != "":
+		return offer.Spec.Payment.Price.PerMB + " " + symbol + "/MB"
 	default:
 		return "—"
 	}

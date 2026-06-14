@@ -79,6 +79,34 @@ spec:
                     - namespace
                     type: object
                 type: object
+              dataset:
+                description: |-
+                  Populated when type='dataset'. Pins the versioned dataset artifact
+                  (an export bundle) the offer sells: the content-address anchor
+                  (manifestHash), the published version, and the artifact size. The
+                  controller surfaces these in the 402 response's extra.dataset block.
+                properties:
+                  fileHash:
+                    description: |-
+                      SHA-256 of the served file, for whole-file integrity verification
+                      after download.
+                    type: string
+                  manifestHash:
+                    description: |-
+                      Content-address anchor of the artifact: the export bundle
+                      manifestHash (SHA-256 over the artifact contents).
+                    type: string
+                  sizeBytes:
+                    description: Size of the served artifact in bytes. Drives per-MB
+                      pricing.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  version:
+                    description: Monotonic published version tag of the dataset (e.g.
+                      "1", "2").
+                    type: string
+                type: object
               drainAt:
                 description: |-
                   DrainAt marks the offer as draining when non-nil. While the offer
@@ -177,6 +205,9 @@ spec:
                         type: string
                       perHour:
                         description: Per-compute-hour price in USDC. Fine-tuning only.
+                        type: string
+                      perMB:
+                        description: Per-megabyte price in USDC. Dataset only.
                         type: string
                       perMTok:
                         description: Per-million-tokens price in USDC. Inference only.
@@ -278,12 +309,14 @@ spec:
                 description: |-
                   Service type. 'inference' enables model management; 'http' for any HTTP
                   service; 'agent' references an Agent CR via spec.agent.ref and the
-                  controller derives upstream + model + skills from the agent's status.
+                  controller derives upstream + model + skills from the agent's status;
+                  'dataset' sells a versioned dataset artifact via spec.dataset.
                 enum:
                 - inference
                 - fine-tuning
                 - http
                 - agent
+                - dataset
                 type: string
               upstream:
                 description: In-cluster service that handles the actual workload.
