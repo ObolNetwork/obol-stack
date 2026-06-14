@@ -241,6 +241,56 @@ func (a *Authority) Revoke(rawToken string) {
 	}
 }
 
+// HashToken returns the SHA-256 hex hash of a raw member token. Exposed so a
+// caller (e.g. a payment-gated service's entitlement map) can key off the
+// same hash the Authority stores without ever holding the raw token.
+func HashToken(rawToken string) string { return hashToken(rawToken) }
+
+// Mint issues a member token for groupID WITHOUT the device-auth flow, for
+// services where a settled payment — not an owner approval — is the
+// membership decision. The raw token is returned exactly once; only its hash
+// is retained (returned too, so the caller can persist it). label is a
+// non-trusted descriptive tag.
+func (a *Authority) Mint(groupID, label string) (rawToken, tokenHash string, err error) {
+	raw, err := randomHex(32)
+	if err != nil {
+		return "", "", err
+	}
+	rawToken = tokenPrefix + raw
+	tokenHash = hashToken(rawToken)
+
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.tokens[tokenHash] = &memberToken{
+		TokenHash: tokenHash,
+		GroupID:   strings.TrimSpace(groupID),
+		Label:     strings.TrimSpace(label),
+		IssuedAt:  a.now(),
+		Active:    true,
+	}
+	return rawToken, tokenHash, nil
+}
+
+// RegisterHash re-registers a previously issued token by its hash, marking it
+// active for groupID. It lets a persistent store rehydrate the in-memory
+// Authority after a restart without ever seeing the raw token (the Authority
+// verifies by hash). A blank hash is ignored; otherwise idempotent.
+func (a *Authority) RegisterHash(tokenHash, groupID, label string) {
+	tokenHash = strings.TrimSpace(tokenHash)
+	if tokenHash == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.tokens[tokenHash] = &memberToken{
+		TokenHash: tokenHash,
+		GroupID:   strings.TrimSpace(groupID),
+		Label:     strings.TrimSpace(label),
+		IssuedAt:  a.now(),
+		Active:    true,
+	}
+}
+
 // --- helpers ---
 
 func generateUserCode() (string, error) {
