@@ -2,7 +2,6 @@ package tunnel
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,13 +9,17 @@ import (
 	"testing"
 )
 
-func TestExtractZoneName(t *testing.T) {
-	zone, err := extractZoneName("api.stack.example.co.uk")
-	if err != nil {
-		t.Fatalf("extractZoneName: %v", err)
+func TestCloudflareAuthHint(t *testing.T) {
+	// Nested error_chain code 6111 (the connector-token-as-API-token mistake).
+	body := []byte(`{"success":false,"errors":[{"code":6003,"message":"Invalid request headers","error_chain":[{"code":6111,"message":"Invalid format for Authorization header"}]}]}`)
+	if hint := cloudflareAuthHint(body); !strings.Contains(hint, "not a valid Cloudflare API token") {
+		t.Fatalf("expected auth hint, got %q", hint)
 	}
-	if zone != "example.co.uk" {
-		t.Fatalf("zone = %q, want example.co.uk", zone)
+
+	// An unrelated error must not produce a hint.
+	other := []byte(`{"success":false,"errors":[{"code":1003,"message":"record exists"}]}`)
+	if hint := cloudflareAuthHint(other); hint != "" {
+		t.Fatalf("did not expect a hint for non-auth error, got %q", hint)
 	}
 }
 
@@ -55,64 +58,6 @@ func TestCloudflareClientResolveAccountIDSingleAccount(t *testing.T) {
 	}
 	if accountID != "acct-123" {
 		t.Fatalf("accountID = %q, want acct-123", accountID)
-	}
-}
-
-func TestCloudflareClientResolveZoneForHostname(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/zones" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-		if got := r.URL.Query().Get("name"); got != "example.co.uk" {
-			t.Fatalf("zone query = %q, want example.co.uk", got)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"success": true,
-			"result": []map[string]any{{
-				"id":   "zone-123",
-				"name": "example.co.uk",
-				"account": map[string]any{
-					"id":   "acct-123",
-					"name": "Main",
-				},
-			}},
-		})
-	}))
-	defer server.Close()
-
-	client := newCloudflareClient("token")
-	client.baseURL = server.URL
-
-	zone, err := client.ResolveZoneForHostname("stack.example.co.uk")
-	if err != nil {
-		t.Fatalf("ResolveZoneForHostname: %v", err)
-	}
-	if zone.ID != "zone-123" || zone.Account.ID != "acct-123" {
-		t.Fatalf("unexpected zone: %+v", zone)
-	}
-}
-
-func TestCloudflareClientResolveZoneForHostnameNotFound(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/zones" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"success": true,
-			"result":  []map[string]any{},
-		})
-	}))
-	defer server.Close()
-
-	client := newCloudflareClient("token")
-	client.baseURL = server.URL
-
-	_, err := client.ResolveZoneForHostname("stack.example.dev")
-	if err == nil {
-		t.Fatal("expected not-found error")
-	}
-	if !errors.Is(err, errCloudflareZoneNotFound) {
-		t.Fatalf("expected zone-not-found error, got %v", err)
 	}
 }
 

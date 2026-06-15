@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -23,7 +26,7 @@ const (
 	tunnelNamespace     = "traefik"
 	tunnelLabelSelector = "app.kubernetes.io/name=cloudflared"
 
-	// cloudflared-tunnel-token is created by `obol tunnel provision`.
+	// cloudflared-tunnel-token is created by `obol tunnel setup` (connector token).
 	tunnelTokenSecretName = "cloudflared-tunnel-token"
 	tunnelTokenSecretKey  = "TUNNEL_TOKEN"
 )
@@ -31,6 +34,7 @@ const (
 // tunnelStatusResult is the JSON-serialisable result for `tunnel status`.
 type tunnelStatusResult struct {
 	Mode              string `json:"mode"`
+	DisplayMode       string `json:"display_mode,omitempty"`
 	ExposureMode      string `json:"exposure_mode,omitempty"`
 	ManagementMode    string `json:"management_mode,omitempty"`
 	TransportProtocol string `json:"transport_protocol,omitempty"`
@@ -41,9 +45,20 @@ type tunnelStatusResult struct {
 	ReadyReplicas     int    `json:"ready_replicas,omitempty"`
 	AvailableReplicas int    `json:"available_replicas,omitempty"`
 	PodStatus         string `json:"pod_status,omitempty"`
+	Uptime            string `json:"uptime,omitempty"`
 	ConnectorStatus   string `json:"connector_status,omitempty"`
 	ActiveConnections int    `json:"active_connections,omitempty"`
-	LastUpdated       string `json:"last_updated"`
+
+	// Connector-local probe results (cloudflared :2000 /ready + /metrics).
+	ConnectorVersion string `json:"connector_version,omitempty"`
+	RequestsServed   int64  `json:"requests_served,omitempty"`
+	RequestErrors    int64  `json:"request_errors,omitempty"`
+
+	// Public reachability probe (HTTP GET of the public URL).
+	PublicReachable  bool `json:"public_reachable,omitempty"`
+	PublicHTTPStatus int  `json:"public_http_status,omitempty"`
+
+	LastUpdated string `json:"last_updated"`
 }
 
 type deploymentReplicaStatus struct {
@@ -61,6 +76,7 @@ type podStatusList struct {
 	Items []struct {
 		Status struct {
 			Phase      string `json:"phase"`
+			StartTime  string `json:"startTime"`
 			Conditions []struct {
 				Type   string `json:"type"`
 				Status string `json:"status"`
@@ -74,6 +90,26 @@ type tunnelRuntimeHealth struct {
 	ReadyReplicas     int
 	AvailableReplicas int
 	PodStatus         string
+	StartedAt         time.Time
+}
+
+// connectorProbe captures the cloudflared connector's self-reported health from
+// its in-cluster metrics endpoint (:2000). All fields are best-effort; a failed
+// probe leaves the zero value and the caller degrades gracefully.
+type connectorProbe struct {
+	Reachable      bool
+	ReadyConns     int
+	Version        string
+	RequestsServed int64
+	RequestErrors  int64
+}
+
+// StatusOptions configures `tunnel status` presentation and probing.
+type StatusOptions struct {
+	// NoProbe skips both the connector metrics probe (kubectl port-forward to
+	// cloudflared :2000) and the outbound public URL reachability check, keeping
+	// `status` fully offline and fast.
+	NoProbe bool
 }
 
 type RestartOptions struct {
@@ -81,7 +117,7 @@ type RestartOptions struct {
 }
 
 // Status displays the current tunnel status and URL.
-func Status(cfg *config.Config, u *ui.UI) error {
+func Status(cfg *config.Config, u *ui.UI, opts StatusOptions) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
@@ -93,6 +129,7 @@ func Status(cfg *config.Config, u *ui.UI) error {
 	mode, url := tunnelModeAndURL(st)
 	result := tunnelStatusResult{
 		Mode:              mode,
+		DisplayMode:       st.DisplayMode(),
 		ExposureMode:      tunnelExposureQuick,
 		ManagementMode:    tunnelManagementQuick,
 		TransportProtocol: tunnelTransportAuto,
@@ -124,12 +161,12 @@ func Status(cfg *config.Config, u *ui.UI) error {
 		if u.IsJSON() {
 			return u.JSON(result)
 		}
-		printDetailedStatusBox(u, result, now)
+		printStatusReport(u, result, now)
 		u.Blank()
 		if mode == tunnelExposureQuick {
 			u.Print("The tunnel will start automatically when you sell a service.")
-			u.Print("  Start manually: obol tunnel restart")
-			u.Print("  Persistent URL: obol tunnel setup --hostname stack.example.com")
+			u.Print("  Start manually:  obol tunnel restart")
+			u.Print("  Permanent URL:   obol tunnel setup")
 		} else {
 			u.Print("Troubleshooting:")
 			u.Print("  - Start the stack: obol stack up")
@@ -142,6 +179,9 @@ func Status(cfg *config.Config, u *ui.UI) error {
 	result.ReadyReplicas = runtime.ReadyReplicas
 	result.AvailableReplicas = runtime.AvailableReplicas
 	result.PodStatus = runtime.PodStatus
+	if !runtime.StartedAt.IsZero() {
+		result.Uptime = humanizeDuration(now.Sub(runtime.StartedAt))
+	}
 
 	if mode == tunnelExposureQuick {
 		tunnelURL, quickErr := GetTunnelURL(cfg)
@@ -154,20 +194,35 @@ func Status(cfg *config.Config, u *ui.UI) error {
 		result.URL = "https://" + result.Hostname
 	}
 
-	if st != nil && st.Management() == tunnelManagementRemote && st.AccountID != "" && st.TunnelID != "" {
-		result.ConnectorStatus = "unknown"
-		if apiToken := strings.TrimSpace(os.Getenv("CLOUDFLARE_API_TOKEN")); apiToken != "" {
-			if tunnelInfo, tunnelErr := newCloudflareClient(apiToken).GetTunnel(st.AccountID, st.TunnelID); tunnelErr == nil {
-				result.ActiveConnections = len(tunnelInfo.Connections)
-				if result.ActiveConnections > 0 {
-					result.ConnectorStatus = "connected"
-				} else {
-					result.ConnectorStatus = "waiting_for_connections"
-				}
+	// Connector health: prefer the connector's own /ready + /metrics endpoint
+	// (works in every mode, no Cloudflare API token needed). Fall back to the
+	// remote-management API path only when the local probe is skipped/unavailable
+	// and a token happens to be present.
+	if !opts.NoProbe {
+		if probe := probeCloudflaredMetrics(cfg); probe.Reachable {
+			result.ActiveConnections = probe.ReadyConns
+			result.ConnectorVersion = probe.Version
+			result.RequestsServed = probe.RequestsServed
+			result.RequestErrors = probe.RequestErrors
+			if probe.ReadyConns > 0 {
+				result.ConnectorStatus = "connected"
+			} else {
+				result.ConnectorStatus = "waiting_for_connections"
 			}
 		}
-	} else if st != nil && st.IsPersistent() {
+	}
+	if result.ConnectorStatus == "" && st != nil && st.IsPersistent() {
 		result.ConnectorStatus = "managed-locally"
+	}
+
+	// Public reachability probe: GET the public URL root and assert HTTP < 400.
+	publicURL := result.URL
+	probeablePublicURL := strings.HasPrefix(publicURL, "https://") || strings.HasPrefix(publicURL, "http://")
+	if !opts.NoProbe && probeablePublicURL {
+		if code, ok := probePublicURL(publicURL); ok {
+			result.PublicHTTPStatus = code
+			result.PublicReachable = code < 400
+		}
 	}
 
 	result.Status = summarizeTunnelStatus(result)
@@ -175,16 +230,19 @@ func Status(cfg *config.Config, u *ui.UI) error {
 		return u.JSON(result)
 	}
 
-	printDetailedStatusBox(u, result, now)
-	if result.URL != "" && result.URL != "(not available)" && result.URL != "(activates on 'obol sell')" {
-		u.Printf("Test with: curl %s/", result.URL)
-		syncTunnelDependents(cfg, u, result.URL)
+	printStatusReport(u, result, now)
+	if probeablePublicURL {
+		syncTunnelDependents(cfg, u, publicURL)
 	}
 	if result.Status != "active" {
 		u.Blank()
 		u.Print("Troubleshooting:")
-		u.Print("  - Check logs: obol tunnel logs")
+		u.Print("  - Check logs:     obol tunnel logs")
 		u.Print("  - Restart tunnel: obol tunnel restart")
+	} else if mode == tunnelExposureQuick {
+		u.Blank()
+		u.Dim("This is a temporary URL — it changes on every restart.")
+		u.Print("  Create a permanent URL: obol tunnel setup")
 	}
 
 	return nil
@@ -628,18 +686,6 @@ func Logs(cfg *config.Config, follow bool) error {
 	return cmd.Run()
 }
 
-// getPodStatus returns the status of the cloudflared pod.
-func getPodStatus(kubectlPath, kubeconfigPath string) (string, error) {
-	runtime, err := getTunnelRuntimeHealth(kubectlPath, kubeconfigPath)
-	if err != nil {
-		return "", err
-	}
-	if runtime.PodStatus == "" {
-		return "", errors.New("no pods found")
-	}
-	return runtime.PodStatus, nil
-}
-
 func getTunnelRuntimeHealth(kubectlPath, kubeconfigPath string) (*tunnelRuntimeHealth, error) {
 	depCmd := exec.Command(kubectlPath,
 		"--kubeconfig", kubeconfigPath,
@@ -679,12 +725,20 @@ func getTunnelRuntimeHealth(kubectlPath, kubeconfigPath string) (*tunnelRuntimeH
 	}
 
 	phases := make([]string, 0, len(pods.Items))
+	var earliestStart time.Time
 	for _, pod := range pods.Items {
 		phase := strings.ToLower(strings.TrimSpace(pod.Status.Phase))
 		if phase == "" {
 			phase = "unknown"
 		}
 		phases = append(phases, phase)
+		if ts := strings.TrimSpace(pod.Status.StartTime); ts != "" {
+			if started, parseErr := time.Parse(time.RFC3339, ts); parseErr == nil {
+				if earliestStart.IsZero() || started.Before(earliestStart) {
+					earliestStart = started
+				}
+			}
+		}
 	}
 	podStatus := ""
 	if len(phases) > 0 {
@@ -696,52 +750,230 @@ func getTunnelRuntimeHealth(kubectlPath, kubeconfigPath string) (*tunnelRuntimeH
 		ReadyReplicas:     int(deployment.Status.ReadyReplicas),
 		AvailableReplicas: int(deployment.Status.AvailableReplicas),
 		PodStatus:         podStatus,
+		StartedAt:         earliestStart,
 	}, nil
 }
 
-func printDetailedStatusBox(u *ui.UI, result tunnelStatusResult, lastUpdated time.Time) {
+// humanizeDuration renders a coarse, human-friendly uptime string.
+func humanizeDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		h := int(d.Hours())
+		m := int(d.Minutes()) % 60
+		if m == 0 {
+			return fmt.Sprintf("%dh", h)
+		}
+		return fmt.Sprintf("%dh%dm", h, m)
+	default:
+		days := int(d.Hours()) / 24
+		h := int(d.Hours()) % 24
+		if h == 0 {
+			return fmt.Sprintf("%dd", days)
+		}
+		return fmt.Sprintf("%dd%dh", days, h)
+	}
+}
+
+// humanTunnelMode maps the internal display mode to a friendly label that makes
+// the permanent-vs-temporary distinction obvious. Both local- and remote-managed
+// tunnels are permanent; only the quick tunnel is temporary.
+func humanTunnelMode(displayMode string) string {
+	switch displayMode {
+	case "persistent-remote":
+		return "Permanent (Cloudflare-managed)"
+	case "persistent-local":
+		return "Permanent (browser-managed)"
+	case tunnelExposurePersistent:
+		return "Permanent"
+	default:
+		return "Temporary (quick tunnel)"
+	}
+}
+
+// printStatusReport renders the human-facing status. The default view stays
+// concise; --verbose (u.IsVerbose) adds replica/pod internals and last-updated.
+func printStatusReport(u *ui.UI, result tunnelStatusResult, lastUpdated time.Time) {
 	u.Blank()
 	u.Bold("Cloudflare Tunnel Status")
 	u.Print(strings.Repeat("─", 50))
-	u.Detail("Mode", result.Mode)
-	if result.ManagementMode != "" {
-		u.Detail("Management", result.ManagementMode)
-	}
-	if result.TransportProtocol != "" {
-		u.Detail("Transport", result.TransportProtocol)
-	}
+	u.Detail("Mode", humanTunnelMode(result.DisplayMode))
 	u.Detail("Status", result.Status)
 	if result.Hostname != "" {
 		u.Detail("Hostname", result.Hostname)
 	}
 	u.Detail("URL", result.URL)
-	if result.DesiredReplicas > 0 || result.ReadyReplicas > 0 {
-		u.Detail("Replicas", fmt.Sprintf("%d ready / %d desired", result.ReadyReplicas, result.DesiredReplicas))
-	}
-	if result.PodStatus != "" {
-		u.Detail("Pods", result.PodStatus)
+	if result.Uptime != "" {
+		u.Detail("Uptime", result.Uptime)
 	}
 	if result.ConnectorStatus != "" {
 		connector := result.ConnectorStatus
 		if result.ActiveConnections > 0 {
 			connector = fmt.Sprintf("%s (%d active)", connector, result.ActiveConnections)
 		}
-		u.Detail("Connectors", connector)
+		u.Detail("Connector", connector)
 	}
-	u.Detail("Last Updated", lastUpdated.Format(time.RFC3339))
+	if result.PublicHTTPStatus > 0 {
+		reach := fmt.Sprintf("HTTP %d", result.PublicHTTPStatus)
+		if result.PublicReachable {
+			reach = "reachable (" + reach + ")"
+		} else {
+			reach = "unreachable (" + reach + ")"
+		}
+		u.Detail("Public check", reach)
+	}
+	if u.IsVerbose() {
+		if result.ManagementMode != "" {
+			u.Detail("Management", result.ManagementMode)
+		}
+		if result.TransportProtocol != "" {
+			u.Detail("Transport", result.TransportProtocol)
+		}
+		if result.ConnectorVersion != "" {
+			u.Detail("Connector version", result.ConnectorVersion)
+		}
+		if result.RequestsServed > 0 || result.RequestErrors > 0 {
+			u.Detail("Requests served", fmt.Sprintf("%d (%d errors)", result.RequestsServed, result.RequestErrors))
+		}
+		if result.DesiredReplicas > 0 || result.ReadyReplicas > 0 {
+			u.Detail("Replicas", fmt.Sprintf("%d ready / %d desired", result.ReadyReplicas, result.DesiredReplicas))
+		}
+		if result.PodStatus != "" {
+			u.Detail("Pods", result.PodStatus)
+		}
+		u.Detail("Last updated", lastUpdated.Format(time.RFC3339))
+	}
 	u.Print(strings.Repeat("─", 50))
 }
 
-// printStatusBox prints a formatted status box.
-func printStatusBox(u *ui.UI, mode, status, url string, lastUpdated time.Time) {
-	u.Blank()
-	u.Bold("Cloudflare Tunnel Status")
-	u.Print(strings.Repeat("─", 50))
-	u.Detail("Mode", mode)
-	u.Detail("Status", status)
-	u.Detail("URL", url)
-	u.Detail("Last Updated", lastUpdated.Format(time.RFC3339))
-	u.Print(strings.Repeat("─", 50))
+// probeCloudflaredMetrics port-forwards to the cloudflared connector's metrics
+// endpoint (:2000) and reads /ready + /metrics for self-reported health. It is
+// strictly best-effort: any failure returns a non-reachable zero value so the
+// caller degrades gracefully. Works in every tunnel mode without a Cloudflare
+// API token.
+func probeCloudflaredMetrics(cfg *config.Config) connectorProbe {
+	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	localPort, err := freeLocalPort()
+	if err != nil {
+		return connectorProbe{}
+	}
+
+	pf := exec.Command(kubectlPath,
+		"--kubeconfig", kubeconfigPath,
+		"port-forward", "-n", tunnelNamespace,
+		"deployment/cloudflared",
+		fmt.Sprintf("%d:2000", localPort),
+	)
+	if err := pf.Start(); err != nil {
+		return connectorProbe{}
+	}
+	defer func() {
+		_ = pf.Process.Kill()
+		_ = pf.Wait()
+	}()
+
+	client := &http.Client{Timeout: 2 * time.Second}
+	base := fmt.Sprintf("http://127.0.0.1:%d", localPort)
+
+	// Wait briefly for the forward to come up.
+	var readyBody []byte
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, getErr := client.Get(base + "/ready")
+		if getErr == nil {
+			readyBody, _ = io.ReadAll(resp.Body)
+			resp.Body.Close()
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	if len(readyBody) == 0 {
+		return connectorProbe{}
+	}
+
+	probe := connectorProbe{Reachable: true}
+	var ready struct {
+		ReadyConnections int `json:"readyConnections"`
+	}
+	if json.Unmarshal(readyBody, &ready) == nil {
+		probe.ReadyConns = ready.ReadyConnections
+	}
+
+	if resp, getErr := client.Get(base + "/metrics"); getErr == nil {
+		metricsBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		parseCloudflaredMetrics(string(metricsBody), &probe)
+	}
+
+	return probe
+}
+
+// parseCloudflaredMetrics extracts a few friendly numbers from cloudflared's
+// Prometheus text exposition. Unknown/absent metrics are silently ignored.
+func parseCloudflaredMetrics(metrics string, probe *connectorProbe) {
+	for _, line := range strings.Split(metrics, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "cloudflared_tunnel_total_requests"):
+			probe.RequestsServed += metricLineValueInt(line)
+		case strings.HasPrefix(line, "cloudflared_tunnel_request_errors"):
+			probe.RequestErrors += metricLineValueInt(line)
+		case strings.HasPrefix(line, "build_info") && probe.Version == "":
+			probe.Version = metricLabelValue(line, "version")
+		}
+	}
+}
+
+func metricLineValueInt(line string) int64 {
+	fields := strings.Fields(line)
+	if len(fields) < 2 {
+		return 0
+	}
+	if f, err := strconv.ParseFloat(fields[len(fields)-1], 64); err == nil {
+		return int64(f)
+	}
+	return 0
+}
+
+func metricLabelValue(line, label string) string {
+	re := regexp.MustCompile(label + `="([^"]*)"`)
+	if m := re.FindStringSubmatch(line); len(m) == 2 {
+		return m[1]
+	}
+	return ""
+}
+
+// probePublicURL issues a short GET against the public URL root and returns the
+// HTTP status code. ok is false when the request could not be completed.
+func probePublicURL(publicURL string) (int, bool) {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(strings.TrimRight(publicURL, "/") + "/")
+	if err != nil {
+		return 0, false
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
+	return resp.StatusCode, true
+}
+
+func freeLocalPort() (int, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	defer ln.Close()
+	return ln.Addr().(*net.TCPAddr).Port, nil
 }
 
 // SyncTunnelConfigMap creates or patches the obol-stack-config ConfigMap in the
@@ -767,9 +999,10 @@ data:
   tunnelURL: %s
 `, strings.TrimRight(tunnelURL, "/"))
 
+	// Server-side apply avoids the flaky client-side /openapi/v2 download on k3d.
 	cmd := exec.Command(kubectlPath,
 		"--kubeconfig", kubeconfigPath,
-		"apply", "-f", "-",
+		"apply", "--server-side", "--force-conflicts", "-f", "-",
 	)
 
 	cmd.Stdin = strings.NewReader(manifest)
@@ -963,9 +1196,10 @@ func CreateStorefront(cfg *config.Config, tunnelURL string) error {
 			return fmt.Errorf("failed to marshal resource: %w", err)
 		}
 
+		// Server-side apply avoids the flaky client-side /openapi/v2 download on k3d.
 		cmd := exec.Command(kubectlPath,
 			"--kubeconfig", kubeconfigPath,
-			"apply", "-f", "-",
+			"apply", "--server-side", "--force-conflicts", "-f", "-",
 		)
 
 		cmd.Stdin = strings.NewReader(string(data))

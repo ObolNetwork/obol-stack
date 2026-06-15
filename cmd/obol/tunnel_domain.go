@@ -19,17 +19,31 @@ func tunnelCommand(cfg *config.Config) *cli.Command {
 			{
 				Name:  "status",
 				Usage: "Show tunnel status and public URL",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "no-probe", Usage: "Skip connector and public reachability probes (offline/fast)"},
+				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return tunnel.Status(cfg, getUI(cmd))
+					return tunnel.Status(cfg, getUI(cmd), tunnel.StatusOptions{NoProbe: cmd.Bool("no-probe")})
 				},
 			},
 			{
-				Name:  "setup",
-				Usage: "Guided persistent tunnel setup with optional domain registration",
+				Name:      "setup",
+				Usage:     "Create a permanent public URL with a Cloudflare tunnel",
+				ArgsUsage: "[<connector-token>]",
+				Description: "A tunnel exposes your stack to the public internet so buyers can discover and\n" +
+					"pay for the services you sell. You don't need it for local use — set one up\n" +
+					"once you're ready to sell, to get a permanent URL.\n\n" +
+					"By default Obol wires a dashboard-managed tunnel from a Cloudflare connector\n" +
+					"token (least privilege, no API key, no local install). Create the tunnel in the\n" +
+					"Cloudflare dashboard, route its Public Hostname to\n" +
+					"http://traefik.traefik.svc.cluster.local:80, then paste the token here — you can\n" +
+					"paste the whole 'cloudflared tunnel run --token …' line and Obol extracts it.\n\n" +
+					"Advanced: '--management local' uses a browser login on this machine instead\n" +
+					"(needs cloudflared installed); 'obol tunnel login' is the same flow directly.",
 				Flags: tunnelSetupFlags(),
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					u := getUI(cmd)
-					opts, err := setupOptionsFromCommand(cmd, u)
+					opts, err := setupOptionsFromCommand(cmd)
 					if err != nil {
 						return err
 					}
@@ -46,8 +60,9 @@ func tunnelCommand(cfg *config.Config) *cli.Command {
 				},
 			},
 			{
-				Name:  "login",
-				Usage: "Authenticate via browser and create a locally-managed tunnel (no API token)",
+				Name:   "login",
+				Hidden: true,
+				Usage:  "Advanced: create a locally-managed tunnel via browser login (no token)",
 				Flags: []cli.Flag{
 					&cli.StringFlag{
 						Name:     "hostname",
@@ -66,46 +81,6 @@ func tunnelCommand(cfg *config.Config) *cli.Command {
 						Hostname:          cmd.String("hostname"),
 						TransportProtocol: cmd.String("transport-protocol"),
 						OverwriteDNS:      cmd.Bool("overwrite-dns"),
-					})
-				},
-			},
-			{
-				Name:  "provision",
-				Usage: "Provision a persistent remote-managed Cloudflare Tunnel",
-				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:     "hostname",
-						Aliases:  []string{"H"},
-						Usage:    "Public hostname to route (e.g. stack.example.com)",
-						Required: true,
-					},
-					&cli.StringFlag{
-						Name:    "account-id",
-						Aliases: []string{"a"},
-						Usage:   "Cloudflare account ID (optional if the API token can access a single account)",
-						Sources: cli.EnvVars("CLOUDFLARE_ACCOUNT_ID"),
-					},
-					&cli.StringFlag{
-						Name:    "zone-id",
-						Aliases: []string{"z"},
-						Usage:   "Cloudflare zone ID for the hostname (auto-detected when omitted)",
-						Sources: cli.EnvVars("CLOUDFLARE_ZONE_ID"),
-					},
-					&cli.StringFlag{
-						Name:    "api-token",
-						Aliases: []string{"t"},
-						Usage:   "Cloudflare API token",
-						Sources: cli.EnvVars("CLOUDFLARE_API_TOKEN"),
-					},
-					tunnelTransportProtocolFlag(),
-				},
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					return tunnel.Provision(cfg, getUI(cmd), tunnel.ProvisionOptions{
-						Hostname:          cmd.String("hostname"),
-						AccountID:         cmd.String("account-id"),
-						ZoneID:            cmd.String("zone-id"),
-						APIToken:          cmd.String("api-token"),
-						TransportProtocol: cmd.String("transport-protocol"),
 					})
 				},
 			},
@@ -242,25 +217,15 @@ func tunnelTransportProtocolFlag() cli.Flag {
 func tunnelSetupFlags() []cli.Flag {
 	return []cli.Flag{
 		&cli.StringFlag{Name: "hostname", Aliases: []string{"H"}, Usage: "Public hostname to route (e.g. stack.example.com)"},
-		&cli.StringFlag{Name: "management", Usage: "Tunnel management mode: local or remote", Value: "auto"},
+		&cli.StringFlag{Name: "token", Aliases: []string{"t"}, Usage: "Cloudflare tunnel connector token (or pass it as a positional argument)"},
+		&cli.StringFlag{Name: "management", Usage: "Tunnel management: connector (default) or local (browser fallback)", Value: "connector"},
 		tunnelTransportProtocolFlag(),
-		&cli.StringFlag{Name: "account-id", Aliases: []string{"a"}, Usage: "Cloudflare account ID", Sources: cli.EnvVars("CLOUDFLARE_ACCOUNT_ID")},
-		&cli.StringFlag{Name: "zone-id", Aliases: []string{"z"}, Usage: "Cloudflare zone ID (auto-detected when omitted)", Sources: cli.EnvVars("CLOUDFLARE_ZONE_ID")},
-		&cli.StringFlag{Name: "api-token", Aliases: []string{"t"}, Usage: "Cloudflare API token", Sources: cli.EnvVars("CLOUDFLARE_API_TOKEN")},
-		&cli.BoolFlag{Name: "register-domain", Usage: "Register the domain apex via Cloudflare Registrar when the zone is missing"},
-		&cli.IntFlag{Name: "years", Usage: "Domain registration term in years", Value: 1},
-		&cli.BoolFlag{Name: "auto-renew", Usage: "Enable domain auto-renew when registering a domain"},
-		&cli.StringFlag{Name: "privacy-mode", Usage: "WHOIS privacy mode for registration", Value: "redaction"},
-		&cli.BoolFlag{Name: "yes", Aliases: []string{"y"}, Usage: "Confirm billable domain registration without prompting"},
-		&cli.BoolFlag{Name: "overwrite-dns", Usage: "Replace any existing A/AAAA/CNAME at the hostname (forwards --overwrite-dns to cloudflared in local-managed mode)"},
+		&cli.BoolFlag{Name: "overwrite-dns", Usage: "Local-managed only: replace any existing A/AAAA/CNAME at the hostname"},
 		&cli.StringFlag{Name: "from-json", Usage: "Read setup options from JSON file (or - for stdin)"},
 	}
 }
 
-func setupOptionsFromCommand(cmd *cli.Command, u interface {
-	Input(string, string) (string, error)
-},
-) (tunnel.SetupOptions, error) {
+func setupOptionsFromCommand(cmd *cli.Command) (tunnel.SetupOptions, error) {
 	if jsonPath := cmd.String("from-json"); jsonPath != "" {
 		var opts tunnel.SetupOptions
 		data, err := readJSONInput(jsonPath)
@@ -273,27 +238,16 @@ func setupOptionsFromCommand(cmd *cli.Command, u interface {
 		return opts, nil
 	}
 
-	hostname := cmd.String("hostname")
-	if strings.TrimSpace(hostname) == "" {
-		input, err := u.Input("Public hostname", "")
-		if err != nil {
-			return tunnel.SetupOptions{}, err
-		}
-		hostname = input
+	token := strings.TrimSpace(cmd.String("token"))
+	if token == "" {
+		token = strings.TrimSpace(cmd.Args().First())
 	}
 
 	return tunnel.SetupOptions{
-		Hostname:          hostname,
+		Hostname:          cmd.String("hostname"),
 		Management:        cmd.String("management"),
+		ConnectorToken:    token,
 		TransportProtocol: cmd.String("transport-protocol"),
-		AccountID:         cmd.String("account-id"),
-		ZoneID:            cmd.String("zone-id"),
-		APIToken:          cmd.String("api-token"),
-		RegisterDomain:    cmd.Bool("register-domain"),
-		Years:             cmd.Int("years"),
-		AutoRenew:         cmd.Bool("auto-renew"),
-		PrivacyMode:       cmd.String("privacy-mode"),
-		ConfirmCharge:     cmd.Bool("yes"),
 		OverwriteDNS:      cmd.Bool("overwrite-dns"),
 	}, nil
 }

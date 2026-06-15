@@ -78,18 +78,8 @@ func restoreRemoteManagedResources(cfg *config.Config, u *ui.UI, kubeconfigPath 
 		return fmt.Errorf("load stored tunnel token: %w", err)
 	}
 
-	if token == "" && st.AccountID != "" && st.TunnelID != "" {
-		if apiToken := os.Getenv("CLOUDFLARE_API_TOKEN"); apiToken != "" {
-			client := newCloudflareClient(apiToken)
-			token, err = client.GetTunnelToken(st.AccountID, st.TunnelID)
-			if err == nil && token != "" {
-				_ = saveRemoteTunnelToken(cfg, token)
-			}
-		}
-	}
-
 	if token == "" {
-		return errors.New("persistent remote tunnel token is unavailable locally; rerun 'obol tunnel setup --management remote --hostname <host> --api-token ...' or set CLOUDFLARE_API_TOKEN and retry")
+		return errors.New("persistent tunnel token is unavailable locally; rerun 'obol tunnel setup <connector-token>' to reconfigure the tunnel")
 	}
 
 	if err := applyTunnelTokenSecret(cfg, u, kubeconfigPath, token); err != nil {

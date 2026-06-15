@@ -12,102 +12,49 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
-// ProvisionOptions configures `obol tunnel provision`.
-type ProvisionOptions struct {
+// TokenProvisionOptions configures the dashboard-managed (connector token) path.
+type TokenProvisionOptions struct {
 	Hostname          string
-	AccountID         string
-	ZoneID            string
-	APIToken          string
+	ConnectorToken    string
 	TransportProtocol string
 }
 
-type resolvedProvisionTarget struct {
-	Hostname  string
-	AccountID string
-	ZoneID    string
-	ZoneName  string
-}
-
-// Provision provisions a remotely managed persistent Cloudflare Tunnel routed via a proxied DNS record.
-func Provision(cfg *config.Config, u *ui.UI, opts ProvisionOptions) error {
+// ProvisionWithToken wires up a permanent, dashboard-managed tunnel from a
+// Cloudflare connector token (the value from Networks → Tunnels). It performs no
+// Cloudflare API calls: the user has already created the tunnel and its Public
+// Hostname route in the dashboard. We simply store the token as the in-cluster
+// connector secret and run cloudflared in remote-managed mode — runtime-identical
+// to the API-provisioned path, but with a least-privilege, single-tunnel
+// credential instead of an account-wide API token.
+func ProvisionWithToken(cfg *config.Config, u *ui.UI, opts TokenProvisionOptions) error {
 	hostname := normalizeHostname(opts.Hostname)
 	if hostname == "" {
 		return errors.New("--hostname is required (e.g. stack.example.com)")
-	}
-	if opts.APIToken == "" {
-		return errors.New("--api-token is required (or set CLOUDFLARE_API_TOKEN)")
 	}
 	transportProtocol, err := validateTunnelTransportProtocol(opts.TransportProtocol)
 	if err != nil {
 		return err
 	}
 
-	// Stack must be running so we can store the tunnel token in-cluster.
+	claims, err := parseConnectorToken(opts.ConnectorToken)
+	if err != nil {
+		return fmt.Errorf("invalid connector token: %w", err)
+	}
+	connectorToken := strings.TrimSpace(opts.ConnectorToken)
+
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 		return errors.New("stack not running, use 'obol stack up' first")
 	}
 
-	stackID := getStackID(cfg)
-	if stackID == "" {
-		return errors.New("stack not initialized, run 'obol stack init' first")
-	}
+	u.Info("Configuring dashboard-managed Cloudflare Tunnel...")
+	u.Detail("Hostname", hostname)
+	u.Detail("Tunnel", claims.TunnelID)
 
-	client := newCloudflareClient(opts.APIToken)
-	target, err := resolveProvisionTarget(client, ProvisionOptions{
-		Hostname:  hostname,
-		AccountID: opts.AccountID,
-		ZoneID:    opts.ZoneID,
-		APIToken:  opts.APIToken,
-	})
-	if err != nil {
-		return err
-	}
-
-	st, _ := loadTunnelState(cfg)
-	tunnelName := desiredPersistentTunnelName(stackID, st, tunnelManagementRemote)
-	if st != nil && st.Management() == tunnelManagementRemote && st.AccountID == target.AccountID && st.TunnelID != "" && st.TunnelName != "" {
-		tunnelName = st.TunnelName
-	}
-
-	u.Info("Provisioning Cloudflare Tunnel (API)...")
-	u.Detail("Hostname", target.Hostname)
-	u.Detail("Account", target.AccountID)
-	u.Detail("Zone", fmt.Sprintf("%s (%s)", target.ZoneName, target.ZoneID))
-	u.Detail("Tunnel", tunnelName)
-
-	tunnelID := ""
-	tunnelToken := ""
-	if st != nil && st.Management() == tunnelManagementRemote && st.AccountID == target.AccountID && st.TunnelID != "" {
-		tunnelID = st.TunnelID
-		tok, tokenErr := client.GetTunnelToken(target.AccountID, tunnelID)
-		if tokenErr != nil {
-			u.Warnf("Existing tunnel token fetch failed (%v); creating a new tunnel...", tokenErr)
-			tunnelID = ""
-		} else {
-			tunnelToken = tok
-		}
-	}
-
-	if tunnelID == "" {
-		t, createErr := client.CreateTunnel(target.AccountID, tunnelName)
-		if createErr != nil {
-			return createErr
-		}
-		tunnelID = t.ID
-		tunnelToken = t.Token
-	}
-
-	if err := client.UpdateTunnelConfiguration(target.AccountID, tunnelID, target.Hostname, "http://traefik.traefik.svc.cluster.local:80"); err != nil {
-		return err
-	}
-	if err := client.UpsertTunnelDNSRecord(target.ZoneID, target.Hostname, tunnelID+".cfargotunnel.com"); err != nil {
-		return err
-	}
-	if err := saveRemoteTunnelToken(cfg, tunnelToken); err != nil {
+	if err := saveRemoteTunnelToken(cfg, connectorToken); err != nil {
 		return fmt.Errorf("save tunnel token locally: %w", err)
 	}
-	if err := applyTunnelTokenSecret(cfg, u, kubeconfigPath, tunnelToken); err != nil {
+	if err := applyTunnelTokenSecret(cfg, u, kubeconfigPath, connectorToken); err != nil {
 		return err
 	}
 	if err := deleteLocalManagedK8sResources(cfg, u, kubeconfigPath); err != nil {
@@ -116,28 +63,27 @@ func Provision(cfg *config.Config, u *ui.UI, opts ProvisionOptions) error {
 	if err := applyManagementModeConfigMap(cfg, u, kubeconfigPath, tunnelManagementRemote, transportProtocol); err != nil {
 		return err
 	}
-
-	// Ensure cloudflared switches to remotely-managed mode immediately.
 	if err := helmUpgradeCloudflared(cfg, u, kubeconfigPath); err != nil {
 		return err
 	}
 
+	st, _ := loadTunnelState(cfg)
 	if st == nil {
 		st = &tunnelState{}
 	}
 	st.ExposureMode = tunnelExposurePersistent
 	st.ManagementMode = tunnelManagementRemote
 	st.TransportProtocol = transportProtocol
-	st.Hostname = target.Hostname
-	st.AccountID = target.AccountID
-	st.ZoneID = target.ZoneID
-	st.TunnelID = tunnelID
-	st.TunnelName = tunnelName
+	st.Hostname = hostname
+	st.AccountID = claims.AccountTag
+	st.ZoneID = "" // DNS is managed in the dashboard, not by us.
+	st.TunnelID = claims.TunnelID
+	st.TunnelName = ""
 	if err := saveTunnelState(cfg, st); err != nil {
-		return fmt.Errorf("tunnel provisioned, but failed to save local state: %w", err)
+		return fmt.Errorf("tunnel configured, but failed to save local state: %w", err)
 	}
 
-	tunnelURL := "https://" + target.Hostname
+	tunnelURL := "https://" + hostname
 	if err := SyncAgentBaseURL(cfg, tunnelURL); err != nil {
 		u.Warnf("could not sync AGENT_BASE_URL to obol-agent: %v", err)
 	}
@@ -146,57 +92,15 @@ func Provision(cfg *config.Config, u *ui.UI, opts ProvisionOptions) error {
 	}
 
 	u.Blank()
-	u.Success("Tunnel provisioned")
-	u.Printf("Persistent URL: %s", tunnelURL)
+	u.Success("Tunnel configured")
+	u.Printf("Permanent URL: %s", tunnelURL)
+	u.Blank()
+	u.Print("In the Cloudflare dashboard, make sure this tunnel's Public Hostname routes to:")
+	u.Dim("  Service: http://traefik.traefik.svc.cluster.local:80")
+	u.Dim(fmt.Sprintf("  Hostname: %s", hostname))
 	u.Print("Tip: run 'obol tunnel status' to verify the connector is active.")
 
 	return nil
-}
-
-func resolveProvisionTarget(client *cloudflareClient, opts ProvisionOptions) (*resolvedProvisionTarget, error) {
-	hostname := normalizeHostname(opts.Hostname)
-	if hostname == "" {
-		return nil, errors.New("hostname is required")
-	}
-
-	zoneName, err := extractZoneName(hostname)
-	if err != nil {
-		return nil, err
-	}
-
-	accountID := strings.TrimSpace(opts.AccountID)
-	zoneID := strings.TrimSpace(opts.ZoneID)
-
-	if zoneID == "" {
-		zone, zoneErr := client.ResolveZoneForHostname(hostname)
-		if zoneErr != nil {
-			if errors.Is(zoneErr, errCloudflareZoneNotFound) {
-				return nil, fmt.Errorf("could not resolve a Cloudflare zone for %s: %w. Either add the zone to Cloudflare first or use 'obol tunnel setup --register-domain'", hostname, zoneErr)
-			}
-
-			return nil, fmt.Errorf("cloudflare zone lookup failed for %s: %w", hostname, zoneErr)
-		}
-		zoneID = zone.ID
-		zoneName = zone.Name
-		if accountID == "" {
-			accountID = zone.Account.ID
-		}
-	}
-
-	if accountID == "" {
-		resolvedAccountID, resolveErr := client.ResolveAccountID(accountID)
-		if resolveErr != nil {
-			return nil, resolveErr
-		}
-		accountID = resolvedAccountID
-	}
-
-	return &resolvedProvisionTarget{
-		Hostname:  hostname,
-		AccountID: accountID,
-		ZoneID:    zoneID,
-		ZoneName:  zoneName,
-	}, nil
 }
 
 func normalizeHostname(s string) string {
