@@ -143,16 +143,19 @@ rules:
   # ServiceAccount + PVC are namespace-scoped child resources.
   #
   # Secrets: the reconciler touches exactly three, by name:
-  #   - litellm-secrets        get               (read LITELLM_MASTER_KEY, ns llm)
-  #   - hermes-api-server      get/delete/create (mint the agent API token)
-  #   - remote-signer-keystore get/delete/create (mint the agent wallet keystore)
-  # Secrets are create-only in the reconciler (isCreateOnlyKind): the API token
-  # is preserved, not rotated, and the keystore is minted once and never
-  # reshaped, so no `update`/`patch` verb is needed. `litellm-secrets` is
-  # get-only; delete is confined to the two per-agent Secret names that teardown
-  # owns. `create` is split into its own rule below: resourceNames cannot scope
-  # create, and agent namespaces are minted dynamically, so create stays
-  # namespace-wide. That is an integrity surface only.
+  #   - litellm-secrets        get                      (read LITELLM_MASTER_KEY, ns llm)
+  #   - hermes-api-server      get/delete/create        (mint the agent API token)
+  #   - remote-signer-keystore get/update/patch/delete/create (mint + backfill auth token)
+  # `hermes-api-server` is create-only: the token is preserved, not rotated.
+  # `remote-signer-keystore` needs `update`/`patch` for a one-shot backfill
+  # path (backfillSignerAuthToken in agent_wallet.go) that adds the
+  # signer-auth bearer-token key to keystores minted before signer auth
+  # existed. Idempotent: presence of the key (even empty) is a no-op, so
+  # operator-rotated tokens are never clobbered. `litellm-secrets` is
+  # get-only; delete is confined to the two per-agent Secret names that
+  # teardown owns. `create` is split into its own rule below: resourceNames
+  # cannot scope create, and agent namespaces are minted dynamically, so
+  # create stays namespace-wide. That is an integrity surface only.
   - apiGroups: [""]
     resources: ["serviceaccounts"]
     verbs: ["create"]
@@ -173,8 +176,12 @@ rules:
     verbs: ["get"]
   - apiGroups: [""]
     resources: ["secrets"]
-    resourceNames: ["hermes-api-server", "remote-signer-keystore"]
+    resourceNames: ["hermes-api-server"]
     verbs: ["get", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["remote-signer-keystore"]
+    verbs: ["get", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create"]
