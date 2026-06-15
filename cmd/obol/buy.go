@@ -194,12 +194,18 @@ func runBuyInferenceProvider(cfg *config.Config, cmd *cli.Command, prof model.Pr
 		}
 	}
 
-	// openurl: send the operator to the provider's key page before we
-	// prompt for the key (skipped when a key is already in hand or non-TTY).
-	if apiKey == "" && prof.SignupURL != "" && u.IsTTY() && !u.IsJSON() {
-		u.Infof("Opening %s to create an API key …", prof.SignupURL)
-		if err := openBrowser(prof.SignupURL); err != nil {
-			u.Dim(fmt.Sprintf("(couldn't open a browser — visit %s)", prof.SignupURL))
+	// openurl: send the operator to the provider's onboarding page before
+	// we prompt for the key (skipped when a key is already in hand or
+	// non-TTY). Prefer JoinURL (the new-user landing page, possibly
+	// referral-tagged) when set; fall back to SignupURL (keys dashboard).
+	onboardURL := prof.JoinURL
+	if onboardURL == "" {
+		onboardURL = prof.SignupURL
+	}
+	if apiKey == "" && onboardURL != "" && u.IsTTY() && !u.IsJSON() {
+		u.Infof("Opening %s to sign up / create an API key …", onboardURL)
+		if err := openBrowser(onboardURL); err != nil {
+			u.Dim(fmt.Sprintf("(couldn't open a browser — visit %s)", onboardURL))
 		}
 	}
 

@@ -69,8 +69,13 @@ type ProviderInfo struct {
 	Mode       apiMode  // how model_list entries are shaped
 	BaseURL    string   // OpenAI-compatible base_url (modeOpenAICompatible only)
 	Default    string   // default chat model when --model is omitted ("" = ask/require)
-	SignupURL  string   // where to obtain an API key (shown as a hint)
-	Free       []string // curated zero-marginal-cost model ids (seeded by --free)
+	SignupURL  string   // where to obtain an API key (assumes existing account)
+	JoinURL    string   // optional landing page for users without an account yet
+	// (may carry a referral tag). When set, `obol buy inference <provider>`
+	// opens this in preference to SignupURL, and `obol model setup`'s
+	// missing-key Dim hint surfaces it as a "new to X? sign up" line above
+	// the keys-dashboard hint.
+	Free []string // curated zero-marginal-cost model ids (seeded by --free)
 }
 
 // IsBYOK reports whether the provider is a BYOK OpenAI-compatible
@@ -103,7 +108,9 @@ var knownProviders = []ProviderInfo{
 	// model from the live /v1/models list or --model.
 	{
 		ID: "venice", Name: "Venice", EnvVar: "VENICE_API_KEY", Mode: modeOpenAICompatible,
-		BaseURL: "https://api.venice.ai/api/v1", SignupURL: "https://venice.ai/settings/api",
+		BaseURL:   "https://api.venice.ai/api/v1",
+		SignupURL: "https://venice.ai/settings/api",
+		JoinURL:   "https://venice.ai/chat?ref=ZynMuD",
 	},
 	{
 		ID: "openrouter", Name: "OpenRouter", EnvVar: "OPENROUTER_API_KEY", Mode: modeOpenAICompatible,

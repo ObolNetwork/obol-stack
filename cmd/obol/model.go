@@ -97,16 +97,24 @@ func modelSetupCommand(cfg *config.Config) *cli.Command {
 				providers, _ := model.GetAvailableProviders(cfg)
 
 				options := make([]string, len(providers))
+				// Default to Venice — the friendliest BYOK on-ramp (cheap,
+				// no credit card to start, referral link in the JoinURL).
+				// Falls back to index 0 if Venice is ever removed from the
+				// registry.
+				defaultIdx := 0
 				for i, p := range providers {
 					label := fmt.Sprintf("%s (%s)", p.Name, p.ID)
 					if det, ok := creds[p.ID]; ok {
 						label += " — detected: " + det.source
 					}
+					if p.ID == "venice" {
+						defaultIdx = i
+					}
 
 					options[i] = label
 				}
 
-				idx, err := u.Select("Select a provider:", options, 0)
+				idx, err := u.Select("Select a provider:", options, defaultIdx)
 				if err != nil {
 					return err
 				}
@@ -194,6 +202,9 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 
 func setupCloudProvider(cfg *config.Config, u *ui.UI, prof model.ProviderInfo, apiKey string, models []string, free bool) error {
 	if apiKey == "" {
+		if prof.JoinURL != "" {
+			u.Dim(fmt.Sprintf("New to %s? Sign up: %s", prof.Name, prof.JoinURL))
+		}
 		if prof.SignupURL != "" {
 			u.Dim(fmt.Sprintf("Get a %s API key: %s", prof.Name, prof.SignupURL))
 		}
