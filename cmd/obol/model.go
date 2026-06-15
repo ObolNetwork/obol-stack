@@ -97,17 +97,17 @@ func modelSetupCommand(cfg *config.Config) *cli.Command {
 				providers, _ := model.GetAvailableProviders(cfg)
 
 				options := make([]string, len(providers))
-				// Default to Venice — the friendliest BYOK on-ramp (cheap,
-				// no credit card to start, referral link in the JoinURL).
-				// Falls back to index 0 if Venice is ever removed from the
-				// registry.
+				// Default to OpenRouter — free roster auto-seeds when no
+				// --model is passed, so a new user gets a working remote
+				// model with zero credit-card friction. Falls back to
+				// index 0 if OpenRouter is ever removed from the registry.
 				defaultIdx := 0
 				for i, p := range providers {
 					label := fmt.Sprintf("%s (%s)", p.Name, p.ID)
 					if det, ok := creds[p.ID]; ok {
 						label += " — detected: " + det.source
 					}
-					if p.ID == "venice" {
+					if p.ID == "openrouter" {
 						defaultIdx = i
 					}
 
@@ -202,11 +202,25 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 
 func setupCloudProvider(cfg *config.Config, u *ui.UI, prof model.ProviderInfo, apiKey string, models []string, free bool) error {
 	if apiKey == "" {
+		// Prefer JoinURL (new-user landing, possibly referral-tagged) for
+		// the browser open; fall back to KeyURL (keys dashboard). Always
+		// print both as Dim hints so the URLs are visible whether the
+		// browser opened or not.
+		onboardURL := prof.JoinURL
+		if onboardURL == "" {
+			onboardURL = prof.KeyURL
+		}
+		if onboardURL != "" && u.IsTTY() && !u.IsJSON() {
+			u.Infof("Opening %s to sign up / create an API key …", onboardURL)
+			if err := openBrowser(onboardURL); err != nil {
+				u.Dim(fmt.Sprintf("(couldn't open a browser — visit %s)", onboardURL))
+			}
+		}
 		if prof.JoinURL != "" {
 			u.Dim(fmt.Sprintf("New to %s? Sign up: %s", prof.Name, prof.JoinURL))
 		}
-		if prof.SignupURL != "" {
-			u.Dim(fmt.Sprintf("Get a %s API key: %s", prof.Name, prof.SignupURL))
+		if prof.KeyURL != "" {
+			u.Dim(fmt.Sprintf("Get a %s API key: %s", prof.Name, prof.KeyURL))
 		}
 
 		var err error
@@ -220,14 +234,24 @@ func setupCloudProvider(cfg *config.Config, u *ui.UI, prof model.ProviderInfo, a
 		}
 	}
 
+	// OpenRouter zero-friction default: when no explicit --model and no
+	// explicit --free, auto-seed the curated free roster. The Dim hint
+	// surfaces openrouter/auto as the paid upgrade for users with balance.
+	if !free && len(models) == 0 && prof.ID == "openrouter" && len(prof.Free) > 0 {
+		free = true
+		u.Dim("Seeding OpenRouter's curated free models. With account balance, use: obol model setup --provider openrouter --model openrouter/auto")
+	}
+
 	// --free: seed the provider's curated free-tier models (unless the
-	// operator already named explicit --model values).
+	// operator already named explicit --model values). The static roster
+	// is intersected against the live /v1/models response so removed or
+	// renamed ids drop out without breaking the install.
 	if free {
 		if len(prof.Free) == 0 {
 			return fmt.Errorf("--free is not available for %s (no curated free models); pass --model instead", prof.Name)
 		}
 		if len(models) == 0 {
-			models = append([]string(nil), prof.Free...)
+			models = filterFreeAgainstLive(u, prof, apiKey)
 			u.Infof("Seeding %d curated free %s model(s)", len(models), prof.Name)
 		}
 	}
@@ -260,6 +284,41 @@ func setupCloudProvider(cfg *config.Config, u *ui.UI, prof model.ProviderInfo, a
 	return promoteAndSync(cfg, u, models)
 }
 
+// filterFreeAgainstLive intersects the registry's curated Free model list
+// with the provider's live /v1/models response so removed or renamed ids
+// drop out before they hit LiteLLM. On any fetch failure (network down,
+// auth error, unparseable body) it falls back to the full static list —
+// a slightly stale roster is better than a zero-model install.
+func filterFreeAgainstLive(u *ui.UI, prof model.ProviderInfo, apiKey string) []string {
+	static := append([]string(nil), prof.Free...)
+	live, err := model.FetchOpenAICompatibleModels(prof.BaseURL, apiKey)
+	if err != nil || len(live) == 0 {
+		return static
+	}
+	liveSet := make(map[string]bool, len(live))
+	for _, id := range live {
+		liveSet[id] = true
+	}
+	filtered := make([]string, 0, len(static))
+	dropped := make([]string, 0)
+	for _, id := range static {
+		if liveSet[id] {
+			filtered = append(filtered, id)
+		} else {
+			dropped = append(dropped, id)
+		}
+	}
+	if len(filtered) == 0 {
+		// All curated ids missing from live list — likely a major rotation;
+		// fall back rather than seed nothing.
+		return static
+	}
+	if len(dropped) > 0 {
+		u.Dim(fmt.Sprintf("(%d curated free model(s) no longer listed by %s: %s)", len(dropped), prof.Name, strings.Join(dropped, ", ")))
+	}
+	return filtered
+}
+
 // resolveSetupModel picks a model when the operator passed none. A registry
 // Default wins (overridable in a TTY). With no static default — BYOK
 // aggregators whose catalog rotates — it lists the live /v1/models endpoint:
@@ -290,7 +349,7 @@ func resolveSetupModel(u *ui.UI, prof model.ProviderInfo, apiKey string) (string
 		if u.IsTTY() && !u.IsJSON() {
 			return u.Input(fmt.Sprintf("Model id for %s", prof.Name), "")
 		}
-		return "", fmt.Errorf("could not resolve a model for %s: pass --model <id> (keys/models at %s)", prof.Name, prof.SignupURL)
+		return "", fmt.Errorf("could not resolve a model for %s: pass --model <id> (keys/models at %s)", prof.Name, prof.KeyURL)
 	}
 
 	if u.IsTTY() && !u.IsJSON() {

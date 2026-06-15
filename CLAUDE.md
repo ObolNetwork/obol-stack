@@ -262,16 +262,15 @@ Caveats:
 
 **Auto-configuration**: `obol stack up` → `autoConfigureLLM()` detects host Ollama models, patches LiteLLM config. `obolup.sh` → `check_agent_model_api_key()` reads `~/.openclaw/openclaw.json`, resolves API key from `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` (Anthropic) or `OPENAI_API_KEY` (OpenAI), exports for downstream.
 
-**BYOK cloud providers** (easiest getting-started path) — provider knowledge is a single registry in `internal/model/model.go` (`knownProviders` / `ProviderInfo` with `Mode`/`BaseURL`/`Default`/`SignupURL`/`Free`); adding a provider is one row, no per-provider switch. Built-in: `anthropic`, `openai`, `ollama` (native/local) + OpenAI-compatible aggregators `venice`, `openrouter`, `nvidia`, `gmi`, `novita`, `huggingface` (`Mode=openai-compatible` → `model_list` entry `openai/<id>` + explicit `api_base` + key from the provider's env var; no wildcard). When `--model` is omitted, setup uses the registry `Default` or lists the live `GET <base>/v1/models` (TTY picker / non-TTY error naming real ids). `--free` seeds only the curated free-tier model snapshot (OpenRouter).
+**BYOK cloud providers** (easiest getting-started path) — provider knowledge is a single registry in `internal/model/model.go` (`knownProviders` / `ProviderInfo` with `Mode`/`BaseURL`/`Default`/`KeyURL`/`JoinURL`/`Free`); adding a provider is one row, no per-provider switch. `KeyURL` is the API-key dashboard (assumes account); optional `JoinURL` is a new-user landing page (may carry a referral tag) used in preference to `KeyURL` for browser-open and "new to X? Sign up" hints. Built-in: `anthropic`, `openai`, `ollama` (native/local) + OpenAI-compatible aggregators `venice`, `openrouter`, `nvidia`, `gmi`, `novita`, `huggingface` (`Mode=openai-compatible` → `model_list` entry `openai/<id>` + explicit `api_base` + key from the provider's env var; no wildcard). When `--model` is omitted, setup uses the registry `Default` or lists the live `GET <base>/v1/models` (TTY picker / non-TTY error naming real ids). `--free` seeds the curated free-tier model snapshot (currently OpenRouter only) intersected against the live `/v1/models` response to drop rotated-out ids; auto-applied for `openrouter` when no `--model` is passed.
 
-Two front doors share one engine (`setupCloudProvider` in `cmd/obol/model.go`):
-- `obol buy inference <provider>` — friendly onboarding: opens the provider's `SignupURL` in the browser (`openBrowser`, hermes-style), takes the key (`--api-key` → env var → prompt), wires LiteLLM + syncs agents. `obol buy inference` with a URL/no-arg is still the **x402 crypto-paid seller** path — dispatch keys on whether the positional arg matches a registry provider id.
-- `obol model setup <provider> --api-key <key>` — the scriptable, no-browser equivalent. Unlisted endpoints still use `obol model setup custom`.
+Single front door: `obol model setup` (engine: `setupCloudProvider` in `cmd/obol/model.go`). Interactive picker defaults to OpenRouter — `obol model setup` with no flags walks a TTY user through provider pick → browser open at `JoinURL`/`KeyURL` → key prompt → free-roster seeding. Scriptable variant: `obol model setup --provider <id> --api-key <key>`. Unlisted endpoints: `obol model setup custom --endpoint … --model …`. `obol buy inference <provider>` is reserved for future credit top-ups against remote providers; today it errors with a redirect to `obol model setup`. `obol buy inference [<seller-url>]` (URL or no arg) is the **x402 crypto-paid seller** path — unchanged.
 
 ```bash
-obol buy inference venice                 # opens venice key page, prompts, wires up
-obol buy inference openrouter --free      # seeds curated free models
-obol model setup venice --api-key $VENICE_API_KEY   # scriptable / CI
+obol model setup                                       # interactive; default = openrouter + free roster
+obol model setup --provider venice                     # opens https://venice.ai/chat?ref=ZynMuD (TTY) + prompts for key
+obol model setup --provider venice --api-key $VENICE_API_KEY   # scriptable / CI
+obol model setup --provider openrouter --model openrouter/auto # paid OpenRouter (skips free-roster seeding)
 ```
 
 **External OpenAI-compatible LLM** (vLLM / sglang / mlx-lm / remote GPU) — canonical user flow, no ConfigMap surgery:

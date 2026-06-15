@@ -9,7 +9,6 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/buy"
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 )
 
@@ -603,35 +602,35 @@ func TestLooksLikeURL(t *testing.T) {
 	}
 }
 
-// TestBuyInference_BYOKFrontDoor pins the BYOK onboarding surface on
-// `obol buy inference`: the command exposes --api-key/--free/--model, and
-// every registry provider that isn't local Ollama is recognized as a
-// hosted-provider argument (the dispatch the Action keys on).
-func TestBuyInference_BYOKFrontDoor(t *testing.T) {
+// TestBuyInference_NoBYOKArm pins that `obol buy inference` is x402-only:
+// the BYOK provider arm (which previously dispatched to setupCloudProvider
+// when a provider id was passed) has been removed in favour of
+// `obol model setup`. The `--api-key` and `--free` flags went with it.
+// The command name stays reserved for future remote-credit top-ups.
+func TestBuyInference_NoBYOKArm(t *testing.T) {
 	cmd := buyInferenceCommand(&config.Config{})
 
-	want := map[string]bool{"api-key": false, "free": false, "model": false, "seller": false}
+	// BYOK-only flags must be gone; the x402 surface keeps --seller.
+	gone := map[string]bool{"api-key": false, "free": false}
+	stillHere := map[string]bool{"seller": false}
 	for _, f := range cmd.Flags {
 		for _, n := range f.Names() {
-			if _, ok := want[n]; ok {
-				want[n] = true
+			if _, ok := gone[n]; ok {
+				gone[n] = true
+			}
+			if _, ok := stillHere[n]; ok {
+				stillHere[n] = true
 			}
 		}
 	}
-	for n, found := range want {
+	for n, found := range gone {
+		if found {
+			t.Errorf("buy inference must not expose --%s (BYOK arm removed; use `obol model setup`)", n)
+		}
+	}
+	for n, found := range stillHere {
 		if !found {
 			t.Errorf("buy inference missing --%s flag", n)
 		}
-	}
-
-	// Hosted providers route to BYOK onboarding; ollama does not (local).
-	for _, id := range []string{"venice", "openrouter", "nvidia", "gmi", "novita", "huggingface"} {
-		p, ok := model.ProviderByID(id)
-		if !ok || p.ID == model.ProviderOllama {
-			t.Errorf("provider %q should be a BYOK buy-inference target", id)
-		}
-	}
-	if p, ok := model.ProviderByID("ollama"); !ok || p.ID != model.ProviderOllama {
-		t.Errorf("ollama must remain a local (non-buy) provider")
 	}
 }
