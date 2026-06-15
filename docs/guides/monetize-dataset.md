@@ -35,24 +35,24 @@ the `dataset-anonymize` skill.
 ## 2. Record a signed version
 
 ```bash
-obol dataset from my-bundle --name pi-sessions
+obol sell data from my-bundle --name pi-sessions
 ```
 
 This reads the bundle, computes the artifact's whole-file SHA-256, and appends
 a **signed** `DatasetVersion` (v1) to the dataset's version log — chained to
 its predecessor, signed by your owner key (the address buyers pin). Append a new
-snapshot later with `obol dataset version pi-sessions --bundle my-bundle-v2`.
+snapshot later with `obol sell data version pi-sessions --bundle my-bundle-v2`.
 
 Walk the chain offline at any time:
 
 ```bash
-obol dataset verify pi-sessions     # rejects any reorder/tamper/middle-removal
+obol sell data verify pi-sessions     # rejects any reorder/tamper/middle-removal
 ```
 
 ## 3. Publish (host + tunnel + gate)
 
 ```bash
-obol dataset publish pi-sessions --membership invite
+obol sell data publish pi-sessions --membership invite
 ```
 
 Starts the artifact server on your machine and a Cloudflare tunnel. **Bytes
@@ -64,7 +64,7 @@ alike.
 Two ways a caller holds a member token:
 
 - **Pre-approved worker** — joins via device-auth; you run
-  `obol dataset approve <user-code>`. Gets full (head) access.
+  `obol sell data approve <user-code>`. Gets full (head) access.
 - **Anonymous market buyer** — pays the priced offer; the edge x402 verifier
   proves the settled payment, and the server mints a token scoped to exactly
   the version paid for (`/join/paid`). Payment *is* the approval; the dataset

@@ -1,6 +1,6 @@
 ---
 name: dataset-anonymize
-description: Anonymize a dataset's JSONL (PII detection + masking) before publishing or selling it with `obol dataset`. Pluggable detector — built-in regex redactor by default, or a BYO Hugging Face token-classification model.
+description: Anonymize a dataset's JSONL (PII detection + masking) before publishing or selling it with `obol sell data`. Pluggable detector — built-in regex redactor by default, or a BYO Hugging Face token-classification model.
 ---
 
 # dataset-anonymize
@@ -38,8 +38,8 @@ export OBOL_ANONYMIZER_MODEL="<org>/<pii-token-classification-model>"
 python3 scripts/anonymize.py input.jsonl anonymized.jsonl --report
 
 # Then ingest the anonymized bundle and publish it:
-obol dataset from <bundle-dir-with-anonymized.jsonl> --name my-dataset
-obol dataset publish my-dataset
+obol sell data from <bundle-dir-with-anonymized.jsonl> --name my-dataset
+obol sell data publish my-dataset
 ```
 
 Each input line is a JSON object; the script masks string values under

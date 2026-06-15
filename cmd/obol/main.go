@@ -330,7 +330,6 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 			bountyCommand(cfg),
 			smokeCommand(cfg),
 			researchCommand(cfg),
-			datasetCommand(cfg),
 			modelCommand(cfg),
 			{
 				Name:  "app",

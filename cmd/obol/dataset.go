@@ -1,16 +1,16 @@
 package main
 
-// obol dataset — owner side of a versioned, membership-gated dataset offer.
+// obol sell data — owner side of a versioned, membership-gated dataset offer.
 //
-//	obol dataset from <bundle-dir> --name <id>   ingest a bundle as a new
-//	                                             signed version (creates v1).
-//	obol dataset version <id> --bundle <dir>     append the next signed version.
-//	obol dataset publish <id>                    host the artifact server on
-//	                                             this machine + a Cloudflare
-//	                                             tunnel; gate every byte.
-//	obol dataset approve <user-code>             admit a worker (membership).
-//	obol dataset verify <id>                     walk the signed version chain.
-//	obol dataset status <id>                     versions + members.
+//	obol sell data from <bundle-dir> --name <id>   ingest a bundle as a new
+//	                                               signed version (creates v1).
+//	obol sell data version <id> --bundle <dir>     append the next signed version.
+//	obol sell data publish <id>                    host the artifact server on
+//	                                               this machine + a Cloudflare
+//	                                               tunnel; gate every byte.
+//	obol sell data approve <user-code>             admit a worker (membership).
+//	obol sell data verify <id>                     walk the signed version chain.
+//	obol sell data status <id>                     versions + members.
 //
 // The artifact server is the host gateway (same spirit as `obol sell
 // inference` / `obol research publish`): it runs on the owner's machine, never
@@ -47,10 +47,11 @@ type datasetState struct {
 	OwnerToken string `json:"owner_token"`
 }
 
-func datasetCommand(cfg *config.Config) *cli.Command {
+func sellDataCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
-		Name:  "dataset",
-		Usage: "Publish and sell versioned, membership-gated datasets",
+		Name:    "data",
+		Aliases: []string{"dataset"},
+		Usage:   "Publish and sell versioned, membership-gated datasets",
 		Commands: []*cli.Command{
 			datasetFromCommand(cfg),
 			datasetVersionCommand(cfg),
@@ -70,7 +71,7 @@ func datasetFromCommand(cfg *config.Config) *cli.Command {
 		Flags:     []cli.Flag{&cli.StringFlag{Name: "name", Usage: "Dataset id", Required: true}},
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			if cmd.NArg() != 1 {
-				return fmt.Errorf("bundle directory required: obol dataset from <bundle-dir> --name <id>")
+				return fmt.Errorf("bundle directory required: obol sell data from <bundle-dir> --name <id>")
 			}
 			return appendDatasetVersion(cfg, cmd, strings.TrimSpace(cmd.String("name")), cmd.Args().First())
 		},
@@ -85,11 +86,11 @@ func datasetVersionCommand(cfg *config.Config) *cli.Command {
 		Flags:     []cli.Flag{&cli.StringFlag{Name: "bundle", Usage: "New bundle directory", Required: true}},
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			if cmd.NArg() != 1 {
-				return fmt.Errorf("dataset id required: obol dataset version <id> --bundle <dir>")
+				return fmt.Errorf("dataset id required: obol sell data version <id> --bundle <dir>")
 			}
 			id := strings.TrimSpace(cmd.Args().First())
 			if _, err := os.Stat(datasetStorePath(cfg, id)); err != nil {
-				return fmt.Errorf("dataset %q not found — create it with 'obol dataset from'", id)
+				return fmt.Errorf("dataset %q not found — create it with 'obol sell data from'", id)
 			}
 			return appendDatasetVersion(cfg, cmd, id, cmd.String("bundle"))
 		},
@@ -144,7 +145,7 @@ func appendDatasetVersion(cfg *config.Config, cmd *cli.Command, id, bundleDir st
 	u.Infof("File hash:     %s", v.FileHash)
 	u.Infof("Size:          %d bytes", v.Size)
 	u.Infof("Owner:         %s", signer.SignerID())
-	u.Dim("Publish it with:  obol dataset publish " + id)
+	u.Dim("Publish it with:  obol sell data publish " + id)
 	return nil
 }
 
@@ -164,7 +165,7 @@ func datasetPublishCommand(cfg *config.Config) *cli.Command {
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			if cmd.NArg() != 1 {
-				return fmt.Errorf("dataset id required: obol dataset publish <id>")
+				return fmt.Errorf("dataset id required: obol sell data publish <id>")
 			}
 			id := strings.TrimSpace(cmd.Args().First())
 
@@ -180,7 +181,7 @@ func datasetPublishCommand(cfg *config.Config) *cli.Command {
 				return err
 			}
 			if len(st.Versions) == 0 {
-				return fmt.Errorf("dataset %q has no versions — run 'obol dataset from' first", id)
+				return fmt.Errorf("dataset %q has no versions — run 'obol sell data from' first", id)
 			}
 			// Never serve a chain we cannot verify against the owner key: a
 			// tampered persisted store must fail closed, not be published.
@@ -302,7 +303,7 @@ func datasetApproveCommand(cfg *config.Config) *cli.Command {
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			if cmd.NArg() != 1 {
-				return fmt.Errorf("user code required: obol dataset approve <user-code>")
+				return fmt.Errorf("user code required: obol sell data approve <user-code>")
 			}
 			st, err := loadDatasetState(cfg, cmd.String("dataset"))
 			if err != nil {
@@ -332,7 +333,7 @@ func datasetVerifyCommand(cfg *config.Config) *cli.Command {
 		Action: func(_ context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			if cmd.NArg() != 1 {
-				return fmt.Errorf("dataset id required: obol dataset verify <id>")
+				return fmt.Errorf("dataset id required: obol sell data verify <id>")
 			}
 			id := strings.TrimSpace(cmd.Args().First())
 			key, err := dataset.LoadOrCreateKey(datasetKeyPath(cfg, id))
@@ -363,7 +364,7 @@ func datasetStatusCommand(cfg *config.Config) *cli.Command {
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			if cmd.NArg() != 1 {
-				return fmt.Errorf("dataset id required: obol dataset status <id>")
+				return fmt.Errorf("dataset id required: obol sell data status <id>")
 			}
 			id := strings.TrimSpace(cmd.Args().First())
 			st, err := dataset.NewStore(datasetStorePath(cfg, id)).Load()

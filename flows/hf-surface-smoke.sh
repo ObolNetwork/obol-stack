@@ -77,8 +77,8 @@ fi
 HASH=$(shasum -a 256 "$BUNDLE/sft.jsonl" | awk '{print $1}')
 printf '{"hash":"%s","files":["sft.jsonl"]}\n' "$HASH" > "$BUNDLE/manifest.json"
 
-if "$OBOL_BIN" dataset from "$BUNDLE" --name "$DS_ID" >/dev/null 2>&1 \
-   && "$OBOL_BIN" dataset verify "$DS_ID" 2>&1 | grep -q 'Chain valid'; then
+if "$OBOL_BIN" sell data from "$BUNDLE" --name "$DS_ID" >/dev/null 2>&1 \
+   && "$OBOL_BIN" sell data verify "$DS_ID" 2>&1 | grep -q 'Chain valid'; then
   pass "1b sign + verify — signed version chain valid"
 else
   fail "1b sign+verify" "version not recorded or chain invalid"
@@ -86,7 +86,7 @@ fi
 
 MANIFEST_HASH=$(python3 -c "import json;print(json.load(open('$OBOL_CONFIG_DIR/dataset-serve/$DS_ID.store.json'))['versions'][0]['manifestHash'])")
 
-"$OBOL_BIN" dataset publish "$DS_ID" --membership open --port "$DS_PORT" --no-tunnel >/dev/null 2>&1 &
+"$OBOL_BIN" sell data publish "$DS_ID" --membership open --port "$DS_PORT" --no-tunnel >/dev/null 2>&1 &
 curl -sf --retry 25 --retry-connrefused --retry-delay 1 "http://127.0.0.1:$DS_PORT/healthz" >/dev/null
 OWNER=$(python3 -c "import json;print(json.load(open('$OBOL_CONFIG_DIR/dataset-serve/$DS_ID.state.json'))['owner_token'])" 2>/dev/null)
 

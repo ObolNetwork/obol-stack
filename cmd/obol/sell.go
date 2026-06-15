@@ -67,6 +67,7 @@ func sellCommand(cfg *config.Config) *cli.Command {
 			sellIdentityCommand(cfg),
 			sellInfoCommand(cfg),
 			sellResumeCommand(cfg),
+			sellDataCommand(cfg),
 		},
 	}
 }
