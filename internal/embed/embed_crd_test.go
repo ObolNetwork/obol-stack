@@ -875,6 +875,8 @@ func TestServiceOfferControllerSecretRBAC_Scoped(t *testing.T) {
 
 	readNames := map[string]bool{}
 	deleteNames := map[string]bool{}
+	updateNames := map[string]bool{}
+	patchNames := map[string]bool{}
 	var sawCreate bool
 	for _, r := range rules {
 		rm := r.(map[string]any)
@@ -908,9 +910,25 @@ func TestServiceOfferControllerSecretRBAC_Scoped(t *testing.T) {
 			if verbs["delete"] {
 				deleteNames[n] = true
 			}
+			if verbs["update"] {
+				updateNames[n] = true
+			}
+			if verbs["patch"] {
+				patchNames[n] = true
+			}
 		}
-		if verbs["list"] || verbs["watch"] || verbs["update"] || verbs["patch"] {
-			t.Error("serviceoffer-controller scoped secrets rule must not grant list/watch/update/patch — Secrets are create-only in the reconciler and all reads are by name")
+		if verbs["list"] || verbs["watch"] {
+			t.Error("serviceoffer-controller scoped secrets rule must not grant list/watch — all reads are by name")
+		}
+		// update/patch is allowed only on remote-signer-keystore, which the
+		// reconciler updates via backfillSignerAuthToken to add the bearer
+		// token key to keystores minted before signer auth existed.
+		if verbs["update"] || verbs["patch"] {
+			for n := range names {
+				if n != "remote-signer-keystore" {
+					t.Errorf("serviceoffer-controller must not grant secrets:update/patch on %s — only remote-signer-keystore is mutated (auth-token backfill)", n)
+				}
+			}
 		}
 		if names["litellm-secrets"] && verbs["delete"] {
 			t.Error("serviceoffer-controller must not grant secrets:delete on litellm-secrets; the code only reads LITELLM_MASTER_KEY")
@@ -929,6 +947,16 @@ func TestServiceOfferControllerSecretRBAC_Scoped(t *testing.T) {
 			// and the CR is stranded in Terminating.
 			t.Errorf("serviceoffer-controller must grant resourceName-scoped secrets:delete on %s for agent teardown", name)
 		}
+	}
+	// backfillSignerAuthToken (agent_wallet.go) calls Update on the keystore
+	// Secret to add the signer-auth bearer token to legacy keystores. Without
+	// update + patch the Agent stays in Provisioning and every downstream
+	// ServiceOffer condition blocks on WaitingForAgent.
+	if !updateNames["remote-signer-keystore"] {
+		t.Error("serviceoffer-controller must grant resourceName-scoped secrets:update on remote-signer-keystore for backfillSignerAuthToken")
+	}
+	if !patchNames["remote-signer-keystore"] {
+		t.Error("serviceoffer-controller must grant resourceName-scoped secrets:patch on remote-signer-keystore for backfillSignerAuthToken")
 	}
 	if !sawCreate {
 		t.Error("serviceoffer-controller must retain secrets:create for minting the per-agent API token + wallet keystore in dynamic namespaces")
