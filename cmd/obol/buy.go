@@ -66,45 +66,27 @@ func buyCommand(cfg *config.Config) *cli.Command {
 func buyInferenceCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "inference",
-		Usage:     "Buy inference for your agents — a hosted BYOK provider (Venice, OpenRouter, …) or an x402-gated seller",
-		ArgsUsage: "[<provider>|<seller-url>]",
-		Description: `Two ways to give your agents inference:
+		Usage:     "Buy inference for your agents from an x402-gated seller",
+		ArgsUsage: "[<seller-url>]",
+		Description: `Buy x402-gated inference from a seller.
 
-  1. Hosted provider (BYOK) — hand the command a provider id and it opens
-     that provider's API-key page in your browser, takes the key, and wires
-     your agents' LiteLLM gateway to it:
+Hand the command a seller URL (a storefront base like
+"https://inference.v1337.org" or a specific offer ".../services/aeon") and
+the CLI walks /api/services.json, picks the inference offer, and pre-signs
+payment authorizations via the agent's remote signer. With no argument the
+public ` + x402verifier.DefaultBuySellerURL + ` storefront is used.
 
-         obol buy inference venice
-         obol buy inference openrouter --free
+In a TTY the flow prompts for auto-refill, request count, and confirmation.
+Pass --yes / -y for non-interactive runs (--count required).
 
-     Built-in providers: venice, openrouter, nvidia, gmi, novita,
-     huggingface (plus anthropic, openai). The key is read from the
-     provider's env var when already set, so this stays non-interactive in CI.
-
-  2. x402-gated seller — hand it a seller URL (a storefront base like
-     "https://inference.v1337.org" or a specific offer ".../services/aeon")
-     and the CLI walks /api/services.json, picks the inference offer, and
-     pre-signs payment authorizations via the agent's remote signer. With no
-     argument, the public ` + x402verifier.DefaultBuySellerURL + ` storefront is used.
-
-In a TTY the seller flow prompts for auto-refill, request count, and
-confirmation. Pass --yes / -y for non-interactive runs (--count required).
+For hosted BYOK providers (Venice, OpenRouter, …) use ` + "`obol model setup`" + `
+instead — that path takes the API key and wires LiteLLM directly, no x402.
 
 Examples:
-    obol buy inference venice
-    obol buy inference openrouter --free
+    obol buy inference
     obol buy inference https://inference.v1337.org/services/aeon
     obol buy inference https://seller.example/services/foo --yes --count 100`,
 		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:    "api-key",
-				Usage:   "API key for a hosted provider (BYOK). Also read from the provider's env var when set.",
-				Sources: cli.EnvVars("LLM_API_KEY"),
-			},
-			&cli.BoolFlag{
-				Name:  "free",
-				Usage: "For a hosted provider that has them, seed only the curated free-tier models (OpenRouter)",
-			},
 			&cli.StringFlag{
 				Name:  "seller",
 				Usage: "Seller URL (alternative to positional). When neither is set the default storefront is used.",
@@ -177,49 +159,6 @@ Examples:
 	}
 }
 
-// runBuyInferenceProvider is the BYOK front door: open the provider's
-// API-key page (hermes-style openurl), take the key (--api-key → env →
-// prompt), then wire the LiteLLM gateway via the shared model-setup
-// engine. No wallet, no x402 — this is hosted inference with the user's
-// own key, the easiest way to get an agent talking to a model.
-func runBuyInferenceProvider(cfg *config.Config, cmd *cli.Command, prof model.ProviderInfo) error {
-	u := getUI(cmd)
-	u.Infof("Connecting %s for your agents (bring-your-own-key)", prof.Name)
-
-	apiKey := strings.TrimSpace(cmd.String("api-key"))
-	if apiKey == "" {
-		if key, envVar := model.ResolveAPIKey(prof.ID); key != "" {
-			apiKey = key
-			u.Infof("Using %s API key from %s", prof.Name, envVar)
-		}
-	}
-
-	// openurl: send the operator to the provider's onboarding page before
-	// we prompt for the key (skipped when a key is already in hand or
-	// non-TTY). Prefer JoinURL (the new-user landing page, possibly
-	// referral-tagged) when set; fall back to SignupURL (keys dashboard).
-	onboardURL := prof.JoinURL
-	if onboardURL == "" {
-		onboardURL = prof.SignupURL
-	}
-	if apiKey == "" && onboardURL != "" && u.IsTTY() && !u.IsJSON() {
-		u.Infof("Opening %s to sign up / create an API key …", onboardURL)
-		if err := openBrowser(onboardURL); err != nil {
-			u.Dim(fmt.Sprintf("(couldn't open a browser — visit %s)", onboardURL))
-		}
-	}
-
-	var models []string
-	if m := strings.TrimSpace(cmd.String("model")); m != "" {
-		models = []string{m}
-	}
-
-	// Shared engine: prompts for the key if still empty, seeds --free,
-	// resolves a model (registry default or live /v1/models), patches
-	// LiteLLM, and promotes + syncs the agents to use it.
-	return setupCloudProvider(cfg, u, prof, apiKey, models, cmd.Bool("free"))
-}
-
 // runBuyInference is the orchestrator for the new flow. Kept separate from
 // the cli.Command literal so the steps stay scannable: resolve agent →
 // resolve seller URL → pick catalog entry → resolve token+count+budget →
@@ -227,16 +166,17 @@ func runBuyInferenceProvider(cfg *config.Config, cmd *cli.Command, prof model.Pr
 func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) error {
 	u := getUI(cmd)
 
-	// Front door: if the argument names a hosted provider in the registry
-	// (venice, openrouter, …) rather than a seller URL, run BYOK onboarding
-	// — open the provider's key page and wire the LiteLLM gateway. Ollama is
-	// local and free, so it's not a "buy" target.
+	// If the argument names a hosted provider in the registry (venice,
+	// openrouter, …) rather than a seller URL, the user wants BYOK setup,
+	// not an x402 purchase. Redirect to `obol model setup`. The command
+	// name stays reserved for future credit top-up flows against the same
+	// remote providers.
 	arg := strings.TrimSpace(cmd.String("seller"))
 	if arg == "" {
 		arg = strings.TrimSpace(cmd.Args().First())
 	}
 	if prof, ok := model.ProviderByID(arg); ok && prof.ID != model.ProviderOllama {
-		return runBuyInferenceProvider(cfg, cmd, prof)
+		return fmt.Errorf("BYOK provider setup moved — run: obol model setup --provider %s", prof.ID)
 	}
 
 	u.Info("Purchasing remote inference for running Obol Agents")

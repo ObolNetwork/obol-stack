@@ -69,11 +69,10 @@ type ProviderInfo struct {
 	Mode       apiMode  // how model_list entries are shaped
 	BaseURL    string   // OpenAI-compatible base_url (modeOpenAICompatible only)
 	Default    string   // default chat model when --model is omitted ("" = ask/require)
-	SignupURL  string   // where to obtain an API key (assumes existing account)
-	JoinURL    string   // optional landing page for users without an account yet
-	// (may carry a referral tag). When set, `obol buy inference <provider>`
-	// opens this in preference to SignupURL, and `obol model setup`'s
-	// missing-key Dim hint surfaces it as a "new to X? sign up" line above
+	KeyURL     string   // where to create an API key (assumes existing account)
+	JoinURL    string   // optional new-user landing page (may carry a referral
+	// tag). When set, `obol model setup` opens this in preference to KeyURL
+	// (browser open) and surfaces it as a "new to X? sign up" Dim hint above
 	// the keys-dashboard hint.
 	Free []string // curated zero-marginal-cost model ids (seeded by --free)
 }
@@ -92,11 +91,11 @@ var knownProviders = []ProviderInfo{
 	{
 		ID: ProviderAnthropic, Name: "Anthropic", EnvVar: "ANTHROPIC_API_KEY",
 		AltEnvVars: []string{"CLAUDE_CODE_OAUTH_TOKEN"}, Mode: modeAnthropic,
-		Default: "claude-sonnet-4-6", SignupURL: "https://console.anthropic.com/settings/keys",
+		Default: "claude-sonnet-4-6", KeyURL: "https://console.anthropic.com/settings/keys",
 	},
 	{
 		ID: ProviderOpenAI, Name: "OpenAI", EnvVar: "OPENAI_API_KEY", Mode: modeOpenAI,
-		Default: "gpt-5.5", SignupURL: "https://platform.openai.com/api-keys",
+		Default: "gpt-5.5", KeyURL: "https://platform.openai.com/api-keys",
 	},
 	{
 		ID: ProviderOllama, Name: "Ollama (local)", EnvVar: "", Mode: modeOllama,
@@ -108,14 +107,14 @@ var knownProviders = []ProviderInfo{
 	// model from the live /v1/models list or --model.
 	{
 		ID: "venice", Name: "Venice", EnvVar: "VENICE_API_KEY", Mode: modeOpenAICompatible,
-		BaseURL:   "https://api.venice.ai/api/v1",
-		SignupURL: "https://venice.ai/settings/api",
-		JoinURL:   "https://venice.ai/chat?ref=ZynMuD",
+		BaseURL: "https://api.venice.ai/api/v1",
+		KeyURL:  "https://venice.ai/settings/api",
+		JoinURL: "https://venice.ai/chat?ref=ZynMuD",
 	},
 	{
 		ID: "openrouter", Name: "OpenRouter", EnvVar: "OPENROUTER_API_KEY", Mode: modeOpenAICompatible,
 		BaseURL: "https://openrouter.ai/api/v1", Default: "openrouter/auto",
-		SignupURL: "https://openrouter.ai/keys",
+		KeyURL: "https://openrouter.ai/keys",
 		// Curated zero-cost models (snapshot — OpenRouter's free roster
 		// rotates; pass --model for any other). Seeded by `--free`.
 		Free: []string{
@@ -130,19 +129,19 @@ var knownProviders = []ProviderInfo{
 	},
 	{
 		ID: "nvidia", Name: "NVIDIA NIM", EnvVar: "NVIDIA_API_KEY", Mode: modeOpenAICompatible,
-		BaseURL: "https://integrate.api.nvidia.com/v1", SignupURL: "https://build.nvidia.com",
+		BaseURL: "https://integrate.api.nvidia.com/v1", KeyURL: "https://build.nvidia.com",
 	},
 	{
 		ID: "gmi", Name: "GMI Cloud", EnvVar: "GMI_API_KEY", Mode: modeOpenAICompatible,
-		BaseURL: "https://api.gmi-serving.com/v1", SignupURL: "https://console.gmicloud.ai",
+		BaseURL: "https://api.gmi-serving.com/v1", KeyURL: "https://console.gmicloud.ai",
 	},
 	{
 		ID: "novita", Name: "Novita", EnvVar: "NOVITA_API_KEY", Mode: modeOpenAICompatible,
-		BaseURL: "https://api.novita.ai/openai/v1", SignupURL: "https://novita.ai/settings/key-management",
+		BaseURL: "https://api.novita.ai/openai/v1", KeyURL: "https://novita.ai/settings/key-management",
 	},
 	{
 		ID: "huggingface", Name: "Hugging Face Router", EnvVar: "HF_TOKEN", Mode: modeOpenAICompatible,
-		BaseURL: "https://router.huggingface.co/v1", SignupURL: "https://huggingface.co/settings/tokens",
+		BaseURL: "https://router.huggingface.co/v1", KeyURL: "https://huggingface.co/settings/tokens",
 	},
 }
 
