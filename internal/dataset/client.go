@@ -5,11 +5,121 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+
+	x402types "github.com/x402-foundation/x402/go/types"
 )
+
+// SignPaymentFunc signs an x402 payment for a requirement and returns the
+// base64 X-PAYMENT header value. Injected so the dataset client stays decoupled
+// from the concrete signer (the CLI passes x402.SignExactPayment).
+type SignPaymentFunc func(req x402types.PaymentRequirements) (string, error)
+
+// JoinOptions configures a paid join (pay the seller's x402 price to mint a
+// version-scoped member token).
+type JoinOptions struct {
+	BaseURL   string
+	ID        string
+	Version   int    // 0 = head
+	MaxAtomic string // optional safety cap on the join price, in atomic units
+	Client    *http.Client
+}
+
+// JoinResult reports a completed paid join.
+type JoinResult struct {
+	Token   string
+	Version int
+	Amount  string // atomic units paid
+	PayTo   string
+	Network string
+}
+
+// JoinPaid pays the seller's x402 join price to mint a version-scoped member
+// token: it probes the /join/paid 402 challenge, signs the advertised payment
+// with sign, and POSTs it. Fully host-side and peer-to-peer — no cluster,
+// sidecar, or remote signer needed.
+func JoinPaid(ctx context.Context, opts JoinOptions, sign SignPaymentFunc) (JoinResult, error) {
+	if opts.Client == nil {
+		opts.Client = http.DefaultClient
+	}
+	url := strings.TrimSuffix(opts.BaseURL, "/") + "/dataset/" + opts.ID + "/join/paid"
+	if opts.Version > 0 {
+		url += "?version=" + strconv.Itoa(opts.Version)
+	}
+
+	// 1. Probe for the 402 challenge.
+	probe, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return JoinResult{}, err
+	}
+	resp, err := opts.Client.Do(probe)
+	if err != nil {
+		return JoinResult{}, err
+	}
+	pr, err := decodeJoinChallenge(resp)
+	if err != nil {
+		return JoinResult{}, err
+	}
+	if opts.MaxAtomic != "" {
+		limit, ok1 := new(big.Int).SetString(opts.MaxAtomic, 10)
+		price, ok2 := new(big.Int).SetString(pr.Amount, 10)
+		if ok1 && ok2 && price.Cmp(limit) > 0 {
+			return JoinResult{}, fmt.Errorf("dataset: join price %s exceeds --max-price %s (atomic units)", pr.Amount, opts.MaxAtomic)
+		}
+	}
+
+	// 2. Sign the advertised payment, then 3. POST it to mint the token.
+	xpay, err := sign(pr)
+	if err != nil {
+		return JoinResult{}, fmt.Errorf("dataset: sign join payment: %w", err)
+	}
+	payReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return JoinResult{}, err
+	}
+	payReq.Header.Set("X-PAYMENT", xpay)
+	payResp, err := opts.Client.Do(payReq)
+	if err != nil {
+		return JoinResult{}, err
+	}
+	defer payResp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(payResp.Body, 1<<16))
+	if payResp.StatusCode != http.StatusOK {
+		return JoinResult{}, fmt.Errorf("dataset: paid join %s -> %d: %s", url, payResp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var out struct {
+		Token   string `json:"token"`
+		Version int    `json:"version"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil || out.Token == "" {
+		return JoinResult{}, fmt.Errorf("dataset: paid join returned no token: %s", strings.TrimSpace(string(body)))
+	}
+	return JoinResult{Token: out.Token, Version: out.Version, Amount: pr.Amount, PayTo: pr.PayTo, Network: pr.Network}, nil
+}
+
+// decodeJoinChallenge reads the seller's 402 paid-join challenge and returns
+// the first advertised payment requirement.
+func decodeJoinChallenge(resp *http.Response) (x402types.PaymentRequirements, error) {
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPaymentRequired {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return x402types.PaymentRequirements{}, fmt.Errorf("dataset: expected a 402 paid-join challenge, got %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	var challenge struct {
+		Accepts []x402types.PaymentRequirements `json:"accepts"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&challenge); err != nil {
+		return x402types.PaymentRequirements{}, fmt.Errorf("dataset: decode 402 challenge: %w", err)
+	}
+	if len(challenge.Accepts) == 0 {
+		return x402types.PaymentRequirements{}, fmt.Errorf("dataset: 402 challenge carried no accepts[]")
+	}
+	return challenge.Accepts[0], nil
+}
 
 // FetchResult reports what a verified download produced.
 type FetchResult struct {

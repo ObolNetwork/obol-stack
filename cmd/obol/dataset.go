@@ -265,9 +265,14 @@ func datasetPublishCommand(cfg *config.Config) *cli.Command {
 			u.Infof("Membership:  %s", cmd.String("membership"))
 			u.Blank()
 			u.Bold("Buyers fetch with:")
-			u.Printf("  obol buy dataset %s --id %s --member-token <token> --owner %s", publicURL, id, signer.SignerID())
+			if paidJoin != nil {
+				u.Printf("  obol buy dataset %s --id %s --join --owner %s", publicURL, id, signer.SignerID())
+				u.Dim("  (--join pays the x402 price host-side and mints a member token — no cluster needed)")
+			} else {
+				u.Printf("  obol buy dataset %s --id %s --member-token <token> --owner %s", publicURL, id, signer.SignerID())
+			}
 			if cmd.String("membership") == dataset.MembershipInvite {
-				u.Dim("Admit a worker's printed code:  obol dataset approve <user-code>")
+				u.Dim("Admit a worker's printed code:  obol sell data approve <user-code>")
 			}
 			u.Dim("Ctrl-C to stop.")
 
@@ -386,9 +391,12 @@ func buyDatasetCommand(cfg *config.Config) *cli.Command {
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "id", Usage: "Dataset id (or embed /dataset/<id> in the URL)"},
 			&cli.IntFlag{Name: "version", Usage: "Version to fetch (0 = head)"},
-			&cli.StringFlag{Name: "member-token", Usage: "Member token (owner-issued or payment-minted)", Required: true},
+			&cli.StringFlag{Name: "member-token", Usage: "Member token (owner-issued or payment-minted). Omit when using --join."},
 			&cli.StringFlag{Name: "out", Usage: "Output file (default <id>-v<N>.jsonl)"},
 			&cli.StringFlag{Name: "owner", Usage: "Expected owner 0x address that must have signed the version log (pins identity; recommended)"},
+			&cli.BoolFlag{Name: "join", Usage: "Pay the seller's x402 join price to mint a member token (host-side, peer-to-peer; no cluster needed)"},
+			&cli.StringFlag{Name: "key", Usage: "Buyer wallet keyfile (default <config>/dataset-serve/buyer.key, auto-created — fund the printed address)"},
+			&cli.StringFlag{Name: "max-price", Usage: "Safety cap in atomic units on the --join price"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -399,6 +407,38 @@ func buyDatasetCommand(cfg *config.Config) *cli.Command {
 			if id == "" {
 				return fmt.Errorf("dataset id required (pass --id or a /dataset/<id> URL)")
 			}
+
+			// Resolve the member token: either supplied, or minted by paying the
+			// seller's x402 join price host-side (peer-to-peer, no cluster).
+			token := strings.TrimSpace(cmd.String("member-token"))
+			if cmd.Bool("join") {
+				if token != "" {
+					return fmt.Errorf("pass either --member-token or --join, not both")
+				}
+				keyPath := strings.TrimSpace(cmd.String("key"))
+				if keyPath == "" {
+					keyPath = datasetBuyerKeyPath(cfg)
+				}
+				key, kerr := dataset.LoadOrCreateKey(keyPath)
+				if kerr != nil {
+					return kerr
+				}
+				u.Infof("Buyer wallet: %s (fund this address to pay)", dataset.NewEthSigner(key).SignerID())
+				jr, jerr := dataset.JoinPaid(ctx, dataset.JoinOptions{
+					BaseURL: base, ID: id, Version: cmd.Int("version"),
+					MaxAtomic: strings.TrimSpace(cmd.String("max-price")),
+				}, func(pr x402types.PaymentRequirements) (string, error) {
+					return x402.SignExactPayment(key, pr)
+				})
+				if jerr != nil {
+					return jerr
+				}
+				token = jr.Token
+				u.Successf("Paid join: %s atomic units to %s on %s → minted v%d member token", jr.Amount, jr.PayTo, jr.Network, jr.Version)
+			} else if token == "" {
+				return fmt.Errorf("provide --member-token <tok>, or --join to pay for one")
+			}
+
 			out := cmd.String("out")
 			if out == "" {
 				v := cmd.Int("version")
@@ -410,7 +450,7 @@ func buyDatasetCommand(cfg *config.Config) *cli.Command {
 			u.Infof("Fetching %s (version %v) → %s", id, orHead(cmd.Int("version")), out)
 			res, err := dataset.Fetch(ctx, dataset.FetchOptions{
 				BaseURL: base, ID: id, Version: cmd.Int("version"),
-				Token: cmd.String("member-token"), OutPath: out,
+				Token: token, OutPath: out,
 				ExpectedOwner: strings.TrimSpace(cmd.String("owner")),
 			})
 			if err != nil {
@@ -432,6 +472,12 @@ func datasetServeDir(cfg *config.Config) string { return filepath.Join(cfg.Confi
 
 func datasetKeyPath(cfg *config.Config, id string) string {
 	return filepath.Join(datasetServeDir(cfg), id+".key")
+}
+
+// datasetBuyerKeyPath is the host buyer's wallet keyfile used by `buy dataset
+// --join` to pay for member tokens. Auto-created on first use.
+func datasetBuyerKeyPath(cfg *config.Config) string {
+	return filepath.Join(datasetServeDir(cfg), "buyer.key")
 }
 
 func datasetStorePath(cfg *config.Config, id string) string {

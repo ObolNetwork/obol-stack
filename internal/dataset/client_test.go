@@ -3,11 +3,86 @@ package dataset
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+
+	x402types "github.com/x402-foundation/x402/go/types"
 )
+
+func TestJoinPaid_ProbesSignsAndMints(t *testing.T) {
+	var sawPayment string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/dataset/ds/join/paid" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if r.Header.Get("X-PAYMENT") == "" {
+			// 402 challenge; accepts marshalled from the real struct so the wire
+			// tags are exactly what JoinPaid decodes back.
+			acc := x402types.PaymentRequirements{
+				Scheme: "exact", Network: "eip155:84532", Amount: "1000",
+				Asset: "0xabc", PayTo: "0xdef",
+				Extra: map[string]any{"name": "USDC", "version": "2"},
+			}
+			body, _ := json.Marshal(map[string]any{"x402Version": 2, "accepts": []x402types.PaymentRequirements{acc}})
+			w.WriteHeader(http.StatusPaymentRequired)
+			_, _ = w.Write(body)
+			return
+		}
+		sawPayment = r.Header.Get("X-PAYMENT")
+		_, _ = w.Write([]byte(`{"token":"minted-token-xyz","version":3}`))
+	}))
+	defer srv.Close()
+
+	var signedFor x402types.PaymentRequirements
+	sign := func(req x402types.PaymentRequirements) (string, error) {
+		signedFor = req
+		return "BASE64XPAYMENT", nil
+	}
+
+	jr, err := JoinPaid(context.Background(), JoinOptions{BaseURL: srv.URL, ID: "ds", Version: 3}, sign)
+	if err != nil {
+		t.Fatalf("JoinPaid: %v", err)
+	}
+	if jr.Token != "minted-token-xyz" || jr.Version != 3 {
+		t.Fatalf("result = %+v, want minted-token-xyz / v3", jr)
+	}
+	if jr.Amount != "1000" || jr.PayTo != "0xdef" {
+		t.Fatalf("result terms = %+v, want amount 1000 payTo 0xdef from the 402", jr)
+	}
+	if signedFor.PayTo != "0xdef" || signedFor.Amount != "1000" {
+		t.Fatalf("signer got %+v, want the 402's terms", signedFor)
+	}
+	if sawPayment != "BASE64XPAYMENT" {
+		t.Fatalf("server saw X-PAYMENT %q, want the signed header", sawPayment)
+	}
+}
+
+func TestJoinPaid_RejectsOverMaxPrice(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		acc := x402types.PaymentRequirements{
+			Scheme: "exact", Network: "eip155:84532", Amount: "5000",
+			Asset: "0xabc", PayTo: "0xdef", Extra: map[string]any{"name": "USDC", "version": "2"},
+		}
+		body, _ := json.Marshal(map[string]any{"x402Version": 2, "accepts": []x402types.PaymentRequirements{acc}})
+		w.WriteHeader(http.StatusPaymentRequired)
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	signed := false
+	sign := func(x402types.PaymentRequirements) (string, error) { signed = true; return "x", nil }
+	if _, err := JoinPaid(context.Background(), JoinOptions{BaseURL: srv.URL, ID: "ds", MaxAtomic: "1000"}, sign); err == nil {
+		t.Fatal("JoinPaid accepted a price above --max-price")
+	}
+	if signed {
+		t.Fatal("must reject before signing/paying when the price exceeds the cap")
+	}
+}
 
 func TestFetch_DownloadsAndVerifies(t *testing.T) {
 	ts := newTestServer(t, MembershipOpen, passGate)
