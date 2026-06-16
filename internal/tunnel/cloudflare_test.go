@@ -61,6 +61,43 @@ func TestCloudflareClientResolveAccountIDSingleAccount(t *testing.T) {
 	}
 }
 
+func TestCloudflareClientListRegistrarDomains(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/accounts/acct-123/registrar/domains" {
+			t.Fatalf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"success": true,
+			"result": []map[string]any{
+				{"name": "obol.stack", "expires_at": "2027-01-01T00:00:00Z", "auto_renew": true},
+				{"name": "example.dev", "auto_renew": false},
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := newCloudflareClient("token")
+	client.baseURL = server.URL
+
+	domains, err := client.ListRegistrarDomains("acct-123")
+	if err != nil {
+		t.Fatalf("ListRegistrarDomains: %v", err)
+	}
+	if len(domains) != 2 || domains[0].Name != "obol.stack" || !domains[0].AutoRenew {
+		t.Fatalf("unexpected list results: %+v", domains)
+	}
+	if domains[1].AutoRenew {
+		t.Fatalf("expected example.dev auto_renew=false, got %+v", domains[1])
+	}
+}
+
+func TestListDomainsRequiresToken(t *testing.T) {
+	_, err := ListDomains(DomainListOptions{})
+	if err == nil || !strings.Contains(err.Error(), "api-token") {
+		t.Fatalf("expected api-token-required error, got %v", err)
+	}
+}
+
 func TestCloudflareClientRegistrarEndpoints(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

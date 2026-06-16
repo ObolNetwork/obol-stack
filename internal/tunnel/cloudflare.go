@@ -35,6 +35,17 @@ type cloudflareRegistrarDomain struct {
 	Tier        string                   `json:"tier,omitempty"`
 }
 
+// cloudflareOwnedDomain is a domain already held in the account, as returned by
+// the registrar domains list endpoint (distinct from the availability shape).
+type cloudflareOwnedDomain struct {
+	Name             string `json:"name"`
+	ExpiresAt        string `json:"expires_at,omitempty"`
+	AutoRenew        bool   `json:"auto_renew"`
+	Locked           bool   `json:"locked"`
+	CurrentRegistrar string `json:"current_registrar,omitempty"`
+	RegistryStatuses string `json:"registry_statuses,omitempty"`
+}
+
 type cloudflareRegistrationRequest struct {
 	DomainName  string `json:"domain_name"`
 	AutoRenew   bool   `json:"auto_renew,omitempty"`
@@ -170,6 +181,19 @@ func (c *cloudflareClient) CheckRegistrarDomains(accountID string, domains []str
 	}
 
 	return resp.Result.Domains, nil
+}
+
+func (c *cloudflareClient) ListRegistrarDomains(accountID string) ([]cloudflareOwnedDomain, error) {
+	var resp cloudflareAPIResponse[[]cloudflareOwnedDomain]
+	endpoint := fmt.Sprintf("/accounts/%s/registrar/domains", accountID)
+	if err := c.doJSON(http.MethodGet, endpoint, nil, nil, &resp); err != nil {
+		return nil, err
+	}
+	if !resp.Success {
+		return nil, c.apiError("cloudflare registrar domain list failed", resp.Errors)
+	}
+
+	return resp.Result, nil
 }
 
 func (c *cloudflareClient) CreateRegistration(accountID string, req cloudflareRegistrationRequest, respondAsync bool) (*cloudflareRegistrarWorkflow, error) {

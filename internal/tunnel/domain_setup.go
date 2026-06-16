@@ -51,6 +51,16 @@ type DomainRegisterResult struct {
 	Workflow     *cloudflareRegistrarWorkflow `json:"workflow,omitempty"`
 }
 
+type DomainListOptions struct {
+	AccountID string
+	APIToken  string
+}
+
+type DomainListResult struct {
+	AccountID string                  `json:"account_id"`
+	Domains   []cloudflareOwnedDomain `json:"domains"`
+}
+
 // setupManagementLocal routes `obol tunnel setup --management local` to the
 // browser-based local-managed flow (an advanced fallback). The default and
 // recommended path is the connector-token flow, which needs no host binary and
@@ -85,6 +95,8 @@ type SetupResult struct {
 type CloudflareRegistrarDomainAlias = cloudflareRegistrarDomain
 
 type CloudflareRegistrarWorkflowAlias = cloudflareRegistrarWorkflow
+
+type CloudflareOwnedDomainAlias = cloudflareOwnedDomain
 
 // Setup is the single guided command for creating a permanent public URL. By
 // default it wires a dashboard-managed Cloudflare Tunnel from a connector token
@@ -255,6 +267,25 @@ func CheckDomains(opts DomainCheckOptions) (*DomainCheckResult, error) {
 	return &DomainCheckResult{AccountID: accountID, Domains: domains}, nil
 }
 
+func ListDomains(opts DomainListOptions) (*DomainListResult, error) {
+	if opts.APIToken == "" {
+		return nil, errors.New("--api-token is required (or set CLOUDFLARE_API_TOKEN)")
+	}
+
+	client := newCloudflareClient(opts.APIToken)
+	accountID, err := client.ResolveAccountID(opts.AccountID)
+	if err != nil {
+		return nil, err
+	}
+
+	domains, err := client.ListRegistrarDomains(accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DomainListResult{AccountID: accountID, Domains: domains}, nil
+}
+
 func RegisterDomain(u *ui.UI, opts DomainRegisterOptions) (*DomainRegisterResult, error) {
 	domainName := normalizeHostname(opts.DomainName)
 	if domainName == "" {
@@ -336,6 +367,7 @@ func RegisterDomain(u *ui.UI, opts DomainRegisterOptions) (*DomainRegisterResult
 			if workflow.Links.Self != "" {
 				message += ": " + workflow.Links.Self
 			}
+			message += "\nfirst-time registrants usually need a payment method and registrant contact details saved on the account: https://dash.cloudflare.com/?to=/:account/registrar"
 			return nil, errors.New(message)
 		}
 	}
