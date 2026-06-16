@@ -212,7 +212,7 @@ func Status(cfg *config.Config, u *ui.UI, opts StatusOptions) error {
 		}
 	}
 	if result.ConnectorStatus == "" && st != nil && st.IsPersistent() {
-		result.ConnectorStatus = "managed-locally"
+		result.ConnectorStatus = defaultPersistentConnectorStatus(st)
 	}
 
 	// Public reachability probe: GET the public URL root and assert HTTP < 400.
@@ -268,6 +268,16 @@ func summarizeTunnelStatus(result tunnelStatusResult) string {
 		return "degraded"
 	}
 	return "active"
+}
+
+func defaultPersistentConnectorStatus(st *tunnelState) string {
+	if st == nil || !st.IsPersistent() {
+		return ""
+	}
+	if st.Management() == tunnelManagementRemote {
+		return "not_probed"
+	}
+	return "managed-locally"
 }
 
 // InjectBaseURL sets AGENT_BASE_URL on the default Hermes deployment so that

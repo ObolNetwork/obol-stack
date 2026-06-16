@@ -37,6 +37,45 @@ func TestHumanTunnelMode(t *testing.T) {
 	}
 }
 
+func TestDefaultPersistentConnectorStatus(t *testing.T) {
+	cases := []struct {
+		name string
+		st   *tunnelState
+		want string
+	}{
+		{
+			name: "remote managed",
+			st: &tunnelState{
+				ExposureMode:   tunnelExposurePersistent,
+				ManagementMode: tunnelManagementRemote,
+				Hostname:       "stack.example.com",
+			},
+			want: "not_probed",
+		},
+		{
+			name: "local managed",
+			st: &tunnelState{
+				ExposureMode:   tunnelExposurePersistent,
+				ManagementMode: tunnelManagementLocal,
+				Hostname:       "stack.example.com",
+			},
+			want: "managed-locally",
+		},
+		{
+			name: "quick tunnel",
+			st:   &tunnelState{ExposureMode: tunnelExposureQuick},
+			want: "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := defaultPersistentConnectorStatus(tc.st); got != tc.want {
+				t.Fatalf("defaultPersistentConnectorStatus() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseCloudflaredMetrics(t *testing.T) {
 	metrics := `# HELP cloudflared_tunnel_total_requests Amount of requests
 cloudflared_tunnel_total_requests 42
