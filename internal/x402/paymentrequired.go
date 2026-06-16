@@ -477,7 +477,11 @@ func httpCopy(url string, d PaymentDisplay) typeCopy {
 	if d.NetworkLabel != "" {
 		netClause = " Network: " + d.NetworkLabel + "."
 	}
-	prompt := fmt.Sprintf("Use the buy-x402 skill's `pay` command to call %s once.%s%s", url, priceClause, netClause)
+	prompt := fmt.Sprintf(
+		"Use the buy-x402 skill's `pay` command to call %s.%s%s "+
+			"Before paying, decide what you want from this endpoint and put it in the request body "+
+			"(e.g. JSON with your question or task) — do not call it empty-handed. Report the response.",
+		url, priceClause, netClause)
 
 	priceWord := "the listed price"
 	if d.PriceDisplay != "" {
@@ -489,9 +493,9 @@ func httpCopy(url string, d PaymentDisplay) typeCopy {
 	}
 	other := fmt.Sprintf(
 		"Read https://obol.org/llms.txt and skim https://github.com/ObolNetwork/skills "+
-			"to learn how Obol Agents pay for x402 services. Then help me buy access to %s "+
-			"for %s%s. Sign the EIP-3009 or Permit2 authorization and call the endpoint "+
-			"with the X-PAYMENT header.",
+			"to learn how Obol x402 payments work. Help me buy one call to %s "+
+			"for %s%s. First ask me what I want the endpoint to do, include that in the request body, "+
+			"then sign EIP-3009 or Permit2 and call with the X-PAYMENT header.",
 		url, priceWord, onNet,
 	)
 
