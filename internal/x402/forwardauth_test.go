@@ -2,6 +2,7 @@ package x402
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -604,5 +605,63 @@ func TestForwardAuth_SettlesInProcess_SuppressesWarning(t *testing.T) {
 
 	if gotLog := buf.String(); strings.Contains(gotLog, "verifyOnly=false") {
 		t.Fatalf("SettlesInProcess=true must suppress the verifyOnly=false warning, got:\n%s", gotLog)
+	}
+}
+
+func TestRequestIsSecure(t *testing.T) {
+	mk := func(tlsOn bool, xfp, remote string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/", nil)
+		r.RemoteAddr = remote
+		if xfp != "" {
+			r.Header.Set("X-Forwarded-Proto", xfp)
+		}
+		if tlsOn {
+			r.TLS = &tls.ConnectionState{}
+		}
+		return r
+	}
+	cases := []struct {
+		name string
+		req  *http.Request
+		want bool
+	}{
+		{"direct TLS", mk(true, "", "1.2.3.4:443"), true},
+		{"x-forwarded-proto https", mk(false, "https", "203.0.113.7:80"), true},
+		{"loopback hop", mk(false, "", "127.0.0.1:8402"), true},
+		{"cluster-internal hop", mk(false, "", "10.42.0.5:80"), true},
+		{"plaintext public", mk(false, "", "203.0.113.7:80"), false},
+		{"forwarded-proto http public", mk(false, "http", "203.0.113.7:80"), false},
+	}
+	for _, c := range cases {
+		if got := requestIsSecure(c.req); got != c.want {
+			t.Errorf("%s: requestIsSecure = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
+// A payment proof submitted over plaintext HTTP directly to a publicly-bound
+// gateway must be rejected before any facilitator call (defense-in-depth).
+func TestForwardAuth_SecureMode_RejectsPlaintextPayment(t *testing.T) {
+	// Opt-in: with RequireSecureTransport a plaintext-public payment is rejected
+	// before any facilitator call. The DEFAULT (no RequireSecureTransport)
+	// accepts it — the happy-path tests above all run over httptest's 192.0.2.1
+	// plaintext remote with default config and succeed, which is the insecure
+	// direct peer-to-peer default.
+	req := BuildV2Requirement(ChainBaseSepolia, "0.01", "0x1111111111111111111111111111111111111111", 0)
+	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL:         "https://x402.gcp.obol.tech",
+		VerifyOnly:             true,
+		RequireSecureTransport: true,
+	}, []x402types.PaymentRequirements{req})
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+
+	r := httptest.NewRequest(http.MethodPost, "http://gw.example/", nil)
+	r.RemoteAddr = "203.0.113.7:80" // public, plaintext, no X-Forwarded-Proto
+	r.Header.Set("X-PAYMENT", base64.StdEncoding.EncodeToString([]byte(`{"x402Version":1}`)))
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+
+	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "secure transport") {
+		t.Fatalf("plaintext payment = %d %q, want 400 secure-transport rejection", w.Code, strings.TrimSpace(w.Body.String()))
 	}
 }

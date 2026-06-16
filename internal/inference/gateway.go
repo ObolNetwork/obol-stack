@@ -106,6 +106,13 @@ type GatewayConfig struct {
 	// ForwardAuth) to avoid double-gating requests. Enclave/TEE encryption
 	// middleware remains active when enabled.
 	NoPaymentGate bool
+
+	// RequireSecurePayment, when true, rejects payment proofs that did not
+	// arrive over a secure transport (TLS / X-Forwarded-Proto=https / loopback
+	// / private IP). Default false: a direct, un-tunneled peer-to-peer buyer
+	// over plaintext HTTP is accepted. `obol sell inference --secure` sets it
+	// (the router-mediated secure posture).
+	RequireSecurePayment bool
 }
 
 // Gateway is an x402-enabled reverse proxy for LLM inference with optional
@@ -190,6 +197,9 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 		// so a configured VerifyOnly=false is correct by design — suppress the
 		// misleading per-request warning on this path.
 		SettlesInProcess: true,
+		// Direct peer-to-peer is insecure by default so an un-tunneled buyer
+		// works out of the box; --secure flips this on.
+		RequireSecureTransport: g.config.RequireSecurePayment,
 	}, []x402types.PaymentRequirements{requirement})
 
 	// Initialise key backend: TEE (Linux) or SE (macOS), mutually exclusive.

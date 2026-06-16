@@ -190,6 +190,7 @@ func TestVerifier_PaidRoute_ValidPayment_Returns200(t *testing.T) {
 	req.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
 	req.Header.Set("X-Forwarded-Host", "obol.stack")
 	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-Forwarded-Proto", "https")
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
 
@@ -214,6 +215,7 @@ func TestVerifier_PaidRoute_RejectedPayment_Returns402(t *testing.T) {
 	req.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
 	req.Header.Set("X-Forwarded-Host", "obol.stack")
 	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-Forwarded-Proto", "https")
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
 
@@ -242,6 +244,7 @@ func TestVerifier_VerifyOnly_SkipsSettle(t *testing.T) {
 	req.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
 	req.Header.Set("X-Forwarded-Host", "obol.stack")
 	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-Forwarded-Proto", "https")
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
 
@@ -383,6 +386,7 @@ func TestVerifier_HandleProxy_ValidPayment_SettlesAndStripsPrefix(t *testing.T) 
 	req := httptest.NewRequest(http.MethodPost, "/services/demo/v1/chat/completions", strings.NewReader(`{"model":"qwen3.5:9b"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-Forwarded-Proto", "https")
 	w := httptest.NewRecorder()
 	v.HandleProxy(w, req)
 
@@ -426,6 +430,7 @@ func TestVerifier_HandleProxy_UpstreamFailure_DoesNotSettle(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/services/demo/v1/chat/completions", strings.NewReader(`{}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-Forwarded-Proto", "https")
 	w := httptest.NewRecorder()
 	v.HandleProxy(w, req)
 
@@ -510,6 +515,7 @@ func TestVerifier_HandleProxy_StreamsSSEChunks(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-Forwarded-Proto", "https")
 
 	client := &http.Client{Timeout: 15 * time.Second}
 	start := time.Now()
@@ -617,6 +623,7 @@ func TestVerifier_HandleProxy_NonStreamingResponse(t *testing.T) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-Forwarded-Proto", "https")
 
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil {
@@ -866,6 +873,7 @@ func TestVerifier_PerRoutePayTo_WithValidPayment(t *testing.T) {
 	req.Header.Set("X-Forwarded-Uri", "/services/test/foo")
 	req.Header.Set("X-Forwarded-Host", "obol.stack")
 	req.Header.Set("X-PAYMENT", testPaymentHeaderFor(t, routeWallet, "1000"))
+	req.Header.Set("X-Forwarded-Proto", "https")
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
 
@@ -1040,6 +1048,7 @@ func TestVerifier_MetricsVerifiedAndRejectedPayments(t *testing.T) {
 	okReq.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
 	okReq.Header.Set("X-Forwarded-Host", "obol.stack")
 	okReq.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	okReq.Header.Set("X-Forwarded-Proto", "https")
 	okResp := httptest.NewRecorder()
 	okVerifier.HandleVerify(okResp, okReq)
 	if okResp.Code != http.StatusOK {
@@ -1065,6 +1074,7 @@ func TestVerifier_MetricsVerifiedAndRejectedPayments(t *testing.T) {
 	rejectReq.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
 	rejectReq.Header.Set("X-Forwarded-Host", "obol.stack")
 	rejectReq.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	rejectReq.Header.Set("X-Forwarded-Proto", "https")
 	rejectResp := httptest.NewRecorder()
 	rejectVerifier.HandleVerify(rejectResp, rejectReq)
 	if rejectResp.Code != http.StatusPaymentRequired {
@@ -1141,6 +1151,7 @@ func TestVerifier_LastPaymentSuccessGauge(t *testing.T) {
 			req.Header.Set("X-Forwarded-Host", "obol.stack")
 			if tt.setPayment {
 				req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+				req.Header.Set("X-Forwarded-Proto", "https")
 			}
 
 			before := time.Now().Unix()
@@ -1203,6 +1214,7 @@ func TestVerifier_Reload_PrunesDeletedOfferSeries(t *testing.T) {
 		req.Header.Set("X-Forwarded-Uri", path)
 		req.Header.Set("X-Forwarded-Host", "obol.stack")
 		req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+		req.Header.Set("X-Forwarded-Proto", "https")
 		rec := httptest.NewRecorder()
 		v.HandleVerify(rec, req)
 		if rec.Code != http.StatusOK {
@@ -1502,6 +1514,7 @@ func TestVerifier_PruneSeriesNotIn_DistinguishesAssetSymbol(t *testing.T) {
 		req.Header.Set("X-Forwarded-Uri", path)
 		req.Header.Set("X-Forwarded-Host", "obol.stack")
 		req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+		req.Header.Set("X-Forwarded-Proto", "https")
 		rec := httptest.NewRecorder()
 		v.HandleVerify(rec, req)
 		if rec.Code != http.StatusOK {

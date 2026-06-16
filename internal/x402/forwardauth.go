@@ -11,10 +11,35 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	x402types "github.com/x402-foundation/x402/go/types"
 )
+
+// requestIsSecure reports whether an X-PAYMENT-bearing request reached us over a
+// transport on which the proof cannot be trivially sniffed or replayed: direct
+// TLS, a TLS-terminating proxy/tunnel (X-Forwarded-Proto=https), or a
+// loopback/cluster-internal hop (cloudflared→127.0.0.1, Traefik→pod IP). A
+// payment submitted directly over plaintext HTTP to a publicly-bound gateway
+// returns false.
+func requestIsSecure(r *http.Request) bool {
+	if r.TLS != nil {
+		return true
+	}
+	if strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https") {
+		return true
+	}
+	host := r.RemoteAddr
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback() || ip.IsPrivate()
+	}
+	// A non-IP remote (unix socket, in-process httptest) is treated as local.
+	return host == "" || strings.EqualFold(host, "localhost")
+}
 
 // ForwardAuthConfig configures the ForwardAuth x402 middleware.
 type ForwardAuthConfig struct {
@@ -56,6 +81,15 @@ type ForwardAuthConfig struct {
 	// change settlement behaviour; the genuinely-dangerous Traefik ForwardAuth
 	// path leaves this false and still warns if an operator flips VerifyOnly.
 	SettlesInProcess bool
+
+	// RequireSecureTransport rejects X-PAYMENT proofs that did not arrive over a
+	// secure transport (TLS / X-Forwarded-Proto=https / loopback / private IP).
+	// It is OPT-IN: the default (false) accepts payment over any transport so
+	// direct, un-tunneled peer-to-peer inference works out of the box. The
+	// cluster verifier (always behind Traefik, which terminates TLS) sets this
+	// true for free defense-in-depth; the standalone seller turns it on with
+	// `obol sell inference --secure` (the router-mediated secure posture).
+	RequireSecureTransport bool
 }
 
 // facilitatorVerifyRequest is the JSON body sent to POST /verify and /settle.
@@ -124,6 +158,16 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 			paymentHeader := r.Header.Get("X-PAYMENT")
 			if paymentHeader == "" {
 				send(w, r, requirements, cfg.Extensions)
+				return
+			}
+
+			// Opt-in only: when RequireSecureTransport is set, a payment proof
+			// must arrive over a secure transport (TLS / X-Forwarded-Proto=https
+			// / loopback / private IP) — a plaintext proof can be sniffed and
+			// replayed. The default accepts any transport so direct, un-tunneled
+			// peer-to-peer inference works out of the box.
+			if cfg.RequireSecureTransport && !requestIsSecure(r) {
+				http.Error(w, "x402: payment proof must be sent over a secure transport (HTTPS)", http.StatusBadRequest)
 				return
 			}
 

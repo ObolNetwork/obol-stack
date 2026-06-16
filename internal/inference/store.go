@@ -97,6 +97,11 @@ type Deployment struct {
 	// gateway runs behind the cluster's x402 verifier to avoid double-gating.
 	NoPaymentGate bool `json:"no_payment_gate,omitempty"`
 
+	// RequireSecurePayment, when true (`obol sell inference --secure`), rejects
+	// payment proofs not sent over a secure transport. Default false: direct,
+	// un-tunneled peer-to-peer buyers over plaintext HTTP are accepted.
+	RequireSecurePayment bool `json:"require_secure_payment,omitempty"`
+
 	// Provenance holds optional metadata about how the model was produced
 	// (e.g. autoresearch experiment results). Stored alongside the deployment
 	// config and passed to the registration document when selling.

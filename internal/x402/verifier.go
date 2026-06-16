@@ -183,10 +183,14 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 	display := buildPaymentDisplay(rule, chain, asset, wallet, requirement.Amount)
 
 	middleware := NewForwardAuthMiddleware(ForwardAuthConfig{
-		FacilitatorURL:      cfg.FacilitatorURL,
-		VerifyOnly:          cfg.VerifyOnly,
-		Extensions:          extensions,
-		SendPaymentRequired: NewHTMLAwarePaymentRequired(display),
+		FacilitatorURL: cfg.FacilitatorURL,
+		VerifyOnly:     cfg.VerifyOnly,
+		Extensions:     extensions,
+		// The cluster verifier always sits behind Traefik (which terminates TLS
+		// and sets X-Forwarded-Proto=https), so enforcing secure transport here
+		// is free defense-in-depth — direct P2P sellers leave it off.
+		RequireSecureTransport: true,
+		SendPaymentRequired:    NewHTMLAwarePaymentRequired(display),
 	}, []x402types.PaymentRequirements{requirement})
 
 	upstreamAuth := rule.UpstreamAuth
@@ -253,10 +257,12 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		// upstream and settles only after a <400 response, so verifyOnly=false
 		// is correct here. SettlesInProcess suppresses the (otherwise
 		// per-request) verifyOnly=false warning on this safe path.
-		VerifyOnly:          false,
-		SettlesInProcess:    true,
-		Extensions:          extensions,
-		SendPaymentRequired: NewHTMLAwarePaymentRequired(display),
+		VerifyOnly:       false,
+		SettlesInProcess: true,
+		// Behind Traefik (TLS-terminated, X-Forwarded-Proto=https) → free.
+		RequireSecureTransport: true,
+		Extensions:             extensions,
+		SendPaymentRequired:    NewHTMLAwarePaymentRequired(display),
 	}, []x402types.PaymentRequirements{requirement})
 
 	hadPayment := r.Header.Get("X-PAYMENT") != ""
