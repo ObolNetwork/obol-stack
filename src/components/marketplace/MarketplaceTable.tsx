@@ -207,9 +207,11 @@ export function MarketplaceTable({
                   <GhostBtn type="button" onClick={() => onDetails?.(item)}>
                     Details →
                   </GhostBtn>
-                  <PrimaryBtn type="button" onClick={() => onBuy?.(item)}>
-                    Buy
-                  </PrimaryBtn>
+                  {item.type === 'inference' ? (
+                    <PrimaryBtn type="button" onClick={() => onBuy?.(item)}>
+                      Buy
+                    </PrimaryBtn>
+                  ) : null}
                 </Actions>
               </Td>
             </Row>

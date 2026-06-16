@@ -8,6 +8,7 @@ import { theme } from '@obolnetwork/obol-ui';
 import { config, isWalletConnectConfigured } from '../lib/config/wagmi';
 
 import '@rainbow-me/rainbowkit/styles.css';
+import { LocalDevHostBanner } from '@/components/molecules/LocalDevHostBanner/LocalDevHostBanner';
 
 const queryClient = new QueryClient();
 
@@ -18,6 +19,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
     return (
       <WagmiProvider config={config}>
         <QueryClientProvider client={queryClient}>
+          <LocalDevHostBanner />
           {children}
         </QueryClientProvider>
       </WagmiProvider>
@@ -37,6 +39,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
             overlayBlur: 'small',
           })}
         >
+          <LocalDevHostBanner />
           {children}
         </RainbowKitProvider>
       </QueryClientProvider>

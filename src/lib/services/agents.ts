@@ -101,13 +101,67 @@ export class AgentClient {
     return `http://${instance.hostname}`;
   }
 
+  /** `obol agent new <name>` — namespaces `agent-<name>`, not `hermes-*`. */
+  private instanceFromSubAgentNamespace(
+    namespace: string
+  ): AgentInstance | null {
+    const prefix = 'agent-';
+    if (!namespace.startsWith(prefix)) return null;
+    const id = namespace.slice(prefix.length);
+    if (!id) return null;
+
+    return {
+      id,
+      runtime: 'hermes',
+      namespace,
+      hostname: `${namespace}.${config.agentIngressBaseDomain}`,
+      status: 'unknown',
+      isSubAgent: true,
+    };
+  }
+
+  /** Resolve by Kubernetes namespace (authoritative for status lookups). */
+  public resolveInstanceByNamespace(namespace: string): AgentInstance | null {
+    return (
+      this.instanceFromSubAgentNamespace(namespace) ??
+      this.instanceFromNamespace(namespace)
+    );
+  }
+
+  /** Master Hermes (`hermes-<id>`), OpenClaw (`openclaw-<id>`), or sub-agent (`agent-<id>`). */
+  public resolveInstance(
+    runtime: AgentRuntime,
+    id: string
+  ): AgentInstance | null {
+    if (runtime === 'openclaw') {
+      return this.instanceFromNamespace(`openclaw-${id}`);
+    }
+    if (id === DEFAULT_AGENT_ID) {
+      return this.instanceFromNamespace(`hermes-${id}`);
+    }
+    // Sub-agents live in agent-<name>. Try before hermes-<id> — otherwise
+    // id "agent-v0-10-0" wrongly maps to namespace hermes-agent-v0-10-0.
+    return (
+      this.instanceFromSubAgentNamespace(`agent-${id}`) ??
+      this.instanceFromNamespace(`hermes-${id}`)
+    );
+  }
+
   public async listInstances(): Promise<AgentInstance[]> {
     const response = await this.coreV1Api.listNamespace({});
-    const discovered = response.items
+    const names = response.items
       .map(ns => ns.metadata?.name)
-      .filter((name): name is string => Boolean(name))
+      .filter((name): name is string => Boolean(name));
+
+    const runtimeInstances = names
       .map(name => this.instanceFromNamespace(name))
       .filter((instance): instance is AgentInstance => instance !== null);
+
+    const subAgents = names
+      .map(name => this.instanceFromSubAgentNamespace(name))
+      .filter((instance): instance is AgentInstance => instance !== null);
+
+    const discovered = [...runtimeInstances, ...subAgents];
 
     const hydrated = await Promise.all(
       discovered.map(async instance => {
@@ -141,9 +195,12 @@ export class AgentClient {
 
   public async getInstanceHealth(
     runtime: AgentRuntime,
-    id: string
+    id: string,
+    namespace?: string
   ): Promise<AgentInstanceHealth> {
-    const instance = this.instanceFromNamespace(`${runtime}-${id}`);
+    const instance = namespace
+      ? this.resolveInstanceByNamespace(namespace)
+      : this.resolveInstance(runtime, id);
     if (!instance) {
       return {
         id,
@@ -174,9 +231,30 @@ export class AgentClient {
       this.getConfigInfo(instance),
     ]);
 
-    let apiConnected = false;
+    let apiConnected: boolean | undefined;
     let apiError: string | undefined;
     let advertisedModel: string | undefined;
+
+    if (instance.isSubAgent) {
+      // Sub-agents are cluster-internal only; pod phase is the reachable signal in local dev.
+      const resolvedModel = configInfo.model || 'unknown';
+      return {
+        id,
+        runtime,
+        healthy: podInfo.running,
+        model: resolvedModel,
+        provider: configInfo.provider || inferProvider(resolvedModel),
+        endpoint: this.getPublicUrl(instance),
+        podStatus: podInfo.phase,
+        restarts: podInfo.restarts,
+        error:
+          podInfo.phase === 'NotFound'
+            ? `Instance '${id}' not found`
+            : undefined,
+        apiConnected,
+        apiError,
+      };
+    }
 
     if (token) {
       const modelInfo = await this.fetchModels(
@@ -187,6 +265,7 @@ export class AgentClient {
       apiError = modelInfo.error;
       advertisedModel = modelInfo.model;
     } else {
+      apiConnected = false;
       apiError = 'API token not found';
     }
 
@@ -296,6 +375,11 @@ export class AgentClient {
   }
 
   private async checkHealth(instance: AgentInstance): Promise<boolean> {
+    if (instance.isSubAgent) {
+      const podInfo = await this.getPodInfo(instance);
+      return podInfo.running;
+    }
+
     try {
       const token = await this.getGatewayToken(instance);
       if (!token) {

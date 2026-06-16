@@ -13,7 +13,7 @@ import {
 import { ChevronRightIcon } from '@radix-ui/react-icons';
 import { StatusPill } from '../../atoms/StatusIndicator';
 import { CopyButton } from '../../atoms/CopyButton/CopyButton';
-import { SellInferenceModal } from '../SellInferenceModal';
+import { SellAgentModal } from '../SellAgentModal';
 import {
   useAgentStatus,
   useAgentWalletMetadata,
@@ -24,7 +24,6 @@ import {
   type AssetBalance,
 } from '../../../hooks/useWalletAssetBalances';
 import { explorerUrlFor } from '../../../lib/config/agent-balance-tokens';
-import { isDefaultSellAgent } from '../../../lib/services/agent-runtime';
 import type { AgentInstance } from '@/types/agent';
 
 function displayModelName(raw: string): string {
@@ -50,6 +49,7 @@ function displayInstanceName(instance: AgentInstance): string {
 }
 
 function runtimeLabel(instance: AgentInstance): string {
+  if (instance.isSubAgent) return 'Sub-agent';
   return instance.runtime === 'hermes' ? 'Hermes' : 'OpenClaw';
 }
 
@@ -300,6 +300,32 @@ const SellButton = styled('button', {
     background: 'rgba(47, 228, 171, 0.15)',
     borderColor: 'rgba(47, 228, 171, 0.5)',
   },
+
+  '&:disabled': {
+    opacity: 0.45,
+    cursor: 'not-allowed',
+  },
+});
+
+const ListingLink = styled('a', {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '6px',
+  padding: '$xxxs $sm',
+  borderRadius: '$pill',
+  border: '1px solid rgba(47, 228, 171, 0.3)',
+  background: 'rgba(47, 228, 171, 0.08)',
+  color: '#2FE4AB',
+  fontSize: '$2',
+  fontWeight: '$semibold',
+  textDecoration: 'none',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+
+  '&:hover': {
+    background: 'rgba(47, 228, 171, 0.15)',
+    borderColor: 'rgba(47, 228, 171, 0.5)',
+  },
 });
 
 function truncateAddress(address: string): string {
@@ -348,8 +374,9 @@ export function AgentInstanceCard({
           ? 'error'
           : 'unknown';
 
-  const dashboardBaseUrl =
-    instance.runtime === 'openclaw'
+  const dashboardBaseUrl = instance.isSubAgent
+    ? null
+    : instance.runtime === 'openclaw'
       ? tunnelURL
         ? tunnelURL
         : `http://${instance.hostname}`
@@ -361,8 +388,28 @@ export function AgentInstanceCard({
     ? withCurrentIngressPort(dashboardBaseUrl)
     : null;
 
-  const showSellCta =
-    isDefaultSellAgent(instance) && displayStatus === 'running';
+  const canSell =
+    instance.isSubAgent === true &&
+    !instance.listing &&
+    displayStatus === 'running';
+
+  const listing = instance.listing;
+  const listingChipLabel =
+    listing?.phase === 'live'
+      ? 'Listed'
+      : listing?.phase === 'draining'
+        ? 'Draining'
+        : listing
+          ? 'Setting up'
+          : null;
+  const listingChipStatus =
+    listing?.phase === 'live'
+      ? 'synced'
+      : listing?.phase === 'draining'
+        ? 'syncing'
+        : listing
+          ? 'syncing'
+          : 'unsynced';
 
   const provider = status?.model ? inferProvider(status.model) : null;
 
@@ -385,6 +432,9 @@ export function AgentInstanceCard({
           }
           label={loading ? 'Loading...' : status?.podStatus || 'Unknown'}
         />
+        {listingChipLabel ? (
+          <StatusPill status={listingChipStatus} label={listingChipLabel} />
+        ) : null}
       </TopRow>
 
       {primaryAddress && (
@@ -434,14 +484,16 @@ export function AgentInstanceCard({
       )}
 
       <ActionsRow>
-        <Button
-          disabled={displayStatus !== 'running'}
-          color="primary"
-          onClick={() => onSelect?.(instance)}
-          css={{ fontSize: '$3', height: '$sm' }}
-        >
-          Chat
-        </Button>
+        {!instance.isSubAgent ? (
+          <Button
+            disabled={displayStatus !== 'running'}
+            color="primary"
+            onClick={() => onSelect?.(instance)}
+            css={{ fontSize: '$3', height: '$sm' }}
+          >
+            Chat
+          </Button>
+        ) : null}
 
         {dashboardUrl ? (
           <Link
@@ -486,49 +538,75 @@ export function AgentInstanceCard({
             <DetailRow>
               <DetailLabel>Provider:</DetailLabel>
               <DetailValue>
-                {status.apiConnected === undefined
-                  ? 'Checking...'
-                  : status.apiConnected
-                    ? `${provider ?? 'Unknown'} · connected`
-                    : `${provider ?? 'Unknown'} · unreachable${
-                        status.apiError ? ` — ${status.apiError}` : ''
-                      }`}
+                {instance.isSubAgent
+                  ? status.model && status.model !== 'unknown'
+                    ? `${provider ?? 'Custom'} · ${displayModelName(status.model)}`
+                    : loading
+                      ? 'Loading...'
+                      : 'Cluster-internal (no public API check)'
+                  : status.apiConnected === undefined
+                    ? 'Checking...'
+                    : status.apiConnected
+                      ? `${provider ?? 'Unknown'} · connected`
+                      : `${provider ?? 'Unknown'} · unreachable${
+                          status.apiError ? ` — ${status.apiError}` : ''
+                        }`}
               </DetailValue>
             </DetailRow>
           )}
         </DetailsBlock>
       )}
 
-      {showSellCta && (
+      {instance.isSubAgent ? (
         <>
           <SellDivider />
           <SellCtaRow>
-            <SellLabel>Sell access to your models</SellLabel>
-            <SellInferenceModal
-              defaultWallet={primaryAddress ?? undefined}
-              trigger={
-                <SellButton>
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="12" y1="8" x2="12" y2="16" />
-                    <line x1="8" y1="12" x2="16" y2="12" />
-                  </svg>
-                  Sell
-                </SellButton>
-              }
-            />
+            <SellLabel>
+              {listing
+                ? listing.phase === 'setting_up'
+                  ? 'Listing in progress'
+                  : 'Listed on storefront'
+                : 'Monetize this agent'}
+            </SellLabel>
+            {canSell ? (
+              <SellAgentModal
+                agentName={instance.id}
+                agentNamespace={instance.namespace}
+                defaultWallet={primaryAddress ?? undefined}
+                trigger={
+                  <SellButton type="button">
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <circle cx="12" cy="12" r="10" />
+                      <line x1="12" y1="8" x2="12" y2="16" />
+                      <line x1="8" y1="12" x2="16" y2="12" />
+                    </svg>
+                    Sell
+                  </SellButton>
+                }
+              />
+            ) : listing ? (
+              <ListingLink href={`#${listing.anchorId}`}>
+                {listing.phase === 'setting_up'
+                  ? 'Finish setup'
+                  : 'View listing'}
+              </ListingLink>
+            ) : (
+              <SellButton type="button" disabled title="Agent must be running">
+                Sell
+              </SellButton>
+            )}
           </SellCtaRow>
         </>
-      )}
+      ) : null}
     </CardContainer>
   );
 }

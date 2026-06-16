@@ -27,6 +27,7 @@ import {
   isErpcInstance,
   isEthereumInstance,
 } from '@/lib/models/application-instances';
+import { resolveMetricsFetchUrl } from '@/lib/utils/cluster-url';
 
 export async function GET() {
   try {
@@ -82,13 +83,21 @@ export async function GET() {
       const clients: ClientInfo[] = [];
 
       if (isEthereumInstance(instance)) {
-        const executionUrl = instance.execution.endpoints.rpc.internal;
+        const executionUrl =
+          resolveMetricsFetchUrl(
+            instance.execution.endpoints.rpc.internal,
+            instance.execution.endpoints.rpc.external
+          ) ?? instance.execution.endpoints.rpc.internal;
         const executionClient = (await clientMetrics.getMetrics(
           'execution',
           executionUrl
         )) as ExecutionClientMetrics;
 
-        const consensusUrl = instance.consensus.endpoints.rpc.internal;
+        const consensusUrl =
+          resolveMetricsFetchUrl(
+            instance.consensus.endpoints.rpc.internal,
+            instance.consensus.endpoints.rpc.external
+          ) ?? instance.consensus.endpoints.rpc.internal;
         const consensusClient = (await clientMetrics.getMetrics(
           'consensus',
           consensusUrl
@@ -129,7 +138,11 @@ export async function GET() {
         continue;
       } else {
         const appType = instance.app; // 'helios' | 'aztec'
-        const appUrl = instance.endpoints.rpc.internal;
+        const appUrl =
+          resolveMetricsFetchUrl(
+            instance.endpoints.rpc.internal,
+            instance.endpoints.rpc.external
+          ) ?? instance.endpoints.rpc.internal;
         const result = (await clientMetrics.getMetrics(
           appType as ClientType,
           appUrl

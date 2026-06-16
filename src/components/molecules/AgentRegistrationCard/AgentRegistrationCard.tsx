@@ -9,22 +9,16 @@ import { Accordion } from '../../molecules/Accordion';
 import { SectionTitle } from '../../atoms/SectionTitle';
 import { LoadingState } from '../../molecules/LoadingState';
 import { ErrorState } from '../../molecules/ErrorState';
-import {
-  useAgentRegistration,
-  type AgentRegistrationService,
-} from '../../../hooks/useAgents';
+import { useAgentRegistration } from '../../../hooks/useAgents';
 import {
   agentRegistrationExplorerUrl,
   agentRegistrationLabel,
 } from '@/lib/services/agent-registration';
 import {
-  hasCapabilityTaxonomy,
-  serviceAvailabilityLabel,
-} from '@/lib/services/agent-registration-capabilities';
-import {
   AGENT_REGISTRATION_PATH,
   publicResourceUrl,
 } from '@/lib/services/public-storefront';
+import { listPublishedRegistrationServices } from '@/lib/services/registration-published-services';
 
 const Body = styled(Box, {
   display: 'flex',
@@ -49,18 +43,6 @@ const Description = styled(Text, {
   fontSize: '$2',
   color: '$body',
   lineHeight: 1.5,
-});
-
-const ServiceRow = styled(Flex, {
-  alignItems: 'center',
-  gap: '$xs',
-  flexWrap: 'wrap',
-});
-
-const ServiceLabel = styled(Text, {
-  fontSize: '$1',
-  color: '$body',
-  minWidth: '36px',
 });
 
 const EndpointLink = styled(Link, {
@@ -137,6 +119,33 @@ const NotPublished = styled(Text, {
   padding: '$sm 0',
 });
 
+const ServiceGrid = styled(Box, {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '$xs',
+});
+
+const ServiceCard = styled(Box, {
+  border: '1px solid rgba(255, 255, 255, 0.1)',
+  borderRadius: '$2',
+  background: 'rgba(255, 255, 255, 0.03)',
+  padding: '$sm',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '$xxs',
+});
+
+const ServiceName = styled(Text, {
+  fontSize: '$3',
+  fontWeight: '$semibold',
+  color: '$light',
+});
+
+const IdentitySummary = styled(Text, {
+  fontSize: '$2',
+  color: '$body',
+});
+
 function metadataEntries(
   metadata: Record<string, string> | undefined
 ): Array<[string, string]> {
@@ -152,18 +161,22 @@ export function AgentRegistrationCard() {
   const registrationEntries = registration?.registrations ?? [];
   const topLevelMetadata = metadataEntries(registration?.metadata);
   const provenanceEntries = metadataEntries(registration?.provenance);
-  const capabilityServices =
-    registration?.services?.filter(hasCapabilityTaxonomy) ?? [];
-  const endpointServices =
-    registration?.services?.filter(
-      (s: AgentRegistrationService) => s.endpoint
-    ) ?? [];
+  const publishedServices = listPublishedRegistrationServices(
+    registration?.services ?? []
+  );
   const rawRegistrationUrl = publicResourceUrl(
     tunnelURL,
     AGENT_REGISTRATION_PATH
   );
 
-  const headerContent = <SectionTitle>Agent Registration</SectionTitle>;
+  const headerContent = (
+    <Flex css={{ alignItems: 'center', gap: '$sm', flexWrap: 'wrap' }}>
+      <SectionTitle>Agent Registration</SectionTitle>
+      {!loading && publishedServices.length > 0 && (
+        <Badge variant="neutral">{publishedServices.length} services</Badge>
+      )}
+    </Flex>
+  );
 
   return (
     <Card section>
@@ -207,7 +220,14 @@ export function AgentRegistrationCard() {
                   alt={registration.name}
                   fallback={registration.name?.[0]?.toUpperCase() ?? 'A'}
                 />
-                <AgentName>{registration.name}</AgentName>
+                <Box>
+                  <AgentName>{registration.name}</AgentName>
+                  <IdentitySummary>
+                    On-chain registration document — {publishedServices.length}{' '}
+                    paid route
+                    {publishedServices.length === 1 ? '' : 's'} published below.
+                  </IdentitySummary>
+                </Box>
                 <MetaRow>
                   {registration.x402Support && (
                     <Badge variant="green">x402</Badge>
@@ -227,6 +247,36 @@ export function AgentRegistrationCard() {
 
               {registration.description && (
                 <Description>{registration.description}</Description>
+              )}
+
+              {publishedServices.length > 0 && (
+                <DetailBlock>
+                  <DetailTitle>Published services</DetailTitle>
+                  <ServiceGrid>
+                    {publishedServices.map(service => (
+                      <ServiceCard key={service.endpoint}>
+                        <ServiceName>{service.name}</ServiceName>
+                        {service.skills.length > 0 && (
+                          <ChipRow>
+                            {service.skills.map(skill => (
+                              <MetaChip key={`${service.name}-${skill}`}>
+                                {skill}
+                              </MetaChip>
+                            ))}
+                          </ChipRow>
+                        )}
+                        <EndpointLink
+                          href={service.endpoint}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          {service.endpoint}
+                          <OpenInNew size="sm" />
+                        </EndpointLink>
+                      </ServiceCard>
+                    ))}
+                  </ServiceGrid>
+                </DetailBlock>
               )}
 
               {registrationEntries.length > 0 && (
@@ -282,77 +332,6 @@ export function AgentRegistrationCard() {
                     ))}
                   </ChipRow>
                 </DetailBlock>
-              )}
-
-              {capabilityServices.length > 0 && (
-                <DetailBlock>
-                  <Flex
-                    css={{ alignItems: 'center', gap: '$xs', flexWrap: 'wrap' }}
-                  >
-                    <DetailTitle>Capabilities</DetailTitle>
-                    {capabilityServices.map((service, index) => {
-                      const label = serviceAvailabilityLabel(service);
-                      return label ? (
-                        <Badge
-                          key={`${service.name}-${service.version ?? index}`}
-                          variant="yellow"
-                        >
-                          {label}
-                        </Badge>
-                      ) : null;
-                    })}
-                  </Flex>
-                  {capabilityServices.map((service, index) => (
-                    <Box key={`${service.name}-${service.version ?? index}`}>
-                      {service.version && (
-                        <Text css={{ fontSize: '$1', color: '$muted' }}>
-                          OASF v{service.version}
-                        </Text>
-                      )}
-                      {(service.skills?.length ?? 0) > 0 && (
-                        <ChipRow css={{ marginTop: '$xxs' }}>
-                          {service.skills!.map(skill => (
-                            <MetaChip key={`skill-${skill}`}>
-                              skill:{skill}
-                            </MetaChip>
-                          ))}
-                        </ChipRow>
-                      )}
-                      {(service.domains?.length ?? 0) > 0 && (
-                        <ChipRow css={{ marginTop: '$xxs' }}>
-                          {service.domains!.map(domain => (
-                            <MetaChip key={`domain-${domain}`}>
-                              domain:{domain}
-                            </MetaChip>
-                          ))}
-                        </ChipRow>
-                      )}
-                    </Box>
-                  ))}
-                </DetailBlock>
-              )}
-
-              {endpointServices.length > 0 && (
-                <Box>
-                  {endpointServices.map((s: AgentRegistrationService) => (
-                    <ServiceRow key={s.name} css={{ marginTop: '$xxs' }}>
-                      <ServiceLabel>{s.name}</ServiceLabel>
-                      <EndpointLink
-                        href={s.endpoint!}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        {s.endpoint}
-                        <OpenInNew size="sm" />
-                      </EndpointLink>
-                      {s.version && (
-                        <Text css={{ fontSize: '$1', color: '$muted' }}>
-                          v{s.version}
-                        </Text>
-                      )}
-                    </ServiceRow>
-                  ))}
-                </Box>
               )}
 
               <Flex css={{ marginTop: '$xs' }}>

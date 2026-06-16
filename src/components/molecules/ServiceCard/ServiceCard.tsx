@@ -35,6 +35,8 @@ interface ServiceCardProps {
   offer: ServiceOffer;
   tunnelURL: string | null;
   onChanged?: () => void | Promise<void>;
+  /** Scroll target for agent card cross-links. */
+  anchorId?: string;
 }
 
 const CardContainer = styled(Box, {
@@ -346,7 +348,12 @@ function useNow(intervalMs = 1000, enabled = true): Date {
   return now;
 }
 
-export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
+export function ServiceCard({
+  offer,
+  tunnelURL,
+  onChanged,
+  anchorId,
+}: ServiceCardProps) {
   const displayName = offer.registration?.name || offer.name;
   const price = formatPrice(offer);
   const symbol = serviceOfferAssetSymbol(offer.payment);
@@ -379,7 +386,7 @@ export function ServiceCard({ offer, tunnelURL, onChanged }: ServiceCardProps) {
     'Serving paid traffic now. On-chain ERC-8004 registration is still pending, so this offer reports Ready=False until the registration tx lands - complete it with `obol sell register`.';
 
   return (
-    <CardContainer>
+    <CardContainer id={anchorId}>
       <TopRow>
         <HeaderMeta>
           <ServiceName>{displayName}</ServiceName>

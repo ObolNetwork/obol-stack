@@ -26,6 +26,7 @@ import { MarketplaceTable } from './MarketplaceTable';
 import { SortDropdown } from './SortDropdown';
 import { ServicesSubNav } from './ServicesSubNav';
 import { NewListingDialog } from './NewListingDialog';
+import { ExternalInferenceBuy } from './ExternalInferenceBuy';
 
 import type { BuyDrawerProps } from './BuyDrawer';
 
@@ -153,6 +154,8 @@ const LAUNCH_DEMO_COMMAND =
   'obol sell demo quant --pay-to $(obol agent wallet address obol-agent)';
 
 const DEFAULT_FILTERS: MarketplaceFilters = {
+  registry: 'obol',
+  type: ['inference'],
   sort: 'recent',
   page: 1,
   pageSize: 24,
@@ -225,6 +228,7 @@ export function MarketplacePage({
     router.push(`/marketplace/${encodeURIComponent(item.slug)}`);
   };
   const onBuy = (item: ServiceListItem) => {
+    if (item.type !== 'inference') return;
     setBuyTarget(item);
   };
 
@@ -245,6 +249,7 @@ export function MarketplacePage({
         />
 
         <RightCol>
+          <ExternalInferenceBuy />
           <ResultsBar>
             <ResultsCount>
               <ResultsCountStrong>{data?.total ?? '—'}</ResultsCountStrong>{' '}

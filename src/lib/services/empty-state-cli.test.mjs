@@ -25,14 +25,14 @@ describe('empty-state CLI hints', () => {
     const agents = await source('agents');
     assert.equal(agents.includes('obol hermes onboard'), false);
     assert.match(agents, /obol agent new/);
-    assert.match(agents, /--runtime hermes/);
-    assert.match(agents, /--runtime openclaw/);
+    assert.match(agents, /obol agent init/);
+    assert.match(agents, /Sell/);
   });
 
   it('mentions the agent service selling path', async () => {
     const services = await source('services');
-    assert.match(services, /obol sell http/);
-    assert.match(services, /obol sell inference/);
+    assert.doesNotMatch(services, /obol sell inference/);
     assert.match(services, /obol sell agent/);
+    assert.match(services, /Pending listings/);
   });
 });

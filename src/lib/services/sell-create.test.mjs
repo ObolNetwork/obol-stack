@@ -56,4 +56,21 @@ describe('buildServiceOfferBody', () => {
     assert.equal(body.spec.payment.asset.eip712Name, 'Obol Network');
     assert.equal(body.spec.payment.asset.eip712Version, '1');
   });
+
+  it('can create an agent ServiceOffer with agent.ref (no upstream)', () => {
+    const body = buildServiceOfferBody({
+      name: 'rc13-test',
+      namespace: 'agent-rc13-test',
+      type: 'agent',
+      wallet: '0x1111111111111111111111111111111111111111',
+      chain: 'ethereum',
+      pricePerRequest: '0.001',
+      agentRef: { name: 'rc13-test', namespace: 'agent-rc13-test' },
+    });
+
+    assert.equal(body.spec.type, 'agent');
+    assert.equal(body.spec.agent.ref.name, 'rc13-test');
+    assert.equal(body.spec.upstream, undefined);
+    assert.equal(body.spec.path, '/services/rc13-test');
+  });
 });

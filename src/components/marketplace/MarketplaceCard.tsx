@@ -448,9 +448,11 @@ function MarketplaceCardImpl({ item, onDetails, onBuy }: MarketplaceCardProps) {
         ) : null}
 
         <ActionRow>
-          <PrimaryBtn type="button" onClick={() => onBuy?.(item)}>
-            Buy <ArrowRightIcon width={13} height={13} />
-          </PrimaryBtn>
+          {item.type === 'inference' ? (
+            <PrimaryBtn type="button" onClick={() => onBuy?.(item)}>
+              Buy <ArrowRightIcon width={13} height={13} />
+            </PrimaryBtn>
+          ) : null}
           <SecondaryBtn type="button" onClick={() => onDetails?.(item)}>
             Probe
           </SecondaryBtn>

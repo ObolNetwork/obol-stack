@@ -18,8 +18,22 @@ import {
   type SellPaymentChain,
   type SellPaymentToken,
 } from '@/lib/services/sell-assets';
-import { DEFAULT_AGENT_ID } from '@/lib/services/agent-runtime';
+import { SellFlowSteps } from '@/components/molecules/SellFlowSteps';
 import { useOperatorWallets } from '@/hooks/useOperatorWallets';
+import { DEFAULT_AGENT_ID } from '@/lib/services/agent-runtime';
+import {
+  buildAgentNewCli,
+  buildSellHttpCli,
+  buildSellInferenceCli,
+  buildSellAgentCli,
+} from '@/lib/sell/cli-commands';
+import { resolveUpstreamHealthPath } from '@/lib/sell/upstream-health';
+import {
+  httpPostCreateSteps,
+  inferencePostCreateSteps,
+  agentPostCreateSteps,
+  type SellFlowStep,
+} from '@/lib/sell/flow-steps';
 import type { ChainName } from '@/types/dashboard';
 
 export interface NewListingDialogProps {
@@ -27,7 +41,7 @@ export interface NewListingDialogProps {
   onClose: () => void;
 }
 
-type ServiceType = 'inference' | 'route';
+type ServiceType = 'inference' | 'route' | 'agent';
 type PaymentToken = SellPaymentToken;
 type PriceUnit = 'req' | 'mtok' | 'hour';
 type Visibility = 'local' | 'erc8004';
@@ -601,7 +615,7 @@ const Banner = styled('div', {
 export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
   const operator = useOperatorWallets();
 
-  // Payments settle to the stack master agent wallet, not the browser-connected wallet.
+  // Default payout: stack remote-signer wallet (lives in hermes-obol-agent). Any --pay-to works in CLI.
   const sellerWallet = useMemo(() => {
     const master = operator.agents.find(
       a => a.runtime === 'hermes' && a.instanceId === DEFAULT_AGENT_ID
@@ -613,18 +627,22 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
   const [name, setName] = useState('my-service');
   const [upstream, setUpstream] = useState('ollama:11434');
   const [model, setModel] = useState('qwen3.5:9b');
+  const [skills, setSkills] = useState('addresses,gas');
   const [priceAmount, setPriceAmount] = useState('0.001');
   const [priceToken, setPriceToken] = useState<PaymentToken>('USDC');
   const [priceUnit, setPriceUnit] = useState<PriceUnit>('req');
   const [chain, setChain] = useState<ChainKey>('base');
   const [visibility, setVisibility] = useState<Visibility>('erc8004');
+  const [payoutWallet, setPayoutWallet] = useState('');
+
+  const defaultPayoutWallet = sellerWallet ?? '';
 
   const [submitting, setSubmitting] = useState(false);
   const [submitState, setSubmitState] = useState<'idle' | 'success' | 'error'>(
     'idle'
   );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [cliCopied, setCliCopied] = useState(false);
+  const [followUpSteps, setFollowUpSteps] = useState<SellFlowStep[]>([]);
 
   const paymentAsset = useMemo(
     () => resolveSellAsset(chain, priceToken, CLIENT_SELL_ASSET_ENV),
@@ -646,9 +664,10 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
       setSubmitting(false);
       setSubmitState('idle');
       setErrorMessage(null);
-      setCliCopied(false);
+      setFollowUpSteps([]);
+      setPayoutWallet(defaultPayoutWallet);
     }
-  }, [open]);
+  }, [open, defaultPayoutWallet]);
 
   // Escape closes the dialog (only when open + not submitting).
   useEffect(() => {
@@ -660,54 +679,67 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
     return () => window.removeEventListener('keydown', handler);
   }, [open, submitting, onClose]);
 
+  const payTo = payoutWallet.trim() || defaultPayoutWallet || '<payout wallet>';
   const cli = useMemo(() => {
-    const payTo = sellerWallet ?? '<agent wallet>';
+    const base = {
+      name: name.trim() || '<name>',
+      payTo,
+      chain,
+      token: priceToken,
+      pricePerRequest: priceAmount,
+    };
     if (type === 'inference') {
-      return [
-        `obol sell inference ${name.trim() || '<name>'} \\`,
-        `  --model ${model.trim() || '<model>'} \\`,
-        `  --per-request ${priceAmount} \\`,
-        `  --token ${priceToken} \\`,
-        `  --chain ${chain} \\`,
-        `  --pay-to ${payTo}`,
-      ].join('\n');
+      return buildSellInferenceCli({
+        ...base,
+        model: model.trim() || '<model>',
+      });
     }
-    return [
-      `obol sell http ${name.trim() || '<name>'} \\`,
-      `  --upstream ${upstream.split(':')[0]} \\`,
-      `  --port ${upstream.split(':')[1] ?? '8080'} \\`,
-      `  --per-request ${priceAmount} \\`,
-      `  --token ${priceToken} \\`,
-      `  --chain ${chain} \\`,
-      `  --pay-to ${payTo}`,
-    ].join('\n');
+    if (type === 'agent') {
+      return buildSellAgentCli({
+        ...base,
+        agentName: name.trim() || '<agent-name>',
+      });
+    }
+    const upstreamService = upstream.split(':')[0];
+    return buildSellHttpCli({
+      ...base,
+      upstream: upstreamService,
+      port: upstream.split(':')[1] ?? '8080',
+      namespace: 'llm',
+      healthPath: resolveUpstreamHealthPath(upstreamService),
+    });
   }, [
     type,
     name,
     model,
+    skills,
     upstream,
     priceAmount,
     priceToken,
     chain,
-    sellerWallet,
+    payTo,
   ]);
+
+  const agentNewCli = useMemo(
+    () =>
+      buildAgentNewCli({
+        name: name.trim() || '<agent-name>',
+        model: model.trim() || undefined,
+        skills: skills.trim() || undefined,
+      }),
+    [name, model, skills]
+  );
 
   if (!open) return null;
 
-  // Inference needs a host gateway — only the CLI can start that today.
-  const canSubmitHttp =
-    type === 'route' &&
-    Boolean(sellerWallet) &&
+  const canSubmit =
+    Boolean(payoutWallet.trim() || defaultPayoutWallet) &&
+    /^0x[a-fA-F0-9]{40}$/.test(payoutWallet.trim() || defaultPayoutWallet) &&
     !submitting &&
     name.trim().length > 0 &&
-    !paymentError;
-
-  const canCopyInferenceCli =
-    type === 'inference' &&
-    Boolean(sellerWallet) &&
-    name.trim().length > 0 &&
-    model.trim().length > 0 &&
-    !paymentError;
+    !paymentError &&
+    (type !== 'inference' || model.trim().length > 0) &&
+    (type !== 'agent' || model.trim().length > 0);
 
   const handleTokenChange = (token: PaymentToken) => {
     const next = reconcileSellPaymentSelection(
@@ -734,10 +766,24 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
   };
 
   const handleSubmit = async () => {
-    if (!sellerWallet) {
-      setErrorMessage(
-        'No agent wallet found — deploy the stack agent (obol agent init) first.'
-      );
+    const wallet = (payoutWallet.trim() || defaultPayoutWallet).trim();
+    if (!wallet) {
+      setErrorMessage('Payout wallet (pay-to) is required.');
+      setSubmitState('error');
+      return;
+    }
+    if (!/^0x[a-fA-F0-9]{40}$/.test(wallet)) {
+      setErrorMessage('Payout wallet must be a valid 0x address.');
+      setSubmitState('error');
+      return;
+    }
+    if (type === 'inference' && !model.trim()) {
+      setErrorMessage('Model name is required for inference listings.');
+      setSubmitState('error');
+      return;
+    }
+    if (type === 'agent' && !model.trim()) {
+      setErrorMessage('Model is required for sub-agent listings.');
       setSubmitState('error');
       return;
     }
@@ -749,22 +795,51 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
     setSubmitting(true);
     setSubmitState('idle');
     setErrorMessage(null);
+    setFollowUpSteps([]);
+
+    const isInference = type === 'inference';
+    const isAgent = type === 'agent';
+    const sellBase = {
+      name: name.trim(),
+      payTo: wallet,
+      chain,
+      token: priceToken,
+      pricePerRequest: priceAmount,
+    };
+    const agentNamespace = `agent-${name.trim()}`;
 
     try {
       const resp = await fetch('/api/sell/create', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          name,
-          namespace: 'llm',
-          type: 'http',
-          wallet: sellerWallet,
+          name: name.trim(),
+          namespace: isAgent ? agentNamespace : 'llm',
+          type: isInference ? 'inference' : isAgent ? 'agent' : 'http',
+          wallet,
           chain,
           token: priceToken,
           pricePerRequest: priceAmount,
-          upstream: upstream.split(':')[0],
-          port: Number(upstream.split(':')[1] ?? '8080') || 8080,
-          healthPath: '/health',
+          model: isInference || isAgent ? model.trim() : undefined,
+          skills: isAgent
+            ? skills
+                .split(',')
+                .map(s => s.trim())
+                .filter(Boolean)
+            : undefined,
+          agentRef: isAgent
+            ? { name: name.trim(), namespace: agentNamespace }
+            : undefined,
+          upstream: isInference || isAgent ? undefined : upstream.split(':')[0],
+          port:
+            isInference || isAgent
+              ? undefined
+              : Number(upstream.split(':')[1] ?? '8080') || 8080,
+          healthPath: isInference
+            ? '/health'
+            : isAgent
+              ? undefined
+              : resolveUpstreamHealthPath(upstream.split(':')[0]),
         }),
       });
 
@@ -773,6 +848,34 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
         throw new Error(body || `HTTP ${resp.status}`);
       }
 
+      setFollowUpSteps(
+        isInference
+          ? inferencePostCreateSteps(
+              { ...sellBase, model: model.trim() },
+              'llm'
+            )
+          : isAgent
+            ? [
+                {
+                  title: 'Create the sub-agent (Terminal)',
+                  detail:
+                    'Run this first if the agent does not exist yet. Safe to re-run when already created.',
+                  cli: agentNewCli,
+                },
+                ...agentPostCreateSteps(
+                  { ...sellBase, agentName: name.trim() },
+                  agentNamespace
+                ),
+              ]
+            : httpPostCreateSteps(
+                {
+                  ...sellBase,
+                  upstream: upstream.split(':')[0],
+                  port: Number(upstream.split(':')[1] ?? '8080') || 8080,
+                },
+                'llm'
+              )
+      );
       setSubmitState('success');
     } catch (err) {
       setSubmitState('error');
@@ -781,19 +884,6 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
       );
     } finally {
       setSubmitting(false);
-    }
-  };
-
-  const handleCopyInferenceCli = async () => {
-    if (!canCopyInferenceCli) return;
-    try {
-      await navigator.clipboard.writeText(cli);
-      setCliCopied(true);
-      setSubmitState('idle');
-      setErrorMessage(null);
-    } catch {
-      setErrorMessage('Could not copy — select the command below manually.');
-      setSubmitState('error');
     }
   };
 
@@ -833,31 +923,95 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
         </Header>
 
         <Body>
-          {!sellerWallet ? (
+          {!defaultPayoutWallet ? (
             <Banner tone="info">
-              No agent wallet found yet. Run{' '}
-              <Mono css={{ color: '$obolGreen' }}>obol agent init</Mono> so the
-              master agent wallet can receive x402 payments.
+              No default payout wallet found. Run{' '}
+              <Mono css={{ color: '$obolGreen' }}>obol agent init</Mono> or
+              enter any <Mono css={{ color: '$obolGreen' }}>pay-to</Mono>{' '}
+              address below.
             </Banner>
-          ) : (
+          ) : null}
+
+          <FormField
+            label="Payout wallet (pay-to)"
+            hint="Where buyer payments settle. Defaults to stack remote-signer; override for a different operator wallet."
+          >
+            <TextInput
+              value={payoutWallet}
+              onChange={v => {
+                setPayoutWallet(v);
+                setSubmitState('idle');
+                setErrorMessage(null);
+              }}
+              placeholder="0x..."
+              mono
+            />
+          </FormField>
+
+          {type === 'inference' ? (
             <Banner tone="info">
-              Payments settle to the master agent wallet{' '}
-              <Mono css={{ color: '$light' }}>{sellerWallet}</Mono>.
+              Inference is served from your Mac (Ollama + gateway) — unrelated
+              to which model Hermes chats with. After create, run the CLI step
+              shown.
             </Banner>
-          )}
+          ) : type === 'agent' ? (
+            <Banner tone="info">
+              Step 1: run{' '}
+              <Mono css={{ color: '$obolGreen' }}>obol agent new</Mono> (copy
+              below). Step 2: create the x402 listing here — or use{' '}
+              <strong>Sell</strong> on the agent card after it is running.
+            </Banner>
+          ) : null}
+
+          {type === 'agent' ? (
+            <FormField
+              label="Create sub-agent (CLI)"
+              hint="Run on your Mac before listing, unless the agent already exists."
+            >
+              <Box
+                css={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '$xs',
+                  padding: '$xs',
+                  borderRadius: '$2',
+                  border: '1px solid $stroke',
+                  background: '$bg03',
+                }}
+              >
+                <Mono
+                  css={{
+                    flex: 1,
+                    fontSize: '$1',
+                    color: '$light',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={agentNewCli}
+                >
+                  {agentNewCli}
+                </Mono>
+                <CopyButton text={agentNewCli} title="Copy obol agent new" />
+              </Box>
+            </FormField>
+          ) : null}
 
           <FormField
             label="Service type"
             hint={
               type === 'inference'
-                ? 'Starts a host gateway on your Mac, then publishes the route. The form fills in the CLI — run it in Terminal.'
-                : "Any HTTP upstream — REST, MCP, webhook. Routed through the cluster's x402 verifier."
+                ? 'Creates the listing, then run the gateway command on your Mac (shown after create).'
+                : type === 'agent'
+                  ? 'Sell a sub-agent you created with obol agent new — tools, skills, and memory.'
+                  : "Any HTTP upstream — REST, MCP, webhook. Routed through the cluster's x402 verifier."
             }
           >
             <Segmented<ServiceType>
               value={type}
               onChange={setType}
               options={[
+                { k: 'agent', label: 'Sub-agent' },
                 { k: 'inference', label: 'Inference (LLM)' },
                 { k: 'route', label: 'HTTP route' },
               ]}
@@ -872,14 +1026,18 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
             }}
           >
             <FormField
-              label="Listing name"
-              hint="Shown to buyers — lowercase, no spaces."
+              label={type === 'agent' ? 'Sub-agent name' : 'Listing name'}
+              hint={
+                type === 'agent'
+                  ? 'Same name as obol agent new <name> — lowercase, no spaces.'
+                  : 'Shown to buyers — lowercase, no spaces.'
+              }
             >
               <TextInput
                 mono
                 value={name}
                 onChange={setName}
-                placeholder="my-service"
+                placeholder={type === 'agent' ? 'quant-research' : 'my-service'}
               />
             </FormField>
             {type === 'inference' ? (
@@ -894,6 +1052,31 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
                   placeholder="qwen3.5:9b"
                 />
               </FormField>
+            ) : type === 'agent' ? (
+              <>
+                <FormField
+                  label="Agent model"
+                  hint="LiteLLM model id the sub-agent chats with."
+                >
+                  <TextInput
+                    mono
+                    value={model}
+                    onChange={setModel}
+                    placeholder="claude-sonnet-4-6"
+                  />
+                </FormField>
+                <FormField
+                  label="Skills"
+                  hint="Comma-separated Obol skill names."
+                >
+                  <TextInput
+                    mono
+                    value={skills}
+                    onChange={setSkills}
+                    placeholder="addresses,gas"
+                  />
+                </FormField>
+              </>
             ) : (
               <FormField
                 label="Upstream endpoint"
@@ -992,28 +1175,16 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
 
           {type === 'inference' ? (
             <Banner tone="info">
-              Inference cannot be created from the browser yet — it needs a
-              process on your Mac. Copy the command below and run it in
-              Terminal, then check{' '}
-              <Mono css={{ color: '$obolGreen' }}>obol sell status</Mono>.
+              Creates the listing in the cluster. You still need to run{' '}
+              <Mono css={{ color: '$obolGreen' }}>obol sell inference</Mono> on
+              your Mac — the numbered steps appear after create.
             </Banner>
           ) : null}
           {paymentError || (submitState === 'error' && errorMessage) ? (
             <Banner tone="error">{paymentError ?? errorMessage}</Banner>
           ) : null}
-          {submitState === 'success' ? (
-            <Banner tone="success">
-              Created. Reload the marketplace to see it appear once the
-              controller reconciles.
-            </Banner>
-          ) : null}
-          {cliCopied ? (
-            <Banner tone="success">
-              Copied. Run it in Terminal on this Mac, then reload the
-              marketplace once{' '}
-              <Mono css={{ color: '$obolGreen' }}>obol sell status</Mono> shows
-              Ready.
-            </Banner>
+          {submitState === 'success' && followUpSteps.length > 0 ? (
+            <SellFlowSteps title="Next steps" steps={followUpSteps} />
           ) : null}
         </Body>
 
@@ -1028,18 +1199,10 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
           </SecondaryBtn>
           <PrimaryBtn
             type="button"
-            disabled={
-              type === 'inference' ? !canCopyInferenceCli : !canSubmitHttp
-            }
-            onClick={
-              type === 'inference' ? handleCopyInferenceCli : handleSubmit
-            }
+            disabled={!canSubmit}
+            onClick={handleSubmit}
           >
-            {type === 'inference'
-              ? 'Copy CLI command'
-              : submitting
-                ? 'Creating…'
-                : 'Create listing'}
+            {submitting ? 'Creating…' : 'Create listing'}
             {!submitting ? (
               <svg width="13" height="13" viewBox="0 0 16 16" fill="none">
                 <path

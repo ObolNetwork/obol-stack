@@ -9,6 +9,7 @@ import {
   isStackUnreachable,
 } from '@/lib/marketplace/errors';
 import { offerKey, serviceOfferFromCatalog } from '@/lib/services/sell-catalog';
+import { splitPendingOffers } from '@/lib/services/agent-listing';
 import type { ServiceOffer } from '@/types/sell';
 import type { AgentInstance } from '@/types/agent';
 
@@ -99,7 +100,29 @@ export async function GET() {
       };
     });
 
-    return NextResponse.json({ offers: enriched });
+    const catalogKeys = new Set(
+      catalog.map(e => offerKey(e.namespace ?? '', e.name ?? ''))
+    );
+    const pendingRaw = splitPendingOffers(liveOffers, catalogKeys);
+    const pendingOffers: ServiceOffer[] = pendingRaw.map(offer => {
+      const key = `${offer.namespace}/${offer.name}`;
+      const charged = sales.get(key);
+      const chainBreakdown = perChain.get(key) ?? [];
+      const r24 = reqs24h.get(key);
+      const last = lastSettlements.get(key);
+      return {
+        ...offer,
+        agentLink: linkOfferToAgent(offer, agents),
+        usage: {
+          chargedRequests: charged === undefined ? null : charged,
+          chargedByChain: chainBreakdown,
+          requests24h: r24 === undefined ? null : r24,
+          lastSettlementUnix: last === undefined ? null : last,
+        },
+      };
+    });
+
+    return NextResponse.json({ offers: enriched, pendingOffers });
   } catch (error) {
     console.error('[Sell List] Error:', error);
     if (isStackUnreachable(error)) {
