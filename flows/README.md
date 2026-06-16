@@ -29,6 +29,33 @@ holds small structured helpers used by the shell entrypoints. Keep new
 contract rather than duplicating stack, DNS, wallet, or config-mutation helpers.
 `release-smoke.sh` is the release gate.
 
+`hf-surface-smoke.sh` and `p2p-surface-smoke.sh` are out-of-band, host-side
+"surface" smokes — no cluster required, and each check SKIPs on a missing
+prerequisite rather than aborting. They cover the peer-to-peer / host-gateway
+paths release-smoke (entirely the cluster path) does not:
+
+- `hf-surface-smoke.sh` — dataset hub (anonymize → sign → publish → unpaid buy),
+  fine-tune-on-spark provenance binding, router + ERC-8004 indexer discovery.
+- `p2p-surface-smoke.sh` — standalone `obol sell inference` 402 emission +
+  remote-model proxy (model served on `spark1`, reached via SSH forward); the
+  paid dataset `/join/paid` x402 gate + `buy dataset --join` client guards
+  (402 challenge, `--max-price` cap, fail-closed download); and the research
+  membership → submit → payout E2E asserting **token-derived** worker identity
+  (not the self-declared field) and best-per-worker payouts. When a local anvil
+  base-sepolia fork + x402 facilitator are reachable (auto-detected; stand them
+  up with flow-10), the **paid 200** (a signed EIP-3009 `X-PAYMENT` verified +
+  settled, via the `flows/tools/x402-sign` host signer) and the **paid dataset
+  mint + verified download** settle on chain for real; otherwise those two legs
+  SKIP. The `--secure` transport gate (Surface 4) auto-activates when a genuinely
+  non-secure origin exists: **4a** (ACCEPT over a NAMED cloudflared tunnel) when
+  `SECURE_TUNNEL_NAME` + `SECURE_TUNNEL_HOSTNAME` are set (after `cloudflared
+  tunnel login` + routing a hostname on your CF domain); **4b/4c** (REJECT/ACCEPT
+  a CGNAT plaintext origin) when THIS host is on a tailnet (`tailscale up`) so a
+  remote peer (`SECURE_ORIGIN_SSH`, default `spark1`) can reach a non-private mac
+  IP — loopback/RFC1918 are always "secure". Each leg SKIPs precisely until its
+  prereq is set; the gate is also unit-tested. Run e.g.
+  `OBOL_BIN=.workspace/bin/obol SPARK=spark1 bash flows/p2p-surface-smoke.sh`.
+
 ## Running a flow detached over SSH
 
 `nohup` and `setsid -f` get reaped when an SSH session ending closes the

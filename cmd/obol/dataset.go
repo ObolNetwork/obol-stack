@@ -162,6 +162,7 @@ func datasetPublishCommand(cfg *config.Config) *cli.Command {
 			&cli.StringFlag{Name: "price", Usage: "Per-join price in USDC (enables x402 paid join; empty = invite/open only)"},
 			&cli.StringFlag{Name: "pay-to", Usage: "USDC recipient (default: the dataset owner address)"},
 			&cli.StringFlag{Name: "chain", Usage: "Payment chain", Value: "base-sepolia"},
+			&cli.StringFlag{Name: "facilitator", Usage: "x402 facilitator URL for paid-join verify+settle (point at a local anvil fork for tests)", Value: x402.DefaultFacilitatorURL},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -220,7 +221,7 @@ func datasetPublishCommand(cfg *config.Config) *cli.Command {
 				req := x402.BuildV2Requirement(chain, price, payTo, 0)
 				joinAtomic = req.Amount
 				paidJoin = x402.NewForwardAuthMiddleware(x402.ForwardAuthConfig{
-					FacilitatorURL:   x402.DefaultFacilitatorURL,
+					FacilitatorURL:   cmd.String("facilitator"),
 					VerifyOnly:       false,
 					SettlesInProcess: true,
 				}, []x402types.PaymentRequirements{req})
