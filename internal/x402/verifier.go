@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/ObolNetwork/obol-stack/internal/offerkind"
 	"github.com/prometheus/client_golang/prometheus"
 	x402types "github.com/x402-foundation/x402/go/types"
 )
@@ -351,9 +352,7 @@ func (v *Verifier) matchPaidRouteFull(cfg *PricingConfig, uri string) (*RouteRul
 
 	asset := ResolveAssetInfo(chain, rule)
 	requirement := BuildV2RequirementWithAsset(chain, asset, rule.Price, wallet, rule.MaxTimeoutSeconds)
-	mergeAgentExtras(&requirement, rule)
-	mergeDatasetExtras(&requirement, rule)
-	mergeSkillExtras(&requirement, rule)
+	mergeTypedExtras(&requirement, rule)
 	extensions := WithBazaar(BuildExtensionsForAsset(asset), rule.OfferType, rule.Model)
 	return rule, requirement, extensions, prometheusLabels(rule), chain, asset, true
 }
@@ -465,6 +464,30 @@ func mergeSkillExtras(req *x402types.PaymentRequirements, rule *RouteRule) {
 		skill["sha256"] = rule.SkillSHA256
 	}
 	req.Extra["skill"] = skill
+}
+
+// mergeTypedExtras attaches the 402 discovery metadata selected by the offer
+// type's integrity profile (offerkind): agent routes surface model/skills;
+// content-bearing types surface their content commitment — a signed-log
+// dataset's {manifestHash,version,fileHash,sizeBytes} or a skill bundle's
+// {name,version,sha256}. The per-merge helpers still self-gate on empty fields
+// as a backstop, so this stays behavior-preserving given the invariant that
+// serviceoffer_source.go only populates a type's RouteRule fields when the
+// offer is that type. Driving the dispatch from the declared profile — instead
+// of calling every merge unconditionally — makes "which integrity metadata a
+// type carries" explicit and centrally declared rather than implied by which
+// fields happen to be set.
+func mergeTypedExtras(req *x402types.PaymentRequirements, rule *RouteRule) {
+	kind := offerkind.Resolve(rule.OfferType)
+	if kind.ResolvesAgentRef {
+		mergeAgentExtras(req, rule)
+	}
+	switch kind.Integrity.Content {
+	case offerkind.ContentSignedVersionLog:
+		mergeDatasetExtras(req, rule)
+	case offerkind.ContentBundleSHA256:
+		mergeSkillExtras(req, rule)
+	}
 }
 
 // buildPaymentDisplay turns the matched rule + chain + asset into pre-formatted

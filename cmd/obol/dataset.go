@@ -34,6 +34,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/dataset"
+	"github.com/ObolNetwork/obol-stack/internal/offerkind"
 	x402 "github.com/ObolNetwork/obol-stack/internal/x402"
 	"github.com/urfave/cli/v3"
 	x402types "github.com/x402-foundation/x402/go/types"
@@ -447,6 +448,15 @@ func buyDatasetCommand(cfg *config.Config) *cli.Command {
 					v = 1
 				}
 				out = fmt.Sprintf("%s-v%d.jsonl", id, v)
+			}
+			// A dataset's integrity profile mandates signed-log content
+			// integrity, but the signed chain only proves it is self-consistent
+			// — not WHO signed it. Without an --owner pin, a seller that swapped
+			// its signing key still verifies, so surface the gap (the profile
+			// declares this check required for the guarantee to hold).
+			if offerkind.Resolve("dataset").Integrity.Content == offerkind.ContentSignedVersionLog &&
+				strings.TrimSpace(cmd.String("owner")) == "" {
+				u.Warnf("No --owner pin: the signed version log proves chain consistency but not the signer's identity. Pass --owner 0x<seller> for full content integrity.")
 			}
 			u.Infof("Fetching %s (version %v) → %s", id, orHead(cmd.Int("version")), out)
 			res, err := dataset.Fetch(ctx, dataset.FetchOptions{

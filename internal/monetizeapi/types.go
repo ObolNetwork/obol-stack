@@ -402,6 +402,27 @@ type ServiceOfferPriceTable struct {
 	PerMB string `json:"perMB,omitempty"`
 }
 
+// RawAndSlot returns the raw decimal price string and which price slot is
+// populated, in precedence order (perRequest > perMTok > perHour > perMB). It
+// is the single source of truth for price-slot detection, shared by the
+// catalog renderer (serviceoffercontroller) and the verifier's effectivePrice
+// (internal/x402). PerEpoch is intentionally not surfaced — no caller enforces
+// it yet, so including it would change behavior. An empty slot means no price.
+func (p ServiceOfferPriceTable) RawAndSlot() (raw, slot string) {
+	switch {
+	case p.PerRequest != "":
+		return p.PerRequest, "perRequest"
+	case p.PerMTok != "":
+		return p.PerMTok, "perMTok"
+	case p.PerHour != "":
+		return p.PerHour, "perHour"
+	case p.PerMB != "":
+		return p.PerMB, "perMB"
+	default:
+		return "", ""
+	}
+}
+
 type ServiceOfferRegistration struct {
 	// If true, register on ERC-8004 after routing is live.
 	// +kubebuilder:default=false

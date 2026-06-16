@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/ObolNetwork/obol-stack/internal/offerkind"
 	x402types "github.com/x402-foundation/x402/go/types"
 )
 
@@ -334,29 +335,13 @@ type typeCopy struct {
 
 func buildTypeCopy(siteURL, endpoint string, d PaymentDisplay) typeCopy {
 	url := siteURL + endpoint
-	switch normalizeOfferType(d.OfferType) {
+	switch offerkind.Resolve(d.OfferType).PaymentCopy {
 	case "inference":
 		return inferenceCopy(url, d)
 	case "agent":
 		return agentCopy(url, d)
 	default:
 		return httpCopy(url, d)
-	}
-}
-
-// normalizeOfferType collapses the spec.type values into the three render
-// branches. Empty falls back to "inference" historically (the original
-// default), but the storefront defaults new offers to "http" — match that
-// behavior here so unknown/unset types stay on the safest (single-shot pay)
-// CTA.
-func normalizeOfferType(t string) string {
-	switch t {
-	case "inference":
-		return "inference"
-	case "agent":
-		return "agent"
-	default:
-		return "http"
 	}
 }
 

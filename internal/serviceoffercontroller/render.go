@@ -1194,18 +1194,7 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 // occupies in the price table. Only one of perRequest / perMTok / perHour /
 // perMB is expected to be set on a given offer.
 func offerPriceRawAndUnit(offer *monetizeapi.ServiceOffer) (string, string) {
-	switch {
-	case offer.Spec.Payment.Price.PerRequest != "":
-		return offer.Spec.Payment.Price.PerRequest, "perRequest"
-	case offer.Spec.Payment.Price.PerMTok != "":
-		return offer.Spec.Payment.Price.PerMTok, "perMTok"
-	case offer.Spec.Payment.Price.PerHour != "":
-		return offer.Spec.Payment.Price.PerHour, "perHour"
-	case offer.Spec.Payment.Price.PerMB != "":
-		return offer.Spec.Payment.Price.PerMB, "perMB"
-	default:
-		return "", ""
-	}
+	return offer.Spec.Payment.Price.RawAndSlot()
 }
 
 // offerAssetJSON resolves the settlement asset block. If the offer carries an

@@ -1,5 +1,7 @@
 package x402
 
+import "github.com/ObolNetwork/obol-stack/internal/offerkind"
+
 // The x402 v2 `bazaar` discovery extension (specs/extensions/bazaar.md in
 // x402-foundation/x402). Every paid route advertises {info, schema} in the
 // 402 response's `extensions.bazaar` so facilitators and indexers
@@ -53,8 +55,8 @@ func WithBazaar(extensions map[string]any, offerType, model string) map[string]a
 // openAPIPathsForOffer in internal/serviceoffercontroller); everything else
 // gets the generic operator-defined JSON shape.
 func BuildBazaarExtension(offerType, model string) map[string]any {
-	switch normalizeOfferType(offerType) {
-	case "inference", "agent":
+	switch offerkind.Resolve(offerType).BazaarShape {
+	case "chat":
 		return bazaarChatCompletions(model)
 	default:
 		return bazaarGenericJSON()

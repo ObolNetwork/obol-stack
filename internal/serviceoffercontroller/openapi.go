@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	"github.com/ObolNetwork/obol-stack/internal/offerkind"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 )
 
@@ -201,8 +202,8 @@ func openAPIPathsForOffer(offer *monetizeapi.ServiceOffer) map[string]map[string
 	if offer == nil {
 		return nil
 	}
-	switch {
-	case offer.IsInference(), offer.IsAgent():
+	switch offerkind.Resolve(offer.Spec.Type).OpenAPIShape {
+	case "chat":
 		return map[string]map[string]any{
 			"/v1/chat/completions": {
 				"post": openAPIOperation(offer, openAPIOperationOptions{
@@ -219,7 +220,7 @@ func openAPIPathsForOffer(offer *monetizeapi.ServiceOffer) map[string]map[string
 				}),
 			},
 		}
-	case strings.EqualFold(offer.Spec.Type, "fine-tuning"):
+	case "multipart":
 		return map[string]map[string]any{
 			"": {
 				"post": openAPIOperation(offer, openAPIOperationOptions{
