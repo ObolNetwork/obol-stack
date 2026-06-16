@@ -35,7 +35,7 @@ const (
 	rawChartVersion = "2.0.2"
 
 	// renovate: datasource=docker depName=nousresearch/hermes-agent
-	defaultImage = "nousresearch/hermes-agent:main"
+	defaultImage = "nousresearch/hermes-agent:main@sha256:e9f2892b626468d2a65abeae9f94ec0a71872d7d9643906b956ab29c9bf328a9"
 	// Use the upstream image venv instead of cloning Hermes into the PVC on
 	// every cold start. The init container below validates the required extras
 	// are present so image regressions fail before the gateway starts.
