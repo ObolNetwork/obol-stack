@@ -157,7 +157,6 @@ func (s *Server) handleChampion(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Worker string  `json:"worker"`
 		Value  float64 `json:"value"`
 		Output string  `json:"output"`
 	}
@@ -165,13 +164,17 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "invalid_request", "bad result body")
 		return
 	}
-	res, err := s.store.Submit(body.Worker, body.Value, body.Output)
+	// Worker identity is the AUTHENTICATED token, never a self-declared body
+	// field — otherwise any member could submit (and be paid out) as another
+	// worker. The member middleware has already validated this token.
+	worker := groupauth.WorkerID(bearer(r))
+	res, err := s.store.Submit(worker, body.Value, body.Output)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid_result", err.Error())
 		return
 	}
 	s.log.Info("result submitted",
-		"worker", body.Worker, "value", body.Value,
+		"worker", worker, "value", body.Value,
 		"accepted", res.Accepted, "champion", res.Champion, "impact", res.Impact)
 	writeJSON(w, http.StatusOK, res)
 }

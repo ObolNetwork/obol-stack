@@ -376,6 +376,13 @@ func TestBountyLifecycle_RewardVoucherFerry(t *testing.T) {
 	if sb.Status.Phase != bountyPhasePaid {
 		t.Fatalf("phase = %q, want Paid", sb.Status.Phase)
 	}
+	// H2: the reward is captured to the ACCEPTED FULFILLER's explicit seat — a
+	// bound (address, amount) recipient — not "all voucher seats" to whoever
+	// the poster pre-signed.
+	batch := fake.lastBatch(t, "uid-ferry")
+	if len(batch) != 1 || !strings.EqualFold(batch[0].Address, "0x2222222222222222222222222222222222222222") {
+		t.Fatalf("reward capture recipients = %+v, want a single seat bound to the fulfiller 0x2222…", batch)
+	}
 }
 
 func TestBountyLifecycle_BondAndEvalVoucherFerry(t *testing.T) {

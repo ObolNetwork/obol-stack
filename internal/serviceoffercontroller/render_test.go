@@ -861,6 +861,7 @@ func TestBuildServiceCatalogJSON_DatasetOfferSurfacesVersion(t *testing.T) {
 			Type: "dataset",
 			Dataset: monetizeapi.ServiceOfferDataset{
 				ManifestHash: "abc123",
+				FileHash:     "def456",
 				Version:      "2",
 				SizeBytes:    1048576,
 			},
@@ -894,6 +895,9 @@ func TestBuildServiceCatalogJSON_DatasetOfferSurfacesVersion(t *testing.T) {
 	}
 	if svc.DatasetManifestHash != "abc123" {
 		t.Errorf("datasetManifestHash = %q, want abc123", svc.DatasetManifestHash)
+	}
+	if svc.DatasetFileHash != "def456" {
+		t.Errorf("datasetFileHash = %q, want def456 (content-integrity anchor must federate)", svc.DatasetFileHash)
 	}
 	if svc.DatasetVersion != "2" {
 		t.Errorf("datasetVersion = %q, want 2", svc.DatasetVersion)

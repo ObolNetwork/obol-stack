@@ -87,6 +87,39 @@ func TestApproximateRequestPriceFromPerMTok_Invalid(t *testing.T) {
 	}
 }
 
+func TestTotalPriceFromPerMB(t *testing.T) {
+	const mib = 1 << 20
+	// 100 MiB at 0.01/MB → 1.00 total, NOT 0.01 (the bug was returning raw perMB).
+	got, err := TotalPriceFromPerMB("0.01", 100*mib)
+	if err != nil {
+		t.Fatalf("TotalPriceFromPerMB() error = %v", err)
+	}
+	if got != "1" {
+		t.Errorf("TotalPriceFromPerMB(0.01, 100MiB) = %q, want %q", got, "1")
+	}
+	// 1000 MiB at 0.01/MB → 10.
+	if got, _ := TotalPriceFromPerMB("0.01", 1000*mib); got != "10" {
+		t.Errorf("TotalPriceFromPerMB(0.01, 1000MiB) = %q, want %q", got, "10")
+	}
+	// Exactly 1 MiB → the raw perMB (the boundary the old test pinned).
+	if got, _ := TotalPriceFromPerMB("0.01", mib); got != "0.01" {
+		t.Errorf("TotalPriceFromPerMB(0.01, 1MiB) = %q, want %q", got, "0.01")
+	}
+	// Empty price or non-positive size → "0".
+	if got, _ := TotalPriceFromPerMB("", 100); got != "0" {
+		t.Errorf("empty perMB = %q, want 0", got)
+	}
+	if got, _ := TotalPriceFromPerMB("0.01", 0); got != "0" {
+		t.Errorf("zero size = %q, want 0", got)
+	}
+}
+
+func TestTotalPriceFromPerMB_Invalid(t *testing.T) {
+	if _, err := TotalPriceFromPerMB("bad", 100); err == nil {
+		t.Fatal("TotalPriceFromPerMB() error = nil, want non-nil")
+	}
+}
+
 func TestPaymentTerms_JSONRoundTrip(t *testing.T) {
 	original := PaymentTerms{
 		Network:           "base-sepolia",

@@ -99,6 +99,17 @@ func (f *fakeEscrowGateway) lastReserve(t *testing.T, id string) escrow.ReserveR
 	return reqs[len(reqs)-1]
 }
 
+func (f *fakeEscrowGateway) lastBatch(t *testing.T, id string) []escrow.BatchRecipient {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	b, ok := f.batches[id]
+	if !ok {
+		t.Fatalf("no CaptureBatch recorded for %s", id)
+	}
+	return b
+}
+
 // fakeValidationReader is the grounding chain fake.
 type fakeValidationReader struct {
 	statuses map[common.Hash]erc8004.ValidationStatus

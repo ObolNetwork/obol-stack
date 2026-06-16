@@ -60,6 +60,7 @@ type ServiceCatalogEntry struct {
 	// know exactly which artifact (and version) an offer sells. Additive
 	// only — see the stable-wire-schema note above.
 	DatasetManifestHash string `json:"datasetManifestHash,omitempty"`
+	DatasetFileHash     string `json:"datasetFileHash,omitempty"`
 	DatasetVersion      string `json:"datasetVersion,omitempty"`
 	DatasetSizeBytes    int64  `json:"datasetSizeBytes,omitempty"`
 }

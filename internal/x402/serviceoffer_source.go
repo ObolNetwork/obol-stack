@@ -250,7 +250,14 @@ func effectivePrice(offer *monetizeapi.ServiceOffer) (price, priceModel, perMTok
 	case offer.Spec.Payment.Price.PerHour != "":
 		return offer.Spec.Payment.Price.PerHour, "perHour", "", 0, nil
 	case offer.Spec.Payment.Price.PerMB != "":
-		return offer.Spec.Payment.Price.PerMB, "perMB", "", 0, nil
+		// A dataset is bought once, so the enforced per-request price is the
+		// TOTAL: perMB × (sizeBytes / 1e6). Returning the raw perMB would charge
+		// a single megabyte's worth for the entire dataset.
+		total, err := schemas.TotalPriceFromPerMB(offer.Spec.Payment.Price.PerMB, offer.Spec.Dataset.SizeBytes)
+		if err != nil {
+			return "", "", "", 0, fmt.Errorf("invalid perMB price %q: %w", offer.Spec.Payment.Price.PerMB, err)
+		}
+		return total, "perMB", "", 0, nil
 	default:
 		return "0", "", "", 0, nil
 	}

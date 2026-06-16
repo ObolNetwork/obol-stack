@@ -99,6 +99,34 @@ func TestServer_ReserveAwaitingThenReserved(t *testing.T) {
 	}
 }
 
+// A re-reserve of a held id with DIFFERENT terms must 409, not silently
+// overwrite the signed voucher; an identical re-reserve stays idempotent.
+func TestServer_ReserveConflictOnDifferentTerms(t *testing.T) {
+	sub := &fakeSubmitter{}
+	_, g, _ := newTestServer(t, ServerOptions{Token: "secret", Spender: testSpender, Networks: []string{"base", "base-sepolia"}, Submitter: sub})
+	ctx := context.Background()
+
+	v := signedTestVoucher(t)
+	req := ReserveRequest{ID: "c1", Network: "base-sepolia", Voucher: &v}
+	if r, err := g.Reserve(ctx, req); err != nil || r.State != StateReserved {
+		t.Fatalf("initial reserve = %+v, %v; want Reserved", r, err)
+	}
+	// Identical re-reserve is idempotent success.
+	if r, err := g.Reserve(ctx, req); err != nil || r.State != StateReserved {
+		t.Fatalf("idempotent re-reserve = %+v, %v; want Reserved", r, err)
+	}
+	// A different (validly-signed) voucher under the same id is a conflict.
+	v2, key2 := goldenVoucher(t)
+	v2.Deadline = time.Now().Add(time.Hour).Unix()
+	v2.Nonce = "424242"
+	if err := SignVoucher(&v2, big.NewInt(84532), key2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Reserve(ctx, ReserveRequest{ID: "c1", Network: "base-sepolia", Voucher: &v2}); err == nil || !strings.Contains(err.Error(), "409") {
+		t.Fatalf("conflicting re-reserve = %v, want 409", err)
+	}
+}
+
 func TestServer_ReserveRejectsBadVouchers(t *testing.T) {
 	_, g, _ := newTestServer(t, ServerOptions{Token: "secret", Spender: testSpender, Networks: []string{"base-sepolia"}, Submitter: &fakeSubmitter{}})
 	ctx := context.Background()

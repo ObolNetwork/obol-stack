@@ -3,7 +3,6 @@ package dataset
 import (
 	"bytes"
 	"context"
-	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -11,17 +10,18 @@ import (
 )
 
 func TestFetch_DownloadsAndVerifies(t *testing.T) {
-	ts := newTestServer(t, MembershipOpen, nil)
+	ts := newTestServer(t, MembershipOpen, passGate)
 	httpSrv := httptest.NewServer(ts.srv.Handler())
 	defer httpSrv.Close()
 
 	out := filepath.Join(t.TempDir(), "ds-v1.jsonl")
 	res, err := Fetch(context.Background(), FetchOptions{
-		BaseURL: httpSrv.URL,
-		ID:      "ds",
-		Version: 1,
-		Token:   ownerToken, // owner is a download superuser
-		OutPath: out,
+		BaseURL:       httpSrv.URL,
+		ID:            "ds",
+		Version:       1,
+		Token:         ownerToken, // owner is a download superuser
+		OutPath:       out,
+		ExpectedOwner: ts.signer.SignerID(),
 	})
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
@@ -45,7 +45,7 @@ func TestFetch_DownloadsAndVerifies(t *testing.T) {
 }
 
 func TestFetch_ResumesFromPartial(t *testing.T) {
-	ts := newTestServer(t, MembershipOpen, nil)
+	ts := newTestServer(t, MembershipOpen, passGate)
 	httpSrv := httptest.NewServer(ts.srv.Handler())
 	defer httpSrv.Close()
 
@@ -57,6 +57,7 @@ func TestFetch_ResumesFromPartial(t *testing.T) {
 
 	res, err := Fetch(context.Background(), FetchOptions{
 		BaseURL: httpSrv.URL, ID: "ds", Version: 1, Token: ownerToken, OutPath: out,
+		ExpectedOwner: ts.signer.SignerID(),
 	})
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
@@ -70,36 +71,58 @@ func TestFetch_ResumesFromPartial(t *testing.T) {
 	}
 }
 
-func TestFetch_RejectsHashMismatch(t *testing.T) {
-	// A malicious/buggy server that serves the wrong bytes but advertises the
-	// real hash must be caught by the whole-file verification.
+func TestFetch_RejectsTamperedBytesAgainstSignedLog(t *testing.T) {
+	// The signed version log commits the REAL hash, but the server serves
+	// different bytes (and would happily advertise the real hash in a header).
+	// Integrity is anchored in the signed log, so the swap is caught.
+	signer := newTestSigner(t)
 	real := []byte("the-real-bytes\n")
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("X-Dataset-File-Hash", sha256hex(real))
-		w.Header().Set("X-Dataset-Version", "1")
-		_, _ = w.Write([]byte("TAMPERED-DIFFERENT-BYTES\n"))
-	}))
-	defer srv.Close()
+	log := NewLog()
+	if _, err := log.Append(hashA, sha256hex(real), int64(len(real)), signer, fixedTime); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	srv := NewServer(Config{
+		ID: "ds", Membership: MembershipOpen, OwnerToken: ownerToken,
+		OwnerSigner: signer.SignerID(),
+		Log:         log,
+		Ents:        NewEntitlements(),
+		Store:       NewStore(filepath.Join(t.TempDir(), "ds.json")),
+		Artifacts:   memArtifacts{data: map[int][]byte{1: []byte("TAMPERED-DIFFERENT-BYTES\n")}},
+		PaidJoin:    passGate,
+	})
+	httpSrv := httptest.NewServer(srv.Handler())
+	defer httpSrv.Close()
 
 	out := filepath.Join(t.TempDir(), "ds.jsonl")
-	_, err := Fetch(context.Background(), FetchOptions{BaseURL: srv.URL, ID: "ds", Version: 1, Token: "t", OutPath: out})
+	_, err := Fetch(context.Background(), FetchOptions{
+		BaseURL: httpSrv.URL, ID: "ds", Version: 1, Token: ownerToken, OutPath: out,
+		ExpectedOwner: signer.SignerID(),
+	})
 	if err == nil {
-		t.Fatal("Fetch accepted bytes that don't match the advertised hash")
+		t.Fatal("Fetch accepted bytes that don't match the signed version log")
 	}
 	if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
 		t.Error("a failed verification must not leave a finalized output file")
 	}
 }
 
-func TestFetch_RefusesUnverifiableDownload(t *testing.T) {
-	// No X-Dataset-File-Hash -> refuse (don't write an unverifiable file).
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("anything"))
-	}))
-	defer srv.Close()
+func TestFetch_RejectsWrongExpectedOwner(t *testing.T) {
+	// A seller that swapped in a different signing key is caught by pinning the
+	// expected owner: every entry's recovered signer fails the identity check.
+	ts := newTestServer(t, MembershipOpen, passGate)
+	httpSrv := httptest.NewServer(ts.srv.Handler())
+	defer httpSrv.Close()
+
 	out := filepath.Join(t.TempDir(), "ds.jsonl")
-	if _, err := Fetch(context.Background(), FetchOptions{BaseURL: srv.URL, ID: "ds", Token: "t", OutPath: out}); err == nil {
-		t.Error("Fetch accepted a download with no file-hash commitment")
+	_, err := Fetch(context.Background(), FetchOptions{
+		BaseURL: httpSrv.URL, ID: "ds", Version: 1, Token: ownerToken, OutPath: out,
+		ExpectedOwner: "0x000000000000000000000000000000000000dead",
+	})
+	if err == nil {
+		t.Fatal("Fetch accepted a version log signed by an unexpected owner")
+	}
+	if _, statErr := os.Stat(out); !os.IsNotExist(statErr) {
+		t.Error("a failed owner check must not leave a finalized output file")
 	}
 }
 

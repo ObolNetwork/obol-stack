@@ -96,3 +96,49 @@ func TestVerify_UnknownToken(t *testing.T) {
 		t.Error("unknown token must not verify")
 	}
 }
+
+func TestRequestCode_SweepsExpired(t *testing.T) {
+	a := New()
+	clk := time.Now()
+	a.now = func() time.Time { return clk }
+
+	g, err := a.RequestCode("w1")
+	if err != nil {
+		t.Fatalf("RequestCode: %v", err)
+	}
+	// Let the first code expire, then request another — the sweep evicts it.
+	clk = clk.Add(CodeExpiry + time.Minute)
+	if _, err := a.RequestCode("w2"); err != nil {
+		t.Fatalf("RequestCode 2: %v", err)
+	}
+
+	// The expired code is gone from the indexes (not merely flagged expired).
+	if _, err := a.Poll(g.DeviceCode); err != ErrNotFound {
+		t.Fatalf("expired code poll = %v, want ErrNotFound (swept)", err)
+	}
+	a.mu.Lock()
+	n := len(a.byDevice) + len(a.byUser)
+	a.mu.Unlock()
+	if n != 2 { // only the live w2 code remains, in both indexes
+		t.Fatalf("index entries = %d, want 2 (expired code swept)", n)
+	}
+}
+
+func TestWorkerID(t *testing.T) {
+	id := WorkerID("tok-abc")
+	if id == "" || id != WorkerID("tok-abc") {
+		t.Fatalf("WorkerID not stable for the same token: %q", id)
+	}
+	if WorkerID("tok-abc") == WorkerID("tok-xyz") {
+		t.Fatal("distinct tokens must produce distinct WorkerIDs (no impersonation)")
+	}
+	if id == "tok-abc" || strings.Contains(id, "tok-abc") {
+		t.Fatalf("WorkerID %q leaked the raw token", id)
+	}
+	if WorkerID("") != "" {
+		t.Fatal("empty token must yield empty WorkerID")
+	}
+	if !strings.HasPrefix(id, "w-") {
+		t.Fatalf("WorkerID = %q, want a w- prefix", id)
+	}
+}

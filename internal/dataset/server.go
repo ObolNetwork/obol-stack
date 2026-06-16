@@ -18,15 +18,6 @@ const (
 	MembershipInvite = "invite"
 )
 
-// PaymentValidator validates a forwarded proof-of-payment for the paid-join
-// path. It runs ONLY behind the edge x402-verifier ForwardAuth (which has
-// already proven a settled payment); its job is to confirm the payment binds
-// to THIS dataset offer and to extract which version + atomic amount was paid.
-// It must never be exposed as a raw public route.
-type PaymentValidator interface {
-	Validate(r *http.Request, offerID string) (version int, atomic string, err error)
-}
-
 // Config builds a Server. Log/Ents/Store/Artifacts are owned by the caller so
 // the CLI can rehydrate them from disk before serving.
 type Config struct {
@@ -39,8 +30,15 @@ type Config struct {
 	Ents        *Entitlements
 	Store       *Store
 	Artifacts   Artifacts
-	Payments    PaymentValidator
-	Logger      *slog.Logger
+	// PaidJoin, when non-nil, wraps the /dataset/{id}/join/paid route with an
+	// x402 payment gate (verify + in-process settle). Reaching the handler
+	// therefore means a real on-chain payment occurred — the handler never
+	// trusts client-supplied payment/version headers. nil disables paid join.
+	PaidJoin func(http.Handler) http.Handler
+	// JoinPriceAtomic is the atomic-unit join price recorded on a paid
+	// entitlement (the gate enforces it; this value is for the ledger only).
+	JoinPriceAtomic string
+	Logger          *slog.Logger
 }
 
 // Server hosts one versioned dataset over an owner-run, membership-gated HTTP
@@ -56,7 +54,8 @@ type Server struct {
 	ents       *Entitlements
 	store      *Store
 	artifacts  Artifacts
-	payments   PaymentValidator
+	paidJoin   func(http.Handler) http.Handler
+	joinAtomic string
 	logger     *slog.Logger
 }
 
@@ -90,7 +89,8 @@ func NewServer(cfg Config) *Server {
 		ents:       cfg.Ents,
 		store:      cfg.Store,
 		artifacts:  cfg.Artifacts,
-		payments:   cfg.Payments,
+		paidJoin:   cfg.PaidJoin,
+		joinAtomic: cfg.JoinPriceAtomic,
 		logger:     cfg.Logger,
 	}
 	// Rehydrate groupauth from persisted entitlements (verified by hash; the
@@ -111,9 +111,16 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /auth/device/token", s.handleDeviceToken)
 	mux.HandleFunc("POST /auth/device/approve", s.ownerOnly(s.handleApprove))
 
-	// Paid join — payment mints a version-scoped member token. Behind the
-	// edge x402-verifier ForwardAuth, never a raw public route.
-	mux.HandleFunc("POST /dataset/{id}/join/paid", s.handleJoinPaid)
+	// Paid join — the x402 gate proves (and settles) a real on-chain payment
+	// before the handler mints a version-scoped member token. With no gate
+	// configured the route is disabled, not open: paid join fails closed.
+	if s.paidJoin != nil {
+		mux.Handle("POST /dataset/{id}/join/paid", s.paidJoin(http.HandlerFunc(s.handleJoinPaid)))
+	} else {
+		mux.HandleFunc("POST /dataset/{id}/join/paid", func(w http.ResponseWriter, _ *http.Request) {
+			writeErr(w, http.StatusServiceUnavailable, "paid_join_disabled", "paid join not configured (publish with --price)")
+		})
+	}
 
 	// Member-gated reads.
 	mux.HandleFunc("GET /dataset/{id}/versions", s.member(s.handleVersions))
@@ -206,17 +213,13 @@ func (s *Server) handleJoinPaid(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "unknown_dataset", "no such dataset on this host")
 		return
 	}
-	if s.payments == nil {
-		writeErr(w, http.StatusServiceUnavailable, "paid_join_disabled", "paid join not configured")
-		return
-	}
-	version, atomic, err := s.payments.Validate(r, s.id)
-	if err != nil {
-		writeErr(w, http.StatusPaymentRequired, "payment_required", err.Error())
-		return
-	}
-	if _, ok := s.log.Get(version); !ok {
-		writeErr(w, http.StatusBadRequest, "unknown_version", fmt.Sprintf("version %d not published", version))
+	// Reaching here means the x402 gate wrapping this route has already
+	// verified (and is settling) a real on-chain payment for the join price.
+	// The version to entitle is taken from the request URL, validated against
+	// the published versions — NEVER from a client-supplied trust header.
+	version, ok := s.resolveVersion(r)
+	if !ok {
+		writeErr(w, http.StatusBadRequest, "unknown_version", "requested version is not published")
 		return
 	}
 	raw, hash, err := s.auth.Mint(s.groupID, "paid-v"+strconv.Itoa(version))
@@ -228,11 +231,11 @@ func (s *Server) handleJoinPaid(w http.ResponseWriter, r *http.Request) {
 		TokenHash:  hash,
 		GroupID:    s.groupID,
 		MaxVersion: version,
-		PaidAtomic: atomic,
+		PaidAtomic: s.joinAtomic,
 		Label:      "paid",
 	})
 	s.persist()
-	s.logger.Info("paid join", "dataset", s.id, "version", version, "atomic", atomic)
+	s.logger.Info("paid join", "dataset", s.id, "version", version, "atomic", s.joinAtomic)
 	writeJSON(w, http.StatusOK, map[string]any{"token": raw, "version": version})
 }
 

@@ -1157,8 +1157,17 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 		asset := offerAssetJSON(offer)
 		if asset != nil {
 			svc.Asset = asset
-			if raw != "" && asset.Decimals > 0 {
-				svc.PriceAtomicUnits = decimalToAtomicString(raw, int(asset.Decimals))
+			// PriceAtomicUnits is what the buyer actually pays. For perMB that
+			// is the TOTAL (rate × dataset size), matching the x402 gate — the
+			// raw perMB stays the displayed per-megabyte RATE in PriceRaw.
+			charged := raw
+			if unit == "perMB" {
+				if total, terr := schemas.TotalPriceFromPerMB(raw, offer.Spec.Dataset.SizeBytes); terr == nil {
+					charged = total
+				}
+			}
+			if charged != "" && asset.Decimals > 0 {
+				svc.PriceAtomicUnits = decimalToAtomicString(charged, int(asset.Decimals))
 			}
 		}
 
@@ -1166,6 +1175,7 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 		// on discovery, mirroring how Model is surfaced for inference/agent.
 		if offer.IsDataset() {
 			svc.DatasetManifestHash = offer.Spec.Dataset.ManifestHash
+			svc.DatasetFileHash = offer.Spec.Dataset.FileHash
 			svc.DatasetVersion = offer.Spec.Dataset.Version
 			svc.DatasetSizeBytes = offer.Spec.Dataset.SizeBytes
 		}

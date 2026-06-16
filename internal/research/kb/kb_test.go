@@ -17,6 +17,35 @@ func minimizeProg(split SplitMode, baseline *float64) Program {
 	}
 }
 
+func thresholdProg(split SplitMode, threshold *float64) Program {
+	return Program{
+		ID:       "threshold-prog",
+		Criteria: Criteria{Metric: "val_bpb", Direction: Minimize, Accept: Threshold, Threshold: threshold},
+		Pool:     100,
+		Split:    split,
+	}
+}
+
+// TestPayouts_ThresholdResubmitCannotInflate is the H4 regression: under
+// Threshold + ByImpact, resubmitting the same passing result must NOT inflate a
+// worker's share. Each worker is credited their BEST accepted impact, not the
+// sum of duplicates.
+func TestPayouts_ThresholdResubmitCannotInflate(t *testing.T) {
+	k := New(thresholdProg(ByImpact, f(1.20))) // minimize: value <= 1.20 passes
+
+	a1, _ := k.Submit("spark1", 1.10, "") // spark1 clears it...
+	a2, _ := k.Submit("spark1", 1.10, "") // ...and resubmits the SAME result.
+	b1, _ := k.Submit("spark2", 1.10, "") // spark2 clears it once, equal impact.
+	if !a1.Accepted || !a2.Accepted || !b1.Accepted {
+		t.Fatalf("threshold submissions = %+v %+v %+v, want all accepted", a1, a2, b1)
+	}
+
+	pay := k.Payouts()
+	if math.Abs(pay["spark1"]-50) > 1e-3 || math.Abs(pay["spark2"]-50) > 1e-3 {
+		t.Fatalf("payouts = %+v, want 50/50 — resubmission must not inflate (was 66.67/33.33)", pay)
+	}
+}
+
 func TestSubmit_BeatsChampion_Minimize(t *testing.T) {
 	k := New(minimizeProg(ByImpact, f(1.20))) // baseline val_bpb 1.20
 

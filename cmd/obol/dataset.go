@@ -28,14 +28,15 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/dataset"
+	x402 "github.com/ObolNetwork/obol-stack/internal/x402"
 	"github.com/urfave/cli/v3"
+	x402types "github.com/x402-foundation/x402/go/types"
 )
 
 // datasetState lets approve/status reach a running publish server.
@@ -117,6 +118,13 @@ func appendDatasetVersion(cfg *config.Config, cmd *cli.Command, id, bundleDir st
 		return err
 	}
 	log := dataset.LogFromVersions(st.Versions)
+	// Tamper-evidence is only real if the producer refuses to extend a chain it
+	// cannot verify: a rewritten earlier entry must not be silently signed over.
+	if len(st.Versions) > 0 {
+		if err := log.Verify(dataset.EthVerifier{}, signer.SignerID()); err != nil {
+			return fmt.Errorf("refusing to extend dataset %q: existing version log fails verification: %w", id, err)
+		}
+	}
 	v, err := log.Append(manifestHash, fileHash, size, signer, time.Now())
 	if err != nil {
 		return err
@@ -149,6 +157,9 @@ func datasetPublishCommand(cfg *config.Config) *cli.Command {
 			&cli.StringFlag{Name: "membership", Usage: "open | invite", Value: "invite"},
 			&cli.IntFlag{Name: "port", Usage: "Local port (0 = pick a free one)", Value: 0},
 			&cli.BoolFlag{Name: "no-tunnel", Usage: "Serve locally only"},
+			&cli.StringFlag{Name: "price", Usage: "Per-join price in USDC (enables x402 paid join; empty = invite/open only)"},
+			&cli.StringFlag{Name: "pay-to", Usage: "USDC recipient (default: the dataset owner address)"},
+			&cli.StringFlag{Name: "chain", Usage: "Payment chain", Value: "base-sepolia"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -171,6 +182,12 @@ func datasetPublishCommand(cfg *config.Config) *cli.Command {
 			if len(st.Versions) == 0 {
 				return fmt.Errorf("dataset %q has no versions — run 'obol dataset from' first", id)
 			}
+			// Never serve a chain we cannot verify against the owner key: a
+			// tampered persisted store must fail closed, not be published.
+			pubLog := dataset.LogFromVersions(st.Versions)
+			if err := pubLog.Verify(dataset.EthVerifier{}, signer.SignerID()); err != nil {
+				return fmt.Errorf("refusing to serve dataset %q: version log fails verification: %w", id, err)
+			}
 			artifacts := dataset.NewFileArtifacts()
 			for seq, path := range st.Artifacts {
 				artifacts.Set(seq, path)
@@ -182,16 +199,42 @@ func datasetPublishCommand(cfg *config.Config) *cli.Command {
 			if err != nil {
 				return err
 			}
+
+			// Optional x402 paid join: when --price is set, gate /join/paid with
+			// a real facilitator-verified, in-process-settled payment for the
+			// join price (the owner address is the default payee). Without it,
+			// the dataset is invite/open-membership only — never free-on-payment.
+			var paidJoin func(http.Handler) http.Handler
+			var joinAtomic string
+			if price := strings.TrimSpace(cmd.String("price")); price != "" {
+				chain, cerr := x402.ResolveChainInfo(cmd.String("chain"))
+				if cerr != nil {
+					return fmt.Errorf("paid join: %w", cerr)
+				}
+				payTo := strings.TrimSpace(cmd.String("pay-to"))
+				if payTo == "" {
+					payTo = signer.SignerID()
+				}
+				req := x402.BuildV2Requirement(chain, price, payTo, 0)
+				joinAtomic = req.Amount
+				paidJoin = x402.NewForwardAuthMiddleware(x402.ForwardAuthConfig{
+					FacilitatorURL:   x402.DefaultFacilitatorURL,
+					VerifyOnly:       false,
+					SettlesInProcess: true,
+				}, []x402types.PaymentRequirements{req})
+			}
+
 			srv := dataset.NewServer(dataset.Config{
-				ID:          id,
-				Membership:  cmd.String("membership"),
-				OwnerToken:  ownerToken,
-				OwnerSigner: signer.SignerID(),
-				Log:         dataset.LogFromVersions(st.Versions),
-				Ents:        ents,
-				Store:       store,
-				Artifacts:   artifacts,
-				Payments:    forwardedPayment{},
+				ID:              id,
+				Membership:      cmd.String("membership"),
+				OwnerToken:      ownerToken,
+				OwnerSigner:     signer.SignerID(),
+				Log:             pubLog,
+				Ents:            ents,
+				Store:           store,
+				Artifacts:       artifacts,
+				PaidJoin:        paidJoin,
+				JoinPriceAtomic: joinAtomic,
 			})
 
 			ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", cmd.Int("port")))
@@ -213,7 +256,7 @@ func datasetPublishCommand(cfg *config.Config) *cli.Command {
 				}
 			}
 
-			head, _ := dataset.LogFromVersions(st.Versions).Head()
+			head, _ := pubLog.Head()
 			_ = writeDatasetState(cfg, datasetState{ID: id, LocalAddr: localAddr, PublicURL: publicURL, OwnerToken: ownerToken})
 
 			u.Successf("Dataset %q published (head version %d)", id, head.Seq)
@@ -222,7 +265,7 @@ func datasetPublishCommand(cfg *config.Config) *cli.Command {
 			u.Infof("Membership:  %s", cmd.String("membership"))
 			u.Blank()
 			u.Bold("Buyers fetch with:")
-			u.Printf("  obol buy dataset %s --id %s --member-token <token>", publicURL, id)
+			u.Printf("  obol buy dataset %s --id %s --member-token <token> --owner %s", publicURL, id, signer.SignerID())
 			if cmd.String("membership") == dataset.MembershipInvite {
 				u.Dim("Admit a worker's printed code:  obol dataset approve <user-code>")
 			}
@@ -345,6 +388,7 @@ func buyDatasetCommand(cfg *config.Config) *cli.Command {
 			&cli.IntFlag{Name: "version", Usage: "Version to fetch (0 = head)"},
 			&cli.StringFlag{Name: "member-token", Usage: "Member token (owner-issued or payment-minted)", Required: true},
 			&cli.StringFlag{Name: "out", Usage: "Output file (default <id>-v<N>.jsonl)"},
+			&cli.StringFlag{Name: "owner", Usage: "Expected owner 0x address that must have signed the version log (pins identity; recommended)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -367,6 +411,7 @@ func buyDatasetCommand(cfg *config.Config) *cli.Command {
 			res, err := dataset.Fetch(ctx, dataset.FetchOptions{
 				BaseURL: base, ID: id, Version: cmd.Int("version"),
 				Token: cmd.String("member-token"), OutPath: out,
+				ExpectedOwner: strings.TrimSpace(cmd.String("owner")),
 			})
 			if err != nil {
 				return err
@@ -379,25 +424,6 @@ func buyDatasetCommand(cfg *config.Config) *cli.Command {
 			return nil
 		},
 	}
-}
-
-// --- payment validation (behind the edge x402-verifier) ---
-
-// forwardedPayment trusts the edge x402-verifier to have proven a settled
-// payment upstream; it extracts the paid version/amount from forwarded
-// headers. It is only reachable on the membership-gated /join/paid route
-// (never a raw public route).
-type forwardedPayment struct{}
-
-func (forwardedPayment) Validate(r *http.Request, _ string) (int, string, error) {
-	if r.Header.Get("X-Payment-Response") == "" && r.Header.Get("X-Payment") == "" {
-		return 0, "", fmt.Errorf("no settled payment forwarded")
-	}
-	v, _ := strconv.Atoi(r.Header.Get("X-Dataset-Version"))
-	if v < 1 {
-		v = 1
-	}
-	return v, r.Header.Get("X-Dataset-Atomic"), nil
 }
 
 // --- state + url helpers ---

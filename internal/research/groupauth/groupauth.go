@@ -121,6 +121,11 @@ func (a *Authority) RequestCode(workerID string) (CodeGrant, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
+	// Drop abandoned/expired codes so they can't accumulate unboundedly: a
+	// long-lived program server is reachable over a public tunnel, and every
+	// un-polled login would otherwise live forever — a cheap memory-growth DoS.
+	a.sweepExpiredLocked()
+
 	dcVal, err := randomHex(32)
 	if err != nil {
 		return CodeGrant{}, err
@@ -155,6 +160,19 @@ func (a *Authority) RequestCode(workerID string) (CodeGrant, error) {
 		ExpiresIn:  int(CodeExpiry.Seconds()),
 		Interval:   PollInterval,
 	}, nil
+}
+
+// sweepExpiredLocked removes device codes past their expiry from both indexes.
+// Caller holds a.mu. O(live codes); since expired entries are deleted, the maps
+// stay bounded by the codes requested within one CodeExpiry window.
+func (a *Authority) sweepExpiredLocked() {
+	now := a.now()
+	for dcv, dc := range a.byDevice {
+		if now.After(dc.ExpiresAt) {
+			delete(a.byDevice, dcv)
+			delete(a.byUser, dc.UserCode)
+		}
+	}
 }
 
 // Approve is the membership decision: the program owner links a pending
@@ -245,6 +263,18 @@ func (a *Authority) Revoke(rawToken string) {
 // caller (e.g. a payment-gated service's entitlement map) can key off the
 // same hash the Authority stores without ever holding the raw token.
 func HashToken(rawToken string) string { return hashToken(rawToken) }
+
+// WorkerID returns a stable, non-secret worker identity derived from a raw
+// member token. A service derives the submitter's identity from the
+// authenticated token rather than trusting a self-declared name, so a member
+// cannot submit (or be paid) as another worker. Empty token -> "".
+func WorkerID(rawToken string) string {
+	rawToken = strings.TrimSpace(rawToken)
+	if rawToken == "" {
+		return ""
+	}
+	return "w-" + hashToken(rawToken)[:16]
+}
 
 // Mint issues a member token for groupID WITHOUT the device-auth flow, for
 // services where a settled payment — not an owner approval — is the

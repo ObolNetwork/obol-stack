@@ -187,6 +187,18 @@ func (s *Server) handleReserve(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, entry.Receipt)
 		return
 	}
+	// A re-reserve of an already-held id must not silently REPLACE the signed
+	// settlement terms: an identical request is idempotent success, but a
+	// different voucher/amount under the same id is a conflict, not an
+	// overwrite (Reserve is specified idempotent).
+	if exists && entry.State == StateReserved {
+		if sameReserveRequest(entry.Request, &req) {
+			writeJSON(w, entry.Receipt)
+			return
+		}
+		http.Error(w, "escrow id already reserved with different settlement terms", http.StatusConflict)
+		return
+	}
 
 	var receipt Receipt
 	if req.Voucher == nil {
@@ -224,6 +236,19 @@ func (s *Server) handleReserve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, receipt)
+}
+
+// sameReserveRequest reports whether two reserve requests carry identical
+// settlement terms, so a retry is treated as idempotent success rather than a
+// silent overwrite of the signed voucher. Compared by canonical JSON (struct
+// fields marshal in declaration order, so the encoding is deterministic).
+func sameReserveRequest(a, b *ReserveRequest) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	ja, err1 := json.Marshal(a)
+	jb, err2 := json.Marshal(b)
+	return err1 == nil && err2 == nil && string(ja) == string(jb)
 }
 
 // captureRequest is the optional capture body. HTTPGateway.Capture sends no

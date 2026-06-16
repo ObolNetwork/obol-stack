@@ -16,15 +16,22 @@ import (
 
 const ownerToken = "owner-secret-token"
 
-// fakePayments stands in for the edge x402-verifier's forwarded proof.
-type fakePayments struct {
-	version int
-	atomic  string
-	err     error
-}
+// passGate is a stub paid-join gate that treats every request as already paid.
+// The real x402 verify/settle path is covered by the inference-gateway tests;
+// here we exercise the server's post-payment behaviour (version from the URL,
+// never from a client header) and that the route is gated at all.
+func passGate(next http.Handler) http.Handler { return next }
 
-func (f fakePayments) Validate(_ *http.Request, _ string) (int, string, error) {
-	return f.version, f.atomic, f.err
+// gateOnHeader simulates the x402 gate: it passes only when X-Test-Paid is set,
+// otherwise returns 402 — so a test can prove the route fails closed.
+func gateOnHeader(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Test-Paid") != "yes" {
+			writeErr(w, http.StatusPaymentRequired, "payment_required", "pay first")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // memArtifacts serves version bytes from memory (seekable for Range).
@@ -50,7 +57,7 @@ type testServer struct {
 	store   *Store
 }
 
-func newTestServer(t *testing.T, membership string, payments PaymentValidator) testServer {
+func newTestServer(t *testing.T, membership string, gate func(http.Handler) http.Handler) testServer {
 	t.Helper()
 	signer := newTestSigner(t)
 	artifact := []byte(`{"messages":[{"role":"user","content":"hi"}]}` + "\n")
@@ -62,15 +69,16 @@ func newTestServer(t *testing.T, membership string, payments PaymentValidator) t
 	}
 	store := NewStore(filepath.Join(t.TempDir(), "ds.json"))
 	srv := NewServer(Config{
-		ID:          "ds",
-		Membership:  membership,
-		OwnerToken:  ownerToken,
-		OwnerSigner: signer.SignerID(),
-		Log:         log,
-		Ents:        NewEntitlements(),
-		Store:       store,
-		Artifacts:   memArtifacts{data: map[int][]byte{1: artifact}},
-		Payments:    payments,
+		ID:              "ds",
+		Membership:      membership,
+		OwnerToken:      ownerToken,
+		OwnerSigner:     signer.SignerID(),
+		Log:             log,
+		Ents:            NewEntitlements(),
+		Store:           store,
+		Artifacts:       memArtifacts{data: map[int][]byte{1: artifact}},
+		PaidJoin:        gate,
+		JoinPriceAtomic: "1000",
 	})
 	return testServer{srv: srv, bytesV1: artifact, signer: signer, store: store}
 }
@@ -90,7 +98,7 @@ func do(t *testing.T, h http.Handler, method, target, token string, hdr map[stri
 }
 
 func TestServer_PaidJoinThenDownload(t *testing.T) {
-	ts := newTestServer(t, MembershipInvite, fakePayments{version: 1, atomic: "1000"})
+	ts := newTestServer(t, MembershipInvite, passGate)
 	h := ts.srv.Handler()
 
 	// Pay -> mint a version-1 token.
@@ -129,7 +137,7 @@ func TestServer_PaidJoinThenDownload(t *testing.T) {
 }
 
 func TestServer_VersionScopeEnforced(t *testing.T) {
-	ts := newTestServer(t, MembershipInvite, fakePayments{version: 1, atomic: "1000"})
+	ts := newTestServer(t, MembershipInvite, passGate)
 	h := ts.srv.Handler()
 
 	// Append a v2 to the log so ?version=2 is a real (but unpaid) version.
@@ -137,7 +145,7 @@ func TestServer_VersionScopeEnforced(t *testing.T) {
 		t.Fatalf("append v2: %v", err)
 	}
 
-	w := do(t, h, "POST", "/dataset/ds/join/paid", "", nil) // pays for v1
+	w := do(t, h, "POST", "/dataset/ds/join/paid?version=1", "", nil) // pays for v1 (version from URL)
 	var join struct{ Token string }
 	_ = json.Unmarshal(w.Body.Bytes(), &join)
 
@@ -156,7 +164,7 @@ func TestServer_VersionScopeEnforced(t *testing.T) {
 }
 
 func TestServer_RangeReturns206WithWholeFileHash(t *testing.T) {
-	ts := newTestServer(t, MembershipOpen, nil)
+	ts := newTestServer(t, MembershipOpen, passGate)
 	h := ts.srv.Handler()
 	token := ownerToken // owner is a download superuser
 
@@ -174,7 +182,7 @@ func TestServer_RangeReturns206WithWholeFileHash(t *testing.T) {
 }
 
 func TestServer_GatesRejectNonMembersAndAnonymous(t *testing.T) {
-	ts := newTestServer(t, MembershipInvite, fakePayments{version: 1})
+	ts := newTestServer(t, MembershipInvite, passGate)
 	h := ts.srv.Handler()
 
 	if w := do(t, h, "GET", "/dataset/ds/download?version=1", "", nil); w.Code != http.StatusUnauthorized {
@@ -192,7 +200,7 @@ func TestServer_GatesRejectNonMembersAndAnonymous(t *testing.T) {
 }
 
 func TestServer_DeviceAuthAdmitGetsHeadAccess(t *testing.T) {
-	ts := newTestServer(t, MembershipOpen, nil) // open: auto-approved on code request
+	ts := newTestServer(t, MembershipOpen, passGate) // open: auto-approved on code request
 	h := ts.srv.Handler()
 
 	// device code (auto-approved) -> token
@@ -219,7 +227,7 @@ func TestServer_DeviceAuthAdmitGetsHeadAccess(t *testing.T) {
 }
 
 func TestServer_VerifyReportsChainHealth(t *testing.T) {
-	ts := newTestServer(t, MembershipOpen, nil)
+	ts := newTestServer(t, MembershipOpen, passGate)
 	h := ts.srv.Handler()
 
 	w := do(t, h, "GET", "/dataset/ds/verify", ownerToken, nil)
@@ -237,7 +245,7 @@ func TestServer_VerifyReportsChainHealth(t *testing.T) {
 }
 
 func TestServer_RehydratesPaidMemberAfterRestart(t *testing.T) {
-	ts := newTestServer(t, MembershipInvite, fakePayments{version: 1, atomic: "1000"})
+	ts := newTestServer(t, MembershipInvite, passGate)
 	h := ts.srv.Handler()
 
 	jw := do(t, h, "POST", "/dataset/ds/join/paid", "", nil)
@@ -254,17 +262,55 @@ func TestServer_RehydratesPaidMemberAfterRestart(t *testing.T) {
 	}
 	restarted := NewServer(Config{
 		ID: "ds", Membership: MembershipInvite, OwnerToken: ownerToken,
-		OwnerSigner: ts.signer.SignerID(),
-		Log:         LogFromVersions(st.Versions),
-		Ents:        loadEnts(st.Entitlements),
-		Store:       ts.store,
-		Artifacts:   memArtifacts{data: map[int][]byte{1: ts.bytesV1}},
-		Payments:    fakePayments{version: 1},
+		OwnerSigner:     ts.signer.SignerID(),
+		Log:             LogFromVersions(st.Versions),
+		Ents:            loadEnts(st.Entitlements),
+		Store:           ts.store,
+		Artifacts:       memArtifacts{data: map[int][]byte{1: ts.bytesV1}},
+		PaidJoin:        passGate,
+		JoinPriceAtomic: "1000",
 	})
 
 	// The pre-restart token still works — the member did not have to re-pay.
 	if dw := do(t, restarted.Handler(), "GET", "/dataset/ds/download?version=1", join.Token, nil); dw.Code != http.StatusOK {
 		t.Errorf("post-restart download = %d, want 200 (rehydration failed)", dw.Code)
+	}
+}
+
+// TestServer_PaidJoinGatedAndVersionFromURL is the C1 regression: the paid-join
+// route fails closed without the x402 gate's approval, and the minted version
+// is taken from the URL — a spoofed X-Dataset-Version header is ignored.
+func TestServer_PaidJoinGatedAndVersionFromURL(t *testing.T) {
+	ts := newTestServer(t, MembershipInvite, gateOnHeader)
+	h := ts.srv.Handler()
+	// Append a v2 so head=2; we still pay for v1 via the URL.
+	if _, err := ts.srv.log.Append(hashB, hashB, 5, ts.signer, fixedTime); err != nil {
+		t.Fatalf("append v2: %v", err)
+	}
+
+	// No payment -> the gate fails closed (NOT a free token).
+	if w := do(t, h, "POST", "/dataset/ds/join/paid?version=1", "", nil); w.Code != http.StatusPaymentRequired {
+		t.Fatalf("unpaid join = %d, want 402", w.Code)
+	}
+
+	// Paid: version is taken from the URL (=1); a spoofed X-Dataset-Version:99
+	// header must be ignored (this was the header-trust bug).
+	w := do(t, h, "POST", "/dataset/ds/join/paid?version=1", "",
+		map[string]string{"X-Test-Paid": "yes", "X-Dataset-Version": "99"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("paid join = %d, body %s", w.Code, w.Body.String())
+	}
+	var join struct {
+		Token   string `json:"token"`
+		Version int    `json:"version"`
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &join)
+	if join.Version != 1 {
+		t.Fatalf("minted version = %d, want 1 (from URL, not the spoofed header 99)", join.Version)
+	}
+	// The v1-scoped token must still not reach v2.
+	if dw := do(t, h, "GET", "/dataset/ds/download?version=2", join.Token, nil); dw.Code != http.StatusForbidden {
+		t.Errorf("v1-paid token download v2 = %d, want 403", dw.Code)
 	}
 }
 

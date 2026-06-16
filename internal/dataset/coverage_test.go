@@ -100,16 +100,16 @@ func TestServer_ErrorPaths(t *testing.T) {
 			t.Errorf("= %d, want 503", w.Code)
 		}
 	})
-	t.Run("join paid rejects payment error", func(t *testing.T) {
-		ts := newTestServer(t, MembershipInvite, fakePayments{err: errFake})
-		w := do(t, ts.srv.Handler(), "POST", "/dataset/ds/join/paid", "", nil)
+	t.Run("join paid fails closed when the gate rejects", func(t *testing.T) {
+		ts := newTestServer(t, MembershipInvite, gateOnHeader) // no X-Test-Paid -> 402
+		w := do(t, ts.srv.Handler(), "POST", "/dataset/ds/join/paid?version=1", "", nil)
 		if w.Code != http.StatusPaymentRequired {
 			t.Errorf("= %d, want 402", w.Code)
 		}
 	})
 	t.Run("join paid unknown version", func(t *testing.T) {
-		ts := newTestServer(t, MembershipInvite, fakePayments{version: 99})
-		w := do(t, ts.srv.Handler(), "POST", "/dataset/ds/join/paid", "", nil)
+		ts := newTestServer(t, MembershipInvite, passGate)
+		w := do(t, ts.srv.Handler(), "POST", "/dataset/ds/join/paid?version=99", "", nil)
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("= %d, want 400", w.Code)
 		}

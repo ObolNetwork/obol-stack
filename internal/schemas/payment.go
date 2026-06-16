@@ -212,3 +212,28 @@ func ApproximateRequestPriceFromPerHour(perHour string) (string, error) {
 
 	return value.Mul(approxMinutesPerRequestDecimal).Div(minutesPerHour).String(), nil
 }
+
+// MebibyteBytes is the divisor for perMB dataset pricing: one "MB" of dataset
+// pricing is a mebibyte (2^20 bytes), matching how artifact file sizes are
+// reported. Documented so buyers and sellers agree on the unit.
+const MebibyteBytes = 1 << 20
+
+var mebibyteBytesDecimal = decimal.NewFromInt(MebibyteBytes)
+
+// TotalPriceFromPerMB converts a per-megabyte dataset price into the TOTAL
+// per-request x402 charge for the whole artifact: perMB * (sizeBytes / 2^20).
+// A dataset is bought once, so the enforced request price is the full total —
+// returning the raw perMB would charge a single megabyte's worth for the whole
+// dataset. An empty price or non-positive size yields "0".
+func TotalPriceFromPerMB(perMB string, sizeBytes int64) (string, error) {
+	perMB = strings.TrimSpace(perMB)
+	if perMB == "" || sizeBytes <= 0 {
+		return "0", nil
+	}
+	value, err := decimal.NewFromString(perMB)
+	if err != nil {
+		return "", err
+	}
+	megabytes := decimal.NewFromInt(sizeBytes).Div(mebibyteBytesDecimal)
+	return value.Mul(megabytes).String(), nil
+}

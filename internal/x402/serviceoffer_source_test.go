@@ -213,7 +213,7 @@ func TestRouteRuleFromOffer_DatasetAdvertisesDatasetMetadata(t *testing.T) {
 				ManifestHash: "ABC123",
 				Version:      "2",
 				FileHash:     "DEF456",
-				SizeBytes:    1048576,
+				SizeBytes:    50 * 1048576, // 50 MiB
 			},
 			Payment: monetizeapi.ServiceOfferPayment{
 				Network: "base-sepolia",
@@ -239,11 +239,13 @@ func TestRouteRuleFromOffer_DatasetAdvertisesDatasetMetadata(t *testing.T) {
 	if route.DatasetFileHash != "def456" {
 		t.Errorf("DatasetFileHash = %q, want def456 (lowercased)", route.DatasetFileHash)
 	}
-	if route.DatasetSizeBytes != 1048576 {
-		t.Errorf("DatasetSizeBytes = %d, want 1048576", route.DatasetSizeBytes)
+	if route.DatasetSizeBytes != 50*1048576 {
+		t.Errorf("DatasetSizeBytes = %d, want %d", route.DatasetSizeBytes, 50*1048576)
 	}
-	if route.Price != "0.01" {
-		t.Errorf("Price = %q, want 0.01 (from perMB)", route.Price)
+	// perMB is the TOTAL for the whole artifact: 0.01/MB × 50 MiB = 0.5,
+	// NOT the raw 0.01 (the H3 bug charged one megabyte for the whole dataset).
+	if route.Price != "0.5" {
+		t.Errorf("Price = %q, want 0.5 (0.01/MB × 50 MiB total)", route.Price)
 	}
 	if route.Pattern != "/services/pi-sessions/*" {
 		t.Errorf("Pattern = %q, want /services/pi-sessions/*", route.Pattern)

@@ -173,6 +173,11 @@
           "minLength": 1,
           "description": "type=dataset only: content-address anchor (export bundle manifestHash, SHA-256) of the sold artifact."
         },
+        "datasetFileHash": {
+          "type": "string",
+          "minLength": 1,
+          "description": "type=dataset only: SHA-256 of the served artifact file, so a router-discovered buyer can verify downloaded bytes offline."
+        },
         "datasetVersion": {
           "type": "string",
           "minLength": 1,

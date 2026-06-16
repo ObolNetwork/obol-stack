@@ -218,13 +218,28 @@ func (k *KB) Payouts() map[string]float64 {
 	}
 
 	// ByImpact (default): proportional to accepted impact.
-	total := 0.0
 	per := map[string]float64{}
-	for _, r := range k.results {
-		if r.Accepted && r.Impact > 0 {
-			per[r.Worker] += r.Impact
-			total += r.Impact
+	if k.prog.Criteria.Accept == Threshold {
+		// Threshold mode accepts EVERY passing result, so summing per-worker
+		// lets a worker inflate their share by resubmitting the same passing
+		// result. Credit each worker's BEST accepted impact only. (BeatsChampion
+		// is already safe: a duplicate is never better than the champion, so it
+		// is not accepted — there the sum reflects genuine cumulative progress.)
+		for _, r := range k.results {
+			if r.Accepted && r.Impact > per[r.Worker] {
+				per[r.Worker] = r.Impact
+			}
 		}
+	} else {
+		for _, r := range k.results {
+			if r.Accepted && r.Impact > 0 {
+				per[r.Worker] += r.Impact
+			}
+		}
+	}
+	total := 0.0
+	for _, imp := range per {
+		total += imp
 	}
 	if total <= 0 {
 		return out

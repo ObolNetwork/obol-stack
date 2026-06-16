@@ -336,9 +336,23 @@ func (c *Controller) reconcileBounty(ctx context.Context, key string) error {
 		}
 	}
 
-	// 7. Payout — Verified + a held escrow → capture to the fulfiller.
+	// 7. Payout — Verified + a held escrow → capture to the ACCEPTED FULFILLER.
 	if bountyConditionIsTrue(status.Conditions, "Verified") && status.EscrowState == escrow.StateReserved {
-		receipt, err := c.escrowGateway().Capture(ctx, string(sb.UID))
+		// Bind the capture to the fulfiller's exact (address, amount) seat so the
+		// facilitator settles only the signed payout to the signed recipient —
+		// never "all voucher seats" to whoever the poster pre-signed. A voucher
+		// missing the fulfiller's seat fails closed (no mispayment) rather than
+		// paying the wrong party.
+		var receipt escrow.Receipt
+		var err error
+		if batch, ok := c.escrowGateway().(escrow.BatchGateway); ok && len(status.Claims) > 0 && status.Claims[0].FulfillerAddress != "" {
+			receipt, err = batch.CaptureBatch(ctx, string(sb.UID), []escrow.BatchRecipient{{
+				Address: status.Claims[0].FulfillerAddress,
+				Amount:  sb.Spec.Reward.Amount,
+			}})
+		} else {
+			receipt, err = c.escrowGateway().Capture(ctx, string(sb.UID))
+		}
 		if err != nil {
 			if isEscrowVoucherRefusal(err) {
 				// The facilitator wants a (fresh) Permit2 voucher before it
