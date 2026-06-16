@@ -66,12 +66,19 @@ var (
 	}
 
 	ChainBaseSepolia = ChainInfo{
-		Name:           "base-sepolia",
-		NetworkID:      "base-sepolia",
-		CAIP2Network:   "eip155:84532",
-		USDCAddress:    "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-		Decimals:       6,
-		EIP3009Name:    "USD Coin",
+		Name:         "base-sepolia",
+		NetworkID:    "base-sepolia",
+		CAIP2Network: "eip155:84532",
+		USDCAddress:  "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		Decimals:     6,
+		// Base-Sepolia USDC is FiatTokenV2_2 whose EIP-712 domain name is "USDC"
+		// (verified: on-chain DOMAIN_SEPARATOR() == keccak of the domain built
+		// with "USDC"), NOT the mainnet "USD Coin". Advertising "USD Coin" makes
+		// every EIP-3009 signature fail FiatToken's SignatureChecker against a
+		// REAL facilitator — the recurring base-sepolia "name" bug that the stub
+		// facilitator silently masked. TestUSDCDomainSeparatorsMatchOnChain pins
+		// this so it can never regress.
+		EIP3009Name:    "USDC",
 		EIP3009Version: "2",
 	}
 
