@@ -6,6 +6,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: test-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
@@ -51,7 +55,10 @@ jobs:
         env:
           NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID: ${{ secrets.WALLET_CONNECT_PROJECT_ID || 'test-project-id' }}
 
+  # Smoke-test the production image on main only — PRs already run `pnpm build`
+  # above; a second full Docker build per push was the main CI cost driver.
   docker-build-test:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -70,32 +77,22 @@ jobs:
           tags: obol-stack-front-end:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          load: true # Ensure image is loaded into local Docker daemon
+          load: true
           build-args: |
             NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=${{ secrets.WALLET_CONNECT_PROJECT_ID || 'test-project-id' }}
 
       - name: Verify Docker image exists
         run: |
-          echo "Checking if Docker image was built successfully..."
           docker images | grep obol-stack-front-end || (echo "Docker image not found!" && exit 1)
 
       - name: Test Docker image
         run: |
-          echo "Starting Docker container..."
           docker run --rm -d --name test-container -p 3000:3000 obol-stack-front-end:test
-
-          echo "Waiting for container to be ready..."
           for i in {1..30}; do
-            if curl -f http://localhost:3000 >/dev/null 2>&1; then
-              echo "Container is responding!"
+            if curl -sf http://localhost:3000 >/dev/null; then
               break
             fi
-            echo "Attempt $i: Container not ready yet, waiting..."
             sleep 2
           done
-
-          echo "Final health check..."
-          curl -f http://localhost:3000 || (echo "Health check failed!" && docker logs test-container && exit 1)
-
-          echo "Stopping container..."
+          curl -sf http://localhost:3000 || (docker logs test-container && exit 1)
           docker stop test-container
