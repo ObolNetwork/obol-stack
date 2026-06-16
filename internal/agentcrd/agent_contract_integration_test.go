@@ -20,8 +20,8 @@ import (
 //
 // The unit tests in agent_test.go and serviceoffercontroller/agent_render_test.go
 // only prove that we *render* the `.no-bundled-skills` marker and the capped
-// hermes-config keys. They do NOT prove the Hermes image
-// (nousresearch/hermes-agent:v2026.6.5) actually honors them. v2026.5.28
+// hermes-config keys. They do NOT prove the currently pinned Hermes image
+// actually honors them. v2026.5.28
 // shipped the marker check on the install/CLI path only; the per-launch
 // sync_skills() call ignored it and re-seeded ~24 categories from the
 // image-baked /opt/hermes/skills source on every boot, regardless of the
