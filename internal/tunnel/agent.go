@@ -9,6 +9,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 )
 
 const agentDeploymentID = agentruntime.DefaultInstanceID
@@ -54,7 +55,13 @@ func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
 
 	fmt.Printf("Syncing AGENT_BASE_URL=%s to obol-agent...\n", tunnelURL)
 
-	cmd := exec.Command(helmfileBin, "-f", helmfilePath, "sync")
+	// Match every other helmfile-sync path (stack/app/openclaw/hermes): on Helm 4+
+	// append --force-conflicts so the SSA upgrade can take ownership of the
+	// AGENT_BASE_URL env field, which InjectBaseURL previously wrote via
+	// `kubectl set env` (field manager "kubectl-set"). Without this, Helm 4's
+	// server-side apply refuses the field and the sync fails with a conflict.
+	syncArgs := append([]string{"-f", helmfilePath, "sync"}, helmcmd.SyncFlagsForVersion(filepath.Join(cfg.BinDir, "helm"))...)
+	cmd := exec.Command(helmfileBin, syncArgs...)
 	cmd.Dir = deploymentDir
 
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)

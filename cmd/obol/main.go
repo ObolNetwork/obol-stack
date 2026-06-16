@@ -102,9 +102,7 @@ COMMANDS:
 
    Tunnel Management:
      tunnel status    Show tunnel status and public URL
-     tunnel setup     Guided persistent tunnel setup with optional domain registration
-     tunnel login     Authenticate and create persistent tunnel (browser)
-     tunnel provision Provision persistent tunnel (API token)
+     tunnel setup     Create a permanent public URL with a Cloudflare tunnel
      tunnel restart   Restart tunnel connector (quick tunnels get new URL)
      tunnel stop      Stop the tunnel connector
      tunnel logs      View cloudflared logs
