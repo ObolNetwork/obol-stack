@@ -11,7 +11,9 @@ pnpm install
 pnpm run dev:local    # http://localhost:3000
 ```
 
-With a live cluster and `obol.stack` in `/etc/hosts`, use `pnpm run dev` → `http://obol.stack:3000`.
+This runs the UI standalone — no cluster needed. Dashboard and marketplace show a "Stack unreachable" state without a live cluster, but all UI, unit tests, and Playwright e2e tests work.
+
+Full cluster mode (`pnpm run dev`) requires a private Obol Stack deployment and `obol.stack` in `/etc/hosts` — this is an internal setup not available to external contributors.
 
 ## Features
 

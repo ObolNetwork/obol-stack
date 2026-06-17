@@ -5,8 +5,8 @@ Thank you for helping improve the Obol Stack dashboard. This doc is the short pa
 ## Prerequisites
 
 - Node.js 22+, pnpm 10.30+
-- A running Obol Stack cluster (`obol stack up`) for integration testing
-- `/etc/hosts`: `127.0.0.1 obol.stack` (dashboard defaults to `http://obol.stack:3000` in dev)
+- A live cluster is **not required** for UI contributions — `pnpm run dev:local` runs the frontend standalone and all tests pass without one
+- A running Obol Stack cluster (`obol stack up`) is needed only for end-to-end integration testing against live APIs (internal setup)
 
 ## Setup
 
@@ -66,5 +66,5 @@ Do **not** file vulnerabilities as public issues. Email **security@obol.tech** �
 
 ## Related repos
 
-- [obol-stack](https://github.com/ObolNetwork/obol-stack) — CLI, x402, ServiceOffer controller
+- **obol-stack** — CLI, x402, ServiceOffer controller (private repo — internal use only)
 - [obol-stack-docs](https://github.com/ObolNetwork/obol-stack-docs) — user documentation
