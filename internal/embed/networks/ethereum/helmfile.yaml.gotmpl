@@ -63,7 +63,7 @@ releases:
                     - --full
                     {{- else if eq (index .Values "pruneKind" | default "") "before" }}
                     # Partial archive: keep state, receipts and bodies from
-                    # the requested block forward. Reth v2.2.0 and current
+                    # the requested block forward. Reth v2.3.0 and current
                     # main both support exact .before cutoffs for these
                     # segments, so avoid the coarser pre-merge preset.
                     - --prune.account-history.before={{ .Values.pruneBlock }}
