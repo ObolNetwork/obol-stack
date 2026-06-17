@@ -28,7 +28,7 @@ releases:
     createNamespace: true
     chart: ethereum-helm-charts/ethereum-node
     # renovate: datasource=helm depName=ethereum-node registryUrl=https://ethpandaops.github.io/ethereum-helm-charts
-    version: 0.2.14
+    version: 0.2.15
     needs: [ethereum-pvcs]
     values:
       # Network and checkpoint sync configuration
@@ -91,19 +91,19 @@ releases:
           image:
             {{- if eq .Values.executionClient "reth" }}
             # renovate: datasource=github-releases depName=paradigmxyz/reth
-            tag: v2.2.0
+            tag: v2.3.0
             {{- else if eq .Values.executionClient "geth" }}
             # renovate: datasource=github-releases depName=ethereum/go-ethereum
             tag: v1.17.3
             {{- else if eq .Values.executionClient "nethermind" }}
             # renovate: datasource=github-releases depName=NethermindEth/nethermind
-            tag: "1.37.2"
+            tag: "1.38.1"
             {{- else if eq .Values.executionClient "besu" }}
             # renovate: datasource=github-releases depName=hyperledger/besu
-            tag: "26.5.0"
+            tag: "26.6.1"
             {{- else if eq .Values.executionClient "erigon" }}
             # renovate: datasource=github-releases depName=erigontech/erigon
-            tag: v3.4.2
+            tag: v3.4.3
             {{- end }}
           persistence:
             enabled: true
@@ -120,10 +120,10 @@ releases:
             tag: v8.1.3
             {{- else if eq .Values.consensusClient "prysm" }}
             # renovate: datasource=github-releases depName=OffchainLabs/prysm
-            tag: v7.1.4
+            tag: v7.1.5
             {{- else if eq .Values.consensusClient "teku" }}
             # renovate: datasource=github-releases depName=Consensys/teku
-            tag: "26.4.0"
+            tag: "26.6.1"
             {{- else if eq .Values.consensusClient "nimbus" }}
             # renovate: datasource=docker depName=statusim/nimbus-eth2
             tag: multiarch-v26.5.0
