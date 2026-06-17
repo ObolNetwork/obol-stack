@@ -1,20 +1,15 @@
-import { Box, Flex, styled } from '@obolnetwork/obol-ui';
-import { HeroBand } from '../HeroBand';
+import { Box, styled } from '@obolnetwork/obol-ui';
+import { NetworksSection } from '../NetworksSection/NetworksSection';
 import { NodeOverview } from '../NodeOverview';
-import { Card } from '../../atoms/Card';
-import { SectionTitle } from '../../atoms/SectionTitle';
-import { CountBadge } from '../../atoms/CountBadge';
-import { HomeAgentCard } from '../../home/HomeAgentCard';
-import { HomeListingsWidget } from '../../home/HomeListingsWidget';
-import { HomeNetworksWidget } from '../../home/HomeNetworksWidget';
-import { HomeRegistryBanner } from '../../home/HomeRegistryBanner';
+import { AgentList } from '../AgentList';
+import { AgentRegistrationCard } from '../../molecules/AgentRegistrationCard';
+import { ServiceList } from '../ServiceList';
+import { AgentRegistry } from '../AgentRegistry';
 import { DashboardData } from '../../../types/dashboard';
 import { AgentChatSidebar } from '../../molecules/AgentChatSidebar';
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { ErrorState } from '../../molecules/ErrorState';
+import { useState, useCallback } from 'react';
 import { useAnchorHash } from '../../../hooks/useAnchorHash';
-import { useAgentInstances } from '../../../hooks/useAgents';
-import { useTopNav } from '../../../hooks/useTopNav';
 import type { AgentInstance } from '@/types/agent';
 
 interface DashboardContentProps {
@@ -28,7 +23,7 @@ const Container = styled(Box, {
 });
 
 const MainSection = styled(Box, {
-  maxWidth: '1160px',
+  maxWidth: '800px',
   margin: '0 auto',
   width: '100%',
 
@@ -36,7 +31,7 @@ const MainSection = styled(Box, {
     transition: 'margin 0.3s ease-in-out',
 
     '&[data-sidebar-open="true"]': {
-      marginLeft: '0px',
+      marginLeft: '0px', // smooth animation now works
     },
   },
   '@media (min-width: 1300px) and (max-width: 1500px)': {
@@ -47,7 +42,7 @@ const MainSection = styled(Box, {
     },
 
     '&[data-sidebar-open="true"]': {
-      marginLeft: '0px',
+      marginLeft: '0px', // smooth animation now works
     },
   },
   '@media (max-width: 1300px)': {
@@ -61,24 +56,14 @@ const SectionContainer = styled(Box, {
   gap: '$lg',
 });
 
-const AgentGrid = styled(Box, {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(2, 1fr)',
-  gap: '$sm',
-  '@media (max-width: 768px)': {
-    gridTemplateColumns: '1fr',
-  },
-});
-
-export function DashboardContent({ data }: DashboardContentProps) {
+export function DashboardContent({
+  data,
+  error,
+  onRetry,
+}: DashboardContentProps) {
   const { hasHash } = useAnchorHash({ hash: '#agent' });
   const [isSidebarOpen, setIsSidebarOpen] = useState(hasHash);
   const [chatInstance, setChatInstance] = useState<AgentInstance | null>(null);
-  const { instances } = useAgentInstances();
-  const { onNavSelect } = useTopNav();
-  const router = useRouter();
-
-  const uptimeHours = data?.nodeOverview?.uptime?.hours ?? 0;
 
   const handleInstanceSelect = (instance: AgentInstance) => {
     setIsSidebarOpen(true);
@@ -93,44 +78,18 @@ export function DashboardContent({ data }: DashboardContentProps) {
     <Container>
       <MainSection as="section" data-sidebar-open={isSidebarOpen}>
         <SectionContainer>
-          {/* Hero band */}
-          <HeroBand data={data} />
-
-          {/* Node Overview */}
+          <AgentList onInstanceSelect={handleInstanceSelect} />
+          <AgentRegistrationCard />
+          <ServiceList />
+          <AgentRegistry />
+          {error && <ErrorState onRetry={onRetry} />}
+          {data && (data.localNodes.length > 0 || data.erpcData) && (
+            <NetworksSection
+              localNodes={data.localNodes}
+              erpcData={data.erpcData}
+            />
+          )}
           {data && <NodeOverview data={data.nodeOverview} ports={data.ports} />}
-
-          {/* AI Agent Instances — 2-column grid */}
-          <Card css={{ padding: '$lg' }}>
-            <Flex
-              css={{ alignItems: 'center', gap: '$sm', marginBottom: '$md' }}
-            >
-              <SectionTitle>AI Agent Instances</SectionTitle>
-              {instances.length > 0 && <CountBadge count={instances.length} />}
-            </Flex>
-            <AgentGrid>
-              {instances.map(instance => (
-                <HomeAgentCard
-                  key={`${instance.runtime}:${instance.id}`}
-                  instance={instance}
-                  uptimeHours={uptimeHours}
-                  onChat={handleInstanceSelect}
-                />
-              ))}
-            </AgentGrid>
-          </Card>
-
-          {/* My Listings */}
-          <HomeListingsWidget
-            onManage={() => router.push('/marketplace/listings')}
-          />
-
-          {/* Networks */}
-          {data?.erpcData && <HomeNetworksWidget erpcData={data.erpcData} />}
-
-          {/* Agent Registry banner */}
-          <HomeRegistryBanner
-            onBrowseMarketplace={() => onNavSelect('marketplace')}
-          />
         </SectionContainer>
       </MainSection>
 

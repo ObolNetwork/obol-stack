@@ -1,1 +1,0 @@
-export { HeroBand } from './HeroBand';

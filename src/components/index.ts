@@ -37,7 +37,6 @@ export { DashboardTemplate } from './templates/DashboardTemplate';
 // Organisms
 export { DashboardHeader } from './organisms/DashboardHeader';
 export { DashboardContent } from './organisms/DashboardContent';
-export { HeroBand } from './organisms/HeroBand';
 export { FooterBar } from './organisms/FooterBar';
 export { ErpcStatus } from './organisms/ErpcStatus';
 export { NetworksSection } from './organisms/NetworksSection/NetworksSection';
