@@ -136,6 +136,49 @@ type RouteRule struct {
 	// minutes-to-hours here — operator-set values up to
 	// MaxMaxTimeoutSeconds are honored verbatim.
 	MaxTimeoutSeconds int64 `yaml:"maxTimeoutSeconds,omitempty"`
+
+	// Card, when non-nil, marks this route as gated by the MPP credit-card
+	// method (Stripe stripe.charge) instead of x402 on-chain settlement.
+	// Mirrors ServiceOffer.spec.payment.card. SPIKE: the serviceoffer route
+	// source does not yet populate this from the CRD — see card.go.
+	Card *CardRoute `yaml:"card,omitempty"`
+
+	// MPPTempo, when non-nil, advertises a Tempo MPP pull-payment option for
+	// this route. It can ride alongside Card so Hermes/mppx clients can choose
+	// between Stripe SPT and Tempo.
+	MPPTempo *TempoMPPRoute `yaml:"mppTempo,omitempty"`
+}
+
+// CardRoute carries the per-route MPP credit-card (Stripe) terms used when
+// RouteRule.Card is non-nil. It is the card-method analog of the
+// PayTo/Network/Asset fields above.
+type CardRoute struct {
+	// Provider is the card payment provider (only "stripe" today).
+	Provider string `yaml:"provider,omitempty"`
+	// Account is the Stripe destination account id (acct_...) that receives
+	// settled funds — the card analog of PayTo.
+	Account string `yaml:"account,omitempty"`
+	// Currency is the ISO-4217 charge currency (e.g. "usd").
+	Currency string `yaml:"currency,omitempty"`
+	// Decimals is the currency's minor-unit precision (2 for usd/eur).
+	Decimals int `yaml:"decimals,omitempty"`
+	// ProfileID is the Stripe profile id advertised in the MPP challenge so
+	// clients can mint an SPT.
+	ProfileID string `yaml:"profileId,omitempty"`
+	// PaymentMethodTypes are the accepted Stripe payment-method types,
+	// advertised in the challenge (defaults to ["card","link"]).
+	PaymentMethodTypes []string `yaml:"paymentMethodTypes,omitempty"`
+}
+
+// TempoMPPRoute carries the per-route Tempo MPP terms. V1 supports pull
+// transaction credentials only so the verifier can submit after upstream
+// success and preserve Obol's charge-after-success invariant.
+type TempoMPPRoute struct {
+	PayTo    string `yaml:"payTo,omitempty"`
+	Asset    string `yaml:"asset,omitempty"`
+	Decimals int    `yaml:"decimals,omitempty"`
+	ChainID  int64  `yaml:"chainId,omitempty"`
+	Network  string `yaml:"network,omitempty"`
 }
 
 // LoadConfig reads and parses a pricing configuration YAML file.

@@ -183,10 +183,13 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 	display := buildPaymentDisplay(rule, chain, asset, wallet, requirement.Amount)
 
 	middleware := NewForwardAuthMiddleware(ForwardAuthConfig{
-		FacilitatorURL:      cfg.FacilitatorURL,
-		VerifyOnly:          cfg.VerifyOnly,
-		Extensions:          extensions,
-		SendPaymentRequired: NewHTMLAwarePaymentRequired(display),
+		FacilitatorURL: cfg.FacilitatorURL,
+		VerifyOnly:     cfg.VerifyOnly,
+		Extensions:     extensions,
+		SendPaymentRequired: func(w http.ResponseWriter, r *http.Request, requirements []x402types.PaymentRequirements, extensions map[string]any) {
+			addMPPAuthenticateHeaders(w, r, rule)
+			NewHTMLAwarePaymentRequired(display)(w, r, requirements, extensions)
+		},
 	}, []x402types.PaymentRequirements{requirement})
 
 	upstreamAuth := rule.UpstreamAuth
@@ -234,6 +237,17 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// MPP credit-card offers gate through Stripe (authorize -> capture/cancel)
+	// instead of the x402 facilitator ForwardAuth path.
+	if rule.MPPTempo != nil && mppAuthorizationMethod(r) == mppMethodTempo {
+		v.serveTempoMPPGated(w, r, rule, requirement, extensions, proxy, defaultTempoMPPGateway)
+		return
+	}
+	if rule.IsCard() {
+		v.serveCardGated(w, r, rule, requirement, extensions, proxy, defaultCardGateway, defaultSPTGuard)
+		return
+	}
+
 	wallet := cfg.Wallet
 	if rule.PayTo != "" {
 		wallet = rule.PayTo
@@ -246,10 +260,13 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		// upstream and settles only after a <400 response, so verifyOnly=false
 		// is correct here. SettlesInProcess suppresses the (otherwise
 		// per-request) verifyOnly=false warning on this safe path.
-		VerifyOnly:          false,
-		SettlesInProcess:    true,
-		Extensions:          extensions,
-		SendPaymentRequired: NewHTMLAwarePaymentRequired(display),
+		VerifyOnly:       false,
+		SettlesInProcess: true,
+		Extensions:       extensions,
+		SendPaymentRequired: func(w http.ResponseWriter, r *http.Request, requirements []x402types.PaymentRequirements, extensions map[string]any) {
+			addMPPAuthenticateHeaders(w, r, rule)
+			NewHTMLAwarePaymentRequired(display)(w, r, requirements, extensions)
+		},
 	}, []x402types.PaymentRequirements{requirement})
 
 	hadPayment := r.Header.Get("X-PAYMENT") != ""
@@ -311,6 +328,12 @@ func (v *Verifier) matchPaidRouteFull(cfg *PricingConfig, uri string) (*RouteRul
 	rule := matchRoute(cfg.Routes, uri)
 	if rule == nil {
 		return nil, x402types.PaymentRequirements{}, nil, nil, ChainInfo{}, AssetInfo{}, false
+	}
+
+	// Card routes settle off-chain via Stripe; skip chain/asset resolution
+	// and emit the MPP credit-card 402 option instead.
+	if rule.IsCard() {
+		return rule, buildCardRequirement(rule), nil, prometheusLabels(rule), ChainInfo{}, AssetInfo{}, true
 	}
 
 	wallet := cfg.Wallet

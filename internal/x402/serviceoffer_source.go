@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -179,6 +180,53 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 		OfferNamespace:         offer.Namespace,
 		OfferName:              offer.Name,
 		MaxTimeoutSeconds:      offer.Spec.Payment.MaxTimeoutSeconds,
+	}
+
+	// MPP credit-card offers carry off-chain Stripe settlement terms instead
+	// of the crypto payTo/network/asset. Populate the card route so the
+	// verifier gates this offer through serveCardGated (matchPaidRouteFull /
+	// HandleProxy dispatch on rule.IsCard()).
+	if strings.EqualFold(offer.Spec.Payment.Method, "card") && offer.Spec.Payment.Card != nil {
+		c := offer.Spec.Payment.Card
+		currency := strings.ToLower(strings.TrimSpace(c.Currency))
+		if currency == "" {
+			currency = defaultCardCurrency
+		}
+		decimals := currencyMinorUnits(currency)
+		if err := validateStripeCardMinimum(price, currency, decimals); err != nil {
+			return RouteRule{}, err
+		}
+		provider := c.Provider
+		if provider == "" {
+			provider = cardNetworkStripe
+		}
+		profileID := firstNonEmpty(c.ProfileID, os.Getenv("STRIPE_PROFILE_ID"))
+		if profileID != "" && !validStripeProfileID(profileID) {
+			return RouteRule{}, fmt.Errorf("invalid Stripe profile id %q: expected profile_... or profile_test_...", profileID)
+		}
+		rule.Card = &CardRoute{
+			Provider:           provider,
+			Account:            c.Account,
+			Currency:           currency,
+			Decimals:           decimals,
+			ProfileID:          profileID,
+			PaymentMethodTypes: append([]string(nil), c.PaymentMethodTypes...),
+		}
+	}
+
+	if offer.Spec.Payment.MPP != nil && offer.Spec.Payment.MPP.Tempo != nil {
+		t := offer.Spec.Payment.MPP.Tempo
+		decimals := int(t.Decimals)
+		if decimals == 0 {
+			decimals = 6
+		}
+		rule.MPPTempo = &TempoMPPRoute{
+			PayTo:    t.PayTo,
+			Asset:    t.Asset,
+			Decimals: decimals,
+			ChainID:  t.ChainID,
+			Network:  t.Network,
+		}
 	}
 
 	if offer.IsAgent() && offer.Status.AgentResolution != nil {

@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -84,6 +85,67 @@ func payToFlag(usage string) *cli.StringFlag {
 		Usage:   usage + " [aliases: --wallet (deprecated), -w]",
 		Sources: cli.EnvVars("X402_WALLET"),
 	}
+}
+
+// Payment-method selector values for the --pay-with flag.
+const (
+	payMethodCrypto = "crypto"
+	payMethodCard   = "card"
+)
+
+var (
+	// stripeAccountRe matches a Stripe account id (e.g. acct_1A2b3C4d).
+	stripeAccountRe = regexp.MustCompile(`^acct_[A-Za-z0-9]+$`)
+	// currencyRe matches a lower-case ISO-4217 currency code (e.g. usd).
+	currencyRe = regexp.MustCompile(`^[a-z]{3}$`)
+)
+
+// normalizePayWith lower-cases/trims the --pay-with value and defaults an
+// empty value to crypto so existing flag-free invocations are unchanged.
+func normalizePayWith(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" {
+		return payMethodCrypto
+	}
+	return v
+}
+
+// resolveCardPayment validates the card flags and returns the
+// spec.payment map for an MPP credit-card (Stripe) ServiceOffer. It is the
+// card analog of the crypto wallet/chain/asset resolution in the sell
+// actions: instead of a chain + 0x payTo it emits method=card plus a card
+// block carrying the Stripe destination account and currency.
+func resolveCardPayment(cmd *cli.Command, price map[string]any) (map[string]any, error) {
+	account := strings.TrimSpace(cmd.String("stripe-account"))
+	if account == "" {
+		return nil, fmt.Errorf("--stripe-account is required with --pay-with card (the acct_... that receives card funds)")
+	}
+	if !stripeAccountRe.MatchString(account) {
+		return nil, fmt.Errorf("invalid --stripe-account %q: expected a Stripe account id like acct_1A2b3C4d", account)
+	}
+	currency := strings.ToLower(strings.TrimSpace(cmd.String("card-currency")))
+	if currency == "" {
+		currency = "usd"
+	}
+	if !currencyRe.MatchString(currency) {
+		return nil, fmt.Errorf("invalid --card-currency %q: expected a 3-letter ISO-4217 code like usd", currency)
+	}
+	card := map[string]any{
+		"provider": "stripe",
+		"account":  account,
+		"currency": currency,
+	}
+	// Stripe MPP uses a profile id (profile_... / profile_test_...) so card
+	// clients can mint a Shared Payment Token.
+	if profileID := strings.TrimSpace(cmd.String("stripe-profile-id")); profileID != "" {
+		card["profileId"] = profileID
+	}
+	return map[string]any{
+		"method":            payMethodCard,
+		"card":              card,
+		"maxTimeoutSeconds": cmd.Int("max-timeout"),
+		"price":             price,
+	}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -707,6 +769,25 @@ Examples:
 				Value:   "default",
 			},
 			&cli.StringFlag{
+				Name:  "pay-with",
+				Usage: "Payment method: 'crypto' (x402 on-chain stablecoin, default) or 'card' (MPP Stripe credit card)",
+				Value: payMethodCrypto,
+			},
+			&cli.StringFlag{
+				Name:  "stripe-account",
+				Usage: "Stripe destination account id (acct_...) that receives card funds — required with --pay-with card (card analog of --pay-to)",
+			},
+			&cli.StringFlag{
+				Name:  "card-currency",
+				Usage: "ISO-4217 currency for card charges",
+				Value: "usd",
+			},
+			&cli.StringFlag{
+				Name:    "stripe-profile-id",
+				Usage:   "Stripe profile id (profile_... or profile_test_...) advertised in the MPP challenge",
+				Sources: cli.EnvVars("STRIPE_PROFILE_ID"),
+			},
+			&cli.StringFlag{
 				Name:  "upstream",
 				Usage: "Upstream service name",
 			},
@@ -840,31 +921,16 @@ Examples:
 				return err
 			}
 
-			// Auto-discover wallet from remote-signer if not set.
-			wallet := cmd.String("pay-to")
-			if wallet == "" {
-				if resolved, err := hermes.ResolveWalletAddress(cfg); err == nil {
-					wallet = resolved
-					u.Infof("Using wallet from remote-signer: %s", wallet)
-				} else if u.IsTTY() {
-					var inputErr error
-					wallet, inputErr = u.Input("Wallet address (payment recipient)", "")
-					if inputErr != nil || wallet == "" {
-						return fmt.Errorf("recipient required: use --pay-to <addr> or set X402_WALLET")
-					}
-				} else {
-					return fmt.Errorf("recipient required: use --pay-to <addr> or set X402_WALLET")
-				}
-			}
-			if err := x402verifier.ValidateWallet(wallet); err != nil {
-				return err
-			}
-
-			// Ensure the x402-verifier CA bundle is populated so TLS verification of
-			// the facilitator works. This is a no-op if already populated. Non-fatal.
-			x402verifier.PopulateCABundle(cfg)
-
 			ns := cmd.String("namespace")
+
+			payWith := normalizePayWith(cmd.String("pay-with"))
+			if payWith != payMethodCrypto && payWith != payMethodCard {
+				return fmt.Errorf("--pay-with must be %q or %q, got %q", payMethodCrypto, payMethodCard, cmd.String("pay-with"))
+			}
+			isCard := payWith == payMethodCard
+			// wallet is the crypto payTo recipient; resolved in the crypto
+			// branch below and left empty for card offers.
+			var wallet string
 
 			if cmd.String("upstream") == "" {
 				return fmt.Errorf("upstream service name required: use --upstream <service-name>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --pay-to 0x... --chain base-sepolia --price 0.001", name)
@@ -889,10 +955,59 @@ Examples:
 				price["perHour"] = priceTable.PerHour
 			}
 
-			chainName := cmd.String("chain")
-			assetTerms, err := resolveAssetTerms(cmd, &chainName)
-			if err != nil {
-				return err
+			// Resolve the payment block per the selected method.
+			var (
+				payment    map[string]any
+				assetTerms schemas.AssetTerms // crypto only; stays zero for card
+			)
+			switch payWith {
+			case payMethodCard:
+				payment, err = resolveCardPayment(cmd, price)
+				if err != nil {
+					return err
+				}
+				u.Infof("Selling via credit card (Stripe account %s, %s)",
+					cmd.String("stripe-account"), strings.ToLower(cmd.String("card-currency")))
+			default: // payMethodCrypto
+				// Auto-discover wallet from remote-signer if not set.
+				wallet = cmd.String("pay-to")
+				if wallet == "" {
+					if resolved, rerr := hermes.ResolveWalletAddress(cfg); rerr == nil {
+						wallet = resolved
+						u.Infof("Using wallet from remote-signer: %s", wallet)
+					} else if u.IsTTY() {
+						var inputErr error
+						wallet, inputErr = u.Input("Wallet address (payment recipient)", "")
+						if inputErr != nil || wallet == "" {
+							return fmt.Errorf("recipient required: use --pay-to <addr> or set X402_WALLET")
+						}
+					} else {
+						return fmt.Errorf("recipient required: use --pay-to <addr> or set X402_WALLET")
+					}
+				}
+				if err := x402verifier.ValidateWallet(wallet); err != nil {
+					return err
+				}
+				// Ensure the x402-verifier CA bundle is populated so TLS
+				// verification of the facilitator works. No-op if already
+				// populated. Non-fatal.
+				x402verifier.PopulateCABundle(cfg)
+
+				chainName := cmd.String("chain")
+				assetTerms, err = resolveAssetTerms(cmd, &chainName)
+				if err != nil {
+					return err
+				}
+				payment = map[string]any{
+					"scheme":            "exact",
+					"network":           chainName,
+					"payTo":             wallet,
+					"maxTimeoutSeconds": cmd.Int("max-timeout"),
+					"price":             price,
+				}
+				if !assetTerms.IsZero() {
+					payment["asset"] = assetTerms
+				}
 			}
 
 			spec := map[string]any{
@@ -903,16 +1018,7 @@ Examples:
 					"port":       cmd.Int("port"),
 					"healthPath": cmd.String("health-path"),
 				},
-				"payment": map[string]any{
-					"scheme":            "exact",
-					"network":           chainName,
-					"payTo":             wallet,
-					"maxTimeoutSeconds": cmd.Int("max-timeout"),
-					"price":             price,
-				},
-			}
-			if !assetTerms.IsZero() {
-				spec["payment"].(map[string]any)["asset"] = assetTerms
+				"payment": payment,
 			}
 
 			if path := cmd.String("path"); path != "" {
@@ -941,21 +1047,33 @@ Examples:
 					prov.Framework, prov.MetricName, prov.MetricValue, prov.ParamCount)
 			}
 
-			reg, registerEnabled, err := buildSellRegistrationConfig(name, sellRegistrationInput{
-				NoRegister:    cmd.Bool("no-register"),
-				Register:      cmd.Bool("register"),
-				Name:          cmd.String("register-name"),
-				Description:   cmd.String("description"),
-				Image:         cmd.String("register-image"),
-				Skills:        cmd.StringSlice("register-skills"),
-				Domains:       cmd.StringSlice("register-domains"),
-				MetadataPairs: cmd.StringSlice("register-metadata"),
-			})
-			if err != nil {
-				return err
-			}
-			if registerEnabled {
-				spec["registration"] = reg
+			// ERC-8004 registration is an on-chain identity step and only
+			// applies to crypto offers. Card offers publish the payment-gated
+			// route without registration.
+			var registerEnabled bool
+			if isCard {
+				if cmd.Bool("register") {
+					return fmt.Errorf("ERC-8004 registration is not supported for --pay-with card yet; re-run with --no-register")
+				}
+				u.Info("Card offers are not ERC-8004 registered (no on-chain identity); publishing the payment-gated route only.")
+			} else {
+				reg, enabled, rerr := buildSellRegistrationConfig(name, sellRegistrationInput{
+					NoRegister:    cmd.Bool("no-register"),
+					Register:      cmd.Bool("register"),
+					Name:          cmd.String("register-name"),
+					Description:   cmd.String("description"),
+					Image:         cmd.String("register-image"),
+					Skills:        cmd.StringSlice("register-skills"),
+					Domains:       cmd.StringSlice("register-domains"),
+					MetadataPairs: cmd.StringSlice("register-metadata"),
+				})
+				if rerr != nil {
+					return rerr
+				}
+				registerEnabled = enabled
+				if registerEnabled {
+					spec["registration"] = reg
+				}
 			}
 
 			// When registration is enabled, the serviceoffer-controller reads the
