@@ -332,36 +332,5 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
     </NodeHeader>
   );
 
-  return (
-    <Card section>
-      <Accordion
-        header={headerContent}
-        defaultExpanded={true}
-        onToggle={expanded => {
-          setIsExpanded(expanded);
-        }}
-      >
-        <NodeContent>
-          {/* Ports Section */}
-          {/* <SectionContainer>
-            <SectionTitle>PORTS</SectionTitle>
-            <PortsList>
-              {portList.map(port => (
-                <PortItem key={port.key}>
-                  <PortNameAndNumber>
-                    <PortName>{port.name}</PortName>
-                    <PortNumber>{port.port}</PortNumber>
-                  </PortNameAndNumber>
-
-                  <PortStatus status={port.status}>
-                    {port.status === 'open' ? 'Open' : 'Closed'}
-                  </PortStatus>
-                </PortItem>
-              ))}
-            </PortsList>
-          </SectionContainer> */}
-        </NodeContent>
-      </Accordion>
-    </Card>
-  );
+  return <Card css={{ padding: '$lg' }}>{headerContent}</Card>;
 };
