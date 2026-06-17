@@ -22,16 +22,13 @@ import { SellFlowSteps } from '@/components/molecules/SellFlowSteps';
 import { useOperatorWallets } from '@/hooks/useOperatorWallets';
 import { DEFAULT_AGENT_ID } from '@/lib/services/agent-runtime';
 import {
-  buildAgentNewCli,
   buildSellHttpCli,
   buildSellInferenceCli,
-  buildSellAgentCli,
 } from '@/lib/sell/cli-commands';
 import { resolveUpstreamHealthPath } from '@/lib/sell/upstream-health';
 import {
   httpPostCreateSteps,
   inferencePostCreateSteps,
-  agentPostCreateSteps,
   type SellFlowStep,
 } from '@/lib/sell/flow-steps';
 import type { ChainName } from '@/types/dashboard';
@@ -41,7 +38,7 @@ export interface NewListingDialogProps {
   onClose: () => void;
 }
 
-type ServiceType = 'inference' | 'route' | 'agent';
+type ServiceType = 'inference' | 'route';
 type PaymentToken = SellPaymentToken;
 type PriceUnit = 'req' | 'mtok' | 'hour';
 type Visibility = 'local' | 'erc8004';
@@ -321,6 +318,7 @@ function TextInput({
   prefix,
   suffix,
   mono,
+  list,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -328,6 +326,7 @@ function TextInput({
   prefix?: React.ReactNode;
   suffix?: React.ReactNode;
   mono?: boolean;
+  list?: string;
 }) {
   return (
     <InputShell>
@@ -336,6 +335,7 @@ function TextInput({
         mono={mono}
         value={value}
         placeholder={placeholder}
+        list={list}
         onChange={(e: ChangeEvent<HTMLInputElement>) =>
           onChange(e.target.value)
         }
@@ -627,7 +627,6 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
   const [name, setName] = useState('my-service');
   const [upstream, setUpstream] = useState('ollama:11434');
   const [model, setModel] = useState('qwen3.5:9b');
-  const [skills, setSkills] = useState('addresses,gas');
   const [priceAmount, setPriceAmount] = useState('0.001');
   const [priceToken, setPriceToken] = useState<PaymentToken>('USDC');
   const [priceUnit, setPriceUnit] = useState<PriceUnit>('req');
@@ -694,12 +693,6 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
         model: model.trim() || '<model>',
       });
     }
-    if (type === 'agent') {
-      return buildSellAgentCli({
-        ...base,
-        agentName: name.trim() || '<agent-name>',
-      });
-    }
     const upstreamService = upstream.split(':')[0];
     return buildSellHttpCli({
       ...base,
@@ -708,27 +701,7 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
       namespace: 'llm',
       healthPath: resolveUpstreamHealthPath(upstreamService),
     });
-  }, [
-    type,
-    name,
-    model,
-    skills,
-    upstream,
-    priceAmount,
-    priceToken,
-    chain,
-    payTo,
-  ]);
-
-  const agentNewCli = useMemo(
-    () =>
-      buildAgentNewCli({
-        name: name.trim() || '<agent-name>',
-        model: model.trim() || undefined,
-        skills: skills.trim() || undefined,
-      }),
-    [name, model, skills]
-  );
+  }, [type, name, model, upstream, priceAmount, priceToken, chain, payTo]);
 
   if (!open) return null;
 
@@ -738,8 +711,7 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
     !submitting &&
     name.trim().length > 0 &&
     !paymentError &&
-    (type !== 'inference' || model.trim().length > 0) &&
-    (type !== 'agent' || model.trim().length > 0);
+    (type !== 'inference' || model.trim().length > 0);
 
   const handleTokenChange = (token: PaymentToken) => {
     const next = reconcileSellPaymentSelection(
@@ -782,11 +754,6 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
       setSubmitState('error');
       return;
     }
-    if (type === 'agent' && !model.trim()) {
-      setErrorMessage('Model is required for sub-agent listings.');
-      setSubmitState('error');
-      return;
-    }
     if (paymentError) {
       setErrorMessage(paymentError);
       setSubmitState('error');
@@ -798,7 +765,6 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
     setFollowUpSteps([]);
 
     const isInference = type === 'inference';
-    const isAgent = type === 'agent';
     const sellBase = {
       name: name.trim(),
       payTo: wallet,
@@ -806,7 +772,6 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
       token: priceToken,
       pricePerRequest: priceAmount,
     };
-    const agentNamespace = `agent-${name.trim()}`;
 
     try {
       const resp = await fetch('/api/sell/create', {
@@ -814,32 +779,20 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           name: name.trim(),
-          namespace: isAgent ? agentNamespace : 'llm',
-          type: isInference ? 'inference' : isAgent ? 'agent' : 'http',
+          namespace: 'llm',
+          type: isInference ? 'inference' : 'http',
           wallet,
           chain,
           token: priceToken,
           pricePerRequest: priceAmount,
-          model: isInference || isAgent ? model.trim() : undefined,
-          skills: isAgent
-            ? skills
-                .split(',')
-                .map(s => s.trim())
-                .filter(Boolean)
-            : undefined,
-          agentRef: isAgent
-            ? { name: name.trim(), namespace: agentNamespace }
-            : undefined,
-          upstream: isInference || isAgent ? undefined : upstream.split(':')[0],
-          port:
-            isInference || isAgent
-              ? undefined
-              : Number(upstream.split(':')[1] ?? '8080') || 8080,
+          model: isInference ? model.trim() : undefined,
+          upstream: isInference ? undefined : upstream.split(':')[0],
+          port: isInference
+            ? undefined
+            : Number(upstream.split(':')[1] ?? '8080') || 8080,
           healthPath: isInference
             ? '/health'
-            : isAgent
-              ? undefined
-              : resolveUpstreamHealthPath(upstream.split(':')[0]),
+            : resolveUpstreamHealthPath(upstream.split(':')[0]),
         }),
       });
 
@@ -854,27 +807,14 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
               { ...sellBase, model: model.trim() },
               'llm'
             )
-          : isAgent
-            ? [
-                {
-                  title: 'Create the sub-agent (Terminal)',
-                  detail:
-                    'Run this first if the agent does not exist yet. Safe to re-run when already created.',
-                  cli: agentNewCli,
-                },
-                ...agentPostCreateSteps(
-                  { ...sellBase, agentName: name.trim() },
-                  agentNamespace
-                ),
-              ]
-            : httpPostCreateSteps(
-                {
-                  ...sellBase,
-                  upstream: upstream.split(':')[0],
-                  port: Number(upstream.split(':')[1] ?? '8080') || 8080,
-                },
-                'llm'
-              )
+          : httpPostCreateSteps(
+              {
+                ...sellBase,
+                upstream: upstream.split(':')[0],
+                port: Number(upstream.split(':')[1] ?? '8080') || 8080,
+              },
+              'llm'
+            )
       );
       setSubmitState('success');
     } catch (err) {
@@ -954,47 +894,6 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
               to which model Hermes chats with. After create, run the CLI step
               shown.
             </Banner>
-          ) : type === 'agent' ? (
-            <Banner tone="info">
-              Step 1: run{' '}
-              <Mono css={{ color: '$obolGreen' }}>obol agent new</Mono> (copy
-              below). Step 2: create the x402 listing here — or use{' '}
-              <strong>Sell</strong> on the agent card after it is running.
-            </Banner>
-          ) : null}
-
-          {type === 'agent' ? (
-            <FormField
-              label="Create sub-agent (CLI)"
-              hint="Run on your Mac before listing, unless the agent already exists."
-            >
-              <Box
-                css={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '$xs',
-                  padding: '$xs',
-                  borderRadius: '$2',
-                  border: '1px solid $stroke',
-                  background: '$bg03',
-                }}
-              >
-                <Mono
-                  css={{
-                    flex: 1,
-                    fontSize: '$1',
-                    color: '$light',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                  }}
-                  title={agentNewCli}
-                >
-                  {agentNewCli}
-                </Mono>
-                <CopyButton text={agentNewCli} title="Copy obol agent new" />
-              </Box>
-            </FormField>
           ) : null}
 
           <FormField
@@ -1002,16 +901,16 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
             hint={
               type === 'inference'
                 ? 'Creates the listing, then run the gateway command on your Mac (shown after create).'
-                : type === 'agent'
-                  ? 'Sell a sub-agent you created with obol agent new — tools, skills, and memory.'
-                  : "Any HTTP upstream — REST, MCP, webhook. Routed through the cluster's x402 verifier."
+                : "Any HTTP upstream — REST, MCP, webhook. Routed through the cluster's x402 verifier."
             }
           >
             <Segmented<ServiceType>
               value={type}
-              onChange={setType}
+              onChange={t => {
+                setType(t);
+                if (t === 'inference') setModel('qwen3.5:9b');
+              }}
               options={[
-                { k: 'agent', label: 'Sub-agent' },
                 { k: 'inference', label: 'Inference (LLM)' },
                 { k: 'route', label: 'HTTP route' },
               ]}
@@ -1026,24 +925,20 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
             }}
           >
             <FormField
-              label={type === 'agent' ? 'Sub-agent name' : 'Listing name'}
-              hint={
-                type === 'agent'
-                  ? 'Same name as obol agent new <name> — lowercase, no spaces.'
-                  : 'Shown to buyers — lowercase, no spaces.'
-              }
+              label="Listing name"
+              hint="Shown to buyers — lowercase, no spaces."
             >
               <TextInput
                 mono
                 value={name}
                 onChange={setName}
-                placeholder={type === 'agent' ? 'quant-research' : 'my-service'}
+                placeholder="my-service"
               />
             </FormField>
             {type === 'inference' ? (
               <FormField
                 label="Upstream model"
-                hint="Ollama model id (e.g. qwen3.5:4b)."
+                hint="Ollama model ID to sell — must be pulled on your Mac first with ollama pull <model>. Separate from which model your agents use."
               >
                 <TextInput
                   mono
@@ -1052,31 +947,6 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
                   placeholder="qwen3.5:9b"
                 />
               </FormField>
-            ) : type === 'agent' ? (
-              <>
-                <FormField
-                  label="Agent model"
-                  hint="LiteLLM model id the sub-agent chats with."
-                >
-                  <TextInput
-                    mono
-                    value={model}
-                    onChange={setModel}
-                    placeholder="claude-sonnet-4-6"
-                  />
-                </FormField>
-                <FormField
-                  label="Skills"
-                  hint="Comma-separated Obol skill names."
-                >
-                  <TextInput
-                    mono
-                    value={skills}
-                    onChange={setSkills}
-                    placeholder="addresses,gas"
-                  />
-                </FormField>
-              </>
             ) : (
               <FormField
                 label="Upstream endpoint"

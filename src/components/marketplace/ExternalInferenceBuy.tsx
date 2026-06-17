@@ -68,9 +68,9 @@ const CommandText = styled(Text, {
   flex: 1,
 });
 
-const DEFAULT_SELLER = 'https://inference.v1337.org/services/aeon';
-const DEFAULT_MODEL = 'aeon';
-const DEFAULT_ALIAS = 'aeon';
+const DEFAULT_SELLER = 'https://inference.v1337.org/services/aeon7';
+const DEFAULT_MODEL = '';
+const DEFAULT_ALIAS = 'aeon7';
 
 /** Host-side `obol buy inference` for sellers outside this cluster's catalog. */
 export function ExternalInferenceBuy() {
@@ -123,13 +123,13 @@ export function ExternalInferenceBuy() {
             gap: '$xxs',
           }}
         >
-          <FieldLabel>Remote model id</FieldLabel>
+          <FieldLabel>Remote model id (optional)</FieldLabel>
           <FieldInput
             value={model}
             onChange={(e: ChangeEvent<HTMLInputElement>) =>
               setModel(e.target.value)
             }
-            placeholder={DEFAULT_MODEL}
+            placeholder="auto (from catalog)"
           />
         </Box>
         <Box

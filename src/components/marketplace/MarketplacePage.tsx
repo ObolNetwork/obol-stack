@@ -26,7 +26,6 @@ import { MarketplaceTable } from './MarketplaceTable';
 import { SortDropdown } from './SortDropdown';
 import { ServicesSubNav } from './ServicesSubNav';
 import { NewListingDialog } from './NewListingDialog';
-import { ExternalInferenceBuy } from './ExternalInferenceBuy';
 
 import type { BuyDrawerProps } from './BuyDrawer';
 
@@ -249,7 +248,6 @@ export function MarketplacePage({
         />
 
         <RightCol>
-          <ExternalInferenceBuy />
           <ResultsBar>
             <ResultsCount>
               <ResultsCountStrong>{data?.total ?? '—'}</ResultsCountStrong>{' '}

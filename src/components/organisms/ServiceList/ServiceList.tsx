@@ -58,14 +58,17 @@ const ListBody = styled(Box, {
 
 function partitionOffers(offers: ServiceOffer[]) {
   const agentOffers = offers.filter(o => o.type === 'agent');
+  const inferenceOffers = offers.filter(
+    o => o.type === 'inference' || o.type === 'fine-tuning'
+  );
   const httpOffers = offers.filter(o => o.type === 'http');
-  return { agentOffers, httpOffers };
+  return { agentOffers, inferenceOffers, httpOffers };
 }
 
 export function ServiceList() {
   const { offers, pendingOffers, loading, error, refetch } = useServiceOffers();
   const { tunnelURL } = useTunnelURL();
-  const { agentOffers, httpOffers } = partitionOffers(offers);
+  const { agentOffers, inferenceOffers, httpOffers } = partitionOffers(offers);
   const totalCount = offers.length + pendingOffers.length;
 
   const headerContent = (
@@ -94,6 +97,7 @@ export function ServiceList() {
           )}
 
           {(agentOffers.length > 0 ||
+            inferenceOffers.length > 0 ||
             pendingOffers.length > 0 ||
             httpOffers.length > 0) && (
             <>
@@ -146,18 +150,14 @@ export function ServiceList() {
                 )}
               </SubSection>
 
-              <SubSection>
-                <SubSectionHeader>
-                  <SubSectionTitle>API Services</SubSectionTitle>
-                  {httpOffers.length > 0 && (
-                    <CountBadge count={httpOffers.length} />
-                  )}
-                  <SubSectionHint>http</SubSectionHint>
-                </SubSectionHeader>
-                {httpOffers.length === 0 ? (
-                  <EmptyMessage>No API services for sale.</EmptyMessage>
-                ) : (
-                  httpOffers.map(offer => (
+              {inferenceOffers.length > 0 && (
+                <SubSection>
+                  <SubSectionHeader>
+                    <SubSectionTitle>Inference Services</SubSectionTitle>
+                    <CountBadge count={inferenceOffers.length} />
+                    <SubSectionHint>inference</SubSectionHint>
+                  </SubSectionHeader>
+                  {inferenceOffers.map(offer => (
                     <ServiceCard
                       key={`${offer.namespace}/${offer.name}`}
                       offer={offer}
@@ -165,9 +165,28 @@ export function ServiceList() {
                       onChanged={refetch}
                       anchorId={offerAnchorId(offer.namespace, offer.name)}
                     />
-                  ))
-                )}
-              </SubSection>
+                  ))}
+                </SubSection>
+              )}
+
+              {httpOffers.length > 0 && (
+                <SubSection>
+                  <SubSectionHeader>
+                    <SubSectionTitle>API Services</SubSectionTitle>
+                    <CountBadge count={httpOffers.length} />
+                    <SubSectionHint>http</SubSectionHint>
+                  </SubSectionHeader>
+                  {httpOffers.map(offer => (
+                    <ServiceCard
+                      key={`${offer.namespace}/${offer.name}`}
+                      offer={offer}
+                      tunnelURL={tunnelURL}
+                      onChanged={refetch}
+                      anchorId={offerAnchorId(offer.namespace, offer.name)}
+                    />
+                  ))}
+                </SubSection>
+              )}
             </>
           )}
         </ListBody>
