@@ -6,7 +6,7 @@ Thank you for helping improve the Obol Stack dashboard. This doc is the short pa
 
 - Node.js 22+, pnpm 10.30+
 - A live cluster is **not required** for UI contributions — `pnpm run dev:local` runs the frontend standalone and all tests pass without one
-- A running Obol Stack cluster (`obol stack up`) is needed only for end-to-end integration testing against live APIs (internal setup)
+- If you have access to **obol-stack**, run `obol stack up` to get a local cluster, then add `127.0.0.1 obol.stack` to `/etc/hosts` and use `pnpm run dev` for the full experience
 
 ## Setup
 
