@@ -10,6 +10,7 @@
     "build": "next build",
     "start": "next start --hostname obol.stack",
     "start:local": "next start",
+    "start:ci": "cp -r .next/static .next/standalone/.next/static && cp -r public .next/standalone/public && node .next/standalone/server.js",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --test src/lib/services/*.test.mjs src/lib/marketplace/*.test.mjs src/lib/middleware/*.test.mjs src/hooks/*.test.mjs",
