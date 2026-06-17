@@ -5,8 +5,14 @@
   ],
   "enabledManagers": [
     "custom.regex",
-    "github-actions"
+    "github-actions",
+    "gomod"
   ],
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security", "renovate/security"]
+  },
   "customManagers": [
     {
       "customType": "regex",
@@ -434,6 +440,21 @@
       ],
       "groupName": "Aztec node updates",
       "groupSlug": "aztec-node"
+    },
+    {
+      "description": "Auto-merge patch-level updates (low risk) once CI passes. Platform auto-merge waits for required checks; aztec is excluded by the rule below.",
+      "matchUpdateTypes": [
+        "patch"
+      ],
+      "automerge": true,
+      "platformAutomerge": true
+    },
+    {
+      "description": "Never auto-merge Aztec — fast-moving testnet (nightly tags, frequent majors). Always review, even patches.",
+      "matchFileNames": [
+        "internal/embed/networks/aztec/**"
+      ],
+      "automerge": false
     }
   ]
 }
