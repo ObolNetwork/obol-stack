@@ -602,6 +602,10 @@ Examples:
 				Name:  "facilitator",
 				Usage: "x402 facilitator URL (verify/settle)",
 			},
+			&cli.StringFlag{
+				Name:  "bounty-reports-dir",
+				Usage: "Directory serving ServiceBounty A2UI reports via the free bounty_report tool (default: $OBOL_DATA_DIR/bounty-reports)",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -624,18 +628,24 @@ Examples:
 				return err
 			}
 
+			reportsDir := cmd.String("bounty-reports-dir")
+			if reportsDir == "" {
+				reportsDir = filepath.Join(cfg.DataDir, "bounty-reports")
+			}
+
 			u.Infof("Starting paid MCP server %q on port %d (Ctrl-C to stop)", name, cmd.Int("port"))
 			return x402mcp.Serve(ctx, x402mcp.Options{
-				Name:            name,
-				ToolName:        cmd.String("tool-name"),
-				Description:     cmd.String("description"),
-				Port:            cmd.Int("port"),
-				PayTo:           payTo,
-				Price:           cmd.String("price"),
-				Chain:           cmd.String("chain"),
-				FacilitatorURL:  facilitator,
-				Upstream:        cmd.String("upstream"),
-				UpstreamHeaders: headers,
+				Name:             name,
+				ToolName:         cmd.String("tool-name"),
+				Description:      cmd.String("description"),
+				Port:             cmd.Int("port"),
+				PayTo:            payTo,
+				Price:            cmd.String("price"),
+				Chain:            cmd.String("chain"),
+				FacilitatorURL:   facilitator,
+				Upstream:         cmd.String("upstream"),
+				UpstreamHeaders:  headers,
+				BountyReportsDir: reportsDir,
 			})
 		},
 	}

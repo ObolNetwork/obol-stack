@@ -56,6 +56,11 @@ type Options struct {
 	FacilitatorURL  string            // x402 facilitator (verify/settle); caller supplies a default
 	Upstream        string            // backend HTTP service the paid tool POSTs the buyer's JSON args to (e.g. a weather/data API)
 	UpstreamHeaders map[string]string // optional auth headers for the backend (e.g. "X-Api-Key": "<key>"); set server-side, never exposed to buyers
+
+	// BountyReportsDir, when set, registers the free bounty_report tool
+	// serving ServiceBounty A2UI reports from
+	// <dir>/<namespace>/<name>/<variant surface file>.
+	BountyReportsDir string
 }
 
 // Serve builds and runs the x402-paid MCP server in the foreground over
@@ -120,6 +125,12 @@ func Serve(ctx context.Context, opts Options) error {
 	}, func(_ context.Context, _ *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
 		return textResult("pong"), nil
 	})
+
+	// Free bounty-report tool (unwrapped — reports are gate:local in v1; the
+	// mcp-x402 gate wraps this same handler with the payment wrapper later).
+	if strings.TrimSpace(opts.BountyReportsDir) != "" {
+		AddBountyReportTool(server, opts.BountyReportsDir)
+	}
 
 	// Paid tool: forward the buyer's JSON arguments to the backend service and
 	// return the response. The arg shape is the backend's own request body —

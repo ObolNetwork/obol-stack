@@ -1,0 +1,115 @@
+# benchmark@v1 — a ServiceBounty task type.
+#
+# A task type is a self-describing, prepackaged unit (mirrors the dynamic
+# network-install registry in internal/embed/networks/). It owns: the param
+# schema that generates `obol bounty post benchmark` flags, the eval method +
+# tolerance, the OBOL eval pricing, the hardware-proof policy, and the A2UI
+# report schema. New task types drop in as a directory here — no CRD or CLI
+# change. `enabled: false` ships a type that isn't live yet (e.g. finetune).
+id: benchmark
+version: 1
+runner: bench            # the BountyRunner that fulfills it (host-side)
+enabled: true
+summary: Benchmark a model on a pinned harness; verified by independent re-run within tolerance.
+
+# Capability tags a fulfiller node must advertise to claim.
+requires:
+  - benchmark
+
+# params → generated `obol bounty post benchmark` flags, validated against
+# spec.task.params at admission. type: string|int|enum; enum lists choices.
+params:
+  - name: tasks
+    type: string
+    default: "mmlu,gsm8k"
+    description: Comma-separated harness tasks to run.
+  - name: harness
+    type: string
+    default: "lm-eval-harness@v0.4.3"
+    description: Pinned eval harness (name@version), content-addressed.
+  - name: hardwareClass
+    type: string
+    default: any
+    description: Declared hardware class — free-form so specific GPUs are expressible (e.g. any, M4-Max, H100, B200, RTX-4090); informational unless hardwareProof requires more.
+  - name: seed
+    type: string
+    default: "1234"
+    description: Decode seed; pinned to shrink nondeterminism (greedy decode assumed).
+  - name: dtype
+    type: enum
+    enum: [fp16, bf16, fp8, int8]
+    default: fp16
+    description: Inference dtype.
+
+# acceptance — benchmarks are NOT bit-exact. An independent re-run must
+# reproduce the claimed score within `tolerance`. commitHash is integrity
+# (anti bait-and-switch), never a determinism gate.
+acceptance:
+  method: rerun-tolerance
+  commitReveal: true
+  tolerance:            # per-metric absolute score band; poster may tighten
+    mmlu: "0.01"
+    gsm8k: "0.015"
+    humaneval: "0.02"
+
+# eval market — a SEPARATE OBOL payment leg from the reward (x402 can't splice
+# a fee out of the reward auth). Evaluators are paid for the WORK, pass or fail.
+eval:
+  defaultK: 3           # median-of-k; k>=3 whenever a probation seat is occupied
+  selection: vrf-reputation-weighted
+  payment:
+    asset: OBOL
+    perEvaluator: "2.00"
+    fundedBy: poster
+    settle: batch-settlement
+  # ladder — evaluator cold-start (design doc §11.4): Shadow (free, randomly
+  # assigned, graded against the quorum median but never counted) → Probation
+  # (one reserved quorum seat at ~50% pay, value-capped bounties only) → Full.
+  # Thresholds are per-type constants so each task type tunes its own on-ramp.
+  ladder:
+    shadowAgreements: 5        # shadow verdicts within tolerance of the quorum median → Probation
+    probationEvals: 10         # paid evals without divergence → Full
+    probationValueCap: "50.00" # reward (human units) above which no probation seat is offered
+    revealWindow: 10m          # commit→reveal window; every commit closes before any reveal opens
+    nonRevealPenalty: outlier  # non-reveal is graded as a worst-case outlier (>= divergence penalty)
+
+# hardwareProof — self-report is a reputation-backed CLAIM (forgeable text).
+# Throughput-flavored bounties should require gpu-attestation or
+# evaluator-measured; a score (e.g. mmlu) is hardware-agnostic so self-report
+# is fine there.
+hardwareProof: self-report
+
+# deliverable — A2UI renderings of the SAME verified result data, in
+# preference order. The serving side (FE locally, the stack MCP server
+# cross-party) picks the first variant whose catalogId the client advertises
+# (a2ui catalog negotiation, locked per surface); no match → raw artifacts.
+#   declarative: operations JSON rendered natively from the client's
+#     compiled-in catalog — no custom code, no iframes (the lean default).
+#   mcp-app: MCP-Apps escape hatch for clients that don't know our catalog —
+#     self-contained HTML served url_encoded in a `custom` McpApp node's
+#     properties.content. The CLIENT supplies double-iframe isolation
+#     (sandbox proxy + srcdoc inner frame, never allow-same-origin); the
+#     server only ever returns JSON. Keep the HTML self-contained: the inner
+#     frame has no storage, no cookies, no same-origin access.
+# Locally the agent persists the report under its hierarchy and the FE reads
+# it; cross-party serves gate it behind mcp-x402 / SIWx (+payment for resale).
+deliverable:
+  report:
+    variants:
+      - kind: declarative                  # A2UI v1.0-candidate messages against the
+        surface: report.a2ui.json          # STANDARD basic catalog — any v1.0 renderer
+        catalogId: https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json
+      - kind: mcp-app
+        surface: report.app.html           # any MCP-Apps host renders this, sandboxed
+        catalogId: obol.org:mcp-app/v1     # domain-prefixed id (spec convention) for the McpApp custom-node rendering
+  gate: local            # local | mcp-x402 | sign-in-with-x
+  artifacts:
+    - name: results.json
+      kind: eval-report
+      required: true
+    - name: run.manifest
+      kind: provenance
+      required: true
+    - name: hw-attestation.json
+      kind: hardware-proof
+      required: false

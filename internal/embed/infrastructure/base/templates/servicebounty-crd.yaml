@@ -1,0 +1,508 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.5
+  name: servicebounties.obol.org
+spec:
+  group: obol.org
+  names:
+    kind: ServiceBounty
+    listKind: ServiceBountyList
+    plural: servicebounties
+    shortNames:
+    - sb
+    singular: servicebounty
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.task.typeRef
+      name: Task
+      type: string
+    - jsonPath: .spec.reward.amount
+      name: Reward
+      type: string
+    - jsonPath: .spec.eval.mode
+      name: Verification
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ServiceBounty declares a unit of paid work (benchmark, fine-tune, serve, …)
+          with an escrowed reward released on an accepted verdict.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              acceptance:
+                description: |-
+                  Acceptance is how a submission is judged. Defaults come from the task
+                  type; the poster may tighten them.
+                properties:
+                  commitReveal:
+                    description: |-
+                      CommitReveal requires evaluators to commit then reveal scores, so they
+                      can't pre-agree on a number.
+                    type: boolean
+                  method:
+                    description: |-
+                      Method judges a submission. Benchmarks are NOT bit-exact: rerun-tolerance
+                      re-runs the harness and accepts a score within tolerance. The commitHash
+                      is integrity (anti bait-and-switch), not a determinism gate.
+                    enum:
+                    - rerun-tolerance
+                    - harness-rerun
+                    - sla-probe
+                    - poster-manual
+                    type: string
+                  tolerance:
+                    additionalProperties:
+                      type: string
+                    description: Tolerance per metric (e.g. {"mmlu":"0.01"}). Default
+                      from the task type.
+                    type: object
+                type: object
+              deadline:
+                description: 'Deadline: past it with no accepted verdict → Expired
+                  → Refunded.'
+                format: date-time
+                type: string
+              eval:
+                description: |-
+                  Eval configures the OBOL-paid evaluation market (a SEPARATE payment leg
+                  from the reward — x402 cannot splice a fee out of the reward auth).
+                properties:
+                  k:
+                    default: 1
+                    description: |-
+                      K evaluators: median-of-k quorum; k≥3 whenever a probation seat is
+                      occupied (the median absorbs one outlier).
+                    format: int64
+                    type: integer
+                  mode:
+                    default: required
+                    description: |-
+                      Mode gates verification. 'required' (default) routes acceptance through
+                      the evaluator quorum once the eval market is wired — until then a poster
+                      verdict is recorded as PosterOverride. 'dangerouslySkipped' declares
+                      poster-as-judge up front: same override path, but the bounty is marked
+                      unverified and produces no reputation signal.
+                    enum:
+                    - required
+                    - dangerouslySkipped
+                    type: string
+                  payment:
+                    description: Payment for evaluators — a separate leg from the
+                      reward.
+                    properties:
+                      asset:
+                        default: OBOL
+                        description: Asset defaults to OBOL (verification is an OBOL
+                          utility sink).
+                        type: string
+                      fundedBy:
+                        default: poster
+                        description: 'FundedBy: ''poster'' (separate poster-funded
+                          eval budget).'
+                        type: string
+                      perEvaluator:
+                        description: PerEvaluator fee (human units).
+                        type: string
+                      settle:
+                        default: batch-settlement
+                        description: 'Settle: ''batch-settlement'' pays all K evaluators
+                          in one tx.'
+                        type: string
+                    type: object
+                  selection:
+                    description: |-
+                      Selection: VRF-sampled after submission, reputation-weighted; the poster
+                      cannot hand-pick.
+                    enum:
+                    - vrf-reputation-weighted
+                    - poster-manual
+                    type: string
+                type: object
+              maxFulfillers:
+                default: 1
+                description: 'MaxFulfillers: 1 = single-winner (default); >1 = first-N-valid
+                  paid.'
+                format: int64
+                type: integer
+              reward:
+                description: Reward is the escrowed payment released to the fulfiller
+                  on acceptance.
+                properties:
+                  amount:
+                    description: Amount is the lump-sum reward (human units, e.g.
+                      "500.00").
+                    type: string
+                  asset:
+                    description: Asset reuses ServiceOffer's asset shape (USDC eip3009
+                      / OBOL permit2).
+                    properties:
+                      address:
+                        description: ERC-20 contract address.
+                        pattern: ^0x[0-9a-fA-F]{40}$
+                        type: string
+                      decimals:
+                        description: Token decimals in atomic units.
+                        format: int64
+                        maximum: 255
+                        minimum: 0
+                        type: integer
+                      eip712Name:
+                        description: EIP-712 domain name used by the token.
+                        type: string
+                      eip712Version:
+                        description: EIP-712 domain version used by the token.
+                        type: string
+                      symbol:
+                        description: Human-friendly token symbol (e.g. USDC, OBOL).
+                        type: string
+                      transferMethod:
+                        description: x402 transfer method for the asset.
+                        enum:
+                        - eip3009
+                        - permit2
+                        type: string
+                    type: object
+                  escrow:
+                    description: Escrow selects the x402 settlement rail + reputation-driven
+                      mode.
+                    properties:
+                      facilitator:
+                        description: |-
+                          Facilitator URL (our own facilitator acts as the bounded settlement
+                          trigger; payTo is signed into the auth so it can never redirect funds).
+                        type: string
+                      mode:
+                        description: |-
+                          Mode is selected by the fulfiller's reputation: 'auto' (optimistic),
+                          'facilitator-check' (deterministic re-run), 'onchain-lock' (authCapture).
+                        enum:
+                        - auto
+                        - facilitator-check
+                        - onchain-lock
+                        type: string
+                      scheme:
+                        description: |-
+                          Scheme: 'upto' (live: facilitator holds a recipient-bound auth, settles
+                          ≤ max) or 'authCapture' (funds-locked, used above valueCap once the Go
+                          impl lands — x402-foundation/x402#2298).
+                        enum:
+                        - upto
+                        - authCapture
+                        type: string
+                      valueCapMicros:
+                        description: 'ValueCapMicros: above this the escrow must use
+                          an on-chain lock.'
+                        type: string
+                    type: object
+                  network:
+                    description: Payment network (e.g. "base", "base-sepolia").
+                    type: string
+                  payTo:
+                    description: |-
+                      PayTo is the poster's address: the escrow-return / refund destination.
+                      The fulfiller payout address is bound at claim time (witness.to in the
+                      upto auth), not here.
+                    pattern: ^0x[a-fA-F0-9]{40}$
+                    type: string
+                type: object
+              task:
+                description: |-
+                  Task describes the work. spec.task.typeRef selects an embedded,
+                  versioned task-type package; spec.task.params is validated against
+                  that package's schema at admission.
+                properties:
+                  datasetCommit:
+                    description: |-
+                      DatasetCommit pins the eval dataset (committed root + the fraction kept
+                      private so a public re-run can't leak answers / enable train-on-test).
+                    properties:
+                      privateFraction:
+                        description: |-
+                          PrivateFraction (0..1, as a string to keep schema stable) of rows kept
+                          secret and revealed only to sampled evaluators at eval time.
+                        type: string
+                      root:
+                        description: Root is a Merkle root committing the (partially
+                          private) eval dataset.
+                        type: string
+                    type: object
+                  hardwareProof:
+                    description: |-
+                      HardwareProof strength required of the fulfiller. self-report is a
+                      reputation-backed claim (forgeable); gpu-attestation is cryptographic
+                      (NVIDIA CC / enclave-binding); evaluator-measured moves the throughput
+                      measurement onto attested evaluator hardware.
+                    enum:
+                    - self-report
+                    - gpu-attestation
+                    - evaluator-measured
+                    type: string
+                  params:
+                    additionalProperties:
+                      type: string
+                    description: Free-form knobs validated against the task type's
+                      param schema.
+                    type: object
+                  targetModel:
+                    description: Target model metadata (reuses ServiceOffer's model
+                      shape).
+                    properties:
+                      name:
+                        description: Model identifier (e.g. qwen3.5:35b).
+                        type: string
+                      runtime:
+                        description: Runtime serving the model.
+                        enum:
+                        - ollama
+                        - vllm
+                        - tgi
+                        type: string
+                    required:
+                    - name
+                    - runtime
+                    type: object
+                  typeRef:
+                    description: TypeRef resolves an embedded task-type package, e.g.
+                      "benchmark@v1".
+                    type: string
+                required:
+                - typeRef
+                type: object
+              trust:
+                description: |-
+                  Trust selects the reputation gate + optional refundable self-bond. No
+                  validator stake, no slashing — reputation (lost future income) is the
+                  only collateral.
+                properties:
+                  reputationGate:
+                    description: |-
+                      ReputationGate derives the fulfiller's maxBountyValue from ERC-8004
+                      getSummary (read with a curated, trusted client filter).
+                    type: boolean
+                  selfBond:
+                    description: |-
+                      SelfBond is an OPTIONAL refundable bond the fulfiller posts from their
+                      OWN funds (returned on success). It is never slashed to a validator set.
+                    properties:
+                      amount:
+                        type: string
+                      required:
+                        type: boolean
+                      token:
+                        type: string
+                    type: object
+                type: object
+            required:
+            - reward
+            - task
+            type: object
+          status:
+            description: |-
+              ServiceBountyStatus mirrors the AND-rollup condition idiom used by
+              ServiceOffer. Machine truth is the condition set; Phase is the human rollup.
+            properties:
+              bondState:
+                description: |-
+                  BondState tracks the fulfiller self-bond at the escrow gateway:
+                  Reserved | Returned (success/honest timeout) | Forfeited (rejected work,
+                  offsets the poster's burned eval budget).
+                type: string
+              captureTxHash:
+                description: CaptureTxHash / RefundTxHash record the settled reward
+                  or refund.
+                type: string
+              claims:
+                description: |-
+                  Claims are observed fulfiller bindings (single-winner is the common case,
+                  so claims live in status, not a separate CR).
+                items:
+                  properties:
+                    claimedAt:
+                      format: date-time
+                      type: string
+                    commitHash:
+                      description: |-
+                        CommitHash binds the worker to a specific model + outputs (anti
+                        bait-and-switch), revealed at submit.
+                      type: string
+                    fulfillerAddress:
+                      type: string
+                    phase:
+                      description: 'Phase: Claimed | Submitted | Verified | Rejected.'
+                      type: string
+                  type: object
+                type: array
+              conditions:
+                items:
+                  properties:
+                    lastTransitionTime:
+                      description: Last time the condition transitioned.
+                      format: date-time
+                      type: string
+                    message:
+                      description: Human-readable message with details.
+                      type: string
+                    reason:
+                      description: Machine-readable reason for the condition.
+                      type: string
+                    status:
+                      description: Status of the condition.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: Condition type.
+                      type: string
+                  required:
+                  - status
+                  - type
+                  type: object
+                type: array
+              escrowState:
+                description: 'EscrowState: Reserved | Captured | Voided (held auth
+                  at the facilitator).'
+                type: string
+              evalBudgetState:
+                description: |-
+                  EvalBudgetState tracks the poster-funded OBOL eval budget
+                  (k × perEvaluator) at the escrow gateway: Reserved | Captured | Voided.
+                  Evaluators are paid for the WORK, pass or fail.
+                type: string
+              evalPayoutTxHash:
+                description: EvalPayoutTxHash records the batch-settlement receipt
+                  for the eval leg.
+                type: string
+              evaluations:
+                description: |-
+                  Evaluations are the eval-market verdicts promoted from the
+                  obol.org/eval-commit-<addr> / eval-reveal-<addr> annotation channel.
+                items:
+                  description: |-
+                    ServiceBountyEvaluation is one evaluator's commit-reveal record. WithinBand
+                    is the per-bounty ladder bookkeeping hook: divergence from the quorum median
+                    (or a missing/invalid reveal) is what future reputation feedback keys on.
+                  properties:
+                    address:
+                      description: Address is the evaluator's payout/identity address
+                        (annotation key suffix).
+                      type: string
+                    commitHash:
+                      description: CommitHash = EvalCommitHash(score, salt, address),
+                        promoted first-write-wins.
+                      type: string
+                    paid:
+                      description: |-
+                        Paid marks inclusion in the eval-budget batch settlement (counting
+                        seats that revealed validly; shadows evaluate free).
+                      type: boolean
+                    phase:
+                      description: 'Phase: Committed | Revealed | BadReveal | NonReveal.'
+                      type: string
+                    revealedAt:
+                      description: RevealedAt records when a valid reveal was promoted.
+                      format: date-time
+                      type: string
+                    score:
+                      description: Score is the revealed 0-100 verdict (ERC-8004 validationResponse
+                        semantics).
+                      format: int64
+                      type: integer
+                    seat:
+                      description: |-
+                        Seat mirrors the panel seat kind (full | probation | shadow); empty in
+                        open-door mode.
+                      type: string
+                    validationTxHash:
+                      description: |-
+                        ValidationTxHash is the evaluator-submitted ERC-8004 validationResponse
+                        transaction, recorded as provenance (the evaluator's OWN wallet signs;
+                        the controller never does).
+                      type: string
+                    withinBand:
+                      description: |-
+                        WithinBand is false for NonReveal/BadReveal and for revealed scores
+                        outside the outlier band around the quorum median.
+                      type: boolean
+                  type: object
+                type: array
+              evaluatorPanel:
+                description: |-
+                  EvaluatorPanel is the controller-selected seat assignment (deterministic
+                  per-bounty sampling from enrolled evaluators). Empty panel = open-door
+                  fallback (insufficient pool) — any address may evaluate, as in early v1.
+                items:
+                  description: ServiceBountyPanelSeat is one selected evaluator seat.
+                  properties:
+                    address:
+                      description: Address is the enrolled evaluator's address.
+                      type: string
+                    seat:
+                      description: 'Seat: full | probation | shadow.'
+                      type: string
+                  type: object
+                type: array
+              ladderRecorded:
+                description: |-
+                  LadderRecorded latches the one-shot cross-bounty ladder bookkeeping so
+                  repeated reconciles after quorum never double-count.
+                type: boolean
+              observedGeneration:
+                format: int64
+                type: integer
+              phase:
+                type: string
+              refundTxHash:
+                type: string
+              reportURI:
+                description: ReportURI points at the SIWx/local-gated A2UI report
+                  (deliverable).
+                type: string
+              revealDeadline:
+                description: |-
+                  RevealDeadline opens once K commitments are in: every commit closes
+                  before any reveal opens, and a missing reveal past this instant is
+                  graded as a worst-case outlier (nonRevealPenalty).
+                format: date-time
+                type: string
+              weightedScore:
+                description: WeightedScore is the reputation-weighted eval verdict
+                  (0-100).
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

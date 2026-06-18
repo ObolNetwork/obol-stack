@@ -152,6 +152,8 @@ generate:
             purchaserequests)     target="purchaserequest-crd.yaml" ;;
             registrationrequests) target="registrationrequest-crd.yaml" ;;
             serviceoffers)        target="serviceoffer-crd.yaml" ;;
+            servicebounties)      target="servicebounty-crd.yaml" ;;
+            evaluatorenrollments) target="evaluatorenrollment-crd.yaml" ;;
             *)                    target="${plural%s}-crd.yaml" ;;
         esac
         mv "$f" "$out/$target"

@@ -20,16 +20,20 @@ const (
 	Version = "v1alpha1"
 
 	ServiceOfferKind        = "ServiceOffer"
+	ServiceBountyKind       = "ServiceBounty"
 	RegistrationRequestKind = "RegistrationRequest"
 	PurchaseRequestKind     = "PurchaseRequest"
 	AgentKind               = "Agent"
 	AgentIdentityKind       = "AgentIdentity"
+	EvaluatorEnrollmentKind = "EvaluatorEnrollment"
 
 	ServiceOfferResource        = "serviceoffers"
+	ServiceBountyResource       = "servicebounties"
 	RegistrationRequestResource = "registrationrequests"
 	PurchaseRequestResource     = "purchaserequests"
 	AgentResource               = "agents"
 	AgentIdentityResource       = "agentidentities"
+	EvaluatorEnrollmentResource = "evaluatorenrollments"
 
 	// Default identity used for the operator's public ERC-8004 registration
 	// file. The registration file can contain multiple per-chain registrations.
@@ -46,6 +50,8 @@ const (
 
 var (
 	ServiceOfferGVR        = schema.GroupVersionResource{Group: Group, Version: Version, Resource: ServiceOfferResource}
+	ServiceBountyGVR       = schema.GroupVersionResource{Group: Group, Version: Version, Resource: ServiceBountyResource}
+	EvaluatorEnrollmentGVR = schema.GroupVersionResource{Group: Group, Version: Version, Resource: EvaluatorEnrollmentResource}
 	RegistrationRequestGVR = schema.GroupVersionResource{Group: Group, Version: Version, Resource: RegistrationRequestResource}
 	PurchaseRequestGVR     = schema.GroupVersionResource{Group: Group, Version: Version, Resource: PurchaseRequestResource}
 	AgentGVR               = schema.GroupVersionResource{Group: Group, Version: Version, Resource: AgentResource}

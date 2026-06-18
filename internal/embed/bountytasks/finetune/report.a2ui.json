@@ -1,0 +1,54 @@
+{
+  "$comment": "finetune@v1 deliverable as an ordered A2UI v1.0-candidate message list against the STANDARD basic catalog. STAGED with the package (enabled: false); the runner fills updateDataModel from the held-out re-eval. Metric rows bind relative to each /metrics item.",
+  "messages": [
+    {
+      "version": "v1.0",
+      "createSurface": {
+        "surfaceId": "obol-bounty-finetune-report",
+        "catalogId": "https://a2ui.org/specification/v1_0/catalogs/basic/catalog.json"
+      }
+    },
+    {
+      "version": "v1.0",
+      "updateComponents": {
+        "surfaceId": "obol-bounty-finetune-report",
+        "components": [
+          { "id": "root", "component": "Card", "child": "layout" },
+          {
+            "id": "layout", "component": "Column",
+            "children": ["title", "subtitle", "verdict", "div-metrics", "metrics-list", "div-provenance", "provenance"]
+          },
+          { "id": "title", "component": "Text", "variant": "h2", "text": { "path": "/model/name" } },
+          { "id": "subtitle", "component": "Text", "variant": "caption", "text": { "path": "/model/subtitle" } },
+          { "id": "verdict", "component": "Text", "variant": "h3", "text": { "path": "/verdict/label" } },
+          { "id": "div-metrics", "component": "Divider" },
+          {
+            "id": "metrics-list", "component": "List", "direction": "vertical",
+            "children": { "componentId": "metric-row", "path": "/metrics" }
+          },
+          { "id": "metric-row", "component": "Row", "children": ["m-name", "m-value"] },
+          { "id": "m-name", "component": "Text", "text": { "path": "/name" } },
+          { "id": "m-value", "component": "Text", "text": { "path": "/value" } },
+          { "id": "div-provenance", "component": "Divider" },
+          { "id": "provenance", "component": "Text", "variant": "caption", "text": { "path": "/provenance/line" } }
+        ]
+      }
+    },
+    {
+      "version": "v1.0",
+      "updateDataModel": {
+        "surfaceId": "obol-bounty-finetune-report",
+        "path": "/",
+        "value": {
+          "$comment": "Filled by the runner; the shape below is the contract (display-ready placeholders).",
+          "model": { "name": "", "subtitle": "" },
+          "verdict": { "label": "" },
+          "metrics": [
+            { "name": "", "value": "" }
+          ],
+          "provenance": { "line": "" }
+        }
+      }
+    }
+  ]
+}
