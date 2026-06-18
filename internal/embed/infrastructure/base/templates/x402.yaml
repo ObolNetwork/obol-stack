@@ -57,6 +57,18 @@ metadata:
 type: Opaque
 stringData:
   WALLET_ADDRESS: ""
+  # Stripe secret key for MPP credit-card (stripe.charge) offers. Empty on a
+  # crypto-only stack; populate it (e.g. `kubectl -n x402 patch secret
+  # x402-secrets --type merge -p '{"stringData":{"STRIPE_SECRET_KEY":"sk_live_..."}}'`)
+  # to let the verifier authorize/capture card PaymentIntents. See README
+  # "Credit-card payments (MPP)".
+  STRIPE_SECRET_KEY: ""
+  # Random secret used to sign MPP WWW-Authenticate challenges. Required for
+  # Hermes/link-cli/mppx Authorization: Payment compatibility.
+  MPP_CHALLENGE_SECRET: ""
+  # Optional Tempo RPC endpoint used when a ServiceOffer enables
+  # spec.payment.mpp.tempo.
+  TEMPO_MPP_RPC_URL: ""
 
 ---
 apiVersion: v1
@@ -279,6 +291,28 @@ spec:
             - --config=/config/pricing.yaml
             - --listen=:8080
             - --route-source=kube
+          env:
+            # MPP credit-card (Stripe) settlement key. Empty unless card offers
+            # are in use; optional=true keeps the verifier starting on
+            # crypto-only stacks where the key is unset.
+            - name: STRIPE_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: x402-secrets
+                  key: STRIPE_SECRET_KEY
+                  optional: true
+            - name: MPP_CHALLENGE_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: x402-secrets
+                  key: MPP_CHALLENGE_SECRET
+                  optional: true
+            - name: TEMPO_MPP_RPC_URL
+              valueFrom:
+                secretKeyRef:
+                  name: x402-secrets
+                  key: TEMPO_MPP_RPC_URL
+                  optional: true
           volumeMounts:
             - name: pricing-config
               mountPath: /config
