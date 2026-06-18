@@ -333,6 +333,7 @@ func (v *Verifier) matchPaidRouteFull(cfg *PricingConfig, uri string) (*RouteRul
 	asset := ResolveAssetInfo(chain, rule)
 	requirement := BuildV2RequirementWithAsset(chain, asset, rule.Price, wallet, rule.MaxTimeoutSeconds)
 	mergeAgentExtras(&requirement, rule)
+	mergeSkillExtras(&requirement, rule)
 	extensions := WithBazaar(BuildExtensionsForAsset(asset), rule.OfferType, rule.Model)
 	return rule, requirement, extensions, prometheusLabels(rule), chain, asset, true
 }
@@ -395,6 +396,28 @@ func mergeAgentExtras(req *x402types.PaymentRequirements, rule *RouteRule) {
 	if rule.AgentRuntime != "" {
 		req.Extra["agentRuntime"] = rule.AgentRuntime
 	}
+}
+
+// mergeSkillExtras adds the skill bundle identity from a RouteRule to the
+// requirement's Extra map as extra.skill = {name, version, sha256} so
+// buyers probing a 402 on a type=skill offer can verify the artifact they
+// are about to pay for. No-op for non-skill rules (SkillName empty).
+// Strictly additive — mirrors mergeAgentExtras above.
+func mergeSkillExtras(req *x402types.PaymentRequirements, rule *RouteRule) {
+	if rule.SkillName == "" {
+		return
+	}
+	if req.Extra == nil {
+		req.Extra = make(map[string]interface{})
+	}
+	skill := map[string]any{"name": rule.SkillName}
+	if rule.SkillVersion != "" {
+		skill["version"] = rule.SkillVersion
+	}
+	if rule.SkillSHA256 != "" {
+		skill["sha256"] = rule.SkillSHA256
+	}
+	req.Extra["skill"] = skill
 }
 
 // buildPaymentDisplay turns the matched rule + chain + asset into pre-formatted

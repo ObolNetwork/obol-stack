@@ -241,6 +241,103 @@ func TestServiceOfferCRD_WalletValidation(t *testing.T) {
 	}
 }
 
+// TestServiceOfferCRD_SkillFields guards the type=skill marketplace
+// schema: the enum value, the spec.skill block (bundle identity +
+// integrity hash + bundle ConfigMap reference), and the spec-level CEL
+// rule that makes spec.skill mandatory for skill offers.
+func TestServiceOfferCRD_SkillFields(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/serviceoffer-crd.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+
+	crd := findDoc(multiDoc(data), "CustomResourceDefinition")
+	if crd == nil {
+		t.Fatal("no CRD document found")
+	}
+
+	versions := nested(crd, "spec", "versions").([]any)
+	v0 := versions[0].(map[string]any)
+	spec, ok := nested(v0, "schema", "openAPIV3Schema", "properties", "spec").(map[string]any)
+	if !ok {
+		t.Fatal("spec schema missing")
+	}
+	props := spec["properties"].(map[string]any)
+
+	// type enum gains "skill".
+	typeProp := props["type"].(map[string]any)
+	gotEnum := map[string]bool{}
+	for _, e := range typeProp["enum"].([]any) {
+		gotEnum[e.(string)] = true
+	}
+	if !gotEnum["skill"] {
+		t.Errorf("spec.type.enum = %v, want it to include skill", typeProp["enum"])
+	}
+
+	// spec.skill block with required identity + integrity fields.
+	skill, ok := props["skill"].(map[string]any)
+	if !ok {
+		t.Fatal("spec.skill property missing")
+	}
+	required := map[string]bool{}
+	for _, r := range skill["required"].([]any) {
+		required[r.(string)] = true
+	}
+	for _, want := range []string{"name", "version", "sha256", "bundleConfigMap"} {
+		if !required[want] {
+			t.Errorf("spec.skill.required missing %q (got %v)", want, skill["required"])
+		}
+	}
+
+	skillProps := skill["properties"].(map[string]any)
+	wantPatterns := map[string]string{
+		"name":    "^[a-z0-9][a-z0-9-]*$",
+		"version": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+		"sha256":  "^[a-f0-9]{64}$",
+	}
+	for field, want := range wantPatterns {
+		fp, ok := skillProps[field].(map[string]any)
+		if !ok {
+			t.Errorf("spec.skill.%s property missing", field)
+			continue
+		}
+		if fp["pattern"] != want {
+			t.Errorf("spec.skill.%s.pattern = %v, want %s", field, fp["pattern"], want)
+		}
+	}
+
+	wantMaxLen := map[string]int{
+		"name":            64,
+		"version":         64,
+		"bundleConfigMap": 253,
+		"displayName":     128,
+		"description":     1024,
+	}
+	for field, want := range wantMaxLen {
+		fp, ok := skillProps[field].(map[string]any)
+		if !ok {
+			t.Errorf("spec.skill.%s property missing", field)
+			continue
+		}
+		if fp["maxLength"] != want {
+			t.Errorf("spec.skill.%s.maxLength = %v, want %d", field, fp["maxLength"], want)
+		}
+	}
+
+	// Spec-level CEL: spec.skill is required when type=skill.
+	rules, ok := spec["x-kubernetes-validations"].([]any)
+	if !ok {
+		t.Fatal("spec.x-kubernetes-validations missing")
+	}
+	joined := ""
+	for _, r := range rules {
+		joined += r.(map[string]any)["rule"].(string) + "\n"
+	}
+	if !strings.Contains(joined, "self.type != 'skill' || has(self.skill)") {
+		t.Errorf("spec CEL rules missing skill requirement; got:\n%s", joined)
+	}
+}
+
 func TestRegistrationRequestCRD_Parses(t *testing.T) {
 	data, err := ReadInfrastructureFile("base/templates/registrationrequest-crd.yaml")
 	if err != nil {
@@ -1075,6 +1172,94 @@ func assertAgentRBACRulesTight(t *testing.T, roleName string, role map[string]an
 	}
 }
 
+// TestSkillPublishRBAC_NamespaceScopedConfigMapsOnly pins the shape of the
+// skill-bundle publish grant. The agent self-publish path (`obol sell
+// skill` from inside the mother agent) needs to write the bundle ConfigMap
+// next to its ServiceOffer, but that grant must stay a NAMESPACED Role in
+// hermes-obol-agent — a core/configmaps write on the cluster-wide
+// openclaw-monetize-write ClusterRole would hand every agent write access
+// to every namespace's ConfigMaps (LiteLLM config, x402 pricing, buyer
+// auth pools) and is hard-failed by assertAgentRBACRulesTight above.
+func TestSkillPublishRBAC_NamespaceScopedConfigMapsOnly(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/obol-agent-monetize-rbac.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+	docs := multiDoc(data)
+
+	role := findDocByName(docs, "Role", "hermes-skill-publish")
+	if role == nil {
+		t.Fatal("no Role 'hermes-skill-publish' found (must be a namespaced Role, not a ClusterRole)")
+	}
+	if findDocByName(docs, "ClusterRole", "hermes-skill-publish") != nil {
+		t.Fatal("hermes-skill-publish must not exist as a ClusterRole")
+	}
+	if ns := nested(role, "metadata", "namespace"); ns != "hermes-obol-agent" {
+		t.Errorf("Role namespace = %v, want hermes-obol-agent", ns)
+	}
+
+	rules, ok := role["rules"].([]any)
+	if !ok || len(rules) != 1 {
+		t.Fatalf("hermes-skill-publish must carry exactly one rule, got %v", role["rules"])
+	}
+	rule, ok := rules[0].(map[string]any)
+	if !ok {
+		t.Fatalf("malformed rule: %T", rules[0])
+	}
+
+	groups := stringSet(rule["apiGroups"])
+	if len(groups) != 1 || !groups[""] {
+		t.Errorf("apiGroups = %v, want exactly [\"\"]", groups)
+	}
+	resources := stringSet(rule["resources"])
+	if len(resources) != 1 || !resources["configmaps"] {
+		t.Errorf("resources = %v, want exactly [configmaps]", resources)
+	}
+
+	verbs := stringSet(rule["verbs"])
+	for _, want := range []string{"create", "get", "update", "patch"} {
+		if !verbs[want] {
+			t.Errorf("verbs missing %q: %v", want, verbs)
+		}
+	}
+	for _, banned := range []string{"list", "watch", "delete", "deletecollection", "*"} {
+		if verbs[banned] {
+			t.Errorf("verbs must not include %q: %v", banned, verbs)
+		}
+	}
+	if len(verbs) != 4 {
+		t.Errorf("verbs = %v, want exactly {create,get,update,patch}", verbs)
+	}
+
+	// Never any secrets in this Role, under any rule shape.
+	for _, r := range rules {
+		rm, _ := r.(map[string]any)
+		if stringSet(rm["resources"])["secrets"] {
+			t.Error("hermes-skill-publish must never grant secrets access")
+		}
+	}
+
+	binding := findDocByName(docs, "RoleBinding", "hermes-skill-publish-binding")
+	if binding == nil {
+		t.Fatal("no RoleBinding 'hermes-skill-publish-binding' found")
+	}
+	if ns := nested(binding, "metadata", "namespace"); ns != "hermes-obol-agent" {
+		t.Errorf("RoleBinding namespace = %v, want hermes-obol-agent", ns)
+	}
+	if ref := nested(binding, "roleRef", "kind"); ref != "Role" {
+		t.Errorf("roleRef.kind = %v, want Role", ref)
+	}
+	if ref := nested(binding, "roleRef", "name"); ref != "hermes-skill-publish" {
+		t.Errorf("roleRef.name = %v, want hermes-skill-publish", ref)
+	}
+	if !bindingHasSubject(binding, "hermes", "hermes-obol-agent") {
+		t.Error("binding missing hermes-obol-agent/hermes subject")
+	}
+	if bindingHasSubject(binding, "openclaw", "openclaw-obol-agent") {
+		t.Error("binding must not include the openclaw subject — the grant is hermes mother ns only")
+	}
+}
+
 func stringSet(v any) map[string]bool {
 	out := make(map[string]bool)
 
@@ -1200,6 +1385,7 @@ func TestAdmissionPolicy_Parses(t *testing.T) {
 		"ForwardAuth middlewares must target x402-verifier.x402.svc",
 		"Agent-created namespaces must be factory-owned agent-* namespaces",
 		"Agent-created Secrets must be hermes-env or hermes-profile-seed inside agent-* namespaces",
+		"Agent-written ConfigMaps must be *-skill-bundle skill bundles (hermes-config and other operator ConfigMaps are off-limits)",
 		"Agent-created Agent CRs must be Hermes agents in their matching agent-* namespace",
 	}
 	if len(validations) != len(wantMessages) {

@@ -28,7 +28,7 @@ spec:
         operations: ["CREATE", "UPDATE"]
       - apiGroups: [""]
         apiVersions: ["v1"]
-        resources: ["namespaces", "secrets"]
+        resources: ["namespaces", "secrets", "configmaps"]
         operations: ["CREATE", "UPDATE"]
       - apiGroups: ["obol.org"]
         apiVersions: ["*"]
@@ -46,6 +46,8 @@ spec:
       message: "Agent-created namespaces must be factory-owned agent-* namespaces"
     - expression: 'object.kind != "Secret" || (object.metadata.namespace.startsWith("agent-") && (object.metadata.name == "hermes-env" || object.metadata.name == "hermes-profile-seed"))'
       message: "Agent-created Secrets must be hermes-env or hermes-profile-seed inside agent-* namespaces"
+    - expression: 'object.kind != "ConfigMap" || object.metadata.name.endsWith("-skill-bundle")'
+      message: "Agent-written ConfigMaps must be *-skill-bundle skill bundles (hermes-config and other operator ConfigMaps are off-limits)"
     - expression: 'object.kind != "Agent" || (object.metadata.namespace == "agent-" + object.metadata.name && (!has(object.spec.runtime) || object.spec.runtime == "hermes"))'
       message: "Agent-created Agent CRs must be Hermes agents in their matching agent-* namespace"
 

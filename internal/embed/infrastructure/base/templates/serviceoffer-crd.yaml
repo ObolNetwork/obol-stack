@@ -273,17 +273,67 @@ spec:
                       type: string
                     type: array
                 type: object
+              skill:
+                description: |-
+                  Required when type='skill' (enforced by the spec-level XValidation
+                  rule). Describes the downloadable skill bundle being sold: identity
+                  (name@version), integrity hash, and the ConfigMap carrying the
+                  artifact. The controller renders a static bundle server from this
+                  block and refuses to publish when the ConfigMap bytes do not match
+                  sha256.
+                properties:
+                  bundleConfigMap:
+                    description: |-
+                      Name of a ConfigMap in the offer's namespace whose
+                      binaryData["bundle.tar.gz"] is the artifact (key: SkillBundleKey).
+                    maxLength: 253
+                    type: string
+                  description:
+                    description: Short human-readable description for catalog surfaces.
+                    maxLength: 1024
+                    type: string
+                  displayName:
+                    description: Human-friendly display name for catalog surfaces.
+                    maxLength: 128
+                    type: string
+                  name:
+                    description: |-
+                      Skill name (e.g. buy-x402). Combined with Version it forms the
+                      skill ref <name>@<version> used by ERC-8004 feedback tags.
+                    maxLength: 64
+                    pattern: ^[a-z0-9][a-z0-9-]*$
+                    type: string
+                  sha256:
+                    description: |-
+                      Lowercase hex sha256 of the gzipped bundle bytes (the exact bytes
+                      stored in the bundle ConfigMap and served to buyers).
+                    pattern: ^[a-f0-9]{64}$
+                    type: string
+                  version:
+                    description: Skill version (e.g. 0.1.0).
+                    maxLength: 64
+                    pattern: ^[A-Za-z0-9][A-Za-z0-9._-]*$
+                    type: string
+                required:
+                - bundleConfigMap
+                - name
+                - sha256
+                - version
+                type: object
               type:
                 default: http
                 description: |-
                   Service type. 'inference' enables model management; 'http' for any HTTP
                   service; 'agent' references an Agent CR via spec.agent.ref and the
-                  controller derives upstream + model + skills from the agent's status.
+                  controller derives upstream + model + skills from the agent's status;
+                  'skill' sells a downloadable skill bundle described by spec.skill and
+                  served from a controller-rendered bundle server.
                 enum:
                 - inference
                 - fine-tuning
                 - http
                 - agent
+                - skill
                 type: string
               upstream:
                 description: In-cluster service that handles the actual workload.
@@ -313,6 +363,9 @@ spec:
             required:
             - payment
             type: object
+            x-kubernetes-validations:
+            - message: spec.skill is required when type=skill
+              rule: self.type != 'skill' || has(self.skill)
           status:
             properties:
               agentId:

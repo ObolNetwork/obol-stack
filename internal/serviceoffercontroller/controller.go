@@ -455,6 +455,42 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		}
 	}
 
+	if offer.IsSkill() {
+		ok, skillErr := c.reconcileSkillBundle(ctx, &status, offer)
+		if skillErr != nil {
+			return skillErr
+		}
+		if !ok {
+			// reconcileSkillBundle already set UpstreamHealthy=False with a
+			// specific reason (BundleMissing / BundleTooLarge /
+			// BundleHashMismatch / InvalidSkillUpstream / ...). Mirror the
+			// WaitingForAgent early return: park the downstream gates, commit
+			// status, refresh the catalog, and poll — no informer watches the
+			// operator's bundle ConfigMap, so a later kubectl apply of the
+			// bundle would otherwise never re-enqueue this offer.
+			setCondition(&status, "ModelReady", "True", "Skipped", "Skill offer does not require model preparation")
+			if offer.DrainExpired(time.Now()) {
+				if err := c.deleteRouteChildren(ctx, offer); err != nil {
+					return err
+				}
+				setCondition(&status, "Draining", "False", "Drained", fmt.Sprintf("Drain ended at %s; route torn down", offer.DrainEndsAt().UTC().Format(time.RFC3339)))
+				setCondition(&status, "PaymentGateReady", "False", "Drained", "Offer drained; payment gate removed")
+				setCondition(&status, "RoutePublished", "False", "Drained", "Offer drained; route removed")
+			} else {
+				setCondition(&status, "PaymentGateReady", "False", "WaitingForUpstream", "Waiting for a valid skill bundle before publishing payment gate")
+				setCondition(&status, "RoutePublished", "False", "WaitingForPaymentGate", "Waiting for payment gate before publishing route")
+			}
+			setCondition(&status, "Ready", "False", "Reconciling", "Offer is not fully reconciled yet")
+			if err := c.updateOfferStatus(ctx, raw, status); err != nil {
+				return err
+			}
+			c.offerQueue.AddAfter(offer.Namespace+"/"+offer.Name, 5*time.Second)
+			freshOffer := *offer
+			freshOffer.Status = status
+			return c.reconcileSkillCatalog(ctx, &freshOffer)
+		}
+	}
+
 	if err := c.reconcileModel(&status, offer); err != nil {
 		return err
 	}
