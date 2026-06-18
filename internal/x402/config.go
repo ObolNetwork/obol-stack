@@ -129,6 +129,15 @@ type RouteRule struct {
 	// `obol buy inference --model ...` command.
 	Model string `yaml:"model,omitempty"`
 
+	// Dataset* fields carry the pinned dataset artifact metadata for
+	// type=dataset offers, mirroring how Agent* fields carry agent
+	// metadata. Surfaced in `accepts[].extra.dataset` so buyers see which
+	// content-addressed version they're paying for.
+	DatasetManifestHash string `yaml:"datasetManifestHash,omitempty"`
+	DatasetVersion      string `yaml:"datasetVersion,omitempty"`
+	DatasetFileHash     string `yaml:"datasetFileHash,omitempty"`
+	DatasetSizeBytes    int64  `yaml:"datasetSizeBytes,omitempty"`
+
 	// MaxTimeoutSeconds is the per-request settle window advertised to
 	// buyers (x402: maxTimeoutSeconds). Mirrors
 	// ServiceOffer.spec.payment.maxTimeoutSeconds; 0 = use the verifier

@@ -53,6 +53,15 @@ type ServiceCatalogEntry struct {
 	// purely additive vs. pre-drain catalogs. Buyers SHOULD migrate to
 	// alternative providers before this time.
 	DrainEndsAt string `json:"drainEndsAt,omitempty"`
+
+	// Dataset* fields are populated for type=dataset offers, mirroring how
+	// Model is populated for inference/agent. They expose the pinned,
+	// content-addressed dataset version on discovery surfaces so buyers
+	// know exactly which artifact (and version) an offer sells. Additive
+	// only — see the stable-wire-schema note above.
+	DatasetManifestHash string `json:"datasetManifestHash,omitempty"`
+	DatasetVersion      string `json:"datasetVersion,omitempty"`
+	DatasetSizeBytes    int64  `json:"datasetSizeBytes,omitempty"`
 }
 
 // ServiceCatalogAsset describes the settlement token resolved for a catalog

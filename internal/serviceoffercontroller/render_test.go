@@ -850,6 +850,96 @@ func TestBuildServiceCatalogJSON_AgentOfferUsesResolvedModel(t *testing.T) {
 	}
 }
 
+// TestBuildServiceCatalogJSON_DatasetOfferSurfacesVersion pins that a
+// type=dataset offer surfaces its pinned, content-addressed version + per-MB
+// price on the public catalog, mirroring how an agent offer surfaces its
+// resolved model.
+func TestBuildServiceCatalogJSON_DatasetOfferSurfacesVersion(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "pi-sessions", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "dataset",
+			Dataset: monetizeapi.ServiceOfferDataset{
+				ManifestHash: "abc123",
+				Version:      "2",
+				SizeBytes:    1048576,
+			},
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base-sepolia",
+				PayTo:   "0x1111111111111111111111111111111111111111",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerMB: "0.01"},
+			},
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Description: "Sanitized coding-session dataset",
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+		},
+	}
+
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://seller.example")
+	assertServiceCatalogSchema(t, jsonStr)
+
+	var services []schemas.ServiceCatalogEntry
+	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
+	}
+	if len(services) != 1 {
+		t.Fatalf("expected 1 service, got %d: %s", len(services), jsonStr)
+	}
+	svc := services[0]
+	if svc.Type != "dataset" {
+		t.Errorf("type = %q, want dataset", svc.Type)
+	}
+	if svc.DatasetManifestHash != "abc123" {
+		t.Errorf("datasetManifestHash = %q, want abc123", svc.DatasetManifestHash)
+	}
+	if svc.DatasetVersion != "2" {
+		t.Errorf("datasetVersion = %q, want 2", svc.DatasetVersion)
+	}
+	if svc.DatasetSizeBytes != 1048576 {
+		t.Errorf("datasetSizeBytes = %d, want 1048576", svc.DatasetSizeBytes)
+	}
+	if svc.Price != "0.01 USDC/MB" {
+		t.Errorf("price = %q, want 0.01 USDC/MB", svc.Price)
+	}
+	if svc.PriceUnit != "perMB" {
+		t.Errorf("priceUnit = %q, want perMB", svc.PriceUnit)
+	}
+}
+
+// TestBuildServiceCatalogJSON_NonDatasetOmitsDatasetFields pins the omitempty
+// contract: a non-dataset offer must never carry dataset metadata.
+func TestBuildServiceCatalogJSON_NonDatasetOmitsDatasetFields(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "infer", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type:  "inference",
+			Model: monetizeapi.ServiceOfferModel{Name: "qwen3.5:9b"},
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base-sepolia",
+				PayTo:   "0x1111111111111111111111111111111111111111",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+		},
+	}
+
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://seller.example")
+
+	var services []schemas.ServiceCatalogEntry
+	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
+		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
+	}
+	svc := services[0]
+	if svc.DatasetManifestHash != "" || svc.DatasetVersion != "" || svc.DatasetSizeBytes != 0 {
+		t.Errorf("inference offer must omit dataset fields, got %+v", svc)
+	}
+}
+
 // TestBuildServiceCatalogJSON_ExcludesNonReady locks in the filter pipeline:
 // nil offers, drain-expired offers, and offers with a DeletionTimestamp
 // must never leak onto the public storefront, even if they carry

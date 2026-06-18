@@ -200,6 +200,56 @@ func TestRouteRuleFromOffer_AgentResolutionAdvertisesRuntimeModelSkills(t *testi
 	}
 }
 
+// TestRouteRuleFromOffer_DatasetAdvertisesDatasetMetadata pins that a
+// type=dataset offer plumbs spec.dataset onto the RouteRule (so the verifier
+// can surface accepts[].extra.dataset in the 402) and prices via perMB.
+// Mirrors the agent-resolution route-rule test.
+func TestRouteRuleFromOffer_DatasetAdvertisesDatasetMetadata(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "pi-sessions", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "dataset",
+			Dataset: monetizeapi.ServiceOfferDataset{
+				ManifestHash: "ABC123",
+				Version:      "2",
+				FileHash:     "DEF456",
+				SizeBytes:    1048576,
+			},
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base-sepolia",
+				PayTo:   "0x1111111111111111111111111111111111111111",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerMB: "0.01"},
+			},
+		},
+	}
+
+	route, err := routeRuleFromOffer(offer, "")
+	if err != nil {
+		t.Fatalf("routeRuleFromOffer: %v", err)
+	}
+	if route.OfferType != "dataset" {
+		t.Errorf("OfferType = %q, want dataset", route.OfferType)
+	}
+	if route.DatasetManifestHash != "abc123" {
+		t.Errorf("DatasetManifestHash = %q, want abc123 (lowercased)", route.DatasetManifestHash)
+	}
+	if route.DatasetVersion != "2" {
+		t.Errorf("DatasetVersion = %q, want 2", route.DatasetVersion)
+	}
+	if route.DatasetFileHash != "def456" {
+		t.Errorf("DatasetFileHash = %q, want def456 (lowercased)", route.DatasetFileHash)
+	}
+	if route.DatasetSizeBytes != 1048576 {
+		t.Errorf("DatasetSizeBytes = %d, want 1048576", route.DatasetSizeBytes)
+	}
+	if route.Price != "0.01" {
+		t.Errorf("Price = %q, want 0.01 (from perMB)", route.Price)
+	}
+	if route.Pattern != "/services/pi-sessions/*" {
+		t.Errorf("Pattern = %q, want /services/pi-sessions/*", route.Pattern)
+	}
+}
+
 // TestRouteRuleFromOffer_PlumbsMaxTimeoutSeconds pins the regression where
 // ServiceOffer.spec.payment.maxTimeoutSeconds was silently dropped on the
 // floor — the verifier hardcoded 60 in BuildV2RequirementWithAsset and

@@ -95,7 +95,8 @@
             "inference",
             "fine-tuning",
             "http",
-            "agent"
+            "agent",
+            "dataset"
           ]
         },
         "model": {
@@ -119,7 +120,8 @@
             "perRequest",
             "perMTok",
             "perHour",
-            "perEpoch"
+            "perEpoch",
+            "perMB"
           ]
         },
         "priceAtomicUnits": {
@@ -165,6 +167,21 @@
           "type": "string",
           "format": "date-time",
           "description": "RFC3339 timestamp at which the offer's HTTPRoute will be torn down. Set only when the offer is draining. Catalog consumers should detect drain via the presence of this field."
+        },
+        "datasetManifestHash": {
+          "type": "string",
+          "minLength": 1,
+          "description": "type=dataset only: content-address anchor (export bundle manifestHash, SHA-256) of the sold artifact."
+        },
+        "datasetVersion": {
+          "type": "string",
+          "minLength": 1,
+          "description": "type=dataset only: monotonic published version tag of the dataset."
+        },
+        "datasetSizeBytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "type=dataset only: size of the served artifact in bytes."
         }
       }
     }
