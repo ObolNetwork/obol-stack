@@ -53,15 +53,8 @@ const transports = {
   [hoodi.id]: http(`${ERPC_URL}/hoodi`, rpcOpts),
 } as const;
 
-// WalletConnect requires a project ID from https://cloud.walletconnect.com
-// This should be set via NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID environment variable
 const walletConnectProjectId =
   process.env.NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID;
-
-// Helper function to check if WalletConnect is configured
-export function isWalletConnectConfigured(): boolean {
-  return !!walletConnectProjectId;
-}
 
 // Lazy initialization to prevent indexedDB access during SSR
 let wagmiConfig: ReturnType<typeof createConfig> | null = null;
