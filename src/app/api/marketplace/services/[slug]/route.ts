@@ -5,8 +5,15 @@ import {
   STACK_UNREACHABLE,
   isStackUnreachable,
 } from '@/lib/marketplace/errors';
+import { fetchErc8004BySlug } from '@/lib/marketplace/erc8004-source';
+import { isErc8004Listing } from '@/lib/marketplace/types';
+import { AgentClient } from '@/lib/services/agents';
+import {
+  AGENT_REGISTRATION_PATH,
+  publicResourceUrl,
+} from '@/lib/services/public-storefront';
 import { SellClient } from '@/lib/services/sell';
-import type { ServiceDetail } from '@/lib/marketplace/types';
+import type { ServiceDetail, ServiceListItem } from '@/lib/marketplace/types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -14,12 +21,9 @@ export const dynamic = 'force-dynamic';
 /**
  * GET /api/marketplace/services/[slug]
  *
- * `slug` is the URL-encoded "<namespace>/<name>" pair the list returns. We
- * resolve the catalog entry first (covers anonymous reads) and then enrich
- * with status.conditions from the live ServiceOffer CR for the detail page.
- *
- * The k8s call is best-effort — if it fails, we still return the catalog row
- * plus empty conditions so the page renders.
+ * Resolves Obol catalog rows first, then ERC-8004 registry rows. Cluster
+ * listings are enriched with ServiceOffer conditions; public registry rows
+ * are returned as-is from the 8004scan snapshot.
  */
 export async function GET(
   req: NextRequest,
@@ -29,22 +33,25 @@ export async function GET(
     const { slug } = await ctx.params;
     const decoded = decodeURIComponent(slug);
 
-    const snapshot = await fetchCatalog();
-    const base = snapshot.items.find(it => it.slug === decoded);
-    if (!base) {
+    const resolved = await resolveListing(decoded);
+    if (!resolved) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
 
-    const conditions = await safeConditions(base.namespace, base.name);
+    const { base } = resolved;
+    const conditions = isErc8004Listing(base)
+      ? []
+      : await safeConditions(base.namespace, base.name);
+    const wellKnownUrl = await buildWellKnownUrl(base);
 
     const detail: ServiceDetail = {
       ...base,
       conditions,
-      wellKnownUrl: buildWellKnown(req, base.namespace, base.name),
+      wellKnownUrl,
       paymentSample: {
         scheme: 'exact',
         network: base.network.alias || base.network.caip2,
-        payTo: '',
+        payTo: base.payTo,
         asset: base.asset,
         maxAmountRequired: base.priceAtomicUnits,
       },
@@ -66,6 +73,19 @@ export async function GET(
   }
 }
 
+async function resolveListing(
+  slug: string
+): Promise<{ base: ServiceListItem } | null> {
+  const catalog = await fetchCatalog();
+  const fromCatalog = catalog.items.find(it => it.slug === slug);
+  if (fromCatalog) return { base: fromCatalog };
+
+  const fromRegistry = await fetchErc8004BySlug(slug);
+  if (fromRegistry) return { base: fromRegistry };
+
+  return null;
+}
+
 async function safeConditions(
   namespace: string,
   name: string
@@ -83,15 +103,12 @@ async function safeConditions(
   }
 }
 
-function buildWellKnown(
-  req: NextRequest,
-  namespace: string,
-  name: string
-): string {
-  // The controller publishes per-offer ERC-8004 docs at the same host the
-  // request came in on. namespace+name is sufficient because the controller
-  // only ever publishes one document per offer.
-  const origin = req.nextUrl.origin;
-  const qs = new URLSearchParams({ namespace, name }).toString();
-  return `${origin}/.well-known/agent-registration.json?${qs}`;
+async function buildWellKnownUrl(base: ServiceListItem): Promise<string> {
+  if (isErc8004Listing(base)) {
+    return 'https://www.8004scan.io';
+  }
+
+  const agentClient = new AgentClient();
+  const tunnelURL = await agentClient.getTunnelURL();
+  return publicResourceUrl(tunnelURL, AGENT_REGISTRATION_PATH);
 }

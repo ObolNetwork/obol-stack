@@ -12,11 +12,12 @@ import {
 } from '@obolnetwork/obol-ui';
 import { StatusPill } from '../atoms/StatusIndicator';
 import { Avatar } from '../atoms/Avatar';
-import { useAgentStatus, useTunnelURL } from '../../hooks/useAgents';
+import {
+  useAgentStatus,
+  useTunnelURL,
+  useAgentWalletMetadata,
+} from '../../hooks/useAgents';
 import { useWalletAssetBalances } from '../../hooks/useWalletAssetBalances';
-import { useAgentWalletMetadata } from '../../hooks/useAgents';
-import { isDefaultSellAgent } from '../../lib/services/agent-runtime';
-import { SellInferenceModal } from '../molecules/SellInferenceModal';
 import type { AgentInstance } from '@/types/agent';
 
 function displayInstanceName(instance: AgentInstance): string {
@@ -112,26 +113,6 @@ const StatSub = styled(Text, {
   fontSize: 10,
   color: '$muted',
   marginTop: 2,
-});
-
-const SellAccessButton = styled('button', {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '5px 14px',
-  borderRadius: '$pill',
-  border: '1px solid rgba(47, 228, 171, 0.3)',
-  backgroundColor: 'rgba(47, 228, 171, 0.08)',
-  color: '$obolGreen',
-  fontSize: '$2',
-  fontWeight: '$semibold',
-  fontFamily: 'inherit',
-  cursor: 'pointer',
-  transition: 'background 120ms, border-color 120ms',
-  '&:hover': {
-    backgroundColor: 'rgba(47, 228, 171, 0.14)',
-    borderColor: 'rgba(47, 228, 171, 0.5)',
-  },
 });
 
 const ModelLabel = styled(Text, {
@@ -294,24 +275,6 @@ export function HomeAgentCard({
           </Link>
         )}
         <Box css={{ flex: 1 }} />
-        {isDefaultSellAgent(instance) && displayStatus === 'running' && (
-          <SellInferenceModal
-            defaultWallet={primaryAddress ?? undefined}
-            trigger={
-              <SellAccessButton>
-                <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
-                  <path
-                    d="M8 3v10M3 8h10"
-                    stroke="currentColor"
-                    strokeWidth="1.6"
-                    strokeLinecap="round"
-                  />
-                </svg>
-                Sell access
-              </SellAccessButton>
-            }
-          />
-        )}
       </Flex>
     </CardContainer>
   );

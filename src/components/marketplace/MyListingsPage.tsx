@@ -12,7 +12,6 @@ import { Identicon } from './Identicon';
 import { ServicesSubNav } from './ServicesSubNav';
 import { NewListingDialog } from './NewListingDialog';
 import { toChainName } from '@/lib/marketplace/chain';
-import { useOperatorWallets } from '@/hooks/useOperatorWallets';
 import { useTunnelURL } from '@/hooks/useAgents';
 import { publicServiceEndpoint } from '@/lib/services/public-storefront';
 import type { ServiceOffer } from '@/types/sell';
@@ -640,7 +639,6 @@ function offerKey(o: ServiceOffer): string {
 
 export function MyListingsPage() {
   const { address } = useAccount();
-  const operator = useOperatorWallets();
   const { tunnelURL } = useTunnelURL();
   const [offers, setOffers] = useState<ServiceOffer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -667,16 +665,7 @@ export function MyListingsPage() {
     return () => clearInterval(id);
   }, [fetchOffers]);
 
-  const myOffers = useMemo(() => {
-    // Cold start: while we still don't know the operator's wallet set,
-    // show everything so the table isn't blank during fetch.
-    if (operator.isLoading && operator.addressSet.size === 0) return offers;
-    if (operator.addressSet.size === 0) return offers;
-    return offers.filter(o => {
-      const payTo = (o.payment?.payTo ?? '').toLowerCase();
-      return payTo && operator.addressSet.has(payTo);
-    });
-  }, [offers, operator.addressSet, operator.isLoading]);
+  const myOffers = offers;
 
   const counts = useMemo(
     () => ({ listings: myOffers.length, browse: offers.length }),
@@ -760,17 +749,11 @@ export function MyListingsPage() {
           <FilterBtn type="button">Filter</FilterBtn>
         </SectionHeader>
 
-        {operator.addressSet.size > 0 ? (
+        {offers.length > 0 && (
           <Text css={{ fontSize: '$1', color: '$muted', marginBottom: '$xs' }}>
-            Showing listings paid to {operator.agents.length} agent wallet
-            {operator.agents.length === 1 ? '' : 's'}
-            {address ? ' + your connected wallet' : ''}.
-          </Text>
-        ) : (
-          <Text css={{ fontSize: '$2', color: '$muted' }}>
-            No agent wallets discovered yet and no browser wallet connected —
-            showing all {offers.length} listing
-            {offers.length === 1 ? '' : 's'} on this stack.
+            Showing all {offers.length} listing{offers.length === 1 ? '' : 's'}{' '}
+            on this stack
+            {address ? ` · connected wallet: ${address.slice(0, 8)}…` : ''}.
           </Text>
         )}
 

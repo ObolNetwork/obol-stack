@@ -25,9 +25,8 @@ export type MarketplaceStatus = 'live' | 'pending-registration' | 'degraded';
  *
  * - `obol`: the in-cluster Obol Stack ServiceOffer catalog at
  *   /api/services.json (controller-published).
- * - `erc8004`: the on-chain ERC-8004 Identity Registry, queried directly
- *   from the chain via eRPC. Surfaces every registered agent across the
- *   configured networks, regardless of whether the local cluster hosts it.
+ * - `erc8004`: on-chain ERC-8004 Identity Registry via 8004scan (same
+ *   indexer as the home dashboard AgentRegistry).
  */
 export type MarketplaceRegistry = 'obol' | 'erc8004';
 
@@ -138,6 +137,14 @@ export interface ServiceListResponse {
   facets: MarketplaceFacets;
   /** ISO-8601 timestamp of the underlying catalog snapshot. */
   cachedAt: string;
+}
+
+export function isErc8004Listing(
+  item: Pick<ServiceListItem, 'namespace' | 'slug'>
+): boolean {
+  return (
+    item.namespace.startsWith('erc8004:') || item.slug.startsWith('erc8004/')
+  );
 }
 
 export interface ServiceDetail extends ServiceListItem {

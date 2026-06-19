@@ -20,6 +20,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Access at `http://localhost` (port 80)
 - Health check endpoint: `http://localhost/api/health` (if implemented)
 
+### Local Dev Prerequisites
+
+The dev server (`pnpm run dev:local`) makes API calls into a running k3d cluster. Two things must be true before the app works:
+
+1. **k3d cluster running** — `k3d cluster start ${clusterName}`
+   - The cluster pauses when Docker Desktop restarts; always start it again after a Docker restart.
+   - Kubeconfig lives at `~/.config/obol/kubeconfig.yaml`.
+
+2. **Kubeconfig copied to `/tmp`** — the app looks for it at `/tmp/kc-****.yaml`:
+   ```bash
+   cp ~/.config/obol/kubeconfig.yaml /tmp/kc-probable-teal.yaml
+   ```
+   This file is wiped on every Mac restart (it's in `/tmp`). Re-run the copy whenever you get "Obol Stack unreachable" on localhost:3000.
+
 ### Custom Domain Setup
 
 The application is configured to run on `obol.stack` domain. Add to `/etc/hosts`:

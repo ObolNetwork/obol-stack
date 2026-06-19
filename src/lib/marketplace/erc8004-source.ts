@@ -2,16 +2,10 @@
  * Server-side source for the "Public ERC-8004" registry view of the
  * marketplace.
  *
- * Delegates to the existing 8004scan-backed RegistryClient — the same
- * indexer the AgentRegistry organism on the home dashboard uses — so the
- * two surfaces share one fetch path. This module's job is the mapping
- * from `Agent8004` (8004scan's shape) onto the marketplace's
- * ServiceListItem so the same card UI handles both data sources.
- *
- * Why an indexer instead of direct `eth_getLogs`: 8004scan already
- * aggregates registrations across chains, exposes search + pagination,
- * and resolves agent metadata, so a marketplace browse is one HTTP call
- * instead of N chain scans + N metadata fetches.
+ * Uses the same RegistryClient (8004scan) as the home AgentRegistry accordion.
+ * Instead of a snapshot, we query page-by-page on demand — 3 parallel
+ * requests per navigation (one per chain). The real totals come from 8004scan
+ * metadata, so the count shown here always matches the home page.
  */
 
 import { createHash } from 'node:crypto';
@@ -33,65 +27,97 @@ interface ChainAlias {
   caip2: string;
 }
 
-// CHAIN_IDS mirrors the obol-stack ERC-8004 network config + 8004scan
-// chain support. Anything not in this map renders as "eip155:<id>".
 const CHAIN_IDS: Record<number, ChainAlias> = {
   1: { alias: 'ethereum', caip2: 'eip155:1' },
   8453: { alias: 'base', caip2: 'eip155:8453' },
   84532: { alias: 'base-sepolia', caip2: 'eip155:84532' },
 };
 
-// Server-side fan-out: we ask 8004scan for the same window of entries
-// on each supported chain. 100 entries per chain is enough for v1 and
-// keeps the request count low.
 const REGISTRY_FANOUT_CHAINS = [1, 8453, 84532] as const;
-const REGISTRY_PAGE_SIZE = 100;
 
-export interface Erc8004Snapshot {
+export interface Erc8004PageResult {
   items: ServiceListItem[];
+  /** Real total across all chains — from 8004scan pagination metadata. */
+  total: number;
+  /** Per-chain totals for display. */
+  chainTotals: Record<number, number>;
   fetchedAt: string;
 }
 
 /**
- * Fetch all ERC-8004 registrations 8004scan knows about across the
- * configured chains, mapped onto ServiceListItem.
+ * Fetch one page of ERC-8004 agents.
  *
- * Per-chain failures are caught individually so one chain being down
- * doesn't sink the whole list — same behaviour as the previous chain-
- * scan implementation, just at the indexer-fetch level.
+ * Fetches only the chains matching `networkFilter` (or all three if unset).
+ * Returns real per-chain totals from 8004scan metadata — same numbers the
+ * home AgentRegistry shows.
  */
-export async function fetchErc8004Registry(): Promise<Erc8004Snapshot> {
+export async function fetchErc8004Page(
+  page: number,
+  pageSize: number,
+  search?: string,
+  /** CAIP-2 values to restrict to, e.g. ['eip155:1']. Undefined = all chains. */
+  networkFilter?: string[]
+): Promise<Erc8004PageResult> {
   const client = new RegistryClient();
-  const perChain = await Promise.all(
-    REGISTRY_FANOUT_CHAINS.map(chainId =>
+
+  const chainsToFetch = REGISTRY_FANOUT_CHAINS.filter(chainId => {
+    if (!networkFilter?.length) return true;
+    const caip2 = CHAIN_IDS[chainId]?.caip2;
+    return caip2 !== undefined && networkFilter.includes(caip2);
+  });
+
+  const results = await Promise.all(
+    chainsToFetch.map(chainId =>
       client
-        .listAgents(REGISTRY_PAGE_SIZE, 1, undefined, undefined, chainId)
-        .then(r => r.agents)
-        .catch(() => [] as Agent8004[])
+        .listAgents(pageSize, page, search, undefined, chainId)
+        .catch(() => ({ agents: [] as Agent8004[], total: 0, hasMore: false }))
     )
   );
-  const items = perChain.flat().map(mapAgent8004ToItem);
-  return {
-    items,
-    fetchedAt: new Date().toISOString(),
-  };
+
+  // Start with zeros for all chains; fill in what we fetched.
+  const chainTotals: Record<number, number> = {};
+  REGISTRY_FANOUT_CHAINS.forEach(id => {
+    chainTotals[id] = 0;
+  });
+  chainsToFetch.forEach((chainId, i) => {
+    chainTotals[chainId] = results[i].total;
+  });
+
+  const total = results.reduce((sum, r) => sum + r.total, 0);
+  const items = results.flatMap(r => r.agents).map(mapAgent8004ToItem);
+
+  return { items, total, chainTotals, fetchedAt: new Date().toISOString() };
 }
 
 /**
- * Pure mapping helper — given one Agent8004 entry from 8004scan,
- * returns the ServiceListItem the marketplace cards/table render.
- *
- * Exported for unit tests so the mapping can be exercised without
- * hitting the network.
+ * Resolve a single ERC-8004 agent by its marketplace slug (erc8004/{chainId}/{tokenId}).
+ * Used by the detail route — avoids loading a full snapshot.
  */
+export async function fetchErc8004BySlug(
+  slug: string
+): Promise<ServiceListItem | null> {
+  const parts = slug.split('/');
+  if (parts.length !== 3 || parts[0] !== 'erc8004') return null;
+  const chainId = parseInt(parts[1], 10);
+  const tokenId = parseInt(parts[2], 10);
+  if (!Number.isFinite(chainId) || !Number.isFinite(tokenId)) return null;
+
+  const client = new RegistryClient();
+  const result = await client
+    .listAgents(20, 1, String(tokenId), undefined, chainId)
+    .catch(() => ({ agents: [] as Agent8004[], total: 0, hasMore: false }));
+
+  const agent = result.agents.find(
+    a => a.token_id === String(tokenId) && a.chain_id === chainId
+  );
+  return agent ? mapAgent8004ToItem(agent) : null;
+}
+
 export function mapAgent8004ToItem(agent: Agent8004): ServiceListItem {
   const slug = `erc8004/${agent.chain_id}/${agent.token_id}`;
   const network = mapNetwork(agent.chain_id);
   const skills = dedupe([...(agent.categories ?? []), ...(agent.tags ?? [])]);
 
-  // 8004scan doesn't expose x402 pricing/asset directly on the agent
-  // payload, so we surface a placeholder. A reviewer who needs price
-  // can probe the agent's endpoint with the buy-x402 sidecar.
   const asset: MarketplaceAsset = {
     symbol: 'USDC',
     address: '',
@@ -136,13 +162,9 @@ function mapNetwork(chainId: number): MarketplaceNetwork {
 }
 
 function deriveType(agent: Agent8004): ServiceOfferType {
-  // Agent registrations declare protocols (e.g. MCP) and services. If
-  // there's a "model" in the services map we'd flag inference, but
-  // 8004scan's shape doesn't separate that — call everything "agent"
-  // by default and let `http` apply when no services are listed.
-  const hasServices =
-    !!agent.services && Object.keys(agent.services).length > 0;
-  return hasServices ? 'agent' : 'http';
+  if (agent.supported_protocols?.length) return 'agent';
+  if (agent.services && Object.keys(agent.services).length > 0) return 'agent';
+  return 'http';
 }
 
 function deriveModelOrRuntime(agent: Agent8004): string {

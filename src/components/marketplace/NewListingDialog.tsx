@@ -41,7 +41,6 @@ export interface NewListingDialogProps {
 type ServiceType = 'inference' | 'route';
 type PaymentToken = SellPaymentToken;
 type PriceUnit = 'req' | 'mtok' | 'hour';
-type Visibility = 'local' | 'erc8004';
 type ChainKey = SellPaymentChain;
 
 const Mono = styled('span', { fontFamily: 'monospace' });
@@ -420,125 +419,6 @@ function ChainPicker({
   );
 }
 
-const VisibilityGrid = styled('div', {
-  display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
-  gap: 8,
-});
-
-const RadioCardBtn = styled('button', {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 5,
-  padding: '12px 14px',
-  border: '1px solid $stroke',
-  background: '$bg03',
-  borderRadius: '$2',
-  cursor: 'pointer',
-  textAlign: 'left',
-  fontFamily: 'inherit',
-  minHeight: 88,
-  position: 'relative',
-
-  variants: {
-    active: {
-      true: {
-        background: '$obolMidGreen',
-        borderColor: '$obolGreen',
-      },
-    },
-  },
-});
-
-const RadioRow = styled('div', {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-});
-
-const RadioCircle = styled('span', {
-  width: 14,
-  height: 14,
-  borderRadius: '50%',
-  border: '2px solid $stroke',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexShrink: 0,
-
-  variants: {
-    active: {
-      true: {
-        borderColor: '$obolGreen',
-      },
-    },
-  },
-});
-
-const RadioInner = styled('span', {
-  width: 6,
-  height: 6,
-  borderRadius: '50%',
-  background: '$obolGreen',
-});
-
-const RadioTitle = styled('span', {
-  fontSize: '$3',
-  fontWeight: '$semibold',
-  color: '$light',
-
-  variants: {
-    active: {
-      true: { color: '$obolGreen' },
-    },
-  },
-});
-
-const RadioBadge = styled('span', {
-  fontSize: '$1',
-  padding: '2px 6px',
-  borderRadius: '$pill',
-  background: '$obolMidGreen',
-  color: '$obolGreen',
-  fontWeight: '$semibold',
-  lineHeight: 1,
-});
-
-const RadioSub = styled('div', {
-  fontSize: '$1',
-  color: '$body',
-  lineHeight: 1.5,
-  paddingLeft: 20,
-});
-
-function VisibilityCard({
-  active,
-  title,
-  badge,
-  sub,
-  onClick,
-}: {
-  active: boolean;
-  title: string;
-  badge?: string;
-  sub: string;
-  onClick: () => void;
-}) {
-  return (
-    <RadioCardBtn type="button" active={active} onClick={onClick}>
-      <RadioRow>
-        <RadioCircle active={active}>
-          {active ? <RadioInner /> : null}
-        </RadioCircle>
-        <RadioTitle active={active}>{title}</RadioTitle>
-        <span style={{ flex: 1 }} />
-        {badge ? <RadioBadge>{badge}</RadioBadge> : null}
-      </RadioRow>
-      <RadioSub>{sub}</RadioSub>
-    </RadioCardBtn>
-  );
-}
-
 // ── Footer buttons ──────────────────────────────────────────────────────
 
 const CliCopyGroup = styled('div', {
@@ -631,7 +511,6 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
   const [priceToken, setPriceToken] = useState<PaymentToken>('USDC');
   const [priceUnit, setPriceUnit] = useState<PriceUnit>('req');
   const [chain, setChain] = useState<ChainKey>('base');
-  const [visibility, setVisibility] = useState<Visibility>('erc8004');
   const [payoutWallet, setPayoutWallet] = useState('');
 
   const defaultPayoutWallet = sellerWallet ?? '';
@@ -1025,23 +904,12 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
             />
           </FormField>
 
-          <FormField label="Visibility">
-            <VisibilityGrid>
-              <VisibilityCard
-                active={visibility === 'local'}
-                title="Local cluster"
-                sub="Only agents inside your cluster can discover and call this listing."
-                onClick={() => setVisibility('local')}
-              />
-              <VisibilityCard
-                active={visibility === 'erc8004'}
-                title="Public · ERC-8004"
-                badge="Recommended"
-                sub="Anchored on-chain in the public registry. Anyone with a wallet can discover and pay."
-                onClick={() => setVisibility('erc8004')}
-              />
-            </VisibilityGrid>
-          </FormField>
+          <Banner tone="info">
+            HTTP and inference listings join the cluster marketplace catalog
+            when ready. On-chain ERC-8004 registration is available for agent
+            listings — sell a sub-agent from the dashboard, then run{' '}
+            <Mono css={{ color: '$obolGreen' }}>obol sell register</Mono>.
+          </Banner>
 
           {type === 'inference' ? (
             <Banner tone="info">

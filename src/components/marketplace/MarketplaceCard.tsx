@@ -2,7 +2,7 @@
 
 import { memo } from 'react';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
-import { ArrowRightIcon, ExternalLinkIcon } from '@radix-ui/react-icons';
+import { ExternalLinkIcon } from '@radix-ui/react-icons';
 
 import { Badge } from '@/components/atoms/Badge';
 import { ChainIcon } from '@/components/atoms/ChainIcon';
@@ -17,7 +17,6 @@ import { Identicon, shortAddress } from './Identicon';
 export interface MarketplaceCardProps {
   item: ServiceListItem;
   onDetails?: (item: ServiceListItem) => void;
-  onBuy?: (item: ServiceListItem) => void;
 }
 
 // Card view follows the Services.html grid card: content/action area on the
@@ -198,23 +197,6 @@ const ActionRow = styled(Flex, {
   marginTop: 'auto',
 });
 
-const PrimaryBtn = styled('button', {
-  height: 30,
-  padding: '0 $xs',
-  borderRadius: '$pill',
-  border: 'none',
-  background: '$obolGreen',
-  color: '$obolDarkDark',
-  fontSize: '$1',
-  fontWeight: '$semibold',
-  cursor: 'pointer',
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 5,
-  transition: 'background 120ms',
-  '&:hover': { background: '$obolGreenHover' },
-});
-
 const SecondaryBtn = styled('button', {
   height: 30,
   padding: '0 $xs',
@@ -392,7 +374,7 @@ function registryBadge(item: ServiceListItem) {
   return null;
 }
 
-function MarketplaceCardImpl({ item, onDetails, onBuy }: MarketplaceCardProps) {
+function MarketplaceCardImpl({ item, onDetails }: MarketplaceCardProps) {
   const seed = item.payTo || item.bannerSeed || item.slug;
   const provider = item.namespace;
   const tone = statusTone(item.status);
@@ -448,11 +430,6 @@ function MarketplaceCardImpl({ item, onDetails, onBuy }: MarketplaceCardProps) {
         ) : null}
 
         <ActionRow>
-          {item.type === 'inference' ? (
-            <PrimaryBtn type="button" onClick={() => onBuy?.(item)}>
-              Buy <ArrowRightIcon width={13} height={13} />
-            </PrimaryBtn>
-          ) : null}
           <SecondaryBtn type="button" onClick={() => onDetails?.(item)}>
             Probe
           </SecondaryBtn>

@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { WagmiProvider } from 'wagmi';
 import { RainbowKitProvider, darkTheme } from '@rainbow-me/rainbowkit';
 import { theme } from '@obolnetwork/obol-ui';
-import { config, isWalletConnectConfigured } from '../lib/config/wagmi';
+import { config } from '../lib/config/wagmi';
 
 import '@rainbow-me/rainbowkit/styles.css';
 import { LocalDevHostBanner } from '@/components/molecules/LocalDevHostBanner/LocalDevHostBanner';
@@ -13,19 +13,6 @@ import { LocalDevHostBanner } from '@/components/molecules/LocalDevHostBanner/Lo
 const queryClient = new QueryClient();
 
 export function Providers({ children }: { children: React.ReactNode }) {
-  // Always wrap in WagmiProvider to prevent useConfig errors
-  // If WalletConnect is not configured, render without RainbowKit
-  if (!isWalletConnectConfigured()) {
-    return (
-      <WagmiProvider config={config}>
-        <QueryClientProvider client={queryClient}>
-          <LocalDevHostBanner />
-          {children}
-        </QueryClientProvider>
-      </WagmiProvider>
-    );
-  }
-
   return (
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>

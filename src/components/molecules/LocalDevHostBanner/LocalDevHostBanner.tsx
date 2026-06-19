@@ -22,7 +22,7 @@ const Banner = styled(Box, {
 });
 
 /**
- * Shown during local `npm run dev` when opened via localhost instead of obol.stack.
+ * Shown during local `pnpm run dev` when opened via localhost instead of obol.stack.
  */
 export function LocalDevHostBanner() {
   const [show, setShow] = useState(false);
@@ -39,7 +39,7 @@ export function LocalDevHostBanner() {
   return (
     <Banner role="status">
       Local dev works best at <code>http://obol.stack:3000</code> (not
-      localhost). Restart with <code>npm run dev</code> and ensure{' '}
+      localhost). Restart with <code>pnpm run dev</code> and ensure{' '}
       <code>obol.stack</code> resolves to 127.0.0.1 in <code>/etc/hosts</code>.
     </Banner>
   );

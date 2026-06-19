@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import dynamic from 'next/dynamic';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 
 import { LoadingState } from '@/components/molecules/LoadingState';
@@ -26,17 +25,6 @@ import { MarketplaceTable } from './MarketplaceTable';
 import { SortDropdown } from './SortDropdown';
 import { ServicesSubNav } from './ServicesSubNav';
 import { NewListingDialog } from './NewListingDialog';
-
-import type { BuyDrawerProps } from './BuyDrawer';
-
-// BuyDrawer pulls in the buy-command builders + CopyButton + dialog
-// machinery; only relevant after the user clicks Buy. Lazy-load it so
-// it doesn't ship in the initial /marketplace route bundle.
-// (vercel-react-best-practices: bundle-dynamic-imports)
-const BuyDrawer = dynamic<BuyDrawerProps>(
-  () => import('./BuyDrawer.tsx').then(m => m.BuyDrawer),
-  { ssr: false }
-);
 
 // The outer shell (background, page padding, header chrome, footer) is
 // supplied by <DashboardTemplate> in src/app/marketplace/layout.tsx. The
@@ -154,7 +142,7 @@ const LAUNCH_DEMO_COMMAND =
 
 const DEFAULT_FILTERS: MarketplaceFilters = {
   registry: 'obol',
-  type: ['inference'],
+  type: [],
   sort: 'recent',
   page: 1,
   pageSize: 24,
@@ -170,7 +158,6 @@ export function MarketplacePage({
   const router = useRouter();
   const [view, setView] = useState<MarketplaceView>(initialView);
   const [filters, setFilters] = useState<MarketplaceFilters>(DEFAULT_FILTERS);
-  const [buyTarget, setBuyTarget] = useState<ServiceListItem | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
   // Hydration safety: localStorage is only available client-side. Read once
@@ -226,10 +213,6 @@ export function MarketplacePage({
   const onDetails = (item: ServiceListItem) => {
     router.push(`/marketplace/${encodeURIComponent(item.slug)}`);
   };
-  const onBuy = (item: ServiceListItem) => {
-    if (item.type !== 'inference') return;
-    setBuyTarget(item);
-  };
 
   return (
     <Box css={{ display: 'flex', flexDirection: 'column' }}>
@@ -279,7 +262,14 @@ export function MarketplacePage({
               <ErrorState
                 message={error?.message ?? 'Failed to load catalog'}
               />
-            ) : !data || (data.items.length === 0 && hasActiveFilters) ? (
+            ) : !data ? (
+              <LoadingState message="Loading services…" />
+            ) : data.items.length === 0 && filters.registry === 'erc8004' ? (
+              <EmptyMessage>
+                No ERC-8004 agents found — 8004scan may be unreachable or the
+                registry is empty.
+              </EmptyMessage>
+            ) : data.items.length === 0 && hasActiveFilters ? (
               <EmptyMessage>
                 No services match your filters. Try clearing the search or
                 widening the price range.
@@ -306,14 +296,9 @@ export function MarketplacePage({
                   setFilters(prev => ({ ...prev, sort, page: 1 }))
                 }
                 onDetails={onDetails}
-                onBuy={onBuy}
               />
             ) : (
-              <MarketplaceGrid
-                items={data.items}
-                onDetails={onDetails}
-                onBuy={onBuy}
-              />
+              <MarketplaceGrid items={data.items} onDetails={onDetails} />
             )}
             {data && data.total > 0 ? (
               <PaginationRow>
@@ -341,11 +326,6 @@ export function MarketplacePage({
           </Results>
         </RightCol>
       </Layout>
-      <BuyDrawer
-        item={buyTarget}
-        open={buyTarget !== null}
-        onClose={() => setBuyTarget(null)}
-      />
       <NewListingDialog
         open={dialogOpen}
         onClose={() => setDialogOpen(false)}

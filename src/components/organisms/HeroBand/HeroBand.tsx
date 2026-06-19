@@ -106,16 +106,20 @@ function HeroMetric({
   value,
   sub,
   last,
+  tooltip,
 }: {
   label: string;
   value: string;
   sub: string;
   last?: boolean;
+  tooltip?: string;
 }) {
   return (
     <MetricContainer
+      title={tooltip}
       css={{
         borderRight: last ? 'none' : '1px solid $stroke',
+        cursor: tooltip ? 'help' : undefined,
       }}
     >
       <MetricLabel>{label}</MetricLabel>
@@ -154,11 +158,11 @@ export function HeroBand({ data }: HeroBandProps) {
     serviceCount > 0 ? `${serviceCount} listed` : 'none listed';
 
   const description =
-    agentCount > 0
-      ? `${agentCount} agent${agentCount !== 1 ? 's' : ''} running across ${networkCount} network${networkCount !== 1 ? 's' : ''}, transacting over x402. Cluster up ${uptimeStr}.`
-      : networkCount > 0
-        ? `${networkCount} network${networkCount !== 1 ? 's' : ''} connected. Cluster up ${uptimeStr}.`
-        : `Starting up. Cluster up ${uptimeStr}.`;
+    agentCount > 0 && networkCount > 0
+      ? `${agentCount} agent${agentCount !== 1 ? 's' : ''} running across ${networkCount} eRPC network${networkCount !== 1 ? 's' : ''}, transacting over x402. Cluster up ${uptimeStr}.`
+      : agentCount > 0
+        ? `${agentCount} agent${agentCount !== 1 ? 's' : ''} running, transacting over x402. Cluster up ${uptimeStr}.`
+        : `Cluster up ${uptimeStr}. Add agents with obol agent init.`;
 
   return (
     <HeroCard>
@@ -181,9 +185,10 @@ export function HeroBand({ data }: HeroBandProps) {
             sub={agentNames || 'none running'}
           />
           <HeroMetric
-            label="Networks"
+            label="eRPC Networks"
             value={String(networkCount)}
-            sub={networkSub}
+            sub={networkCount === 0 ? 'not configured' : networkSub}
+            tooltip="Blockchain RPC networks served through the eRPC gateway. Configure by running: obol stack edit → eRPC settings, or add a network via the stack config."
           />
           <HeroMetric
             label="No. of Services"

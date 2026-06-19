@@ -2,6 +2,7 @@
 
 import { Box, Text, styled } from '@obolnetwork/obol-ui';
 import { useRegistryAgents } from '../../hooks/useRegistryAgents';
+import { LoadingState } from '../molecules/LoadingState';
 
 interface HomeRegistryBannerProps {
   onBrowseMarketplace?: () => void;
@@ -15,7 +16,6 @@ const Banner = styled('div', {
   backgroundColor: '$bg02',
   border: '1px solid $stroke',
   borderRadius: '$4',
-  width: '100%',
   boxSizing: 'border-box',
 });
 
@@ -40,7 +40,6 @@ const AvatarCircle = styled('div', {
 
 const TextBlock = styled('div', {
   flex: 1,
-  minWidth: 0,
 });
 
 const BrowseButton = styled('button', {
@@ -79,9 +78,12 @@ const SEEDS = [
 export function HomeRegistryBanner({
   onBrowseMarketplace,
 }: HomeRegistryBannerProps) {
-  const { total } = useRegistryAgents();
-  const count = total > 0 ? total : 47;
+  const { total, loading } = useRegistryAgents();
+  const count = total;
   const overflow = Math.max(0, count - SEEDS.length);
+
+  if (loading)
+    return <LoadingState size="small" message="Loading registry..." />;
 
   return (
     <Banner>
@@ -116,15 +118,24 @@ export function HomeRegistryBanner({
         <Text
           css={{ fontSize: '$4', fontWeight: '$semibold', color: '$light' }}
         >
-          Agent Registry
+          ERC-8004 On-chain Agent Registry
         </Text>
         <Text css={{ fontSize: '$2', color: '$body', marginTop: 2 }}>
-          {count} agents discovered across the mesh via ERC-8004.
+          {count > 0 ? (
+            <>
+              <strong style={{ color: 'var(--colors-light)' }}>{count}</strong>{' '}
+              agents registered on-chain on Ethereum · live count from{' '}
+              <span style={{ fontFamily: 'monospace' }}>8004scan.io</span> ·
+              browse all of them below ↓
+            </>
+          ) : (
+            'No agents found in the ERC-8004 registry on Ethereum (via 8004scan.io)'
+          )}
         </Text>
       </TextBlock>
 
       <BrowseButton onClick={onBrowseMarketplace}>
-        Browse marketplace
+        Marketplace
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
           <path
             d="M3 8h10m-4-4 4 4-4 4"
