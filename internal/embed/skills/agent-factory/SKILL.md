@@ -39,8 +39,15 @@ python3 scripts/factory.py create bankr-analyst \
   --description "Paid token-analysis agent"
 ```
 
-Each `--accept` may carry its own `pay-to` (else it inherits `--pay-to`).
-ERC-8004 registration uses the first option's network.
+Each `--accept` may carry its own `pay-to`; otherwise it inherits `--pay-to`,
+which **defaults to the master Hermes agent's own wallet** — so a sub-agent
+needn't provision its own wallet just to take payment (pass `--create-wallet`
+only when it genuinely needs to hold/sign funds). For an unlisted token the
+`asset=0x..` escape hatch needs only the address: `decimals`, `symbol`, and the
+EIP-712 domain (`eip712-name`/`eip712-version`) are read from the chain
+(EIP-5267) when omitted, and `transfer` defaults to `permit2`; the factory
+errors and asks you to specify them if they can't be read. ERC-8004
+registration uses the first option's network.
 
 ## Commands
 

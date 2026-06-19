@@ -1130,6 +1130,28 @@ func buildSellUpdatePatch(payTo, chain string, price schemas.PriceTable) (map[st
 	}, nil
 }
 
+// buildSellAcceptUpdatePatch returns a merge patch that REPLACES an offer's
+// payment set with the given options. spec.payments is swapped wholesale; the
+// singular spec.payment is reset to the new primary (payments[0]) so discovery
+// surfaces that read it stay consistent. When the new primary is USDC (no
+// explicit asset), the old asset block is nulled out so a previous non-USDC
+// asset doesn't survive the merge.
+func buildSellAcceptUpdatePatch(payments []map[string]any) map[string]any {
+	primary := map[string]any{}
+	for k, v := range payments[0] {
+		primary[k] = v
+	}
+	if _, hasAsset := primary["asset"]; !hasAsset {
+		primary["asset"] = nil
+	}
+	return map[string]any{
+		"spec": map[string]any{
+			"payments": payments,
+			"payment":  primary,
+		},
+	}
+}
+
 // shouldAutoRegisterSell reports whether the post-create auto-register step
 // must run for a freshly-applied ServiceOffer spec. Both `obol sell http` and
 // `obol sell inference` need the same gate: registration must be enabled AND
@@ -1353,15 +1375,35 @@ func serviceOfferStatusLines(namespace, name string, offer monetizeapi.ServiceOf
 	lines := []string{
 		fmt.Sprintf("ServiceOffer:    %s/%s", namespace, name),
 		fmt.Sprintf("Endpoint:        %s", endpoint),
-		fmt.Sprintf("Network:         %s", valueOrNone(offer.Spec.Payment.Network)),
-		fmt.Sprintf("Asset:           %s", formatOfferAsset(offer.Spec.Payment.Asset)),
-		fmt.Sprintf("Price:           %s", formatOfferPrice(offer.Spec.Payment)),
-		fmt.Sprintf("Pay To:          %s", valueOrNone(offer.Spec.Payment.PayTo)),
+	}
+	// Show each accepted payment option. Single-payment offers keep the flat
+	// Network/Asset/Price/Pay To lines; multi-currency offers list every option.
+	payments := offer.EffectivePayments()
+	if len(payments) <= 1 {
+		p := offer.Spec.Payment
+		lines = append(lines,
+			fmt.Sprintf("Network:         %s", valueOrNone(p.Network)),
+			fmt.Sprintf("Asset:           %s", formatOfferAsset(p.Asset)),
+			fmt.Sprintf("Price:           %s", formatOfferPrice(p)),
+			fmt.Sprintf("Pay To:          %s", valueOrNone(p.PayTo)),
+		)
+	} else {
+		lines = append(lines, fmt.Sprintf("Payments:        %d accepted options", len(payments)))
+		for i := range payments {
+			p := payments[i]
+			lines = append(lines,
+				fmt.Sprintf("  - %s on %s → %s",
+					formatOfferPrice(p), valueOrNone(p.Network), valueOrNone(p.PayTo)),
+				fmt.Sprintf("    asset: %s", formatOfferAsset(p.Asset)),
+			)
+		}
+	}
+	lines = append(lines,
 		fmt.Sprintf("Agent ID:        %s", agentID),
 		fmt.Sprintf("Registration Tx: %s", tx),
 		"",
 		"Conditions:",
-	}
+	)
 	for _, cond := range offer.Status.Conditions {
 		lines = append(lines, formatConditionLine(cond))
 	}
@@ -2669,8 +2711,9 @@ so the controller picks up the new model.
 Examples:
   obol sell update my-api -n llm --per-request 0.002
   obol sell update my-api -n llm --per-mtok 5.0
-  obol sell update my-api -n llm --wallet 0xNew... --chain base`,
-		Flags: []cli.Flag{
+  obol sell update my-api -n llm --wallet 0xNew... --chain base
+  obol sell update my-api -n llm --accept token=USDC,network=base,price=1 --accept token=OBOL,network=ethereum,price=10`,
+		Flags: append([]cli.Flag{
 			&cli.StringFlag{
 				Name:     "namespace",
 				Aliases:  []string{"n"},
@@ -2698,11 +2741,11 @@ Examples:
 				Name:  "per-hour",
 				Usage: "New per-compute-hour price in the selected payment token",
 			},
-		},
+		}, acceptFlags()...),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			if cmd.NArg() == 0 {
-				return errors.New("name required: obol sell update <name> -n <ns> [--per-request N | --per-mtok N | --per-hour N] [--pay-to 0x...] [--chain base]")
+				return errors.New("name required: obol sell update <name> -n <ns> [--per-request N | --per-mtok N | --per-hour N | --accept ...] [--pay-to 0x...] [--chain base]")
 			}
 
 			name := cmd.Args().First()
@@ -2722,18 +2765,48 @@ Examples:
 				}
 			}
 
-			var price schemas.PriceTable
-			if cmd.String("price") != "" || cmd.String("per-request") != "" || cmd.String("per-mtok") != "" || cmd.String("per-hour") != "" {
-				resolved, err := resolvePriceTable(cmd, true)
+			var patch map[string]any
+			if accepts := cmd.StringSlice("accept"); len(accepts) > 0 {
+				// --accept REPLACES the whole payment set (predictable: no
+				// partial merge across options). spec.payments is a list, so a
+				// merge patch swaps it wholesale; spec.payment is reset to the
+				// new primary (asset cleared when the new primary is USDC).
+				payments, err := buildAcceptPayments(accepts, wallet)
 				if err != nil {
 					return err
 				}
-				price = resolved
+				if err := autofillAcceptPayments(ctx, payments, func(ctx context.Context, network, addr string) (tokenMeta, error) {
+					return fetchTokenMeta(ctx, cfg, network, addr)
+				}); err != nil {
+					return err
+				}
+				patch = buildSellAcceptUpdatePatch(payments)
+			} else {
+				var price schemas.PriceTable
+				if cmd.String("price") != "" || cmd.String("per-request") != "" || cmd.String("per-mtok") != "" || cmd.String("per-hour") != "" {
+					resolved, err := resolvePriceTable(cmd, true)
+					if err != nil {
+						return err
+					}
+					price = resolved
+				}
+				p, err := buildSellUpdatePatch(wallet, cmd.String("chain"), price)
+				// Allow a listing-only update (weight/category) with no payment
+				// change: swallow the "nothing to update" error when listing
+				// flags are present, and start from an empty spec patch.
+				if err != nil {
+					if cmd.Int("weight") != 0 || strings.TrimSpace(cmd.String("category")) != "" {
+						p = map[string]any{"spec": map[string]any{}}
+					} else {
+						return err
+					}
+				}
+				patch = p
 			}
 
-			patch, err := buildSellUpdatePatch(wallet, cmd.String("chain"), price)
-			if err != nil {
-				return err
+			// Listing flags (weight/category) layer onto whichever patch we built.
+			if spec, ok := patch["spec"].(map[string]any); ok {
+				applyListingFlags(cmd, spec)
 			}
 			patchBytes, err := json.Marshal(patch)
 			if err != nil {
