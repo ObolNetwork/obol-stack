@@ -24,6 +24,24 @@ python3 scripts/factory.py create medical-advisor \
   --register-name "Medical Advisor"
 ```
 
+### Multiple currencies / networks (one agent, one offer)
+
+Use repeatable `--accept` instead of `--price`/`--network` to advertise several
+payment options on a single offer (the buyer picks one). `token=<symbol>` pulls
+the asset metadata from the built-in registry; for an unlisted token supply it
+inline with `asset=0x..,decimals=..,transfer=eip3009|permit2,eip712-name=..,eip712-version=..,symbol=..`:
+
+```bash
+python3 scripts/factory.py create bankr-analyst \
+  --model openrouter/auto --skills bankr-token-analysis --create-wallet \
+  --accept token=OBOL,network=ethereum,price=10 \
+  --accept token=USDC,network=base,price=1,pay-to=0xColdVault \
+  --description "Paid token-analysis agent"
+```
+
+Each `--accept` may carry its own `pay-to` (else it inherits `--pay-to`).
+ERC-8004 registration uses the first option's network.
+
 ## Commands
 
 | Command | Description |
