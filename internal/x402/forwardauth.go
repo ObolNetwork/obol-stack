@@ -48,6 +48,13 @@ type ForwardAuthConfig struct {
 	// Nil keeps today's behaviour: every 402 is JSON.
 	SendPaymentRequired SendPaymentRequiredFunc
 
+	// OnPaymentMatched, if non-nil, is invoked with the requirement the
+	// buyer's X-PAYMENT satisfied, as soon as it matches (before verify).
+	// Lets the caller attribute metrics to the specific payment option used
+	// in a multi-accept offer (OBOL vs USDC, mainnet vs Base, …). No-op when
+	// the offer advertises a single option.
+	OnPaymentMatched func(x402types.PaymentRequirements)
+
 	// SettlesInProcess marks the in-process seller-gateway path (HandleProxy /
 	// obol sell inference) where VerifyOnly=false is correct BY DESIGN — the
 	// middleware proxies to the real upstream and settles only after a <400
@@ -147,6 +154,9 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 			if !found {
 				send(w, r, requirements, cfg.Extensions)
 				return
+			}
+			if cfg.OnPaymentMatched != nil {
+				cfg.OnPaymentMatched(matchedReq)
 			}
 
 			// Verify with facilitator.

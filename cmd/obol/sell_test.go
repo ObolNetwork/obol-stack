@@ -285,6 +285,8 @@ func TestSellHTTP_Flags(t *testing.T) {
 		"namespace", "upstream", "port", "health-path", "path",
 		"max-timeout",
 		"register", "no-register", "register-name", "register-description", "register-image",
+		// multi-currency + storefront listing flags (Phase 3)
+		"accept", "weight", "category",
 	)
 
 	assertStringDefault(t, flags, "chain", "base")
@@ -293,6 +295,17 @@ func TestSellHTTP_Flags(t *testing.T) {
 	assertStringDefault(t, flags, "health-path", "/health")
 	assertIntDefault(t, flags, "port", 8080)
 	assertIntDefault(t, flags, "max-timeout", 300)
+}
+
+func TestSellAgent_AcceptFlags(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := sellCommand(cfg)
+	agent := findSubcommand(t, cmd, "agent")
+	flags := flagMap(agent)
+	requireFlags(t, flags,
+		"wallet", "chain", "token", "price", "per-request",
+		"accept", "weight", "category", "description",
+	)
 }
 
 func TestBuildSellRegistrationConfig_DefaultEnabled(t *testing.T) {

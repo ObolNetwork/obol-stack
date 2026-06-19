@@ -97,6 +97,22 @@ spec:
                   is honored as "tear down immediately on the next reconcile" (the
                   equivalent of `obol sell stop --force`).
                 type: string
+              listing:
+                description: |-
+                  Listing controls how the offer is presented on the public storefront
+                  (ordering weight and grouping category). Cosmetic only.
+                properties:
+                  category:
+                    description: |-
+                      Category groups the offer into a named storefront section (e.g.
+                      "demo"). Empty means the default/uncategorized section.
+                    type: string
+                  weight:
+                    description: |-
+                      Weight orders offers on the storefront: higher sorts earlier.
+                      Equal weights fall back to alphabetical by name. Defaults to 0.
+                    type: integer
+                type: object
               model:
                 description: LLM model metadata. Required when the upstream serves
                   an LLM.
@@ -197,6 +213,91 @@ spec:
                 - payTo
                 - price
                 type: object
+              payments:
+                description: |-
+                  Payments lists every accepted payment option (one per currency/network).
+                  When non-empty it is the source of truth for the x402 402 accepts[] array;
+                  the buyer picks one option and the verifier settles whichever was used.
+                  payments[0] is the primary option and MUST equal spec.payment.
+                items:
+                  properties:
+                    asset:
+                      description: |-
+                        Optional token metadata override for x402 settlement. When omitted,
+                        the verifier uses the chain default asset.
+                      properties:
+                        address:
+                          description: ERC-20 contract address.
+                          pattern: ^0x[0-9a-fA-F]{40}$
+                          type: string
+                        decimals:
+                          description: Token decimals in atomic units.
+                          format: int64
+                          maximum: 255
+                          minimum: 0
+                          type: integer
+                        eip712Name:
+                          description: EIP-712 domain name used by the token.
+                          type: string
+                        eip712Version:
+                          description: EIP-712 domain version used by the token.
+                          type: string
+                        symbol:
+                          description: Human-friendly token symbol (e.g. USDC, OBOL).
+                          type: string
+                        transferMethod:
+                          description: x402 transfer method for the asset.
+                          enum:
+                          - eip3009
+                          - permit2
+                          type: string
+                      type: object
+                    maxTimeoutSeconds:
+                      default: 300
+                      description: 'Payment validity window in seconds (x402: maxTimeoutSeconds).'
+                      format: int64
+                      type: integer
+                    network:
+                      description: |-
+                        Chain identifier for payments (human-friendly). Reconciler resolves
+                        to CAIP-2 format (e.g., "base-sepolia" → "eip155:84532").
+                      type: string
+                    payTo:
+                      description: 'USDC recipient wallet address (x402: payTo).'
+                      pattern: ^0x[0-9a-fA-F]{40}$
+                      type: string
+                    price:
+                      description: |-
+                        Pricing table with per-unit prices in USDC (human-readable decimals).
+                        Which fields are applicable depends on the workload type.
+                      properties:
+                        perEpoch:
+                          description: Per-training-epoch price in USDC. Fine-tuning
+                            only.
+                          type: string
+                        perHour:
+                          description: Per-compute-hour price in USDC. Fine-tuning only.
+                          type: string
+                        perMTok:
+                          description: Per-million-tokens price in USDC. Inference only.
+                          type: string
+                        perRequest:
+                          description: Flat per-request price in USDC. Applicable to
+                            all types.
+                          type: string
+                      type: object
+                    scheme:
+                      default: exact
+                      description: x402 payment scheme.
+                      enum:
+                      - exact
+                      type: string
+                  required:
+                  - network
+                  - payTo
+                  - price
+                  type: object
+                type: array
               provenance:
                 additionalProperties:
                   type: string

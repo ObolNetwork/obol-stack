@@ -775,8 +775,8 @@ func TestBuildServiceCatalogJSON(t *testing.T) {
 	if svc.Price != "0.00001 USDC/request" {
 		t.Errorf("price = %q, want '0.00001 USDC/request'", svc.Price)
 	}
-	if !svc.IsDemo {
-		t.Error("expected isDemo=true for namespace=demo")
+	if svc.Category != "demo" {
+		t.Errorf("category = %q, want demo (back-compat: namespace=demo)", svc.Category)
 	}
 	if svc.Endpoint != "https://example.com/services/demo-hello" {
 		t.Errorf("endpoint = %q, want https://example.com/services/demo-hello", svc.Endpoint)

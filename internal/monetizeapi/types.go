@@ -117,8 +117,26 @@ type ServiceOfferSpec struct {
 	// In-cluster service that handles the actual workload.
 	Upstream ServiceOfferUpstream `json:"upstream,omitempty"`
 
+	// Primary accepted payment. Always set, including for multi-payment
+	// offers, where it MUST mirror payments[0] — discovery surfaces that
+	// predate multi-payment (the catalog, skill.md, kubectl printcolumns)
+	// read this singular block. The x402 verifier reads the full set via
+	// EffectivePayments.
 	// +kubebuilder:validation:Required
 	Payment ServiceOfferPayment `json:"payment"`
+
+	// Payments lists every accepted payment option for this offer (one per
+	// currency/network). When non-empty it is the source of truth for the
+	// x402 verifier's 402 accepts[] array: the buyer picks one option and
+	// the verifier settles whichever was used. payments[0] is the primary
+	// option and MUST equal spec.payment. Empty means a single-payment
+	// offer described by spec.payment alone. See EffectivePayments.
+	Payments []ServiceOfferPayment `json:"payments,omitempty"`
+
+	// Listing controls how the offer is presented on the public storefront
+	// (ordering weight and grouping category). Cosmetic only — it does not
+	// affect routing, pricing, or payment.
+	Listing ServiceOfferListing `json:"listing,omitempty"`
 
 	// URL path prefix for the HTTPRoute, defaults to /services/<name>.
 	// +kubebuilder:validation:Pattern=`^/[a-zA-Z0-9/_.-]*$`
@@ -215,6 +233,17 @@ type ServiceOfferPayment struct {
 	// Which fields are applicable depends on the workload type.
 	// +kubebuilder:validation:Required
 	Price ServiceOfferPriceTable `json:"price"`
+}
+
+// ServiceOfferListing carries storefront presentation hints. Both fields
+// are optional and purely cosmetic.
+type ServiceOfferListing struct {
+	// Weight orders offers on the storefront: higher sorts earlier. Offers
+	// with equal weight fall back to alphabetical by name. Defaults to 0.
+	Weight int `json:"weight,omitempty"`
+	// Category groups the offer into a named storefront section (e.g.
+	// "demo"). Empty means the default/uncategorized section.
+	Category string `json:"category,omitempty"`
 }
 
 type ServiceOfferAsset struct {
@@ -410,6 +439,18 @@ func (o *ServiceOffer) EffectivePath() string {
 		return o.Spec.Path
 	}
 	return fmt.Sprintf("/services/%s", o.Name)
+}
+
+// EffectivePayments returns every accepted payment option for the offer.
+// When spec.payments is populated it is returned verbatim (multi-payment
+// offers); otherwise a single-element slice is synthesized from spec.payment
+// so single-payment offers and pre-multi-payment CRs keep working unchanged.
+// payments[0] (or spec.payment) is always the primary option.
+func (o *ServiceOffer) EffectivePayments() []ServiceOfferPayment {
+	if len(o.Spec.Payments) > 0 {
+		return o.Spec.Payments
+	}
+	return []ServiceOfferPayment{o.Spec.Payment}
 }
 
 func (o *ServiceOffer) IsInference() bool {

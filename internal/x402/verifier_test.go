@@ -204,6 +204,79 @@ func TestVerifier_PaidRoute_ValidPayment_Returns200(t *testing.T) {
 	}
 }
 
+// TestVerifier_MultiPayment_AdvertisesAllAndSettlesChosen pins the Phase-1
+// multi-currency behaviour: a route with two accepted payment options
+// advertises BOTH in the 402 accepts[] array, and a buyer paying with the
+// SECOND (non-primary) option verifies + settles against that option rather
+// than silently being matched to the primary.
+func TestVerifier_MultiPayment_AdvertisesAllAndSettlesChosen(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+
+	const (
+		payToPrimary = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		payToSecond  = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	)
+	route := RouteRule{
+		Pattern:        "/services/multi/*",
+		OfferNamespace: "demo",
+		OfferName:      "multi",
+		Payments: []RoutePayment{
+			{Price: "0.001", PayTo: payToPrimary, Network: "base-sepolia", AssetSymbol: "USDC"},
+			{Price: "0.002", PayTo: payToSecond, Network: "base-sepolia", AssetSymbol: "USDC"},
+		},
+	}
+
+	// (1) No payment → 402 with BOTH options in accepts[].
+	v := newTestVerifier(t, fac.URL, []RouteRule{route})
+	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/services/multi/run")
+	req.Header.Set("X-Forwarded-Host", "obol.stack")
+	w := httptest.NewRecorder()
+	v.HandleVerify(w, req)
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("expected 402, got %d", w.Code)
+	}
+	var got x402types.PaymentRequired
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("parse 402 body: %v (body=%s)", err, w.Body.String())
+	}
+	if len(got.Accepts) != 2 {
+		t.Fatalf("accepts length = %d, want 2 (multi-currency offer)", len(got.Accepts))
+	}
+	amounts := map[string]string{got.Accepts[0].PayTo: got.Accepts[0].Amount, got.Accepts[1].PayTo: got.Accepts[1].Amount}
+	if amounts[payToPrimary] != "1000" || amounts[payToSecond] != "2000" {
+		t.Fatalf("accepts amounts = %v, want primary→1000 secondary→2000", amounts)
+	}
+
+	// (2) Pay with the SECOND option → settles. The buyer's X-PAYMENT carries
+	// option 2's payTo + atomic amount; findMatchingRequirementV1 must select
+	// it and the facilitator settle against it.
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer upstream.Close()
+	route.UpstreamURL = upstream.URL
+	route.StripPrefix = "/services/multi"
+	vp := newTestVerifier(t, fac.URL, []RouteRule{route})
+
+	preq := httptest.NewRequest(http.MethodPost, "/services/multi/run", strings.NewReader(`{}`))
+	preq.Header.Set("Content-Type", "application/json")
+	preq.Header.Set("X-PAYMENT", testPaymentHeaderFor(t, payToSecond, "2000"))
+	pw := httptest.NewRecorder()
+	vp.HandleProxy(pw, preq)
+
+	if pw.Code != http.StatusOK {
+		t.Fatalf("paying with second option: expected 200, got %d (body=%s)", pw.Code, pw.Body.String())
+	}
+	if fac.settleCalls.Load() == 0 {
+		t.Fatal("expected the chosen (second) option to settle")
+	}
+	if pw.Header().Get("X-PAYMENT-RESPONSE") == "" {
+		t.Fatal("expected X-PAYMENT-RESPONSE on successful settlement of the chosen option")
+	}
+}
+
 func TestVerifier_PaidRoute_RejectedPayment_Returns402(t *testing.T) {
 	fac := newMockFacilitator(t, mockFacilitatorOpts{rejectPayment: true})
 	v := newTestVerifier(t, fac.URL, []RouteRule{

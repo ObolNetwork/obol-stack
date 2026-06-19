@@ -1035,22 +1035,23 @@ func offerOperationallyReady(offer *monetizeapi.ServiceOffer) bool {
 // ready but has its on-chain ERC-8004 registration still pending. Used to
 // flip ServiceCatalogEntry.RegistrationPending so storefront UIs can show
 // a "registration pending" badge alongside the usable offer.
-// isDemoOffer reports whether an offer should be rendered under the
-// storefront's "Demo services" group. The legacy demo path puts offers
-// directly in the "demo" namespace, but the agent-backed demo path
-// (`obol sell demo quant`) lands the offer in agent-<name> because the
-// controller's confused-deputy guard requires the ServiceOffer and the
-// referenced Agent CR to share a namespace. To keep both paths grouping
-// together on the storefront, the CLI sets obol.org/demo=true on
-// agent-backed demos and we honour either signal.
-func isDemoOffer(offer *monetizeapi.ServiceOffer) bool {
+// offerCategory returns the storefront grouping category for an offer.
+// spec.listing.category is the source of truth; demo services are just
+// category="demo" like any other section. For backward compatibility with
+// offers created before listing.category existed, legacy demo signals
+// (namespace "demo", or the obol.org/demo=true label set on agent-backed
+// demos whose offer must live in agent-<name>) still map to "demo".
+func offerCategory(offer *monetizeapi.ServiceOffer) string {
 	if offer == nil {
-		return false
+		return ""
 	}
-	if offer.Namespace == "demo" {
-		return true
+	if c := strings.TrimSpace(offer.Spec.Listing.Category); c != "" {
+		return c
 	}
-	return offer.Labels["obol.org/demo"] == "true"
+	if offer.Namespace == "demo" || offer.Labels["obol.org/demo"] == "true" {
+		return "demo"
+	}
+	return ""
 }
 
 func offerAwaitingRegistration(offer *monetizeapi.ServiceOffer) bool {
@@ -1096,7 +1097,13 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 			ready = append(ready, offer)
 		}
 	}
+	// Higher listing weight sorts earlier; equal weights fall back to name.
+	// Category grouping is applied client-side on the storefront.
 	sort.Slice(ready, func(i, j int) bool {
+		wi, wj := ready[i].Spec.Listing.Weight, ready[j].Spec.Listing.Weight
+		if wi != wj {
+			return wi > wj
+		}
 		return ready[i].Name < ready[j].Name
 	})
 
@@ -1141,7 +1148,8 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 			Network:             offer.Spec.Payment.Network,
 			Description:         desc,
 			Skills:              skills,
-			IsDemo:              isDemoOffer(offer),
+			Category:            offerCategory(offer),
+			Weight:              offer.Spec.Listing.Weight,
 			RegistrationPending: offerAwaitingRegistration(offer),
 			DrainEndsAt:         drainEndsAt,
 		}

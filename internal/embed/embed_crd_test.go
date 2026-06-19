@@ -150,10 +150,24 @@ func TestServiceOfferCRD_Fields(t *testing.T) {
 
 	// Required fields in spec (aligned with x402/ERC-8004 schema). agent
 	// joins this list as part of the type=agent offer flow.
-	for _, field := range []string{"type", "agent", "model", "upstream", "payment", "path", "registration"} {
+	for _, field := range []string{"type", "agent", "model", "upstream", "payment", "payments", "listing", "path", "registration"} {
 		if _, exists := pm[field]; !exists {
 			t.Errorf("spec.properties missing field %q", field)
 		}
+	}
+
+	// payments[] items must carry the same required payment fields as the
+	// singular payment block (it advertises the x402 accepts[] array).
+	paymentsItems := nested(v0, "schema", "openAPIV3Schema", "properties", "spec",
+		"properties", "payments", "items", "properties")
+	if pim, ok := paymentsItems.(map[string]any); ok {
+		for _, field := range []string{"network", "payTo", "price", "asset", "maxTimeoutSeconds"} {
+			if _, exists := pim[field]; !exists {
+				t.Errorf("spec.payments.items.properties missing field %q", field)
+			}
+		}
+	} else {
+		t.Errorf("spec.payments.items.properties is not a map: %T", paymentsItems)
 	}
 
 	typeProp, _ := pm["type"].(map[string]any)
