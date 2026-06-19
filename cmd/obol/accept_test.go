@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -67,7 +68,7 @@ func TestParseAcceptOption_Errors(t *testing.T) {
 		{"two prices", "token=USDC,network=base,price=1,per-mtok=2,pay-to=" + testPayTo, "only one of"},
 		{"bad pay-to", "token=USDC,network=base,price=1,pay-to=nope", "pay-to must be"},
 		{"token and asset", "token=USDC,asset=0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,network=base,price=1,pay-to=" + testPayTo, "not both"},
-		{"raw missing meta", "asset=0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,network=base,price=1,pay-to=" + testPayTo, "decimals"},
+		{"bad decimals", "asset=0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,decimals=999,network=base,price=1,pay-to=" + testPayTo, "decimals must be"},
 		{"unregistered token", "token=WETH,network=base,price=1,pay-to=" + testPayTo, "not in the registry"},
 	}
 	for _, tc := range cases {
@@ -77,6 +78,66 @@ func TestParseAcceptOption_Errors(t *testing.T) {
 				t.Fatalf("err = %v, want containing %q", err, tc.want)
 			}
 		})
+	}
+}
+
+func TestParseAcceptOption_RawAssetDefersToAutofill(t *testing.T) {
+	// A raw asset with just the address parses (transfer defaults to permit2);
+	// decimals/eip712 are left for autofill rather than erroring at parse.
+	opt, _, err := parseAcceptOption("asset=0x"+strings.Repeat("b", 40)+",network=base,price=1,pay-to="+testPayTo, "")
+	if err != nil {
+		t.Fatalf("partial raw asset should parse, got: %v", err)
+	}
+	if opt.Asset.Address != "0x"+strings.Repeat("b", 40) || opt.Asset.TransferMethod != schemas.AssetTransferMethodPermit2 {
+		t.Fatalf("partial raw asset = %+v, want address set + permit2 default", opt.Asset)
+	}
+	if opt.Asset.Decimals != 0 || opt.Asset.EIP712Name != "" {
+		t.Errorf("decimals/eip712 should be empty pending autofill, got %+v", opt.Asset)
+	}
+}
+
+func TestAutofillAcceptPayments(t *testing.T) {
+	ctx := context.Background()
+	full := tokenMeta{Decimals: 18, Symbol: "FOO", EIP712Name: "Foo Token", EIP712Version: "1"}
+
+	// (1) Partial raw asset → filled from chain.
+	pays, _ := buildAcceptPayments([]string{"asset=0x" + strings.Repeat("b", 40) + ",network=base,price=1,pay-to=" + testPayTo}, "")
+	calls := 0
+	err := autofillAcceptPayments(ctx, pays, func(_ context.Context, _, _ string) (tokenMeta, error) {
+		calls++
+		return full, nil
+	})
+	if err != nil {
+		t.Fatalf("autofill: %v", err)
+	}
+	a := pays[0]["asset"].(schemas.AssetTerms)
+	if a.Decimals != 18 || a.EIP712Name != "Foo Token" || a.EIP712Version != "1" || a.Symbol != "FOO" {
+		t.Fatalf("autofill did not fill from chain: %+v", a)
+	}
+
+	// (2) Registry (OBOL) + USDC options are already complete → no RPC call.
+	pays, _ = buildAcceptPayments([]string{
+		"token=USDC,network=base,price=1,pay-to=" + testPayTo,
+		"token=OBOL,network=ethereum,price=10,pay-to=" + testPayTo,
+	}, "")
+	calls = 0
+	if err := autofillAcceptPayments(ctx, pays, func(_ context.Context, _, _ string) (tokenMeta, error) {
+		calls++
+		return tokenMeta{}, nil
+	}); err != nil {
+		t.Fatalf("autofill complete options: %v", err)
+	}
+	if calls != 0 {
+		t.Errorf("registry/USDC options should not hit the chain, got %d calls", calls)
+	}
+
+	// (3) Chain can't resolve the signature-critical fields → error to specify.
+	pays, _ = buildAcceptPayments([]string{"asset=0x" + strings.Repeat("c", 40) + ",network=base,price=1,pay-to=" + testPayTo}, "")
+	err = autofillAcceptPayments(ctx, pays, func(_ context.Context, _, _ string) (tokenMeta, error) {
+		return tokenMeta{Symbol: "X"}, nil // no decimals / eip712 (token lacks EIP-5267)
+	})
+	if err == nil || !strings.Contains(err.Error(), "could not read") {
+		t.Fatalf("expected unresolved-fields error, got %v", err)
 	}
 }
 

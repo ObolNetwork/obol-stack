@@ -156,23 +156,30 @@ func parseAcceptOption(raw, defaultPayTo string) (acceptOption, int64, error) {
 		if !evmAddressRe.MatchString(rawAddr) {
 			return acceptOption{}, 0, fmt.Errorf("--accept %q: asset must be a 0x ERC-20 address (got %q)", raw, rawAddr)
 		}
-		dec, derr := strconv.Atoi(kv["decimals"])
-		if derr != nil || dec <= 0 || dec > 255 {
-			return acceptOption{}, 0, fmt.Errorf("--accept %q: raw asset needs decimals=<1-255>", raw)
+		// transfer defaults to permit2 — the near-universal flow (EIP-3009 is
+		// effectively USDC-only). decimals/symbol/eip712-* are optional here:
+		// any not supplied are filled best-effort from the chain by
+		// autofillAcceptPayments, which errors if they still can't be resolved.
+		transfer := strings.ToLower(strings.TrimSpace(kv["transfer"]))
+		if transfer == "" {
+			transfer = schemas.AssetTransferMethodPermit2
 		}
-		transfer := strings.ToLower(kv["transfer"])
 		if transfer != schemas.AssetTransferMethodEIP3009 && transfer != schemas.AssetTransferMethodPermit2 {
-			return acceptOption{}, 0, fmt.Errorf("--accept %q: raw asset needs transfer=eip3009|permit2", raw)
+			return acceptOption{}, 0, fmt.Errorf("--accept %q: transfer must be eip3009 or permit2", raw)
 		}
-		symbol := strings.TrimSpace(kv["symbol"])
-		name := strings.TrimSpace(kv["eip712-name"])
-		version := strings.TrimSpace(kv["eip712-version"])
-		if symbol == "" || name == "" || version == "" {
-			return acceptOption{}, 0, fmt.Errorf("--accept %q: raw asset needs symbol, eip712-name and eip712-version (the token's EIP-712 signing domain)", raw)
+		dec := 0
+		if d := strings.TrimSpace(kv["decimals"]); d != "" {
+			n, derr := strconv.Atoi(d)
+			if derr != nil || n <= 0 || n > 255 {
+				return acceptOption{}, 0, fmt.Errorf("--accept %q: decimals must be 1-255", raw)
+			}
+			dec = n
 		}
 		opt.Asset = schemas.AssetTerms{
-			Address: rawAddr, Symbol: symbol, Decimals: dec,
-			TransferMethod: transfer, EIP712Name: name, EIP712Version: version,
+			Address: rawAddr, Symbol: strings.TrimSpace(kv["symbol"]), Decimals: dec,
+			TransferMethod: transfer,
+			EIP712Name:     strings.TrimSpace(kv["eip712-name"]),
+			EIP712Version:  strings.TrimSpace(kv["eip712-version"]),
 		}
 		opt.dedupKey = canonicalChain + "\x00" + strings.ToLower(rawAddr)
 
@@ -271,8 +278,9 @@ func acceptFlags() []cli.Flag {
 			Name: "accept",
 			Usage: "Accepted payment option (repeatable) for multi-currency offers, e.g. " +
 				"--accept token=OBOL,network=ethereum,price=10 --accept token=USDC,network=base,price=1. " +
-				"Unlisted tokens: asset=0x..,decimals=..,transfer=eip3009|permit2,eip712-name=..,eip712-version=..,symbol=... " +
-				"When set, --chain/--token/--price are ignored.",
+				"Unlisted tokens: asset=0x..,network=..,price=.. — decimals/symbol/eip712-name/eip712-version are read " +
+				"from the chain (EIP-5267) when omitted and transfer defaults to permit2; pass them explicitly to override " +
+				"or if the chain can't be reached. When set, --chain/--token/--price are ignored.",
 		},
 		&cli.IntFlag{
 			Name:  "weight",

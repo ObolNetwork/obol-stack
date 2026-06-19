@@ -163,6 +163,13 @@ Examples:
 				if err != nil {
 					return err
 				}
+				// Best-effort fill of raw-asset metadata from the chain
+				// (no-op for registry/USDC options).
+				if err := autofillAcceptPayments(ctx, paymentsList, func(ctx context.Context, network, addr string) (tokenMeta, error) {
+					return fetchTokenMeta(ctx, cfg, network, addr)
+				}); err != nil {
+					return err
+				}
 				payment = paymentsList[0]
 				primaryNetwork, _ = payment["network"].(string)
 				primaryPayTo, _ = payment["payTo"].(string)

@@ -37,6 +37,12 @@ type ServiceCatalogEntry struct {
 	// the storefront ServiceCard.
 	Skills []string `json:"skills,omitempty"`
 
+	// Payments is every accepted payment option for this offer (one per
+	// currency/network). Always has at least one entry; payments[0] mirrors
+	// the flat Price/PayTo/Network/Asset fields above (kept for consumers
+	// predating multi-currency). The storefront renders one pay-row per entry.
+	Payments []ServiceCatalogPaymentOption `json:"payments,omitempty"`
+
 	// Category groups the offer into a named storefront section (e.g.
 	// "demo"). Empty means the default/uncategorized section. Demo services
 	// are just category="demo" — no special-casing. Mirrors
@@ -62,6 +68,21 @@ type ServiceCatalogEntry struct {
 	// purely additive vs. pre-drain catalogs. Buyers SHOULD migrate to
 	// alternative providers before this time.
 	DrainEndsAt string `json:"drainEndsAt,omitempty"`
+}
+
+// ServiceCatalogPaymentOption is one accepted (price, payTo, network, asset)
+// combination on an offer. Same fields as the entry's flat payment block,
+// repeated once per advertised currency/network.
+type ServiceCatalogPaymentOption struct {
+	Price            string               `json:"price"`
+	PriceRaw         string               `json:"priceRaw,omitempty"`
+	PriceUnit        string               `json:"priceUnit,omitempty"`
+	PriceAtomicUnits string               `json:"priceAtomicUnits,omitempty"`
+	PayTo            string               `json:"payTo"`
+	Network          string               `json:"network"`
+	CAIP2Network     string               `json:"caip2Network,omitempty"`
+	ChainID          int64                `json:"chainId,omitempty"`
+	Asset            *ServiceCatalogAsset `json:"asset,omitempty"`
 }
 
 // ServiceCatalogAsset describes the settlement token resolved for a catalog

@@ -880,6 +880,17 @@ Examples:
 			if err != nil {
 				return err
 			}
+			if paymentsList != nil {
+				// Best-effort fill of any raw-asset metadata from the chain
+				// (no-op for registry/USDC options). Errors if a raw token's
+				// decimals/EIP-712 domain can't be resolved.
+				if err := autofillAcceptPayments(ctx, paymentsList, func(ctx context.Context, network, addr string) (tokenMeta, error) {
+					return fetchTokenMeta(ctx, cfg, network, addr)
+				}); err != nil {
+					return err
+				}
+				paymentBlock = paymentsList[0]
+			}
 			wallet = primaryPayTo
 
 			spec := map[string]any{

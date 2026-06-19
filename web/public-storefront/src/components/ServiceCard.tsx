@@ -1,7 +1,27 @@
 "use client";
 
 import { useState } from "react";
-import type { Service } from "@/types";
+import type { Service, ServicePayment } from "@/types";
+
+// paymentOptions returns the service's accepted payment options, falling back
+// to the flat fields for catalogs predating multi-currency.
+function paymentOptions(service: Service): ServicePayment[] {
+  if (service.payments && service.payments.length > 0) return service.payments;
+  return [
+    {
+      price: service.price,
+      priceRaw: service.priceRaw,
+      payTo: service.payTo,
+      network: service.network,
+      asset: service.asset,
+    },
+  ];
+}
+
+function optionLabel(opt: ServicePayment): string {
+  const sym = opt.asset?.symbol ?? "USDC";
+  return `${opt.price.replace(/\s.*/, "")} ${sym} · ${opt.network}`;
+}
 
 const typeColors: Record<string, string> = {
   inference: "bg-obol-green/15 text-obol-green border border-obol-green/30",
@@ -24,15 +44,41 @@ type Tab = "agent" | "other-ai" | "code";
 export function ServiceCard({ service }: { service: Service }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("agent");
+  const [copied, setCopied] = useState(false);
+
+  const options = paymentOptions(service);
+  const [optIdx, setOptIdx] = useState(0);
+  const opt = options[optIdx] ?? options[0];
+  const multiPay = options.length > 1;
+
+  const anchorId = `service-${service.name}`;
+  const copyAnchor = () => {
+    const url = `${window.location.origin}${window.location.pathname}#${anchorId}`;
+    navigator.clipboard.writeText(url);
+    window.location.hash = anchorId;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
-    <div className="rounded-lg border border-stroke bg-bg02 p-5 transition-colors hover:bg-bg03">
+    <div
+      id={anchorId}
+      className="scroll-mt-4 rounded-lg border border-stroke bg-bg02 p-5 transition-colors hover:bg-bg03"
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 mb-1">
             <h3 className="text-lg font-semibold text-text-light truncate">
               {service.name}
             </h3>
+            <button
+              onClick={copyAnchor}
+              title="Copy link to this service"
+              aria-label="Copy link to this service"
+              className="shrink-0 text-text-muted hover:text-obol-green text-sm cursor-pointer font-mono"
+            >
+              {copied ? "✓" : "#"}
+            </button>
             {service.category && (
               <span className="shrink-0 rounded px-1.5 py-0.5 text-xs bg-obol-green/15 text-obol-green border border-obol-green/30">
                 {service.category}
@@ -61,14 +107,32 @@ export function ServiceCard({ service }: { service: Service }) {
       </div>
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm mb-4">
-        <div>
-          <span className="text-text-muted">Price</span>
-          <p className="text-text-light font-mono text-xs">{service.price}</p>
-        </div>
-        <div>
-          <span className="text-text-muted">Network</span>
-          <p className="text-text-light font-mono text-xs">{service.network}</p>
-        </div>
+        {multiPay ? (
+          <div className="col-span-2">
+            <span className="text-text-muted">
+              Pay with {options.length} options
+            </span>
+            <ul className="mt-1 space-y-0.5">
+              {options.map((o, i) => (
+                <li key={`${o.network}-${o.asset?.symbol ?? "USDC"}`} className="text-text-light font-mono text-xs">
+                  {optionLabel(o)}
+                  {i === optIdx && open ? " ←" : ""}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <>
+            <div>
+              <span className="text-text-muted">Price</span>
+              <p className="text-text-light font-mono text-xs">{opt.price}</p>
+            </div>
+            <div>
+              <span className="text-text-muted">Network</span>
+              <p className="text-text-light font-mono text-xs">{opt.network}</p>
+            </div>
+          </>
+        )}
         {service.model && (
           <div className="col-span-2">
             <span className="text-text-muted">Model</span>
@@ -95,11 +159,32 @@ export function ServiceCard({ service }: { service: Service }) {
 
       {open && (
         <div className="mt-4 space-y-4">
+          {multiPay && (
+            <div>
+              <p className="text-xs text-text-muted mb-1.5">Pay with</p>
+              <div className="flex flex-wrap gap-1.5">
+                {options.map((o, i) => (
+                  <button
+                    key={`${o.network}-${o.asset?.symbol ?? "USDC"}`}
+                    onClick={() => setOptIdx(i)}
+                    className={`rounded border px-2.5 py-1 text-xs font-mono cursor-pointer transition-colors ${
+                      i === optIdx
+                        ? "border-obol-green text-obol-green bg-obol-green/10"
+                        : "border-stroke text-text-body hover:border-obol-green/50"
+                    }`}
+                  >
+                    {optionLabel(o)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <TabBar tab={tab} onChange={setTab} />
 
-          {tab === "agent" && <BuyViaObolAgent service={service} />}
-          {tab === "other-ai" && <BuyViaOtherAgent service={service} />}
-          {tab === "code" && <BuyWithCode service={service} />}
+          {tab === "agent" && <BuyViaObolAgent service={service} opt={opt} />}
+          {tab === "other-ai" && <BuyViaOtherAgent service={service} opt={opt} />}
+          {tab === "code" && <BuyWithCode service={service} opt={opt} />}
         </div>
       )}
     </div>
@@ -139,7 +224,7 @@ function TabBar({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
 // `pay` against chat-completions for agents, `obol buy inference` CLI
 // for inference). Mirrors inferenceCopy/agentCopy/httpCopy in
 // internal/x402/paymentrequired.go.
-function BuyViaObolAgent({ service }: { service: Service }) {
+function BuyViaObolAgent({ service, opt }: { service: Service; opt: ServicePayment }) {
   const kind = normalizeOfferType(service.type);
 
   if (kind === "inference") {
@@ -179,7 +264,7 @@ function BuyViaObolAgent({ service }: { service: Service }) {
   }
 
   // http (default): legacy single-shot pay.
-  const prompt = `Use the buy-x402 skill's \`pay\` command to call ${service.endpoint} once. Pay ${service.price} on ${service.network}. Report what it returns.`;
+  const prompt = `Use the buy-x402 skill's \`pay\` command to call ${service.endpoint} once. Pay ${opt.price} on ${opt.network}. Report what it returns.`;
   return (
     <div className="space-y-2">
       <p className="text-xs text-text-muted">
@@ -192,7 +277,7 @@ function BuyViaObolAgent({ service }: { service: Service }) {
   );
 }
 
-function BuyViaOtherAgent({ service }: { service: Service }) {
+function BuyViaOtherAgent({ service, opt }: { service: Service; opt: ServicePayment }) {
   const kind = normalizeOfferType(service.type);
 
   let prompt: string;
@@ -203,7 +288,7 @@ function BuyViaOtherAgent({ service }: { service: Service }) {
     const modelLine = service.model ? ` (running ${service.model})` : "";
     prompt = `Read https://obol.org/llms.txt to learn how Obol's x402 micropayments work. Help me call the Obol Agent at ${service.endpoint}${modelLine} — it's an autonomous agent (tools + skills + memory), not a raw LLM. POST OpenAI-style chat-completions JSON with a real prompt in \`messages\`, attach a signed EIP-3009 or Permit2 authorisation as \`X-PAYMENT\`, and report what the agent does.`;
   } else {
-    prompt = `I want to purchase a service offered by an Obol Agent at ${service.endpoint} for ${service.price} on ${service.network}. Please install the run-obol-stack skill from https://github.com/ObolNetwork/skills, ask me for permission to set up the obol stack, and use the buy-x402 skill to make the purchase on my behalf.`;
+    prompt = `I want to purchase a service offered by an Obol Agent at ${service.endpoint} for ${opt.price} on ${opt.network}. Please install the run-obol-stack skill from https://github.com/ObolNetwork/skills, ask me for permission to set up the obol stack, and use the buy-x402 skill to make the purchase on my behalf.`;
   }
 
   return (
@@ -226,7 +311,7 @@ function BuyViaOtherAgent({ service }: { service: Service }) {
   );
 }
 
-function BuyWithCode({ service }: { service: Service }) {
+function BuyWithCode({ service, opt }: { service: Service; opt: ServicePayment }) {
   const kind = normalizeOfferType(service.type);
   return (
     <div className="space-y-4">
@@ -251,7 +336,7 @@ function BuyWithCode({ service }: { service: Service }) {
         <h4 className="text-xs font-semibold text-text-light mb-2">
           2. Pay for the service
         </h4>
-        <LanguageTabs service={service} />
+        <LanguageTabs service={service} opt={opt} />
       </div>
 
       {kind === "agent" && (
@@ -300,16 +385,16 @@ ${service.model ? `  "model": "${service.model}",\n` : ""}  "messages": [
   );
 }
 
-function LanguageTabs({ service }: { service: Service }) {
+function LanguageTabs({ service, opt }: { service: Service; opt: ServicePayment }) {
   // Layout reserves a language selector slot for future JS/TS additions —
   // Python is the only currently-supported snippet.
   const [lang] = useState<"python">("python");
 
-  // Prefer the resolved asset symbol from the catalog. The previous
-  // network-based heuristic mislabeled OBOL on base-sepolia as USDC and
-  // any non-mainnet USDC deployment as OBOL.
+  // Prefer the resolved asset symbol from the selected payment option. The
+  // previous network-based heuristic mislabeled OBOL on base-sepolia as USDC
+  // and any non-mainnet USDC deployment as OBOL.
   const tokenName =
-    service.asset?.symbol ?? (service.network === "ethereum" ? "OBOL" : "USDC");
+    opt.asset?.symbol ?? (opt.network === "ethereum" ? "OBOL" : "USDC");
   const python = `import httpx
 from x402.client import x402_client
 
