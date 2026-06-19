@@ -784,6 +784,57 @@ func TestBuildServiceCatalogJSON(t *testing.T) {
 	if svc.Description != "Proof-of-payment echo service" {
 		t.Errorf("description = %q, want 'Proof-of-payment echo service'", svc.Description)
 	}
+	// Single-payment offers still expose payments[] (one entry mirroring flat).
+	if len(svc.Payments) != 1 || svc.Payments[0].Network != "base" {
+		t.Errorf("single-payment offer payments = %+v, want one base entry", svc.Payments)
+	}
+}
+
+func TestBuildServiceCatalogJSON_MultiPayment(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "bankr", Namespace: "agent-bankr"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type:    "agent",
+			Payment: monetizeapi.ServiceOfferPayment{Network: "base", PayTo: "0x1111111111111111111111111111111111111111", Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "1"}},
+			Payments: []monetizeapi.ServiceOfferPayment{
+				{Network: "base", PayTo: "0x1111111111111111111111111111111111111111", Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "1"}},
+				{
+					Network: "ethereum", PayTo: "0x2222222222222222222222222222222222222222",
+					Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "10"},
+					Asset: monetizeapi.ServiceOfferAsset{Symbol: "OBOL", Address: "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7", Decimals: 18, TransferMethod: "permit2", EIP712Name: "Obol Network", EIP712Version: "1"},
+				},
+			},
+			Registration: monetizeapi.ServiceOfferRegistration{Description: "multi-currency agent"},
+		},
+		Status: monetizeapi.ServiceOfferStatus{Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}}},
+	}
+
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com")
+	assertServiceCatalogSchema(t, jsonStr)
+
+	var services []schemas.ServiceCatalogEntry
+	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(services) != 1 {
+		t.Fatalf("want 1 service, got %d", len(services))
+	}
+	pays := services[0].Payments
+	if len(pays) != 2 {
+		t.Fatalf("payments = %d, want 2", len(pays))
+	}
+	// Flat fields mirror the primary (first) option.
+	if services[0].Network != "base" || services[0].PayTo != "0x1111111111111111111111111111111111111111" {
+		t.Errorf("flat fields should mirror primary option: %+v", services[0])
+	}
+	// Second option resolves OBOL on ethereum with its own atomic price.
+	obol := pays[1]
+	if obol.Network != "ethereum" || obol.Asset == nil || obol.Asset.Symbol != "OBOL" {
+		t.Fatalf("second option = %+v, want OBOL on ethereum", obol)
+	}
+	if obol.PriceAtomicUnits != "10000000000000000000" { // 10 * 1e18
+		t.Errorf("OBOL atomic price = %q, want 10e18", obol.PriceAtomicUnits)
+	}
 }
 
 func TestBuildServiceCatalogJSON_Empty(t *testing.T) {

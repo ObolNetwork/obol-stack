@@ -1170,6 +1170,10 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 			}
 		}
 
+		// Full multi-currency view (always >= 1 entry; payments[0] mirrors the
+		// flat fields above). The storefront renders one pay-row per option.
+		svc.Payments = buildCatalogPayments(offer)
+
 		services = append(services, svc)
 	}
 
@@ -1180,31 +1184,43 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 	return string(out)
 }
 
-// offerPriceRawAndUnit returns the raw decimal price string and which slot it
-// occupies in the price table. Only one of perRequest / perMTok / perHour is
-// expected to be set on a given offer.
+// offerPriceRawAndUnit returns the raw decimal price string and slot for the
+// offer's PRIMARY payment. Per-payment callers use paymentPriceRawAndUnit.
 func offerPriceRawAndUnit(offer *monetizeapi.ServiceOffer) (string, string) {
+	return paymentPriceRawAndUnit(offer.Spec.Payment)
+}
+
+// paymentPriceRawAndUnit returns the raw decimal price string and which slot it
+// occupies for a single payment option. Only one of perRequest / perMTok /
+// perHour / perEpoch is expected to be set.
+func paymentPriceRawAndUnit(p monetizeapi.ServiceOfferPayment) (string, string) {
 	switch {
-	case offer.Spec.Payment.Price.PerRequest != "":
-		return offer.Spec.Payment.Price.PerRequest, "perRequest"
-	case offer.Spec.Payment.Price.PerMTok != "":
-		return offer.Spec.Payment.Price.PerMTok, "perMTok"
-	case offer.Spec.Payment.Price.PerHour != "":
-		return offer.Spec.Payment.Price.PerHour, "perHour"
+	case p.Price.PerRequest != "":
+		return p.Price.PerRequest, "perRequest"
+	case p.Price.PerMTok != "":
+		return p.Price.PerMTok, "perMTok"
+	case p.Price.PerHour != "":
+		return p.Price.PerHour, "perHour"
 	default:
 		return "", ""
 	}
 }
 
-// offerAssetJSON resolves the settlement asset block. If the offer carries an
-// explicit asset, it is used verbatim. If only the network is set, defaults
-// for USDC on that chain are filled in (this matches the verifier's behavior
-// when the seller did not pass --token).
+// offerAssetJSON resolves the settlement asset block for the offer's PRIMARY
+// payment. Per-payment callers use paymentAssetJSON.
 func offerAssetJSON(offer *monetizeapi.ServiceOffer) *schemas.ServiceCatalogAsset {
-	a := offer.Spec.Payment.Asset
+	return paymentAssetJSON(offer.Spec.Payment)
+}
+
+// paymentAssetJSON resolves the settlement asset block for a single payment
+// option. If the option carries an explicit asset it is used verbatim; if only
+// the network is set, defaults for USDC on that chain are filled in (matching
+// the verifier's behavior when the seller did not pass --token).
+func paymentAssetJSON(p monetizeapi.ServiceOfferPayment) *schemas.ServiceCatalogAsset {
+	a := p.Asset
 	if a.Address == "" && a.Symbol == "" && a.EIP712Name == "" {
 		// No explicit asset — fall back to the chain's default USDC entry.
-		if def, ok := defaultUSDCForNetwork(offer.Spec.Payment.Network); ok {
+		if def, ok := defaultUSDCForNetwork(p.Network); ok {
 			return &def
 		}
 		return nil
@@ -1218,7 +1234,7 @@ func offerAssetJSON(offer *monetizeapi.ServiceOffer) *schemas.ServiceCatalogAsse
 	if a.EIP712Name != "" || a.EIP712Version != "" {
 		out.EIP712Domain = &schemas.ServiceCatalogEIP712Domain{Name: a.EIP712Name, Version: a.EIP712Version}
 	}
-	if def, ok := defaultUSDCForNetwork(offer.Spec.Payment.Network); ok {
+	if def, ok := defaultUSDCForNetwork(p.Network); ok {
 		// Backfill any unset fields from chain defaults so consumers always
 		// see a complete asset block when the network is known.
 		if out.Address == "" {
@@ -1339,14 +1355,19 @@ func decimalToAtomicString(amount string, decimals int) string {
 }
 
 func describeOfferPrice(offer *monetizeapi.ServiceOffer) string {
-	// Source the symbol from (in order): explicit asset metadata on the offer,
-	// the resolved chain-default settlement asset, hard-coded "USDC" only as
-	// the last-resort fallback for unknown chains. Mislabeling OBOL-priced
-	// services as "USDC" on the discovery surfaces (storefront / skill.md)
-	// caused buyers to queue up the wrong asset on rc7-rc9.
-	symbol := offer.Spec.Payment.Asset.Symbol
+	return describePaymentPrice(offer.Spec.Payment)
+}
+
+// describePaymentPrice renders a single payment option as "<price> <SYMBOL>/<unit>".
+func describePaymentPrice(p monetizeapi.ServiceOfferPayment) string {
+	// Source the symbol from (in order): explicit asset metadata on the
+	// option, the resolved chain-default settlement asset, hard-coded "USDC"
+	// only as the last-resort fallback for unknown chains. Mislabeling
+	// OBOL-priced services as "USDC" on the discovery surfaces (storefront /
+	// skill.md) caused buyers to queue up the wrong asset on rc7-rc9.
+	symbol := p.Asset.Symbol
 	if symbol == "" {
-		if a := offerAssetJSON(offer); a != nil && a.Symbol != "" {
+		if a := paymentAssetJSON(p); a != nil && a.Symbol != "" {
 			symbol = a.Symbol
 		}
 	}
@@ -1354,15 +1375,41 @@ func describeOfferPrice(offer *monetizeapi.ServiceOffer) string {
 		symbol = "USDC"
 	}
 	switch {
-	case offer.Spec.Payment.Price.PerRequest != "":
-		return offer.Spec.Payment.Price.PerRequest + " " + symbol + "/request"
-	case offer.Spec.Payment.Price.PerMTok != "":
-		return offer.Spec.Payment.Price.PerMTok + " " + symbol + "/MTok"
-	case offer.Spec.Payment.Price.PerHour != "":
-		return offer.Spec.Payment.Price.PerHour + " " + symbol + "/hour"
+	case p.Price.PerRequest != "":
+		return p.Price.PerRequest + " " + symbol + "/request"
+	case p.Price.PerMTok != "":
+		return p.Price.PerMTok + " " + symbol + "/MTok"
+	case p.Price.PerHour != "":
+		return p.Price.PerHour + " " + symbol + "/hour"
 	default:
 		return "—"
 	}
+}
+
+// buildCatalogPayments renders every accepted payment option of an offer into
+// catalog payment entries (one per currency/network). payments[0] is the
+// primary and mirrors the entry's flat fields.
+func buildCatalogPayments(offer *monetizeapi.ServiceOffer) []schemas.ServiceCatalogPaymentOption {
+	payments := offer.EffectivePayments()
+	out := make([]schemas.ServiceCatalogPaymentOption, 0, len(payments))
+	for i := range payments {
+		p := payments[i]
+		opt := schemas.ServiceCatalogPaymentOption{
+			Price:   describePaymentPrice(p),
+			PayTo:   p.PayTo,
+			Network: p.Network,
+		}
+		opt.PriceRaw, opt.PriceUnit = paymentPriceRawAndUnit(p)
+		opt.CAIP2Network, opt.ChainID = caip2ForNetwork(p.Network)
+		if asset := paymentAssetJSON(p); asset != nil {
+			opt.Asset = asset
+			if opt.PriceRaw != "" && asset.Decimals > 0 {
+				opt.PriceAtomicUnits = decimalToAtomicString(opt.PriceRaw, int(asset.Decimals))
+			}
+		}
+		out = append(out, opt)
+	}
+	return out
 }
 
 func marshalRegistrationDocument(document erc8004.AgentRegistration) (string, string, error) {
