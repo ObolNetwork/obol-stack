@@ -19,6 +19,46 @@ export function buildServiceOfferBody(req: CreateServiceOfferRequest) {
   const asset = serviceOfferAssetBody(req.asset);
   if (asset) payment.asset = asset;
 
+  const offerType = req.type ?? 'http';
+
+  const spec: Record<string, unknown> = {
+    type: offerType,
+    payment,
+    path: `/services/${req.name}`,
+  };
+
+  if (offerType === 'agent' && req.agentRef) {
+    spec.agent = {
+      ref: {
+        name: req.agentRef.name,
+        namespace: req.agentRef.namespace,
+      },
+    };
+  } else {
+    spec.upstream = {
+      service: req.upstream ?? 'litellm',
+      namespace: req.namespace,
+      port: req.port ?? 4000,
+      healthPath: req.healthPath || '/health',
+    };
+  }
+
+  if (offerType === 'inference' && req.model) {
+    spec.model = {
+      name: req.model,
+      runtime: req.modelRuntime ?? 'ollama',
+    };
+  }
+
+  if (offerType === 'agent') {
+    spec.registration = {
+      enabled: req.registrationEnabled !== false,
+      name: req.name,
+      description: req.description?.trim() ?? '',
+      skills: req.skills ?? [],
+    };
+  }
+
   return {
     apiVersion: `${CRD_GROUP}/${CRD_VERSION}`,
     kind: 'ServiceOffer',
@@ -26,16 +66,7 @@ export function buildServiceOfferBody(req: CreateServiceOfferRequest) {
       name: req.name,
       namespace: req.namespace,
     },
-    spec: {
-      type: req.type ?? 'http',
-      upstream: {
-        service: req.upstream,
-        namespace: req.namespace,
-        port: req.port,
-        healthPath: req.healthPath || '/health',
-      },
-      payment,
-    },
+    spec,
   };
 }
 

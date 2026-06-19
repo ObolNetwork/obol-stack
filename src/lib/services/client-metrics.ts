@@ -2,6 +2,10 @@
  * Service for fetching real-time metrics from Ethereum and Aztec clients
  */
 
+import {
+  isClusterInternalUrl,
+  isUrlReachableFromRuntime,
+} from '@/lib/utils/cluster-url';
 import type {
   ErpcStatusData,
   ErpcUpstream,
@@ -164,9 +168,23 @@ export class ClientMetricsService {
   /**
    * Fetch metrics from full EL clients (Nethermind, Geth, etc.)
    */
+  private unreachableMetrics(): ExecutionClientMetrics {
+    return {
+      peers: 0,
+      version: 'Unavailable',
+      syncing: false,
+      blockNumber: 0,
+      chainId: 1,
+    };
+  }
+
   private async getExecutionMetrics(
     executionUrl: string
   ): Promise<ExecutionClientMetrics> {
+    if (!isUrlReachableFromRuntime(executionUrl)) {
+      return this.unreachableMetrics();
+    }
+
     try {
       const version = await this.fetchWeb3ClientVersion(executionUrl);
       const peerCount = await this.fetchNetPeerCount(executionUrl);
@@ -176,14 +194,10 @@ export class ClientMetricsService {
 
       return { peers: peerCount, version, syncing, blockNumber, chainId };
     } catch (err) {
-      console.error('Failed to fetch execution metrics:', err);
-      return {
-        peers: 0,
-        version: 'Unknown',
-        syncing: false,
-        blockNumber: 0,
-        chainId: 1,
-      };
+      if (!isClusterInternalUrl(executionUrl)) {
+        console.error('Failed to fetch execution metrics:', err);
+      }
+      return this.unreachableMetrics();
     }
   }
 
@@ -193,6 +207,18 @@ export class ClientMetricsService {
   private async getHeliosMetrics(
     executionUrl: string
   ): Promise<HeliosClientMetrics> {
+    if (!isUrlReachableFromRuntime(executionUrl)) {
+      return {
+        peers: 0,
+        version: 'Unavailable',
+        syncing: false,
+        blockNumber: 0,
+        chainId: 1,
+        finalizedEpoch: 0,
+        participation: 0,
+      };
+    }
+
     try {
       const version = await this.fetchWeb3ClientVersion(executionUrl);
       const blockNumber = await this.fetchBlockNumber(executionUrl);
@@ -211,7 +237,9 @@ export class ClientMetricsService {
         participation: 0,
       };
     } catch (err) {
-      console.error('Failed to fetch Helios metrics:', err);
+      if (!isClusterInternalUrl(executionUrl)) {
+        console.error('Failed to fetch Helios metrics:', err);
+      }
       return {
         peers: 0,
         version: 'Unknown',
@@ -230,6 +258,16 @@ export class ClientMetricsService {
   private async getConsensusMetrics(
     consensusUrl: string
   ): Promise<ConsensusClientMetrics> {
+    if (!isUrlReachableFromRuntime(consensusUrl)) {
+      return {
+        peers: 0,
+        version: 'Unavailable',
+        syncing: false,
+        headSlot: 0,
+        finalizedEpoch: 0,
+      };
+    }
+
     try {
       const version = await this.fetchConsensusVersion(consensusUrl);
       const peers = await this.fetchConsensusPeers(consensusUrl);
@@ -253,7 +291,9 @@ export class ClientMetricsService {
         participation,
       };
     } catch (err) {
-      console.error('Failed to fetch consensus metrics:', err);
+      if (!isClusterInternalUrl(consensusUrl)) {
+        console.error('Failed to fetch consensus metrics:', err);
+      }
       return {
         peers: 0,
         version: 'Unknown',
@@ -268,6 +308,18 @@ export class ClientMetricsService {
    * Fetch metrics from Aztec L2 nodes
    */
   private async getAztecMetrics(aztecUrl: string): Promise<AztecClientMetrics> {
+    if (!isUrlReachableFromRuntime(aztecUrl)) {
+      return {
+        peers: 0,
+        version: 'Unavailable',
+        syncing: false,
+        blockNumber: 0,
+        chainId: 1,
+        finalizedEpoch: 0,
+        participation: 0,
+      };
+    }
+
     try {
       const resp = await fetch(aztecUrl, {
         method: 'POST',

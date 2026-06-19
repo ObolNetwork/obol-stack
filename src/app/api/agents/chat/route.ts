@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AgentClient } from '@/lib/services/agents';
-import type { AgentInstance, AgentRuntime } from '@/types/agent';
+import type { AgentRuntime } from '@/types/agent';
 import { rejectCrossOrigin } from '@/lib/middleware/origin-check';
 
 export const runtime = 'nodejs';
@@ -42,13 +42,13 @@ export async function POST(request: NextRequest) {
     }
 
     const client = new AgentClient();
-    const instance: AgentInstance = {
-      id: instanceId,
-      runtime,
-      namespace: `${runtime}-${instanceId}`,
-      hostname: `${runtime}-${instanceId}`,
-      status: 'unknown',
-    };
+    const instance = client.resolveInstance(runtime, instanceId);
+    if (!instance) {
+      return NextResponse.json(
+        { error: `Instance '${instanceId}' not found` },
+        { status: 404 }
+      );
+    }
 
     const token = await client.getGatewayToken(instance);
     if (!token) {

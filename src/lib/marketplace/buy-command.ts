@@ -6,11 +6,10 @@
  *
  * Three forms are surfaced in the drawer:
  *
- * 1. `buy.py buy …`  — what the agent invokes inside the pod
- * 2. `kubectl exec …` — host-side wrapper that calls (1) via the cluster
- * 3. `curl …`        — paid LiteLLM round-trip the user can run from any
- *                       OpenAI-compatible client once the sidecar has
- *                       pre-signed auths
+ * 1. `obol buy inference …` — stack-canonical host CLI (recommended)
+ * 2. `buy.py buy …`  — what the agent invokes inside the pod
+ * 3. `kubectl exec …` — host-side wrapper that calls (2) via the cluster
+ * 4. `curl …`        — paid LiteLLM round-trip after auths are pre-signed
  */
 
 import type { ServiceListItem } from './types';
@@ -41,6 +40,34 @@ export function computePreflight(
     totalHuman: multiplyDecimalString(item.price || '0', n),
     totalAtomic: multiplyAtomicString(item.priceAtomicUnits || '0', n),
   };
+}
+
+/**
+ * Build the stack-canonical `obol buy inference` command.
+ */
+export function obolBuyInferenceCommand(
+  item: Pick<ServiceListItem, 'endpoint' | 'modelOrRuntime'> & {
+    remoteModel?: string;
+    sellerUrl?: string;
+  },
+  count: number,
+  opts?: { yes?: boolean; name?: string }
+): string {
+  const seller =
+    item.sellerUrl?.trim() ||
+    item.endpoint?.trim() ||
+    'https://inference.v1337.org';
+  const remote =
+    item.remoteModel || extractRemoteModel(item.modelOrRuntime) || undefined;
+  const parts = [
+    'obol buy inference',
+    quoteArg(seller),
+    `--count ${Math.max(1, Math.floor(count))}`,
+  ];
+  if (opts?.yes) parts.push('--yes');
+  if (opts?.name?.trim()) parts.push(`--name ${quoteArg(opts.name.trim())}`);
+  if (remote) parts.push(`--model ${quoteArg(remote)}`);
+  return parts.join(' \\\n  ');
 }
 
 /**

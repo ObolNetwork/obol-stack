@@ -10,7 +10,6 @@ export interface MarketplaceTableProps {
   sort: MarketplaceSort;
   onSortChange: (sort: MarketplaceSort) => void;
   onDetails?: (item: ServiceListItem) => void;
-  onBuy?: (item: ServiceListItem) => void;
 }
 
 const Wrapper = styled(Box, {
@@ -85,19 +84,6 @@ const Actions = styled(Flex, {
   justifyContent: 'flex-end',
 });
 
-const PrimaryBtn = styled('button', {
-  height: 26,
-  padding: '0 $xs',
-  borderRadius: '$1',
-  border: 'none',
-  background: '$obolGreen',
-  color: '$obolDarkDark',
-  fontSize: '$0',
-  fontWeight: '$semibold',
-  cursor: 'pointer',
-  '&:hover': { background: '$obolGreenHover' },
-});
-
 const GhostBtn = styled('button', {
   height: 26,
   padding: '0 $xs',
@@ -146,7 +132,6 @@ export function MarketplaceTable({
   sort,
   onSortChange,
   onDetails,
-  onBuy,
 }: MarketplaceTableProps) {
   return (
     <Wrapper>
@@ -207,9 +192,6 @@ export function MarketplaceTable({
                   <GhostBtn type="button" onClick={() => onDetails?.(item)}>
                     Details →
                   </GhostBtn>
-                  <PrimaryBtn type="button" onClick={() => onBuy?.(item)}>
-                    Buy
-                  </PrimaryBtn>
                 </Actions>
               </Td>
             </Row>

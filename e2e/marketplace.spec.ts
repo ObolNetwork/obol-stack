@@ -118,4 +118,20 @@ test.describe('Marketplace page', () => {
 
     await expect(page).toHaveURL(/\/marketplace\/listings/);
   });
+
+  test('shows New listing control on browse page', async ({ page }) => {
+    await page.route('**/api/marketplace/services**', route =>
+      route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(SERVICES_RESPONSE),
+      })
+    );
+
+    await page.goto('/marketplace');
+
+    await expect(
+      page.getByRole('button', { name: /New listing/i })
+    ).toBeVisible();
+  });
 });

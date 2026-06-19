@@ -1,7 +1,6 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Box, Text, Flex, styled, theme } from '@obolnetwork/obol-ui';
 import { Card } from '../../atoms/Card';
-import { Accordion } from '../../molecules/Accordion';
 import { SectionTitle as CardTitle } from '../../atoms/SectionTitle';
 import { PercentageChip } from '../../atoms/PercentageChip';
 import { ProgressBar } from '../../molecules/ProgressBar';
@@ -259,8 +258,6 @@ const formatUptime = (hours: number): string => {
 };
 
 export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
-  const [isExpanded, setIsExpanded] = useState(true);
-
   // Use real API data directly
   const diskPercentage = data.diskUsage.percentage;
   const memoryPercentage = data.memoryUsage.percentage;
@@ -300,7 +297,7 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
           percentage={diskPercentage}
           value={`${data.diskUsage.value} GB`}
           subtext={`of ${data.diskUsage.total}GB`}
-          isExpanded={isExpanded}
+          isExpanded={true}
         />
 
         <MetricCard
@@ -309,7 +306,7 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
           percentage={memoryPercentage}
           value={`${data.memoryUsage.value} GB`}
           subtext={`of ${data.memoryUsage.total}GB`}
-          isExpanded={isExpanded}
+          isExpanded={true}
         />
 
         <MetricCard
@@ -318,7 +315,7 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
           percentage={cpuPercentage}
           value={`${cpuPercentage}%`}
           subtext="load average"
-          isExpanded={isExpanded}
+          isExpanded={true}
         />
 
         <MetricCard
@@ -326,42 +323,11 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
           label="UPTIME"
           value={formattedUptime}
           subtext="continuous operation"
-          isExpanded={isExpanded}
+          isExpanded={true}
         />
       </MetricsGrid>
     </NodeHeader>
   );
 
-  return (
-    <Card section>
-      <Accordion
-        header={headerContent}
-        defaultExpanded={true}
-        onToggle={expanded => {
-          setIsExpanded(expanded);
-        }}
-      >
-        <NodeContent>
-          {/* Ports Section */}
-          {/* <SectionContainer>
-            <SectionTitle>PORTS</SectionTitle>
-            <PortsList>
-              {portList.map(port => (
-                <PortItem key={port.key}>
-                  <PortNameAndNumber>
-                    <PortName>{port.name}</PortName>
-                    <PortNumber>{port.port}</PortNumber>
-                  </PortNameAndNumber>
-
-                  <PortStatus status={port.status}>
-                    {port.status === 'open' ? 'Open' : 'Closed'}
-                  </PortStatus>
-                </PortItem>
-              ))}
-            </PortsList>
-          </SectionContainer> */}
-        </NodeContent>
-      </Accordion>
-    </Card>
-  );
+  return <Card css={{ padding: '$lg' }}>{headerContent}</Card>;
 };

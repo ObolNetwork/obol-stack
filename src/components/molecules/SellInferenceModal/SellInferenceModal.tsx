@@ -11,6 +11,8 @@ import {
 } from '@obolnetwork/obol-ui';
 import { SectionTitle } from '../../atoms/SectionTitle';
 import { ChainSelector } from '../../atoms/ChainSelector';
+import { SellFlowSteps } from '../SellFlowSteps';
+import { inferencePreflightSteps } from '@/lib/sell/flow-steps';
 import { useSellInferenceModal } from './useSellInferenceModal';
 import type { SellPaymentToken } from '@/lib/services/sell-assets';
 
@@ -73,26 +75,6 @@ const ModalFooter = styled(Flex, {
   gap: '$xs',
 });
 
-const SuccessCard = styled(Flex, {
-  height: '100%',
-  flexDirection: 'column',
-  alignItems: 'center',
-  gap: '$md',
-  padding: '$4xl $lg',
-  textAlign: 'center',
-});
-
-const PulseRing = styled(Box, {
-  width: 56,
-  height: 56,
-  borderRadius: '$round',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  background: 'rgba(47, 228, 171, 0.1)',
-  border: '2px solid rgba(47, 228, 171, 0.3)',
-});
-
 const ErrorMessage = styled(Text, {
   fontSize: '$2',
   color: '$test',
@@ -111,6 +93,7 @@ export function SellInferenceModal({
     setOpen,
     submitState,
     errorMsg,
+    followUpSteps,
     nameValue,
     chainValue,
     tokenValue,
@@ -132,75 +115,43 @@ export function SellInferenceModal({
       triggerElement={trigger as any}
     >
       <Flex css={{ paddingLeft: '$xs' }}>
-        <SectionTitle>Sell Inference</SectionTitle>
+        <SectionTitle>Sell inference</SectionTitle>
       </Flex>
 
       {submitState === 'success' ? (
-        <SuccessCard>
-          <PulseRing>
-            <Text css={{ color: '$obolGreen', fontSize: '$8' }}>&#10003;</Text>
-          </PulseRing>
-          <Box>
+        <ModalBody>
+          <Text css={{ fontSize: '$2', color: '$body' }}>
+            ServiceOffer{' '}
             <Text
-              css={{
-                fontSize: '$5',
-                fontWeight: '$semibold',
-                color: '$light',
-                marginBottom: '$md',
-              }}
+              as="span"
+              css={{ color: '$obolGreen', fontFamily: 'monospace' }}
             >
-              ServiceOffer Created
-            </Text>
-            <Text css={{ fontSize: '$2', color: '$body', marginBottom: '$md' }}>
-              <Text
-                as="span"
-                css={{
-                  color: '$obolGreen',
-                  fontFamily: 'monospace',
-                  marginBottom: '$md',
-                }}
-              >
-                {nameValue}
-              </Text>{' '}
-              is being reconciled by the agent.
-            </Text>
-            <Text
-              css={{
-                fontSize: '$1',
-                color: '$muted',
-                marginTop: '$xs',
-                fontFamily: 'monospace',
-              }}
-            >
-              obol sell status {nameValue} -n llm
-            </Text>
-          </Box>
+              {nameValue}
+            </Text>{' '}
+            saved. Finish setup on your Mac:
+          </Text>
+          <SellFlowSteps steps={followUpSteps} />
           <Button
             color="primary"
             onClick={handleClose}
-            css={{ marginTop: '$sm' }}
+            css={{ alignSelf: 'flex-end' }}
           >
             Done
           </Button>
-        </SuccessCard>
+        </ModalBody>
       ) : (
         <form
           onSubmit={handleSubmit(onSubmit)}
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            flex: 1,
-            height: '100%',
-          }}
+          style={{ display: 'flex', flexDirection: 'column', flex: 1 }}
         >
           <ModalBody>
-            <Text css={{ fontSize: '$2', color: '$body', lineHeight: 1.5 }}>
-              Expose a service behind an x402 payment gate. Buyers pay
-              per-request in the selected token.
-            </Text>
+            <SellFlowSteps
+              title="How it works"
+              steps={inferencePreflightSteps()}
+            />
 
             <FieldGroup>
-              <FieldLabel>Service Name</FieldLabel>
+              <FieldLabel>Listing name</FieldLabel>
               <TextField
                 placeholder="my-inference"
                 autoFocus
@@ -209,7 +160,15 @@ export function SellInferenceModal({
             </FieldGroup>
 
             <FieldGroup>
-              <FieldLabel>Payment Wallet Address</FieldLabel>
+              <FieldLabel>Ollama model</FieldLabel>
+              <TextField
+                placeholder="qwen3.5:4b"
+                {...register('model', { required: true })}
+              />
+            </FieldGroup>
+
+            <FieldGroup>
+              <FieldLabel>Payout wallet (pay-to)</FieldLabel>
               <TextField
                 placeholder="0x..."
                 {...register('wallet', {
@@ -217,6 +176,10 @@ export function SellInferenceModal({
                   validate: v => v.startsWith('0x') && v.length === 42,
                 })}
               />
+              <Text css={{ fontSize: '$1', color: '$muted', marginTop: 4 }}>
+                Where buyers&apos; payments settle. Not related to which model
+                Hermes chats with — inference runs on your Mac via Ollama.
+              </Text>
             </FieldGroup>
 
             <InlineFields>
@@ -246,34 +209,18 @@ export function SellInferenceModal({
               </FieldGroup>
             </InlineFields>
 
-            <InlineFields>
-              <FieldGroup>
-                <FieldLabel>Price / Request ({tokenValue})</FieldLabel>
-                <TextField
-                  type="number"
-                  step="0.0001"
-                  min="0"
-                  {...register('price', {
-                    required: true,
-                    validate: v => parseFloat(v) > 0,
-                  })}
-                />
-              </FieldGroup>
-            </InlineFields>
-
-            <InlineFields>
-              <FieldGroup>
-                <FieldLabel>Upstream Service</FieldLabel>
-                <TextField {...register('upstream', { required: true })} />
-              </FieldGroup>
-              <FieldGroup>
-                <FieldLabel>Port</FieldLabel>
-                <TextField
-                  type="number"
-                  {...register('port', { required: true })}
-                />
-              </FieldGroup>
-            </InlineFields>
+            <FieldGroup>
+              <FieldLabel>Price / request ({tokenValue})</FieldLabel>
+              <TextField
+                type="number"
+                step="0.0001"
+                min="0"
+                {...register('price', {
+                  required: true,
+                  validate: v => parseFloat(v) > 0,
+                })}
+              />
+            </FieldGroup>
 
             {(paymentError || submitState === 'error') && (
               <ErrorMessage>{paymentError ?? errorMsg}</ErrorMessage>
@@ -289,7 +236,7 @@ export function SellInferenceModal({
               type="submit"
               disabled={!isValid || submitState === 'submitting'}
             >
-              {submitState === 'submitting' ? 'Creating...' : 'Create Offer'}
+              {submitState === 'submitting' ? 'Creating…' : 'Create listing'}
             </Button>
           </ModalFooter>
         </form>

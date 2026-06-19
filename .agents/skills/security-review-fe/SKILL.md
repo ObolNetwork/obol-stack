@@ -25,6 +25,11 @@ description: Security review for obol-stack-front-end PRs. Use when reviewing au
 4. **Sell / wallet flows**
    - `pay-to` addresses validated as `0x` + 40 hex
    - Namespace allowlist on `/api/sell/create`
+   - `POST /api/marketplace/probe` — URL host allowlist (`obol.stack`, tunnel, cluster DNS); no arbitrary SSRF
+
+5. **x402 probe**
+   - Probe route only fetches `/services/*` paths on allowlisted hosts
+   - Do not widen allowlist to arbitrary external domains without review
 
 ## Out of scope (do not flag as FE bugs)
 

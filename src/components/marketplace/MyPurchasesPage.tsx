@@ -341,6 +341,8 @@ const RowAction = styled('button', {
   fontSize: '$1',
   cursor: 'pointer',
   '&:hover': { background: '$bg04' },
+  '&:disabled': { opacity: 0.6, cursor: 'not-allowed' },
+  '&:disabled:hover': { background: '$bg03' },
 
   variants: {
     tone: {
@@ -447,7 +449,8 @@ function PurchaseExpansion({ p }: { p: PurchaseRequest }) {
         <Flex css={{ gap: 16, fontFamily: 'monospace', fontSize: '$2' }}>
           <Box>
             <FieldLabel>Total spent</FieldLabel>
-            <Mono css={{ color: '$light' }}>{p.status.totalSpent ?? '0'}</Mono>
+            {/* Controller writes status.spent (consumed auths); totalSpent is unused. */}
+            <Mono css={{ color: '$light' }}>{p.status.spent}</Mono>
           </Box>
           <Box>
             <FieldLabel>Total signed</FieldLabel>
@@ -455,6 +458,7 @@ function PurchaseExpansion({ p }: { p: PurchaseRequest }) {
           </Box>
           <Box>
             <FieldLabel>Wallet bal.</FieldLabel>
+            {/* walletBalance is on the CRD but not populated during reconciliation yet. */}
             <Mono css={{ color: '$light' }}>
               {p.status.walletBalance ?? '—'}
             </Mono>
@@ -674,11 +678,26 @@ function PurchaseRow({
           </Text>
         </Box>
 
-        <Flex css={{ justifyContent: 'flex-end' }}>
-          <RowAction tone={stuck ? 'primary' : undefined}>
+        <Box css={{ textAlign: 'right' }}>
+          {/* Top-up drawer not wired yet; use buy.py buy / obol buy inference for now. */}
+          <RowAction
+            type="button"
+            disabled
+            tone={stuck ? 'primary' : undefined}
+          >
             {stuck ? `Top up ${p.spec.autoRefill?.count ?? 50}` : 'Top up'}
           </RowAction>
-        </Flex>
+          <Text
+            css={{
+              fontSize: '$1',
+              color: '$muted',
+              fontFamily: 'monospace',
+              marginTop: 4,
+            }}
+          >
+            Not configured
+          </Text>
+        </Box>
       </RowBody>
       {expanded ? <PurchaseExpansion p={p} /> : null}
     </RowCard>

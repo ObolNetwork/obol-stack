@@ -28,6 +28,7 @@ If you have access to **obol-stack**, you can run `obol stack up` to spin up a l
 | Doc                                          | Contents                                     |
 | -------------------------------------------- | -------------------------------------------- |
 | [CONTRIBUTING.md](CONTRIBUTING.md)           | **Start here for PRs** — setup, CI, security |
+| [e2e/README.md](e2e/README.md)               | Playwright mocked vs integration tiers       |
 | [DEVELOPMENT.md](DEVELOPMENT.md)             | Skaffold / Kind deployment                   |
 | [CLAUDE.md](CLAUDE.md)                       | Agent / IDE conventions                      |
 | [deployment/README.md](deployment/README.md) | Production Docker / K8s                      |
@@ -38,7 +39,7 @@ If you have access to **obol-stack**, you can run `obol stack up` to spin up a l
 ```bash
 pnpm run lint && pnpm run test && pnpm run build
 pnpm run test:e2e:chromium
-bash scripts/scan-git-secrets.sh
+pnpm run scan:secrets   # optional; requires gitleaks
 ```
 
 ## Contributing

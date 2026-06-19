@@ -43,6 +43,7 @@ const noStoreHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  allowedDevOrigins: ['obol.stack', 'monitoring.obol.stack'],
   env: {
     NEXT_PUBLIC_COMMIT_SHA: commitSha,
     NEXT_PUBLIC_TAG_VERSION: tagVersion,

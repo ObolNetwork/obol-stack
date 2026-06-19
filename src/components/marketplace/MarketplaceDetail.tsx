@@ -11,6 +11,7 @@ import { ErrorState } from '@/components/molecules/ErrorState';
 import { StackUnreachableState } from '@/components/molecules/StackUnreachableState';
 import { useServiceDetail } from '@/hooks/useServiceDetail';
 import { isStackUnreachable } from '@/lib/marketplace/errors';
+import { isErc8004Listing } from '@/lib/marketplace/types';
 
 import type { BuyDrawerProps } from './BuyDrawer';
 
@@ -274,6 +275,8 @@ export function MarketplaceDetail({ slug, onBack }: MarketplaceDetailProps) {
     );
   }
 
+  const canBuy = !isErc8004Listing(data) && Boolean(data.price);
+
   return (
     <Layout>
       <Banner css={{ background: gradientFor(data.bannerSeed) }}>
@@ -293,9 +296,11 @@ export function MarketplaceDetail({ slug, onBack }: MarketplaceDetailProps) {
                 ← Back
               </GhostBtn>
             ) : null}
-            <PrimaryBtn type="button" onClick={() => setDrawerOpen(true)}>
-              Buy access
-            </PrimaryBtn>
+            {canBuy ? (
+              <PrimaryBtn type="button" onClick={() => setDrawerOpen(true)}>
+                Buy access
+              </PrimaryBtn>
+            ) : null}
           </Flex>
         </BannerContent>
       </Banner>
@@ -439,11 +444,13 @@ export function MarketplaceDetail({ slug, onBack }: MarketplaceDetailProps) {
         </Box>
       </Grid>
 
-      <BuyDrawer
-        item={data}
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-      />
+      {canBuy ? (
+        <BuyDrawer
+          item={data}
+          open={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+        />
+      ) : null}
     </Layout>
   );
 }

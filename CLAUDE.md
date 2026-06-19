@@ -6,16 +6,35 @@ Guidance for Claude Code and Cursor agents working in **obol-stack-front-end**.
 
 ```bash
 pnpm install
-pnpm run dev:local          # http://localhost:3000
+pnpm run dev:local          # http://localhost:3000 — no cluster required
 pnpm run dev                # http://obol.stack:3000 (needs /etc/hosts + cluster)
 pnpm run lint
 pnpm run test               # node --test on src/**/*.test.mjs
 pnpm run build
-pnpm run test:e2e:chromium  # Playwright (optional)
-bash scripts/scan-git-secrets.sh
+pnpm run test:e2e:chromium  # Playwright (mocked APIs; see e2e/README.md)
+pnpm run scan:secrets       # gitleaks (same as CI secret-scan.yml)
 ```
 
 Package manager: **pnpm** (`pnpm-lock.yaml`). Do not commit `package-lock.json`.
+
+### Local dev without a cluster
+
+`pnpm run dev:local` runs the UI standalone. Dashboard and marketplace show “Stack unreachable” without kubeconfig, but lint, unit tests, and Playwright e2e still pass.
+
+### Full cluster-backed dev
+
+When you have **obol-stack** running (`obol stack up`):
+
+1. **k3d cluster running** — `k3d cluster start <clusterName>` (re-start after Docker Desktop restarts).
+2. **Kubeconfig** — default `~/.config/obol/kubeconfig.yaml`, or copy to `/tmp/kc-<name>.yaml` if the app expects that path (wiped on Mac restart).
+3. **`/etc/hosts`**:
+
+   ```
+   127.0.0.1 obol.stack
+   127.0.0.1 monitoring.obol.stack
+   ```
+
+4. `pnpm run dev` → `http://obol.stack:3000` (also starts eRPC port-forward script).
 
 ## Architecture
 
@@ -24,7 +43,8 @@ Package manager: **pnpm** (`pnpm-lock.yaml`). Do not commit `package-lock.json`.
 | `src/app/`             | Next.js App Router pages + `src/app/api/*` route handlers |
 | `src/components/`      | UI — atomic design (atoms / molecules / organisms)        |
 | `src/lib/services/`    | Kubernetes, Prometheus, sell, agents, catalog clients     |
-| `src/lib/marketplace/` | Browse filters, buy-command builders, ERC-8004 source     |
+| `src/lib/marketplace/` | Browse filters, buy-command, x402 probe, ERC-8004 source  |
+| `src/lib/sell/`        | CLI command builders, flow steps, upstream health         |
 | `src/hooks/`           | Client data hooks (React Query)                           |
 
 **Runtime**: Next.js 16, React 19, TypeScript strict, `@obolnetwork/obol-ui`, Tailwind v4.
@@ -33,27 +53,36 @@ Package manager: **pnpm** (`pnpm-lock.yaml`). Do not commit `package-lock.json`.
 
 ## Product surfaces
 
-- **Dashboard** — networks, metrics, agent instances, registration card
-- **Marketplace** — `/marketplace` — catalog from `/api/marketplace/services`; buy inference via CLI copy (`obol buy inference`)
-- **Sell** — ServiceOffer CRUD via `/api/sell/*`; UI mirrors `obol sell` CLI steps
-- **Agents** — Hermes default + sub-agents (`obol agent new`); sell via `type=agent` offers
+- **Dashboard** — `HeroBand`, networks, metrics (`NodeOverview`), agent instances, registration card
+- **Marketplace** — `/marketplace` — catalog from `/api/marketplace/services`; buy via CLI (`obol buy inference`); x402 probe via `/api/marketplace/probe`
+- **Sell** — ServiceOffer CRUD via `/api/sell/*`; `SellAgentModal`, `SellInferenceModal`, flow steps mirror `obol sell` CLI
+- **Agents** — Hermes default + sub-agents (`obol agent new`); agent listings joined in `agent-listing.ts`
 
 ## Security
 
 - Mutating APIs: `rejectCrossOrigin` in `src/lib/middleware/origin-check.ts`
-- Never commit `.env.local`, kubeconfigs, or API keys
+- Never commit `.env.local`, kubeconfigs, or API keys — CI runs **gitleaks** (`.gitleaks.toml`)
 - `NEXT_PUBLIC_*` is browser-visible — WalletConnect project ID only
 - Scoped reviews: invoke `.agents/skills/security-review-fe/SKILL.md`
 
 ## CI
 
-Workflows under `.github/workflows/`. PRs run lint + unit tests + build; Docker image smoke test runs on `main` only. `concurrency: cancel-in-progress` drops superseded runs.
+Workflows under `.github/workflows/`:
+
+| Workflow          | PR                                  | `main` push         |
+| ----------------- | ----------------------------------- | ------------------- |
+| `test.yml`        | lint, unit tests, tsc, `next build` | + Docker smoke test |
+| `playwright.yml`  | Chromium E2E (mocked)               | same                |
+| `secret-scan.yml` | gitleaks history scan               | same                |
+
+`concurrency: cancel-in-progress` drops superseded runs.
 
 ## Docs map
 
 | File                                               | Purpose                                |
 | -------------------------------------------------- | -------------------------------------- |
 | [CONTRIBUTING.md](CONTRIBUTING.md)                 | PR checklist, branch policy, CI matrix |
+| [e2e/README.md](e2e/README.md)                     | Mocked vs integration Playwright tiers |
 | [DEVELOPMENT.md](DEVELOPMENT.md)                   | Skaffold / Kind deploy                 |
 | [README.md](README.md)                             | User-facing overview                   |
 | `.agents/skills/obol-stack-front-end-dev/SKILL.md` | Full dev + cluster QA runbook          |

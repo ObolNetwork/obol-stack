@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { ChainName } from '@/types/dashboard';
 import {
@@ -8,28 +8,19 @@ import {
   resolveSellAsset,
   type SellPaymentToken,
 } from '@/lib/services/sell-assets';
+import { inferencePostCreateSteps } from '@/lib/sell/flow-steps';
+import type { SellFlowStep } from '@/lib/sell/flow-steps';
 
-export type FormState = {
+export interface SellInferenceForm {
   name: string;
+  model: string;
   wallet: string;
   chain: ChainName;
   token: SellPaymentToken;
   price: string;
-  upstream: string;
-  port: string;
-};
+}
 
 export type SubmitState = 'idle' | 'submitting' | 'success' | 'error';
-
-const INITIAL_FORM: FormState = {
-  name: '',
-  wallet: '',
-  chain: 'base',
-  token: 'USDC',
-  price: '0.001',
-  upstream: 'litellm',
-  port: '4000',
-};
 
 const SELL_CHAINS: ChainName[] = ['base-sepolia', 'base', 'mainnet'];
 
@@ -37,6 +28,7 @@ export function useSellInferenceModal(defaultWallet?: string) {
   const [open, setOpen] = useState(false);
   const [submitState, setSubmitState] = useState<SubmitState>('idle');
   const [errorMsg, setErrorMsg] = useState('');
+  const [followUpSteps, setFollowUpSteps] = useState<SellFlowStep[]>([]);
 
   const {
     register,
@@ -45,18 +37,29 @@ export function useSellInferenceModal(defaultWallet?: string) {
     reset,
     setValue,
     formState: { isValid: formIsValid },
-  } = useForm<FormState>({
-    defaultValues: { ...INITIAL_FORM, wallet: defaultWallet ?? '' },
+  } = useForm<SellInferenceForm>({
+    defaultValues: {
+      name: '',
+      model: 'qwen3.5:4b',
+      wallet: defaultWallet ?? '',
+      chain: 'base',
+      token: 'USDC',
+      price: '0.001',
+    },
     mode: 'onChange',
   });
 
   const nameValue = watch('name');
+  const modelValue = watch('model');
   const chainValue = watch('chain');
   const tokenValue = watch('token');
+  const priceValue = watch('price');
+
   const paymentError = useMemo(
     () => resolveSellAsset(chainValue, tokenValue, CLIENT_SELL_ASSET_ENV).error,
     [chainValue, tokenValue]
   );
+
   const disabledChainValues = useMemo(
     () =>
       SELL_CHAINS.filter(
@@ -67,25 +70,25 @@ export function useSellInferenceModal(defaultWallet?: string) {
   );
 
   useEffect(() => {
-    const nextSelection = reconcileSellPaymentSelection(
+    const next = reconcileSellPaymentSelection(
       chainValue,
       tokenValue,
       CLIENT_SELL_ASSET_ENV
     );
-    if (nextSelection.chain !== chainValue) {
-      setValue('chain', nextSelection.chain, { shouldValidate: true });
+    if (next.chain !== chainValue) {
+      setValue('chain', next.chain, { shouldValidate: true });
     }
   }, [chainValue, setValue, tokenValue]);
 
   const selectPaymentToken = useCallback(
     (token: SellPaymentToken) => {
-      const nextSelection = reconcileSellPaymentSelection(
+      const next = reconcileSellPaymentSelection(
         chainValue,
         token,
         CLIENT_SELL_ASSET_ENV
       );
-      setValue('token', nextSelection.token, { shouldValidate: true });
-      setValue('chain', nextSelection.chain, { shouldValidate: true });
+      setValue('token', next.token, { shouldValidate: true });
+      setValue('chain', next.chain, { shouldValidate: true });
       setSubmitState('idle');
       setErrorMsg('');
     },
@@ -95,20 +98,20 @@ export function useSellInferenceModal(defaultWallet?: string) {
   const selectPaymentChain = useCallback(
     (chain: ChainName | undefined) => {
       if (!chain) return;
-      const nextSelection = reconcileSellPaymentSelection(
+      const next = reconcileSellPaymentSelection(
         chain,
         tokenValue,
         CLIENT_SELL_ASSET_ENV
       );
-      setValue('token', nextSelection.token, { shouldValidate: true });
-      setValue('chain', nextSelection.chain, { shouldValidate: true });
+      setValue('token', next.token, { shouldValidate: true });
+      setValue('chain', next.chain, { shouldValidate: true });
       setSubmitState('idle');
       setErrorMsg('');
     },
     [setValue, tokenValue]
   );
 
-  const onSubmit = useCallback(async (data: FormState) => {
+  const onSubmit = useCallback(async (data: SellInferenceForm) => {
     setSubmitState('submitting');
     setErrorMsg('');
 
@@ -118,24 +121,20 @@ export function useSellInferenceModal(defaultWallet?: string) {
         data.token,
         CLIENT_SELL_ASSET_ENV
       );
-      if (paymentAsset.error) {
-        throw new Error(paymentAsset.error);
-      }
+      if (paymentAsset.error) throw new Error(paymentAsset.error);
 
       const res = await fetch('/api/sell/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: data.name,
+          name: data.name.trim(),
           namespace: 'llm',
           type: 'inference',
           wallet: data.wallet,
           chain: data.chain,
           token: data.token,
           pricePerRequest: data.price,
-          upstream: data.upstream,
-          port: parseInt(data.port, 10) || 4000,
-          healthPath: '/health/readiness',
+          model: data.model.trim(),
         }),
       });
 
@@ -144,9 +143,24 @@ export function useSellInferenceModal(defaultWallet?: string) {
         throw new Error(json.error || `HTTP ${res.status}`);
       }
 
+      setFollowUpSteps(
+        inferencePostCreateSteps(
+          {
+            name: data.name.trim(),
+            model: data.model.trim(),
+            payTo: data.wallet,
+            chain: data.chain,
+            token: data.token,
+            pricePerRequest: data.price,
+          },
+          'llm'
+        )
+      );
       setSubmitState('success');
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to create ServiceOffer');
+    } catch (err: unknown) {
+      setErrorMsg(
+        err instanceof Error ? err.message : 'Failed to create ServiceOffer'
+      );
       setSubmitState('error');
     }
   }, []);
@@ -154,25 +168,34 @@ export function useSellInferenceModal(defaultWallet?: string) {
   const handleClose = useCallback(() => {
     setOpen(false);
     setTimeout(() => {
-      reset({ ...INITIAL_FORM, wallet: defaultWallet ?? '' });
+      reset({
+        name: '',
+        model: 'qwen3.5:4b',
+        wallet: defaultWallet ?? '',
+        chain: 'base',
+        token: 'USDC',
+        price: '0.001',
+      });
       setSubmitState('idle');
       setErrorMsg('');
+      setFollowUpSteps([]);
     }, 200);
-  }, [reset, defaultWallet]);
+  }, [defaultWallet, reset]);
 
   return {
     open,
     setOpen,
     submitState,
     errorMsg,
+    followUpSteps,
     nameValue,
+    modelValue,
     chainValue,
     tokenValue,
     paymentError,
     disabledChainValues,
-    isValid: formIsValid && !paymentError,
+    isValid: formIsValid && !paymentError && modelValue.trim().length > 0,
     register,
-    setValue,
     selectPaymentToken,
     selectPaymentChain,
     handleSubmit,

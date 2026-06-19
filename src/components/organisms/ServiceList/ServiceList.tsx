@@ -11,6 +11,7 @@ import { ErrorState } from '../../molecules/ErrorState';
 import { ServiceCard } from '../../molecules/ServiceCard';
 import { useServiceOffers } from '../../../hooks/useServiceOffers';
 import { useTunnelURL } from '../../../hooks/useAgents';
+import { offerAnchorId } from '@/lib/services/agent-listing';
 import type { ServiceOffer } from '@/types/sell';
 
 const SubSection = styled(Box, {
@@ -42,6 +43,12 @@ const SubSectionHint = styled(Text, {
   fontFamily: 'monospace',
 });
 
+const SubSectionDesc = styled(Text, {
+  fontSize: '$1',
+  color: '$muted',
+  marginBottom: '$xs',
+});
+
 const ListBody = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
@@ -50,25 +57,24 @@ const ListBody = styled(Box, {
 });
 
 function partitionOffers(offers: ServiceOffer[]) {
-  const agentOffers = offers
-    .filter(
-      o =>
-        o.type === 'agent' || o.type === 'inference' || o.type === 'fine-tuning'
-    )
-    .sort((a, b) => (a.type === 'agent' ? -1 : b.type === 'agent' ? 1 : 0));
+  const agentOffers = offers.filter(o => o.type === 'agent');
+  const inferenceOffers = offers.filter(
+    o => o.type === 'inference' || o.type === 'fine-tuning'
+  );
   const httpOffers = offers.filter(o => o.type === 'http');
-  return { agentOffers, httpOffers };
+  return { agentOffers, inferenceOffers, httpOffers };
 }
 
 export function ServiceList() {
-  const { offers, loading, error, refetch } = useServiceOffers();
+  const { offers, pendingOffers, loading, error, refetch } = useServiceOffers();
   const { tunnelURL } = useTunnelURL();
-  const { agentOffers, httpOffers } = partitionOffers(offers);
+  const { agentOffers, inferenceOffers, httpOffers } = partitionOffers(offers);
+  const totalCount = offers.length + pendingOffers.length;
 
   const headerContent = (
     <Flex css={{ alignItems: 'center', gap: '$sm', paddingRight: '$xl' }}>
       <SectionTitle>Obol Services</SectionTitle>
-      {!loading && offers.length > 0 && <CountBadge count={offers.length} />}
+      {!loading && totalCount > 0 && <CountBadge count={totalCount} />}
     </Flex>
   );
 
@@ -76,34 +82,61 @@ export function ServiceList() {
     <Card section>
       <Accordion header={headerContent} defaultExpanded={true}>
         <ListBody>
-          {loading && offers.length === 0 && (
+          {loading && totalCount === 0 && (
             <LoadingState size="small" message="Loading services..." />
           )}
           {error && (
             <ErrorState message="Failed to load services" onRetry={refetch} />
           )}
-          {!loading && !error && offers.length === 0 && (
+          {!loading && !error && totalCount === 0 && (
             <EmptyMessage>
-              No services for sale yet. Run <code>obol sell http …</code> or{' '}
-              <code>obol sell inference …</code>, or make an agent sellable with{' '}
-              <code>obol sell agent …</code>.
+              No agent services for sale yet. Create a sub-agent, then hit{' '}
+              <strong>Sell</strong> on its card — or run{' '}
+              <code>obol sell agent &lt;name&gt;</code> from Terminal.
             </EmptyMessage>
           )}
 
-          {(agentOffers.length > 0 || httpOffers.length > 0) && (
+          {(agentOffers.length > 0 ||
+            inferenceOffers.length > 0 ||
+            pendingOffers.length > 0 ||
+            httpOffers.length > 0) && (
             <>
+              {pendingOffers.length > 0 ? (
+                <SubSection>
+                  <SubSectionHeader>
+                    <SubSectionTitle>Pending listings</SubSectionTitle>
+                    <CountBadge count={pendingOffers.length} />
+                    <SubSectionHint>agent</SubSectionHint>
+                  </SubSectionHeader>
+                  <SubSectionDesc>
+                    ServiceOffer created but not live on the storefront yet.
+                    Check conditions below for what is still reconciling.
+                  </SubSectionDesc>
+                  {pendingOffers.map(offer => (
+                    <ServiceCard
+                      key={`pending-${offer.namespace}/${offer.name}`}
+                      offer={offer}
+                      tunnelURL={tunnelURL}
+                      onChanged={refetch}
+                      anchorId={offerAnchorId(offer.namespace, offer.name)}
+                    />
+                  ))}
+                </SubSection>
+              ) : null}
+
               <SubSection>
                 <SubSectionHeader>
                   <SubSectionTitle>Agent Services</SubSectionTitle>
                   {agentOffers.length > 0 && (
                     <CountBadge count={agentOffers.length} />
                   )}
-                  <SubSectionHint>
-                    agent · inference · fine-tuning
-                  </SubSectionHint>
+                  <SubSectionHint>agent</SubSectionHint>
                 </SubSectionHeader>
+                <SubSectionDesc>
+                  Live paid agent listings on your storefront (what buyers see).
+                </SubSectionDesc>
                 {agentOffers.length === 0 ? (
-                  <EmptyMessage>No agent services for sale.</EmptyMessage>
+                  <EmptyMessage>No live agent services yet.</EmptyMessage>
                 ) : (
                   agentOffers.map(offer => (
                     <ServiceCard
@@ -111,32 +144,49 @@ export function ServiceList() {
                       offer={offer}
                       tunnelURL={tunnelURL}
                       onChanged={refetch}
+                      anchorId={offerAnchorId(offer.namespace, offer.name)}
                     />
                   ))
                 )}
               </SubSection>
 
-              <SubSection>
-                <SubSectionHeader>
-                  <SubSectionTitle>API Services</SubSectionTitle>
-                  {httpOffers.length > 0 && (
-                    <CountBadge count={httpOffers.length} />
-                  )}
-                  <SubSectionHint>http</SubSectionHint>
-                </SubSectionHeader>
-                {httpOffers.length === 0 ? (
-                  <EmptyMessage>No API services for sale.</EmptyMessage>
-                ) : (
-                  httpOffers.map(offer => (
+              {inferenceOffers.length > 0 && (
+                <SubSection>
+                  <SubSectionHeader>
+                    <SubSectionTitle>Inference Services</SubSectionTitle>
+                    <CountBadge count={inferenceOffers.length} />
+                    <SubSectionHint>inference</SubSectionHint>
+                  </SubSectionHeader>
+                  {inferenceOffers.map(offer => (
                     <ServiceCard
                       key={`${offer.namespace}/${offer.name}`}
                       offer={offer}
                       tunnelURL={tunnelURL}
                       onChanged={refetch}
+                      anchorId={offerAnchorId(offer.namespace, offer.name)}
                     />
-                  ))
-                )}
-              </SubSection>
+                  ))}
+                </SubSection>
+              )}
+
+              {httpOffers.length > 0 && (
+                <SubSection>
+                  <SubSectionHeader>
+                    <SubSectionTitle>API Services</SubSectionTitle>
+                    <CountBadge count={httpOffers.length} />
+                    <SubSectionHint>http</SubSectionHint>
+                  </SubSectionHeader>
+                  {httpOffers.map(offer => (
+                    <ServiceCard
+                      key={`${offer.namespace}/${offer.name}`}
+                      offer={offer}
+                      tunnelURL={tunnelURL}
+                      onChanged={refetch}
+                      anchorId={offerAnchorId(offer.namespace, offer.name)}
+                    />
+                  ))}
+                </SubSection>
+              )}
             </>
           )}
         </ListBody>

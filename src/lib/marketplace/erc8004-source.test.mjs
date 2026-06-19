@@ -60,8 +60,12 @@ describe('mapAgent8004ToItem', () => {
     assert.equal(item.isDemo, true);
   });
 
-  it('classifies as http when no services are present', () => {
-    const item = mapAgent8004ToItem({ ...BASE_AGENT, services: null });
+  it('classifies as http when no services or protocols are present', () => {
+    const item = mapAgent8004ToItem({
+      ...BASE_AGENT,
+      services: null,
+      supported_protocols: [],
+    });
     assert.equal(item.type, 'http');
     assert.equal(item.endpoint, '');
   });

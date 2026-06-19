@@ -7,7 +7,8 @@ describe('monitoring exposure', () => {
     const nextConfig = await readFile('next.config.ts', 'utf8');
 
     assert.doesNotMatch(nextConfig, /\/monitoring\/:path\*/);
-    assert.doesNotMatch(nextConfig, /monitoring\.obol\.stack/);
+    assert.doesNotMatch(nextConfig, /rewrites\s*\(/);
+    assert.doesNotMatch(nextConfig, /destination:.*monitoring/i);
   });
 
   it('keeps dashboard metrics on the server-side Prometheus client', async () => {

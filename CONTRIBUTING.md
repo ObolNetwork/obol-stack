@@ -22,7 +22,7 @@ pnpm run dev:local           # or pnpm run dev with cluster port-forwards
 pnpm run lint
 pnpm run test
 pnpm run build
-bash scripts/scan-git-secrets.sh   # optional; CI runs this too
+pnpm run scan:secrets   # optional; requires gitleaks — CI runs this too
 ```
 
 Playwright (optional locally): `pnpm run test:e2e:chromium`
@@ -49,8 +49,8 @@ Conventional commits: `feat:`, `fix:`, `docs:`, `test:`, `chore:`, `security:` w
 | Workflow                | PR                                  | `main` push              |
 | ----------------------- | ----------------------------------- | ------------------------ |
 | `test.yml`              | lint, unit tests, tsc, `next build` | + Docker smoke test      |
-| `playwright.yml`        | Chromium E2E only                   | full browser matrix      |
-| `secret-scan.yml`       | git history pattern scan            | same                     |
+| `playwright.yml`        | Chromium E2E (mocked APIs)          | same                     |
+| `secret-scan.yml`       | gitleaks history scan               | same                     |
 | `build-push-deploy.yml` | —                                   | multi-arch image publish |
 
 Superseded runs are cancelled via `concurrency: cancel-in-progress` — only the latest commit per PR/branch is built.

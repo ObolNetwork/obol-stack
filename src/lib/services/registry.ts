@@ -12,7 +12,7 @@ export class RegistryClient {
     page = 1,
     search?: string,
     protocol?: string,
-    chainId = 84532,
+    chainId = 1,
     x402Supported?: boolean
   ): Promise<{ agents: Agent8004[]; total: number; hasMore: boolean }> {
     const params = new URLSearchParams({
@@ -41,5 +41,39 @@ export class RegistryClient {
       total: json.meta?.pagination?.total ?? 0,
       hasMore: json.meta?.pagination?.hasMore ?? false,
     };
+  }
+
+  /** Paginate through 8004scan until all agents for a chain are loaded. */
+  async listAllAgents(
+    chainId: number,
+    options?: {
+      search?: string;
+      protocol?: string;
+      x402Supported?: boolean;
+      batchSize?: number;
+    }
+  ): Promise<{ agents: Agent8004[]; total: number }> {
+    const batchSize = options?.batchSize ?? 100;
+    const agents: Agent8004[] = [];
+    let page = 1;
+    let total = 0;
+    let hasMore = true;
+
+    while (hasMore) {
+      const batch = await this.listAgents(
+        batchSize,
+        page,
+        options?.search,
+        options?.protocol,
+        chainId,
+        options?.x402Supported
+      );
+      agents.push(...batch.agents);
+      total = batch.total;
+      hasMore = batch.hasMore && batch.agents.length > 0;
+      page += 1;
+    }
+
+    return { agents, total };
   }
 }

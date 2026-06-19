@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
-import { fetchCatalog, mapCatalog } from './catalog.ts';
+import { fetchCatalog, mapCatalog, IN_CLUSTER_CATALOG_URL } from './catalog.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -155,6 +155,30 @@ describe('mapCatalog', () => {
   });
 });
 
+describe('resolveCatalogUrl', async () => {
+  const saved = {
+    host: process.env.KUBERNETES_SERVICE_HOST,
+    catalog: process.env.MARKETPLACE_CATALOG_URL,
+  };
+
+  afterEach(() => {
+    if (saved.host === undefined) delete process.env.KUBERNETES_SERVICE_HOST;
+    else process.env.KUBERNETES_SERVICE_HOST = saved.host;
+    if (saved.catalog === undefined) delete process.env.MARKETPLACE_CATALOG_URL;
+    else process.env.MARKETPLACE_CATALOG_URL = saved.catalog;
+  });
+
+  it('uses the Traefik storefront URL outside the cluster', async () => {
+    delete process.env.KUBERNETES_SERVICE_HOST;
+    delete process.env.MARKETPLACE_CATALOG_URL;
+    const { resolveCatalogUrl } = await import('./catalog.ts');
+    assert.equal(
+      resolveCatalogUrl(),
+      'http://obol.stack:8080/api/services.json'
+    );
+  });
+});
+
 describe('fetchCatalog', () => {
   it('returns an empty catalog when the default obol-skill-md service is absent', async () => {
     const originalFetch = globalThis.fetch;
@@ -167,7 +191,7 @@ describe('fetchCatalog', () => {
         throw new TypeError('fetch failed', { cause });
       };
 
-      const out = await fetchCatalog();
+      const out = await fetchCatalog(IN_CLUSTER_CATALOG_URL);
       assert.deepEqual(out.items, []);
       assert.match(out.fetchedAt, /^\d{4}-\d{2}-\d{2}T/);
     } finally {

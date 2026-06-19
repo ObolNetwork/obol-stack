@@ -18,10 +18,28 @@ import type {
 } from './types';
 import { classifyFetchFailure } from './errors.ts';
 import type { ServiceOfferType } from '@/types/sell';
+import { isInKubernetesCluster } from '../utils/cluster-url.ts';
+import { LOCAL_STOREFRONT_URL } from '../services/public-storefront.ts';
 
-export const CATALOG_SERVICE =
-  process.env.MARKETPLACE_CATALOG_URL ||
+export const IN_CLUSTER_CATALOG_URL =
   'http://obol-skill-md.x402.svc.cluster.local:8080/api/services.json';
+
+export const LOCAL_DEV_CATALOG_URL = `${LOCAL_STOREFRONT_URL}/api/services.json`;
+
+/** Controller-published catalog; override with MARKETPLACE_CATALOG_URL. */
+export function resolveCatalogUrl(): string {
+  if (process.env.MARKETPLACE_CATALOG_URL) {
+    return process.env.MARKETPLACE_CATALOG_URL;
+  }
+  if (isInKubernetesCluster()) {
+    return IN_CLUSTER_CATALOG_URL;
+  }
+  // Local `npm run dev` on the Mac host cannot resolve cluster DNS; Traefik
+  // serves the same JSON at the public storefront path.
+  return LOCAL_DEV_CATALOG_URL;
+}
+
+export const CATALOG_SERVICE = resolveCatalogUrl();
 
 /**
  * Raw ServiceCatalogEntry — mirrors internal/schemas/service-catalog.schema.json.
@@ -107,7 +125,11 @@ export async function fetchRawCatalog(
 }
 
 function isDefaultCatalogService(url: string): boolean {
-  return url === CATALOG_SERVICE && url.includes('obol-skill-md.x402.');
+  return (
+    url === CATALOG_SERVICE ||
+    url === IN_CLUSTER_CATALOG_URL ||
+    url === LOCAL_DEV_CATALOG_URL
+  );
 }
 
 function isDefaultCatalogMissing(url: string, error: unknown): boolean {

@@ -60,6 +60,18 @@ export class KubernetesAPIClient {
         try {
           const parsed = JSON.parse(data);
 
+          if (
+            app === 'erpc' &&
+            typeof parsed?.network === 'string' &&
+            parsed.network.includes('{{')
+          ) {
+            console.warn(
+              `[KubernetesAPI] Skipping erpc/${id}: metadata.json has unrendered Helm template ` +
+                `(network=${JSON.stringify(parsed.network)}). Re-run \`obol stack up\` to refresh base templates.`
+            );
+            continue;
+          }
+
           const base: BaseApplicationInstance = {
             app, // TypeScript now knows app is 'helios' | 'aztec' | 'ethereum'
             id,

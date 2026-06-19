@@ -139,6 +139,11 @@ export interface ServiceOfferCondition {
   message: string;
 }
 
+export interface ServiceOfferAgentRefInput {
+  name: string;
+  namespace: string;
+}
+
 export interface CreateServiceOfferRequest {
   name: string;
   namespace: string;
@@ -148,7 +153,17 @@ export interface CreateServiceOfferRequest {
   token?: string;
   asset?: ServiceOfferAsset;
   pricePerRequest: string;
-  upstream: string;
-  port: number;
+  /** Omitted for type=agent — controller resolves upstream from agent.ref. */
+  upstream?: string;
+  port?: number;
   healthPath?: string;
+  /** Required for type=inference — maps to spec.model.name. */
+  model?: string;
+  modelRuntime?: string;
+  /** Required for type=agent — maps to spec.agent.ref. */
+  agentRef?: ServiceOfferAgentRefInput;
+  /** Agent sell — storefront description (Agent CR objective when available). */
+  description?: string;
+  skills?: string[];
+  registrationEnabled?: boolean;
 }

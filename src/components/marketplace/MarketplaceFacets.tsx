@@ -29,6 +29,14 @@ const Panel = styled(Box, {
   width: 224,
   flexShrink: 0,
   paddingRight: '$md',
+
+  '@media (max-width: 960px)': {
+    width: '100%',
+    paddingRight: 0,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: '$sm',
+  },
 });
 
 const SearchWrap = styled(Box, { position: 'relative' });
@@ -268,6 +276,9 @@ export function MarketplaceFacets({
     onChange({ ...filters, ...next, page: 1 });
 
   const activeRegistry: MarketplaceRegistry = filters.registry ?? 'obol';
+  // For ERC-8004 we only have real totals for chains; type/token/source counts
+  // are page-level and misleading, so we hide them.
+  const isErc8004 = activeRegistry === 'erc8004';
 
   // "All" is implicit when the type filter has no selections — show it
   // as a first row alongside the bucketed facets, per the design.
@@ -296,44 +307,46 @@ export function MarketplaceFacets({
         />
       </SearchWrap>
 
-      <Group>
-        <FieldLabel>Type</FieldLabel>
-        <Items>
-          <FacetItem
-            type="button"
-            active={typeAllActive}
-            onClick={() => patch({ type: undefined })}
-          >
-            <CheckBox active={typeAllActive}>
-              {typeAllActive ? <CheckIcon width={10} height={10} /> : null}
-            </CheckBox>
-            <ItemLabel>All</ItemLabel>
-            <Count>{facets.type.reduce((n, b) => n + b.count, 0)}</Count>
-          </FacetItem>
-          {facets.type.map(bucket => {
-            const value = bucket.value as ServiceOfferType;
-            const active = filters.type?.includes(value) ?? false;
-            return (
-              <FacetItem
-                key={value}
-                type="button"
-                active={active}
-                onClick={() =>
-                  patch({
-                    type: toggle(filters.type, value) as ServiceOfferType[],
-                  })
-                }
-              >
-                <CheckBox active={active}>
-                  {active ? <CheckIcon width={10} height={10} /> : null}
-                </CheckBox>
-                <ItemLabel>{TYPE_LABEL[value] ?? value}</ItemLabel>
-                <Count>{bucket.count}</Count>
-              </FacetItem>
-            );
-          })}
-        </Items>
-      </Group>
+      {!isErc8004 && (
+        <Group>
+          <FieldLabel>Type</FieldLabel>
+          <Items>
+            <FacetItem
+              type="button"
+              active={typeAllActive}
+              onClick={() => patch({ type: undefined })}
+            >
+              <CheckBox active={typeAllActive}>
+                {typeAllActive ? <CheckIcon width={10} height={10} /> : null}
+              </CheckBox>
+              <ItemLabel>All</ItemLabel>
+              <Count>{facets.type.reduce((n, b) => n + b.count, 0)}</Count>
+            </FacetItem>
+            {facets.type.map(bucket => {
+              const value = bucket.value as ServiceOfferType;
+              const active = filters.type?.includes(value) ?? false;
+              return (
+                <FacetItem
+                  key={value}
+                  type="button"
+                  active={active}
+                  onClick={() =>
+                    patch({
+                      type: toggle(filters.type, value) as ServiceOfferType[],
+                    })
+                  }
+                >
+                  <CheckBox active={active}>
+                    {active ? <CheckIcon width={10} height={10} /> : null}
+                  </CheckBox>
+                  <ItemLabel>{TYPE_LABEL[value] ?? value}</ItemLabel>
+                  <Count>{bucket.count}</Count>
+                </FacetItem>
+              );
+            })}
+          </Items>
+        </Group>
+      )}
 
       <Group>
         <FieldLabel>Chain</FieldLabel>
@@ -364,90 +377,96 @@ export function MarketplaceFacets({
         </Items>
       </Group>
 
-      <Group>
-        <FieldLabel>Token</FieldLabel>
-        <Items>
-          {facets.asset.map(bucket => {
-            const active = filters.asset?.includes(bucket.value) ?? false;
-            return (
-              <FacetItem
-                key={bucket.value}
-                type="button"
-                active={active}
-                onClick={() =>
-                  patch({ asset: toggle(filters.asset, bucket.value) })
-                }
-              >
-                <CheckBox active={active}>
-                  {active ? <CheckIcon width={10} height={10} /> : null}
-                </CheckBox>
-                <ItemLabel>{bucket.value}</ItemLabel>
-                <Count>{bucket.count}</Count>
-              </FacetItem>
-            );
-          })}
-        </Items>
-      </Group>
+      {!isErc8004 && (
+        <>
+          <Group>
+            <FieldLabel>Token</FieldLabel>
+            <Items>
+              {facets.asset.map(bucket => {
+                const active = filters.asset?.includes(bucket.value) ?? false;
+                return (
+                  <FacetItem
+                    key={bucket.value}
+                    type="button"
+                    active={active}
+                    onClick={() =>
+                      patch({ asset: toggle(filters.asset, bucket.value) })
+                    }
+                  >
+                    <CheckBox active={active}>
+                      {active ? <CheckIcon width={10} height={10} /> : null}
+                    </CheckBox>
+                    <ItemLabel>{bucket.value}</ItemLabel>
+                    <Count>{bucket.count}</Count>
+                  </FacetItem>
+                );
+              })}
+            </Items>
+          </Group>
 
-      <Group>
-        <FieldLabel>Source</FieldLabel>
-        <Items>
-          <FacetItem
-            type="button"
-            active={sourceAllActive}
-            onClick={() => patch({ source: undefined })}
-          >
-            <CheckBox active={sourceAllActive}>
-              {sourceAllActive ? <CheckIcon width={10} height={10} /> : null}
-            </CheckBox>
-            <ItemLabel>All</ItemLabel>
-            <Count>{facets.source.reduce((n, b) => n + b.count, 0)}</Count>
-          </FacetItem>
-          {(['local', 'remote'] as const).map(value => {
-            const bucket = facets.source.find(b => b.value === value);
-            const active = filters.source?.includes(value) ?? false;
-            return (
+          <Group>
+            <FieldLabel>Source</FieldLabel>
+            <Items>
               <FacetItem
-                key={value}
                 type="button"
-                active={active}
-                onClick={() =>
-                  patch({
-                    source: toggle(
-                      filters.source,
-                      value
-                    ) as MarketplaceSource[],
-                  })
-                }
+                active={sourceAllActive}
+                onClick={() => patch({ source: undefined })}
               >
-                <CheckBox active={active}>
-                  {active ? <CheckIcon width={10} height={10} /> : null}
+                <CheckBox active={sourceAllActive}>
+                  {sourceAllActive ? (
+                    <CheckIcon width={10} height={10} />
+                  ) : null}
                 </CheckBox>
-                <ItemLabel>{SOURCE_LABEL[value]}</ItemLabel>
-                <Count>{bucket?.count ?? 0}</Count>
+                <ItemLabel>All</ItemLabel>
+                <Count>{facets.source.reduce((n, b) => n + b.count, 0)}</Count>
               </FacetItem>
-            );
-          })}
-        </Items>
-      </Group>
+              {(['local', 'remote'] as const).map(value => {
+                const bucket = facets.source.find(b => b.value === value);
+                const active = filters.source?.includes(value) ?? false;
+                return (
+                  <FacetItem
+                    key={value}
+                    type="button"
+                    active={active}
+                    onClick={() =>
+                      patch({
+                        source: toggle(
+                          filters.source,
+                          value
+                        ) as MarketplaceSource[],
+                      })
+                    }
+                  >
+                    <CheckBox active={active}>
+                      {active ? <CheckIcon width={10} height={10} /> : null}
+                    </CheckBox>
+                    <ItemLabel>{SOURCE_LABEL[value]}</ItemLabel>
+                    <Count>{bucket?.count ?? 0}</Count>
+                  </FacetItem>
+                );
+              })}
+            </Items>
+          </Group>
 
-      <Group>
-        <FieldLabel>Price range ({primaryToken(facets)})</FieldLabel>
-        <SliderTrack>
-          <SliderFill
-            css={{
-              left: `${(minFrac * 100).toFixed(0)}%`,
-              right: `${((1 - maxFrac) * 100).toFixed(0)}%`,
-            }}
-          />
-          <SliderThumb css={{ left: `${(minFrac * 100).toFixed(0)}%` }} />
-          <SliderThumb css={{ left: `${(maxFrac * 100).toFixed(0)}%` }} />
-        </SliderTrack>
-        <SliderLabels>
-          <span>{filters.minPrice ? filters.minPrice : '$0.0001'}</span>
-          <span>{filters.maxPrice ? filters.maxPrice : '$2.50'}</span>
-        </SliderLabels>
-      </Group>
+          <Group>
+            <FieldLabel>Price range ({primaryToken(facets)})</FieldLabel>
+            <SliderTrack>
+              <SliderFill
+                css={{
+                  left: `${(minFrac * 100).toFixed(0)}%`,
+                  right: `${((1 - maxFrac) * 100).toFixed(0)}%`,
+                }}
+              />
+              <SliderThumb css={{ left: `${(minFrac * 100).toFixed(0)}%` }} />
+              <SliderThumb css={{ left: `${(maxFrac * 100).toFixed(0)}%` }} />
+            </SliderTrack>
+            <SliderLabels>
+              <span>{filters.minPrice ? filters.minPrice : '$0.0001'}</span>
+              <span>{filters.maxPrice ? filters.maxPrice : '$2.50'}</span>
+            </SliderLabels>
+          </Group>
+        </>
+      )}
 
       <Group>
         <FieldLabel>Registry</FieldLabel>
