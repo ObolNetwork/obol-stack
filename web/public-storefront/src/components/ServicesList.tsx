@@ -45,36 +45,46 @@ export function ServicesList({ initial }: { initial: Service[] }) {
     );
   }
 
-  const demos = services.filter((s) => s.isDemo);
-  const others = services.filter((s) => !s.isDemo);
+  // Group into storefront sections by category. Demo is just another
+  // category — no special-casing. Services arrive pre-sorted by the catalog
+  // (weight desc, then name), so iterating in order and emitting categories
+  // as first encountered makes the section order follow weight too
+  // (uncategorized services render under "Services").
+  const sections = groupByCategory(services);
 
   return (
     <div className="space-y-6">
-      {demos.length > 0 && (
-        <section>
+      {sections.map(({ category, items }) => (
+        <section key={category || "_default"}>
           <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">
-            Demo services
+            {sectionTitle(category)}
           </h2>
           <div className="space-y-3">
-            {demos.map((s) => (
+            {items.map((s) => (
               <ServiceCard key={s.name} service={s} />
             ))}
           </div>
         </section>
-      )}
-
-      {others.length > 0 && (
-        <section>
-          <h2 className="text-sm font-semibold text-text-muted uppercase tracking-wide mb-3">
-            Services
-          </h2>
-          <div className="space-y-3">
-            {others.map((s) => (
-              <ServiceCard key={s.name} service={s} />
-            ))}
-          </div>
-        </section>
-      )}
+      ))}
     </div>
   );
+}
+
+function groupByCategory(services: Service[]): { category: string; items: Service[] }[] {
+  const order: string[] = [];
+  const buckets = new Map<string, Service[]>();
+  for (const s of services) {
+    const cat = s.category ?? "";
+    if (!buckets.has(cat)) {
+      buckets.set(cat, []);
+      order.push(cat);
+    }
+    buckets.get(cat)!.push(s);
+  }
+  return order.map((category) => ({ category, items: buckets.get(category)! }));
+}
+
+function sectionTitle(category: string): string {
+  if (!category) return "Services";
+  return category.charAt(0).toUpperCase() + category.slice(1);
 }

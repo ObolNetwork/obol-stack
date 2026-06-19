@@ -53,12 +53,8 @@ function buildDynamicCopy(services: Service[]) {
   if (services.length === 0) {
     return { title: DEFAULT_TITLE, description: DEFAULT_DESCRIPTION };
   }
-  const demos = services.filter((s) => s.isDemo).length;
   const total = services.length;
-  const summary =
-    demos > 0
-      ? `${total} service${total === 1 ? "" : "s"} (${demos} demo${demos === 1 ? "" : "s"})`
-      : `${total} service${total === 1 ? "" : "s"}`;
+  const summary = `${total} service${total === 1 ? "" : "s"}`;
   const title = `Obol Stack — ${summary} for sale`;
   const sample = services
     .slice(0, 3)

@@ -77,8 +77,7 @@
         "price",
         "payTo",
         "network",
-        "description",
-        "isDemo"
+        "description"
       ],
       "properties": {
         "name": {
@@ -155,8 +154,13 @@
           },
           "description": "OASF skills or buy-x402 skills the agent advertises. For type=agent offers this mirrors the resolved Agent.spec.skills allow-list; for non-agent offers it mirrors spec.registration.skills."
         },
-        "isDemo": {
-          "type": "boolean"
+        "category": {
+          "type": "string",
+          "description": "Storefront grouping section (e.g. \"demo\"). Empty/absent means the default section. Mirrors spec.listing.category."
+        },
+        "weight": {
+          "type": "integer",
+          "description": "Orders offers within a category: higher sorts earlier. Mirrors spec.listing.weight."
         },
         "registrationPending": {
           "type": "boolean"

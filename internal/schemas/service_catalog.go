@@ -36,7 +36,16 @@ type ServiceCatalogEntry struct {
 	// offers it mirrors spec.registration.skills. Surfaced as pills on
 	// the storefront ServiceCard.
 	Skills []string `json:"skills,omitempty"`
-	IsDemo bool     `json:"isDemo"`
+
+	// Category groups the offer into a named storefront section (e.g.
+	// "demo"). Empty means the default/uncategorized section. Demo services
+	// are just category="demo" — no special-casing. Mirrors
+	// ServiceOffer.spec.listing.category.
+	Category string `json:"category,omitempty"`
+
+	// Weight orders offers within a category on the storefront: higher sorts
+	// earlier. Mirrors ServiceOffer.spec.listing.weight.
+	Weight int `json:"weight,omitempty"`
 
 	// RegistrationPending is true when the offer is operationally ready
 	// (route published, payment gate active, upstream healthy) but its

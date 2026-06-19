@@ -29,9 +29,37 @@ type PricingConfig struct {
 	Routes []RouteRule `yaml:"routes"`
 }
 
+// RoutePayment is one accepted payment option for a route — a single
+// (price, payTo, network, asset) tuple. A route advertising N options emits
+// N entries in the 402 accepts[] array; the buyer picks one and the verifier
+// settles whichever was used. The fields mirror the per-payment subset of
+// RouteRule so a single-payment route synthesizes one of these from its
+// inline fields (see RouteRule.PaymentOptions).
+type RoutePayment struct {
+	Price               string `yaml:"price"`
+	PayTo               string `yaml:"payTo,omitempty"`
+	Network             string `yaml:"network,omitempty"`
+	AssetAddress        string `yaml:"assetAddress,omitempty"`
+	AssetSymbol         string `yaml:"assetSymbol,omitempty"`
+	AssetDecimals       int    `yaml:"assetDecimals,omitempty"`
+	AssetTransferMethod string `yaml:"assetTransferMethod,omitempty"`
+	EIP712Name          string `yaml:"eip712Name,omitempty"`
+	EIP712Version       string `yaml:"eip712Version,omitempty"`
+	PriceModel          string `yaml:"priceModel,omitempty"`
+	PerMTok             string `yaml:"perMTok,omitempty"`
+	ApproxTokensPerRequest int `yaml:"approxTokensPerRequest,omitempty"`
+	MaxTimeoutSeconds   int64  `yaml:"maxTimeoutSeconds,omitempty"`
+}
+
 // RouteRule maps a URL pattern to x402 payment requirements.
 // Per-route fields (PayTo, Network) override the global PricingConfig values
 // when set, enabling multiple ServiceOffers with different wallets/chains.
+//
+// The inline payment fields (Price, PayTo, Network, Asset*, …) describe the
+// PRIMARY payment option and are always populated. Payments, when non-empty,
+// holds every accepted option (incl. the primary as Payments[0]) so a single
+// offer can be paid in multiple currencies/networks. Use PaymentOptions to
+// read the effective list regardless of how the rule was built.
 type RouteRule struct {
 	// Pattern is a path matching pattern. Supports:
 	//   - Exact match: "/health"
@@ -136,6 +164,38 @@ type RouteRule struct {
 	// minutes-to-hours here — operator-set values up to
 	// MaxMaxTimeoutSeconds are honored verbatim.
 	MaxTimeoutSeconds int64 `yaml:"maxTimeoutSeconds,omitempty"`
+
+	// Payments is the full set of accepted payment options for this route.
+	// When non-empty it is the source of truth for the 402 accepts[] array;
+	// Payments[0] mirrors the inline fields above (the primary option).
+	// Empty means a single-payment route described by the inline fields.
+	Payments []RoutePayment `yaml:"payments,omitempty"`
+}
+
+// PaymentOptions returns the route's accepted payment options. When the
+// multi-payment Payments slice is populated it is returned verbatim;
+// otherwise a single option is synthesized from the inline (primary) fields
+// for backward compatibility with single-payment routes and static
+// pricing.yaml configs. The result always has at least one element.
+func (r *RouteRule) PaymentOptions() []RoutePayment {
+	if len(r.Payments) > 0 {
+		return r.Payments
+	}
+	return []RoutePayment{{
+		Price:                  r.Price,
+		PayTo:                  r.PayTo,
+		Network:                r.Network,
+		AssetAddress:           r.AssetAddress,
+		AssetSymbol:            r.AssetSymbol,
+		AssetDecimals:          r.AssetDecimals,
+		AssetTransferMethod:    r.AssetTransferMethod,
+		EIP712Name:             r.EIP712Name,
+		EIP712Version:          r.EIP712Version,
+		PriceModel:             r.PriceModel,
+		PerMTok:                r.PerMTok,
+		ApproxTokensPerRequest: r.ApproxTokensPerRequest,
+		MaxTimeoutSeconds:      r.MaxTimeoutSeconds,
+	}}
 }
 
 // LoadConfig reads and parses a pricing configuration YAML file.

@@ -713,6 +713,14 @@ func (in *ServiceOfferSpec) DeepCopyInto(out *ServiceOfferSpec) {
 	out.Model = in.Model
 	out.Upstream = in.Upstream
 	out.Payment = in.Payment
+	if in.Payments != nil {
+		in, out := &in.Payments, &out.Payments
+		*out = make([]ServiceOfferPayment, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+	out.Listing = in.Listing
 	if in.Provenance != nil {
 		in, out := &in.Provenance, &out.Provenance
 		*out = make(map[string]string, len(*in))

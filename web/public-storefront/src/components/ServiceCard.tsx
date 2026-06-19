@@ -33,9 +33,9 @@ export function ServiceCard({ service }: { service: Service }) {
             <h3 className="text-lg font-semibold text-text-light truncate">
               {service.name}
             </h3>
-            {service.isDemo && (
+            {service.category && (
               <span className="shrink-0 rounded px-1.5 py-0.5 text-xs bg-obol-green/15 text-obol-green border border-obol-green/30">
-                demo
+                {service.category}
               </span>
             )}
           </div>

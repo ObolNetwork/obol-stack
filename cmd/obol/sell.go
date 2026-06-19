@@ -672,7 +672,7 @@ Use --no-register to skip the on-chain registration step.
 Examples:
   obol sell http my-cool-api --upstream my-svc.my-namespace.svc.cluster.local --port 8080 --pay-to 0x... --price 0.01 --chain base
   obol sell http my-cool-api --upstream my-svc --port 8080 --pay-to 0x... --price 0.01 --chain base --no-register`,
-		Flags: []cli.Flag{
+		Flags: append([]cli.Flag{
 			payToFlag("Payment recipient address"),
 			&cli.StringFlag{
 				Name:  "chain",
@@ -771,7 +771,7 @@ Examples:
 				Name:  "from-json",
 				Usage: "Read ServiceOffer spec from JSON file (or - for stdin) instead of flags",
 			},
-		},
+		}, acceptFlags()...),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 
@@ -873,27 +873,14 @@ Examples:
 				return fmt.Errorf("upstream port required: use --port <port-number>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --pay-to 0x... --chain base-sepolia --price 0.001", name)
 			}
 
-			priceTable, err := resolvePriceTable(cmd, true)
+			// Build the payment block(s): multi-currency via --accept, else
+			// the singular --chain/--token/--price flags. chainName/wallet are
+			// re-pointed at the primary option so registration lands on it.
+			paymentBlock, paymentsList, chainName, primaryPayTo, err := resolveOfferPayments(cmd, wallet, true)
 			if err != nil {
 				return err
 			}
-
-			price := map[string]any{}
-
-			switch {
-			case priceTable.PerRequest != "":
-				price["perRequest"] = priceTable.PerRequest
-			case priceTable.PerMTok != "":
-				price["perMTok"] = priceTable.PerMTok
-			case priceTable.PerHour != "":
-				price["perHour"] = priceTable.PerHour
-			}
-
-			chainName := cmd.String("chain")
-			assetTerms, err := resolveAssetTerms(cmd, &chainName)
-			if err != nil {
-				return err
-			}
+			wallet = primaryPayTo
 
 			spec := map[string]any{
 				"type": "http",
@@ -903,17 +890,12 @@ Examples:
 					"port":       cmd.Int("port"),
 					"healthPath": cmd.String("health-path"),
 				},
-				"payment": map[string]any{
-					"scheme":            "exact",
-					"network":           chainName,
-					"payTo":             wallet,
-					"maxTimeoutSeconds": cmd.Int("max-timeout"),
-					"price":             price,
-				},
+				"payment": paymentBlock,
 			}
-			if !assetTerms.IsZero() {
-				spec["payment"].(map[string]any)["asset"] = assetTerms
+			if paymentsList != nil {
+				spec["payments"] = paymentsList
 			}
+			applyListingFlags(cmd, spec)
 
 			if path := cmd.String("path"); path != "" {
 				spec["path"] = path
@@ -1005,8 +987,13 @@ Examples:
 				action = "updated"
 			}
 			u.Successf("ServiceOffer %s/%s %s (type: http)", ns, name, action)
-			if priceTable.PerMTok != "" {
-				u.Infof("Requests will be charged at %s", formatPriceTableSummary(priceTable, assetTerms.Symbol))
+			if paymentsList != nil {
+				u.Infof("Accepted payments: %s", acceptSummary(paymentsList))
+			}
+			if pm, ok := paymentBlock["price"].(map[string]any); ok {
+				if _, isMTok := pm["perMTok"]; isMTok {
+					u.Info("Per-MTok price is charged as a per-request approximation (~1000 tok/request) until exact metering ships.")
+				}
 			}
 			u.Infof("The agent will reconcile: health-check → payment gate → route")
 			u.Infof("Check status: obol sell status %s -n %s", name, ns)
@@ -1030,7 +1017,7 @@ Examples:
 					u.Blank()
 					u.Info("Registering seller agent on ERC-8004...")
 					if err := autoRegisterServiceOffer(ctx, cfg, u, autoRegisterOptions{
-						ChainCSV:      cmd.String("chain"),
+						ChainCSV:      chainName,
 						Endpoint:      tunnelURL,
 						AgentName:     registrationNameForPrompt(name, reg),
 						AgentDesc:     registrationDescriptionForPrompt(name, reg),
@@ -1039,7 +1026,7 @@ Examples:
 						aw, _ := hermes.ResolveWalletAddress(cfg)
 						printRegistrationNotice(u, registrationNotice{
 							Mode:        regNoticeAutoFailed,
-							Chain:       cmd.String("chain"),
+							Chain:       chainName,
 							PayTo:       wallet,
 							AgentWallet: aw,
 							OfferName:   name,
@@ -2009,6 +1996,11 @@ func buildDemoServiceOffer(name, ns, chain, wallet, price string, register bool,
 			},
 			"payment": payment,
 			"path":    "/services/" + name,
+			// Demo services are an ordinary storefront category now, not a
+			// special-cased flag — the catalog/storefront group on this.
+			"listing": map[string]any{
+				"category": "demo",
+			},
 			"registration": map[string]any{
 				"enabled":     register,
 				"name":        name,

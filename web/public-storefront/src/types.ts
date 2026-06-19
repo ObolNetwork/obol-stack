@@ -28,5 +28,10 @@ export interface Service {
   // offers it mirrors spec.registration.skills. Rendered as pills on
   // the ServiceCard, matching the 402 page.
   skills?: string[];
-  isDemo: boolean;
+  // category groups the service into a storefront section (e.g. "demo").
+  // Absent/empty means the default section. Mirrors spec.listing.category —
+  // demo services are just category="demo", not a special case.
+  category?: string;
+  // weight orders services within a category; higher sorts earlier.
+  weight?: number;
 }

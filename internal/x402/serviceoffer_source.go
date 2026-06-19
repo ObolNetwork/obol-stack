@@ -136,10 +136,22 @@ func routesFromStore(offerItems, secretItems []any) ([]RouteRule, error) {
 }
 
 func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (RouteRule, error) {
-	price, priceModel, perMTok, approx, err := effectivePrice(offer)
-	if err != nil {
-		return RouteRule{}, err
+	// Build one RoutePayment per accepted payment option. EffectivePayments
+	// returns the multi-payment list when present, else a one-element slice
+	// from spec.payment — so single- and multi-payment offers share this path.
+	payments := offer.EffectivePayments()
+	routePayments := make([]RoutePayment, 0, len(payments))
+	for i := range payments {
+		rp, err := routePaymentFromSpec(payments[i])
+		if err != nil {
+			return RouteRule{}, err
+		}
+		routePayments = append(routePayments, rp)
 	}
+	// The primary option (payments[0]) populates the inline fields so the
+	// HTML 402 page, metrics defaults, and any direct rule.PayTo/Network
+	// readers keep working unchanged for single-payment offers.
+	primary := routePayments[0]
 
 	// Agent-type offers derive their upstream URL from the controller's
 	// resolved view (ServiceOffer.status.agentResolution), which the
@@ -159,26 +171,27 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 
 	rule := RouteRule{
 		Pattern:                strings.TrimSuffix(offer.EffectivePath(), "/") + "/*",
-		Price:                  price,
+		Price:                  primary.Price,
 		Description:            offer.Spec.Registration.Description,
 		OfferType:              offer.Spec.Type,
-		PayTo:                  offer.Spec.Payment.PayTo,
-		Network:                NormalizeNetworkID(offer.Spec.Payment.Network),
-		AssetAddress:           offer.Spec.Payment.Asset.Address,
-		AssetSymbol:            offer.Spec.Payment.Asset.Symbol,
-		AssetDecimals:          int(offer.Spec.Payment.Asset.Decimals),
-		AssetTransferMethod:    offer.Spec.Payment.Asset.TransferMethod,
-		EIP712Name:             offer.Spec.Payment.Asset.EIP712Name,
-		EIP712Version:          offer.Spec.Payment.Asset.EIP712Version,
+		PayTo:                  primary.PayTo,
+		Network:                primary.Network,
+		AssetAddress:           primary.AssetAddress,
+		AssetSymbol:            primary.AssetSymbol,
+		AssetDecimals:          primary.AssetDecimals,
+		AssetTransferMethod:    primary.AssetTransferMethod,
+		EIP712Name:             primary.EIP712Name,
+		EIP712Version:          primary.EIP712Version,
 		UpstreamAuth:           effectiveUpstreamAuth(offer, upstreamAuth),
 		UpstreamURL:            upstreamURL,
 		StripPrefix:            stripPrefix,
-		PriceModel:             priceModel,
-		PerMTok:                perMTok,
-		ApproxTokensPerRequest: approx,
+		PriceModel:             primary.PriceModel,
+		PerMTok:                primary.PerMTok,
+		ApproxTokensPerRequest: primary.ApproxTokensPerRequest,
 		OfferNamespace:         offer.Namespace,
 		OfferName:              offer.Name,
-		MaxTimeoutSeconds:      offer.Spec.Payment.MaxTimeoutSeconds,
+		MaxTimeoutSeconds:      primary.MaxTimeoutSeconds,
+		Payments:               routePayments,
 	}
 
 	if offer.IsAgent() && offer.Status.AgentResolution != nil {
@@ -194,18 +207,45 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 	return rule, nil
 }
 
-func effectivePrice(offer *monetizeapi.ServiceOffer) (price, priceModel, perMTok string, approx int, err error) {
+// routePaymentFromSpec converts a single ServiceOffer payment option into a
+// RoutePayment, resolving the enforced request price from whichever price
+// slot is set (and approximating perMTok into a per-request charge for the
+// phase-1 request-based gate). Network is normalized to CAIP-2 so the
+// verifier's chain lookup resolves it.
+func routePaymentFromSpec(p monetizeapi.ServiceOfferPayment) (RoutePayment, error) {
+	price, priceModel, perMTok, approx, err := effectivePriceForOption(p)
+	if err != nil {
+		return RoutePayment{}, err
+	}
+	return RoutePayment{
+		Price:                  price,
+		PayTo:                  p.PayTo,
+		Network:                NormalizeNetworkID(p.Network),
+		AssetAddress:           p.Asset.Address,
+		AssetSymbol:            p.Asset.Symbol,
+		AssetDecimals:          int(p.Asset.Decimals),
+		AssetTransferMethod:    p.Asset.TransferMethod,
+		EIP712Name:             p.Asset.EIP712Name,
+		EIP712Version:          p.Asset.EIP712Version,
+		PriceModel:             priceModel,
+		PerMTok:                perMTok,
+		ApproxTokensPerRequest: approx,
+		MaxTimeoutSeconds:      p.MaxTimeoutSeconds,
+	}, nil
+}
+
+func effectivePriceForOption(p monetizeapi.ServiceOfferPayment) (price, priceModel, perMTok string, approx int, err error) {
 	switch {
-	case offer.Spec.Payment.Price.PerRequest != "":
-		return offer.Spec.Payment.Price.PerRequest, "perRequest", "", 0, nil
-	case offer.Spec.Payment.Price.PerMTok != "":
-		price, err := schemas.ApproximateRequestPriceFromPerMTok(offer.Spec.Payment.Price.PerMTok)
+	case p.Price.PerRequest != "":
+		return p.Price.PerRequest, "perRequest", "", 0, nil
+	case p.Price.PerMTok != "":
+		price, err := schemas.ApproximateRequestPriceFromPerMTok(p.Price.PerMTok)
 		if err != nil {
-			return "", "", "", 0, fmt.Errorf("invalid perMTok price %q: %w", offer.Spec.Payment.Price.PerMTok, err)
+			return "", "", "", 0, fmt.Errorf("invalid perMTok price %q: %w", p.Price.PerMTok, err)
 		}
-		return price, "perMTok", offer.Spec.Payment.Price.PerMTok, schemas.ApproxTokensPerRequest, nil
-	case offer.Spec.Payment.Price.PerHour != "":
-		return offer.Spec.Payment.Price.PerHour, "perHour", "", 0, nil
+		return price, "perMTok", p.Price.PerMTok, schemas.ApproxTokensPerRequest, nil
+	case p.Price.PerHour != "":
+		return p.Price.PerHour, "perHour", "", 0, nil
 	default:
 		return "0", "", "", 0, nil
 	}
