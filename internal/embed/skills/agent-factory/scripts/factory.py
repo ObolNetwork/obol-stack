@@ -215,15 +215,34 @@ def build_profile_archive(name, objective, skills, soul_file=None):
             f.write(soul)
 
         for skill in skills:
-            src = os.path.join(SKILLS_ROOT, skill)
-            if not os.path.isdir(src):
-                raise ValueError(f"skill {skill!r} is not available under {SKILLS_ROOT}")
+            src = resolve_skill_dir(skill)
             safe_copytree(src, os.path.join(root, "obol-skills", skill))
 
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tf:
             tf.add(root, arcname=name, recursive=True)
         return buf.getvalue()
+
+
+def resolve_skill_dir(skill):
+    """Locate a skill directory, preferring the flat obol-skills layout but
+    falling back to one level of category subdir (skills/<category>/<name>),
+    where `skill_manage` creates new skills. Raises with the exact fix when
+    nothing matches (handoff §6: the silent skills/ vs obol-skills/ trap)."""
+    flat = os.path.join(SKILLS_ROOT, skill)
+    if os.path.isdir(flat):
+        return flat
+    try:
+        for category in sorted(os.listdir(SKILLS_ROOT)):
+            candidate = os.path.join(SKILLS_ROOT, category, skill)
+            if os.path.isdir(candidate):
+                return candidate
+    except OSError:
+        pass
+    raise ValueError(
+        f"skill {skill!r} not found under {SKILLS_ROOT} (searched the flat layout and one "
+        f"category level). If you authored it with skill_manage, copy it into place: "
+        f"cp -r {SKILLS_ROOT}/<category>/{skill} {SKILLS_ROOT}/{skill}")
 
 
 def validate_profile_archive_bytes(archive_bytes):
@@ -320,36 +339,230 @@ def agent_resource(args, parent_ns):
     }
 
 
-def serviceoffer_resource(args, parent_ns):
+# Supported payment chains. Mirrors internal/x402/chains.go ResolveChainInfo;
+# keep in sync. CAIP-2 ids and a few human aliases normalize to the canonical
+# names used as ASSET_REGISTRY keys.
+KNOWN_CHAINS = {
+    "base", "base-sepolia", "ethereum", "polygon", "polygon-amoy",
+    "avalanche", "avalanche-fuji", "arbitrum-one", "arbitrum-sepolia",
+}
+CHAIN_ALIASES = {
+    "base-mainnet": "base", "ethereum-mainnet": "ethereum", "mainnet": "ethereum",
+    "polygon-mainnet": "polygon", "avalanche-mainnet": "avalanche", "arbitrum": "arbitrum-one",
+}
+CAIP2_TO_CHAIN = {
+    "eip155:8453": "base", "eip155:84532": "base-sepolia", "eip155:1": "ethereum",
+    "eip155:137": "polygon", "eip155:80002": "polygon-amoy", "eip155:43114": "avalanche",
+    "eip155:43113": "avalanche-fuji", "eip155:42161": "arbitrum-one", "eip155:421614": "arbitrum-sepolia",
+}
+
+# ASSET_REGISTRY mirrors the non-USDC tokens in internal/x402/tokens.go. USDC is
+# the chain default (emitted as an empty asset block, like the obol CLI), so it
+# needs no entry here. Keep in sync when adding tokens to tokens.go.
+ASSET_REGISTRY = {
+    "OBOL": {
+        "ethereum": {"address": "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7", "symbol": "OBOL", "decimals": 18,
+                     "transferMethod": "permit2", "eip712Name": "Obol Network", "eip712Version": "1"},
+        "base-sepolia": {"address": "0x0a09371a8b011d5110656ceBCc70603e53FD2c78", "symbol": "OBOL", "decimals": 18,
+                         "transferMethod": "permit2", "eip712Name": "Obol Network", "eip712Version": "1"},
+    },
+}
+
+ACCEPT_PRICE_KEYS = {"price": "perRequest", "per-request": "perRequest", "per-mtok": "perMTok",
+                     "per-hour": "perHour", "per-epoch": "perEpoch"}
+ACCEPT_KNOWN_KEYS = set(ACCEPT_PRICE_KEYS) | {
+    "token", "network", "chain", "pay-to", "asset", "decimals", "transfer",
+    "symbol", "eip712-name", "eip712-version", "max-timeout",
+}
+
+
+def resolve_chain(network):
+    """Normalize a chain name / CAIP-2 id to a canonical supported-chain name."""
+    n = (network or "").strip().lower()
+    if n in CAIP2_TO_CHAIN:
+        return CAIP2_TO_CHAIN[n]
+    n = CHAIN_ALIASES.get(n, n)
+    if n not in KNOWN_CHAINS:
+        raise ValueError(f"unsupported chain: {network} (use one of {', '.join(sorted(KNOWN_CHAINS))}, or any eip155:<id> we know)")
+    return n
+
+
+def parse_accept_option(raw, default_pay_to):
+    """Parse one --accept value into (payment_dict, dedup_key).
+
+    Grammar mirrors `obol sell --accept` (cmd/obol/accept.go): token=<symbol>
+    registry shorthand XOR asset=0x.. raw escape hatch, plus network, one price
+    slot, optional pay-to and max-timeout.
+    """
+    kv = {}
+    max_timeout = 0
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "=" not in part:
+            raise ValueError(f"malformed --accept segment {part!r} (want key=value)")
+        k, v = part.split("=", 1)
+        k, v = k.strip().lower(), v.strip()
+        if not k or not v:
+            raise ValueError(f"malformed --accept segment {part!r} (want key=value)")
+        if k not in ACCEPT_KNOWN_KEYS:
+            raise ValueError(f"unknown --accept key {k!r}")
+        if k == "max-timeout":
+            if not v.isdigit() or int(v) <= 0:
+                raise ValueError(f"--accept max-timeout {v!r} must be a positive integer")
+            max_timeout = int(v)
+            continue
+        if k in kv:
+            raise ValueError(f"--accept key {k!r} given twice")
+        kv[k] = v
+
+    network = kv.get("network") or kv.get("chain")
+    if not network:
+        raise ValueError(f"--accept {raw!r}: network is required")
+    chain = resolve_chain(network)
+
+    pay_to = kv.get("pay-to") or (default_pay_to or "").strip()
+    if not ADDR_RE.match(pay_to or ""):
+        raise ValueError(f"--accept {raw!r}: pay-to must be a 0x EVM address (got {pay_to!r})")
+
+    price_key = price_val = None
+    for flag, slot in ACCEPT_PRICE_KEYS.items():
+        if kv.get(flag):
+            if price_key:
+                raise ValueError(f"--accept {raw!r}: set only one of price/per-request/per-mtok/per-hour/per-epoch")
+            price_key, price_val = slot, kv[flag]
+    if not price_key:
+        raise ValueError(f"--accept {raw!r}: a price is required (price=, per-mtok=, ...)")
+    validate_positive_decimal(price_val, f"--accept {raw!r} price")
+
+    token_sym = (kv.get("token") or "").strip()
+    raw_addr = (kv.get("asset") or "").strip()
     payment = {
         "scheme": "exact",
-        "network": args.network,
-        "payTo": args.pay_to,
-        "maxTimeoutSeconds": args.max_timeout,
-        "price": {"perRequest": args.price},
+        "network": chain,
+        "payTo": pay_to,
+        "maxTimeoutSeconds": max_timeout or 300,
+        "price": {price_key: price_val},
     }
+
+    if token_sym and raw_addr:
+        raise ValueError(f"--accept {raw!r}: set either token=<symbol> or asset=0x..., not both")
+    if raw_addr:
+        if not ADDR_RE.match(raw_addr):
+            raise ValueError(f"--accept {raw!r}: asset must be a 0x ERC-20 address (got {raw_addr!r})")
+        if not (kv.get("decimals") or "").isdigit() or not (0 < int(kv["decimals"]) <= 255):
+            raise ValueError(f"--accept {raw!r}: raw asset needs decimals=<1-255>")
+        transfer = (kv.get("transfer") or "").lower()
+        if transfer not in ("eip3009", "permit2"):
+            raise ValueError(f"--accept {raw!r}: raw asset needs transfer=eip3009|permit2")
+        symbol, name, version = kv.get("symbol", ""), kv.get("eip712-name", ""), kv.get("eip712-version", "")
+        if not (symbol and name and version):
+            raise ValueError(f"--accept {raw!r}: raw asset needs symbol, eip712-name and eip712-version (the token's EIP-712 signing domain)")
+        payment["asset"] = {"address": raw_addr, "symbol": symbol, "decimals": int(kv["decimals"]),
+                            "transferMethod": transfer, "eip712Name": name, "eip712Version": version}
+        dedup = f"{chain}\x00{raw_addr.lower()}"
+    elif token_sym and token_sym.upper() != "USDC":
+        entry = ASSET_REGISTRY.get(token_sym.upper(), {}).get(chain)
+        if not entry:
+            raise ValueError(
+                f"--accept {raw!r}: token {token_sym} is not in the registry for {chain} "
+                f"(use asset=0x... with decimals/transfer/eip712 for an unlisted token)")
+        payment["asset"] = dict(entry)
+        dedup = f"{chain}\x00{entry['address'].lower()}"
+    else:
+        # USDC (or no token): chain default, no explicit asset block.
+        dedup = f"{chain}\x00usdc"
+
+    return payment, dedup
+
+
+def build_accept_payments(accepts, default_pay_to):
+    """Parse every --accept value into payment dicts, rejecting duplicate
+    (chain, token) pairs. Returns [] when no --accept was given."""
+    if not accepts:
+        return []
+    payments = []
+    seen = {}
+    for raw in accepts:
+        payment, dedup = parse_accept_option(raw, default_pay_to)
+        if dedup in seen:
+            raise ValueError(f"--accept duplicate payment option for the same (chain, token): {seen[dedup]!r} and {raw!r}")
+        seen[dedup] = raw
+        payments.append(payment)
+    return payments
+
+
+def _payment_symbol(payment):
+    asset = payment.get("asset") or {}
+    return asset.get("symbol") or "USDC"
+
+
+def _payment_price(payment):
+    for k in ("perRequest", "perMTok", "perHour", "perEpoch"):
+        if payment.get("price", {}).get(k):
+            return payment["price"][k]
+    return ""
+
+
+def serviceoffer_resource(args, parent_ns):
+    accepts = getattr(args, "accept", None) or []
+    if accepts:
+        payments = build_accept_payments(accepts, args.pay_to)
+        payment = payments[0]
+    else:
+        payment = {
+            "scheme": "exact",
+            "network": args.network,
+            "payTo": args.pay_to,
+            "maxTimeoutSeconds": args.max_timeout,
+            "price": {"perRequest": args.price},
+        }
+        payments = None
+
+    primary_network = payment["network"]
+    primary_symbol = _payment_symbol(payment)
+    primary_price = _payment_price(payment)
+
     spec = {
         "type": "agent",
         "agent": {"ref": {"name": args.name, "namespace": namespace_for(args.name)}},
         "payment": payment,
         "path": args.path or f"/services/{args.name}",
     }
-    if args.register or args.register_name or args.register_description or args.register_skills:
+    if payments is not None:
+        spec["payments"] = payments
+
+    listing = {}
+    if getattr(args, "weight", 0):
+        listing["weight"] = args.weight
+    if getattr(args, "category", None):
+        listing["category"] = args.category.strip()
+    if listing:
+        spec["listing"] = listing
+
+    # registration.description / .name are useful for discovery even without
+    # on-chain registration, so they are written whenever provided (decoupled
+    # from --register). `enabled` alone controls ERC-8004 publication.
+    description = getattr(args, "description", None)
+    enabled = bool(args.register)
+    if enabled or args.register_name or description or args.register_skills:
         reg = {
-            "enabled": True,
+            "enabled": enabled,
             "metadata": {
                 "runtime": "hermes",
                 "model": args.model,
                 "pricingUnit": "agent-turn",
-                "x402Price": args.price,
-                "x402Asset": "USDC",
-                "x402Network": args.network,
+                # Registration is per-chain — describe the primary (first) option.
+                "x402Price": primary_price,
+                "x402Asset": primary_symbol,
+                "x402Network": primary_network,
             },
         }
         if args.register_name:
             reg["name"] = args.register_name
-        if args.register_description:
-            reg["description"] = args.register_description
+        if description:
+            reg["description"] = description
         skills = parse_skills(args.register_skills) if args.register_skills else args.skills
         if skills:
             reg["skills"] = skills
@@ -397,12 +610,18 @@ def cmd_create(args, token, parent_ns, ssl_ctx):
         raise ValueError("--path must start with /")
     if args.max_timeout <= 0:
         raise ValueError("--max-timeout must be greater than zero")
-    if args.price and not args.pay_to:
-        raise ValueError("--pay-to is required when --price is set")
-    if args.price:
-        validate_positive_decimal(args.price, "--price")
-    if args.pay_to and not ADDR_RE.match(args.pay_to):
-        raise ValueError("--pay-to must be a 0x-prefixed EVM address")
+    accepts = args.accept or []
+    if accepts:
+        # build_accept_payments validates each option (network, price, asset,
+        # pay-to); fail fast here so we don't create the Agent then choke.
+        build_accept_payments(accepts, args.pay_to)
+    else:
+        if args.price and not args.pay_to:
+            raise ValueError("--pay-to is required when --price is set")
+        if args.price:
+            validate_positive_decimal(args.price, "--price")
+        if args.pay_to and not ADDR_RE.match(args.pay_to):
+            raise ValueError("--pay-to must be a 0x-prefixed EVM address")
 
     ns = namespace_for(args.name)
     apply_resource("/api/v1/namespaces", ns, namespace_resource(args.name, parent_ns), token, ssl_ctx)
@@ -433,7 +652,7 @@ def cmd_create(args, token, parent_ns, ssl_ctx):
     )
 
     offer_name = None
-    if args.price:
+    if args.price or accepts:
         offer = serviceoffer_resource(args, parent_ns)
         offer_name = offer["metadata"]["name"]
         apply_resource(
@@ -483,9 +702,7 @@ def cmd_status(args, token, parent_ns, ssl_ctx):
     validate_resource_name(args.offer_name, "--offer-name")
     ns = namespace_for(args.name)
     agent = api_request("GET", f"/apis/{CRD_GROUP}/{CRD_VERSION}/namespaces/{ns}/{AGENT_PLURAL}/{args.name}", token, ssl_ctx, quiet=True)
-    offer_name = args.offer_name or args.name
-    offer = api_request("GET", f"/apis/{CRD_GROUP}/{CRD_VERSION}/namespaces/{ns}/{OFFER_PLURAL}/{offer_name}", token, ssl_ctx, quiet=True)
-    out = {"agent": None, "serviceOffer": None}
+    out = {"agent": None, "serviceOffers": []}
     if not agent.get("_error"):
         out["agent"] = {
             "name": f"{ns}/{args.name}",
@@ -494,12 +711,38 @@ def cmd_status(args, token, parent_ns, ssl_ctx):
             "walletAddress": agent.get("status", {}).get("walletAddress", ""),
             "endpoint": agent.get("status", {}).get("endpoint", ""),
         }
-    if not offer.get("_error"):
-        out["serviceOffer"] = {
-            "name": f"{ns}/{offer_name}",
+
+    # Report every ServiceOffer in the agent's namespace (an agent can carry
+    # several — e.g. distinct offer names — and each offer can itself accept
+    # multiple currencies). --offer-name narrows to one for targeted queries.
+    def offer_view(offer):
+        spec = offer.get("spec", {})
+        payments = spec.get("payments") or ([spec["payment"]] if spec.get("payment") else [])
+        opts = []
+        for p in payments:
+            asset = p.get("asset") or {}
+            opts.append({
+                "network": p.get("network", ""),
+                "symbol": asset.get("symbol") or "USDC",
+                "price": next((p["price"][k] for k in ("perRequest", "perMTok", "perHour", "perEpoch")
+                               if p.get("price", {}).get(k)), ""),
+                "payTo": p.get("payTo", ""),
+            })
+        return {
+            "name": f"{ns}/{offer.get('metadata', {}).get('name', '')}",
             "ready": condition_status(offer, "Ready")[0],
             "endpoint": offer.get("status", {}).get("endpoint", ""),
+            "payments": opts,
         }
+
+    if args.offer_name:
+        offer = api_request("GET", f"/apis/{CRD_GROUP}/{CRD_VERSION}/namespaces/{ns}/{OFFER_PLURAL}/{args.offer_name}", token, ssl_ctx, quiet=True)
+        if not offer.get("_error"):
+            out["serviceOffers"].append(offer_view(offer))
+    else:
+        listing = api_request("GET", f"/apis/{CRD_GROUP}/{CRD_VERSION}/namespaces/{ns}/{OFFER_PLURAL}", token, ssl_ctx, quiet=True)
+        for offer in listing.get("items", []) or []:
+            out["serviceOffers"].append(offer_view(offer))
     print(json.dumps(out, indent=2))
 
 
@@ -548,14 +791,25 @@ def build_parser():
     create.add_argument("--create-wallet", action="store_true")
     create.add_argument("--env", action="append", default=[], help="Child env Secret entry KEY=VALUE")
     create.add_argument("--price", help="USDC per-request price; creates ServiceOffer when set")
-    create.add_argument("--pay-to", help="Payment recipient wallet")
+    create.add_argument("--pay-to", help="Payment recipient wallet (also the default recipient for --accept options)")
     create.add_argument("--network", default="base-sepolia")
+    create.add_argument(
+        "--accept", action="append", default=[],
+        help="Accepted payment option (repeatable) for multi-currency offers, e.g. "
+             "--accept token=OBOL,network=ethereum,price=10 --accept token=USDC,network=base,price=1. "
+             "Unlisted tokens: asset=0x..,decimals=..,transfer=eip3009|permit2,eip712-name=..,eip712-version=..,symbol=... "
+             "When set, --price/--network are ignored.")
     create.add_argument("--path")
     create.add_argument("--offer-name")
     create.add_argument("--max-timeout", type=int, default=300)
+    create.add_argument("--weight", type=int, default=0, help="Storefront ordering weight; higher sorts earlier within its category")
+    create.add_argument("--category", help="Storefront grouping section (e.g. \"demo\")")
     create.add_argument("--register", action="store_true")
     create.add_argument("--register-name")
-    create.add_argument("--register-description")
+    create.add_argument(
+        "--description", "--register-description", dest="description",
+        help="Human-readable service description. Written to registration.description for "
+             "discovery regardless of --register; --register alone controls on-chain publication.")
     create.add_argument("--register-skills", action="append", default=[])
     create.add_argument("--wait", action="store_true")
     create.add_argument("--timeout", type=int, default=180)

@@ -369,8 +369,13 @@ args = SimpleNamespace(
 )
 offer = factory.serviceoffer_resource(args, "hermes-obol-agent")
 registration = offer["spec"]["registration"]
-if registration.get("enabled") is not True:
-    raise SystemExit("registration metadata did not enable registration")
+# §5 decoupling: register_name/description populate the block for discovery,
+# but on-chain registration (enabled) is driven ONLY by --register. Here
+# register=False, so the block is present yet enabled stays False.
+if registration.get("enabled") is not False:
+    raise SystemExit("registration.enabled must follow --register, not register-name")
+if registration.get("name") != "Medical Advisor":
+    raise SystemExit(f"registration name not populated: {registration!r}")
 if registration.get("skills") != ["privacy-filter"]:
     raise SystemExit(f"registration skills did not inherit agent skills: {registration!r}")
 expected_metadata = {
