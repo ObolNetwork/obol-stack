@@ -11,6 +11,10 @@ on:
     types: [published]
   workflow_dispatch:
 
+concurrency:
+  group: build-push-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   REGISTRY_GHCR: ghcr.io
   REGISTRY_DOCKERHUB: docker.io

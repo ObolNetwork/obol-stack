@@ -1,169 +1,95 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code and Cursor agents working in **obol-stack-front-end**.
 
-## Development Commands
+## Commands
 
-### Core Commands
+```bash
+pnpm install
+pnpm run dev:local          # http://localhost:3000 — no cluster required
+pnpm run dev                # http://obol.stack:3000 (needs /etc/hosts + cluster)
+pnpm run lint
+pnpm run test               # node --test on src/**/*.test.mjs
+pnpm run build
+pnpm run test:e2e:chromium  # Playwright (mocked APIs; see e2e/README.md)
+pnpm run scan:secrets       # gitleaks (same as CI secret-scan.yml)
+```
 
-- `pnpm install` - Install dependencies
-- `pnpm run dev` - Start development server with Turbopack on custom domain
-- `pnpm run dev:local` - Start development server with Turbopack on localhost:3000
-- `pnpm run build` - Build for production (Next.js standalone output)
-- `pnpm run start` - Start production server on obol.stack domain
-- `pnpm run start:local` - Start production server on localhost:3000
-- `pnpm run lint` - Run ESLint with Next.js TypeScript config
+Package manager: **pnpm** (`pnpm-lock.yaml`). Do not commit `package-lock.json`.
 
-### Docker Commands
+### Local dev without a cluster
 
-- `docker-compose up -d` - Start containerized application with health checks
-- Access at `http://localhost` (port 80)
-- Health check endpoint: `http://localhost/api/health` (if implemented)
+`pnpm run dev:local` runs the UI standalone. Dashboard and marketplace show “Stack unreachable” without kubeconfig, but lint, unit tests, and Playwright e2e still pass.
 
-### Local Dev Prerequisites
+### Full cluster-backed dev
 
-The dev server (`pnpm run dev:local`) makes API calls into a running k3d cluster. Two things must be true before the app works:
+When you have **obol-stack** running (`obol stack up`):
 
-1. **k3d cluster running** — `k3d cluster start ${clusterName}`
-   - The cluster pauses when Docker Desktop restarts; always start it again after a Docker restart.
-   - Kubeconfig lives at `~/.config/obol/kubeconfig.yaml`.
+1. **k3d cluster running** — `k3d cluster start <clusterName>` (re-start after Docker Desktop restarts).
+2. **Kubeconfig** — default `~/.config/obol/kubeconfig.yaml`, or copy to `/tmp/kc-<name>.yaml` if the app expects that path (wiped on Mac restart).
+3. **`/etc/hosts`**:
 
-2. **Kubeconfig copied to `/tmp`** — the app looks for it at `/tmp/kc-****.yaml`:
-   ```bash
-   cp ~/.config/obol/kubeconfig.yaml /tmp/kc-probable-teal.yaml
    ```
-   This file is wiped on every Mac restart (it's in `/tmp`). Re-run the copy whenever you get "Obol Stack unreachable" on localhost:3000.
+   127.0.0.1 obol.stack
+   127.0.0.1 monitoring.obol.stack
+   ```
 
-### Custom Domain Setup
+4. `pnpm run dev` → `http://obol.stack:3000` (also starts eRPC port-forward script).
 
-The application is configured to run on `obol.stack` domain. Add to `/etc/hosts`:
+## Architecture
 
-```
-127.0.0.1 obol.stack
-127.0.0.1 monitoring.obol.stack
-```
+| Layer                  | Role                                                      |
+| ---------------------- | --------------------------------------------------------- |
+| `src/app/`             | Next.js App Router pages + `src/app/api/*` route handlers |
+| `src/components/`      | UI — atomic design (atoms / molecules / organisms)        |
+| `src/lib/services/`    | Kubernetes, Prometheus, sell, agents, catalog clients     |
+| `src/lib/marketplace/` | Browse filters, buy-command, x402 probe, ERC-8004 source  |
+| `src/lib/sell/`        | CLI command builders, flow steps, upstream health         |
+| `src/hooks/`           | Client data hooks (React Query)                           |
 
-## Architecture Overview
+**Runtime**: Next.js 16, React 19, TypeScript strict, `@obolnetwork/obol-ui`, Tailwind v4.
 
-### Tech Stack
+**Cluster access**: Route handlers run server-side with `KUBECONFIG`. Host dev reaches Traefik at `http://obol.stack:8080`; in-cluster code uses `*.svc.cluster.local` (see `src/lib/utils/cluster-url.ts`).
 
-- **Framework**: Next.js 15.5.2 with React 19
-- **Language**: TypeScript with strict mode
-- **Styling**: Tailwind CSS v4 with custom Obol design system
-- **UI Library**: @obolnetwork/obol-ui package
-- **Icons**: Lucide React
-- **Font**: DM Sans (Obol brand font)
+## Product surfaces
 
-### Design System
+- **Dashboard** — `HeroBand`, networks, metrics (`NodeOverview`), agent instances, registration card
+- **Marketplace** — `/marketplace` — catalog from `/api/marketplace/services`; buy via CLI (`obol buy inference`); x402 probe via `/api/marketplace/probe`
+- **Sell** — ServiceOffer CRUD via `/api/sell/*`; `SellAgentModal`, `SellInferenceModal`, flow steps mirror `obol sell` CLI
+- **Agents** — Hermes default + sub-agents (`obol agent new`); agent listings joined in `agent-listing.ts`
 
-The application uses authentic Obol branding extracted from `blog.obol.org/branding`:
+## Security
 
-- **Primary Colors**: Obol Green (#2FE4AB), Blue (#162A40), Purple (#9167E4)
-- **Background System**: Multi-layered dark theme with gradients
-- **Typography**: DM Sans font family with font weights 400-700
-- **Component Style**: Launchpad-inspired cards with hover effects and glassmorphism
+- Mutating APIs: `rejectCrossOrigin` in `src/lib/middleware/origin-check.ts`
+- Never commit `.env.local`, kubeconfigs, or API keys — CI runs **gitleaks** (`.gitleaks.toml`)
+- `NEXT_PUBLIC_*` is browser-visible — WalletConnect project ID only
+- Scoped reviews: invoke `.agents/skills/security-review-fe/SKILL.md`
 
-### Project Structure
+## CI
 
-```
-src/
-├── app/
-│   ├── globals.css      # Tailwind CSS config + Obol design system
-│   ├── layout.tsx       # Root layout with DM Sans font loading
-│   └── page.tsx         # Main dashboard integration
-├── components/
-│   ├── layout/          # Header and Footer components
-│   ├── metrics/         # Network status, node overview, client status
-│   ├── monitoring/      # Port status and system monitoring
-│   ├── shared/          # Reusable UI components (StatusIndicator, ProgressBar)
-│   └── index.ts         # Component exports
-├── types/
-│   └── dashboard.ts     # TypeScript interfaces for dashboard data
-└── data/
-    └── mockData.ts      # Mock data for development
-```
+Workflows under `.github/workflows/`:
 
-### Key Components
+| Workflow          | PR                                  | `main` push         |
+| ----------------- | ----------------------------------- | ------------------- |
+| `test.yml`        | lint, unit tests, tsc, `next build` | + Docker smoke test |
+| `playwright.yml`  | Chromium E2E (mocked)               | same                |
+| `secret-scan.yml` | gitleaks history scan               | same                |
 
-- **Header**: Minimal navigation with network indicator (testnet/mainnet)
-- **NetworkStatus**: Ethereum mainnet status with blocks, finalized epochs, participation rate
-- **NodeOverview**: System metrics grid (disk, memory, CPU, uptime) with progress bars
-- **ClientStatus**: Geth and Prysm client status cards with peer count
-- **PortStatus**: Port monitoring table (P2P, JSON-RPC, Prometheus, Beacon API)
-- **Footer**: Action buttons for diagnostics export and log viewing
-- **Shared Components**: StatusIndicator dots, ProgressBar with color variants, MetricCard template
+`concurrency: cancel-in-progress` drops superseded runs.
 
-### Data Architecture
+## Docs map
 
-TypeScript interfaces in `src/types/dashboard.ts` define the data structure:
+| File                                               | Purpose                                |
+| -------------------------------------------------- | -------------------------------------- |
+| [CONTRIBUTING.md](CONTRIBUTING.md)                 | PR checklist, branch policy, CI matrix |
+| [e2e/README.md](e2e/README.md)                     | Mocked vs integration Playwright tiers |
+| [DEVELOPMENT.md](DEVELOPMENT.md)                   | Skaffold / Kind deploy                 |
+| [README.md](README.md)                             | User-facing overview                   |
+| `.agents/skills/obol-stack-front-end-dev/SKILL.md` | Full dev + cluster QA runbook          |
 
-- **DashboardData**: Main interface with header, ethereum, nodeOverview, clients, ports
-- **Network Status**: Blocks, finalized epochs, participation rate, distance to justified
-- **System Metrics**: Disk/memory usage with percentages, CPU load, uptime hours
-- **Client Status**: Geth/Prysm versions, peer counts, sync status
-- **Port Monitoring**: P2P (30303), JSON-RPC (8545), Prometheus (9090), Beacon API (4000)
-- **Status Types**: 'synced', 'syncing', 'error' with corresponding UI indicators
+Implementation plans belong in `plans/`, not `docs/`.
 
-### Configuration
+## Related
 
-- **Next.js Config**: Custom domain rewrites, security headers, standalone output for Docker
-- **TypeScript**: Path mapping with `ObolNetwork/*` and `@/*` aliases pointing to `./src/*`
-- **ESLint**: Next.js core web vitals and TypeScript config with FlatCompat
-- **Turbopack**: Enabled by default for faster development builds
-- **Environment Variables**: NODE_ENV, PORT, HOSTNAME, NEXT_TELEMETRY_DISABLED
-
-### Security Features
-
-- Next.js security headers (X-Frame-Options: DENY, X-Content-Type-Options: nosniff)
-- Standalone Docker output for containerized deployment
-- Production-ready nginx configuration in deployment folder
-- Docker health checks with wget monitoring
-
-### Development Architecture Patterns
-
-- **Mock Data Strategy**: Uses `src/data/mockData.ts` implementing `DashboardData` interface
-- **Component Architecture**: Modular design with shared components (StatusIndicator, ProgressBar, Card)
-- **Type Safety**: Comprehensive TypeScript interfaces in `src/types/dashboard.ts`
-- **Styling Approach**: Tailwind CSS with Obol design tokens and dark theme
-- **Client-Side Rendering**: Uses `'use client'` for interactive dashboard components
-
-### Future Integration Points
-
-The codebase is prepared for real data integration with:
-
-- Ethereum execution client APIs (Geth JSON-RPC)
-- Consensus client APIs (Prysm/Lighthouse Beacon API)
-- System monitoring APIs (Prometheus metrics)
-- Charon distributed validator middleware (marked as "Coming Soon")
-
-## Development Patterns
-
-### Adding New Components
-
-1. Create component in appropriate `src/components/` subdirectory
-2. Follow existing patterns: use TypeScript interfaces from `src/types/dashboard.ts`
-3. Apply Obol design system styles and dark theme
-4. Export from `src/components/index.ts` for clean imports
-5. Use shared components (StatusIndicator, ProgressBar) for consistency
-
-### Working with Mock Data
-
-- Mock data structure defined in `src/data/mockData.ts`
-- Implements `DashboardData` interface from `src/types/dashboard.ts`
-- Replace mock data calls with real API calls for production integration
-- Maintain interface compatibility when switching to real data
-
-### Testing Strategy
-
-- No test framework currently configured
-- Consider Jest + React Testing Library for component testing
-- Docker health checks provide basic application health monitoring
-- Manual testing via development server or Docker container
-
-### Package Manager
-
-- **pnpm** is the package manager for this project
-- Faster installation and more efficient disk space usage than npm
-- Use `pnpm install` to install dependencies
-- Use `pnpm add <package>` to add new dependencies
-- pnpm-lock.yaml is the lockfile (do not commit package-lock.json)
+- **obol-stack** — CLI, x402 verifier, ServiceOffer controller, public storefront
+- Set `OBOL_STACK_DIR` / use sibling checkout for cross-repo work

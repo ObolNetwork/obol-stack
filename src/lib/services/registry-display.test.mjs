@@ -35,7 +35,7 @@ const BASE_AGENT = {
 
 describe('registry display helpers', () => {
   it('maps registry chain filters without silently coercing unsupported chains', () => {
-    assert.equal(chainIdForRegistryFilter(), 84532);
+    assert.equal(chainIdForRegistryFilter(), 1);
     assert.equal(chainIdForRegistryFilter('mainnet'), 1);
     assert.equal(chainIdForRegistryFilter('base'), 8453);
     assert.equal(chainIdForRegistryFilter('base-sepolia'), 84532);

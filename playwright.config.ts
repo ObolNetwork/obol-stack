@@ -27,6 +27,11 @@ export default defineConfig({
     ? [['html'], ['github'], ['list']]
     : [['html', { open: 'never' }], ['list']],
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
+  expect: {
+    // Pages use hasMounted + React Query — allow up to 15s for hydration and
+    // initial data fetch before asserting visibility.
+    timeout: 15000,
+  },
   use: {
     /* Base URL to use in actions like `await page.goto('/')`. */
     baseURL: process.env.BASE_URL || 'http://localhost:3000',
@@ -78,12 +83,11 @@ export default defineConfig({
 
   /* Run your local dev server before starting the tests */
   webServer: {
-    command: 'pnpm run dev',
+    command: process.env.CI ? 'pnpm run start:ci' : 'pnpm run dev:local',
     url: 'http://localhost:3000',
     reuseExistingServer: !process.env.CI,
-    // Ignore most server output, only show critical errors
     stdout: 'ignore',
-    stderr: 'ignore', // Changed from 'pipe' to 'ignore' to reduce noise
+    stderr: 'pipe',
     timeout: 120 * 1000,
   },
 });

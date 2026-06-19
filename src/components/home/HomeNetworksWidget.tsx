@@ -6,6 +6,7 @@ import { SectionTitle } from '../atoms/SectionTitle';
 import { CountBadge } from '../atoms/CountBadge';
 import { StatusIndicator } from '../atoms/StatusIndicator';
 import { ChainIcon } from '../atoms/ChainIcon';
+import { BaseSepoliaObolFaucet } from '../molecules/BaseSepoliaObolFaucet';
 import type { ErpcStatusData } from '../../types/dashboard';
 import {
   networkToChainName,
@@ -43,6 +44,7 @@ const Tile = styled(Flex, {
 export function HomeNetworksWidget({ erpcData }: HomeNetworksWidgetProps) {
   const networks = erpcData?.networks ?? [];
   const upstreams = erpcData?.upstreams ?? [];
+  const hasBaseSepolia = networks.some(n => n.alias === 'base-sepolia');
 
   if (networks.length === 0) return null;
 
@@ -84,6 +86,12 @@ export function HomeNetworksWidget({ erpcData }: HomeNetworksWidgetProps) {
           );
         })}
       </TileGrid>
+
+      {hasBaseSepolia ? (
+        <Box css={{ marginTop: '$md' }}>
+          <BaseSepoliaObolFaucet />
+        </Box>
+      ) : null}
     </Card>
   );
 }

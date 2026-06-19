@@ -1,40 +1,103 @@
 import { test, expect } from '@playwright/test';
 
-test.describe('API Routes', () => {
-  test('should respond to API health check if available', async ({
+const probeOrigin = 'http://obol.stack:3000';
+
+// These tests hit the real API routes (no mocking).
+// Without a live cluster the routes return 503 — that's correct behaviour.
+// Tests validate response shape and error handling, not cluster-specific data.
+
+test.describe('API routes', () => {
+  test('GET /api/dashboard returns valid JSON with nodeOverview and ports', async ({
     request,
   }) => {
-    // This test checks if your API routes are responding
-    // Adjust the endpoint based on your actual API structure
-    try {
-      const response = await request.get('/api/dashboard');
+    const res = await request.get('/api/dashboard');
 
-      // API should respond (either successfully or with an expected error)
-      expect(response.status()).toBeLessThan(500);
-    } catch (error) {
-      // If endpoint doesn't exist yet, that's okay for initial setup
-      console.log('API endpoint not yet available:', error);
-    }
+    // 200 (cluster up) or 503 (cluster down) are both correct
+    expect([200, 503]).toContain(res.status());
+
+    const body = await res.json();
+    // Both success and degraded responses include these keys
+    expect(body).toHaveProperty('nodeOverview');
+    expect(body).toHaveProperty('ports');
   });
 
-  test('should handle CORS correctly', async ({ page }) => {
-    await page.goto('/');
+  test('GET /api/marketplace/services returns valid JSON', async ({
+    request,
+  }) => {
+    const res = await request.get('/api/marketplace/services');
 
-    // Listen for any CORS errors
-    const consoleErrors: string[] = [];
-    page.on('console', msg => {
-      if (msg.type() === 'error') {
-        consoleErrors.push(msg.text());
-      }
-    });
+    expect([200, 503, 502]).toContain(res.status());
 
-    await page.waitForLoadState('networkidle');
+    const body = await res.json();
+    // 200 has items/total; 503 has error key
+    expect(typeof body).toBe('object');
+    expect(body).not.toBeNull();
+  });
 
-    // Check for CORS errors
-    const corsErrors = consoleErrors.filter(error =>
-      error.toLowerCase().includes('cors')
+  test('GET /api/agents/status without params returns 400', async ({
+    request,
+  }) => {
+    const res = await request.get('/api/agents/status');
+
+    expect(res.status()).toBe(400);
+
+    const body = await res.json();
+    expect(body).toHaveProperty('error');
+  });
+
+  test('GET /api/tunnel returns JSON with tunnelURL or error key', async ({
+    request,
+  }) => {
+    const res = await request.get('/api/tunnel');
+
+    expect(res.status()).toBeLessThan(600);
+
+    const body = await res.json();
+    const hasExpectedKey = 'tunnelURL' in body || 'error' in body;
+    expect(hasExpectedKey).toBe(true);
+  });
+
+  test('GET /api/marketplace/services with filters returns valid JSON', async ({
+    request,
+  }) => {
+    const res = await request.get(
+      '/api/marketplace/services?type=inference&sort=price_asc&page=1&pageSize=10'
     );
 
-    expect(corsErrors.length).toBe(0);
+    expect([200, 503, 502]).toContain(res.status());
+
+    const body = await res.json();
+    expect(typeof body).toBe('object');
+  });
+
+  test('POST /api/marketplace/probe without url returns 400', async ({
+    request,
+  }) => {
+    const res = await request.post('/api/marketplace/probe', {
+      headers: { Origin: probeOrigin },
+      data: {},
+    });
+
+    expect(res.status()).toBe(400);
+
+    const body = await res.json();
+    expect(body).toHaveProperty('error');
+  });
+
+  test('POST /api/marketplace/probe rejects disallowed external URLs', async ({
+    request,
+  }) => {
+    const res = await request.post('/api/marketplace/probe', {
+      headers: { Origin: probeOrigin },
+      data: {
+        url: 'https://evil.example.com/services/foo',
+        model: 'test-model',
+      },
+    });
+
+    expect(res.status()).toBe(400);
+
+    const body = await res.json();
+    expect(body.error).toMatch(/Probe URL/i);
   });
 });
