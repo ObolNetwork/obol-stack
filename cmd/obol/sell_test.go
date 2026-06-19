@@ -375,6 +375,28 @@ func TestServiceOfferStatusLines(t *testing.T) {
 	}
 }
 
+func TestServiceOfferStatusLines_MultiPayment(t *testing.T) {
+	offer := monetizeapi.ServiceOffer{
+		Spec: monetizeapi.ServiceOfferSpec{
+			Payment: monetizeapi.ServiceOfferPayment{Network: "base", PayTo: "0xAAA", Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "1"}},
+			Payments: []monetizeapi.ServiceOfferPayment{
+				{Network: "base", PayTo: "0xAAA", Asset: monetizeapi.ServiceOfferAsset{Symbol: "USDC"}, Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "1"}},
+				{Network: "ethereum", PayTo: "0xBBB", Asset: monetizeapi.ServiceOfferAsset{Symbol: "OBOL"}, Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "10"}},
+			},
+		},
+	}
+	joined := strings.Join(serviceOfferStatusLines("agent-x", "x", offer, ""), "\n")
+	for _, want := range []string{
+		"Payments:        2 accepted options",
+		"1 USDC per request on base → 0xAAA",
+		"10 OBOL per request on ethereum → 0xBBB",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("multi-payment status missing %q\n%s", want, joined)
+		}
+	}
+}
+
 func TestServiceOfferStatusLines_RawTxFallback(t *testing.T) {
 	// Unknown network: fall back to raw hash (no explorer link).
 	offer := monetizeapi.ServiceOffer{

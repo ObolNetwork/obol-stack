@@ -105,10 +105,12 @@ func createCRDAgent(cfg *config.Config, u *ui.UI, opts createCRDAgentOptions) er
 			objective = strings.TrimSpace(promptOrDefault(u, "Objective",
 				"You are a focused sub-agent. Answer the user's task within scope; refuse anything outside your skills."))
 		}
-		// Wallet defaults to true on the prompt because most sub-agents
-		// will want one; the operator can decline.
-		ans := strings.TrimSpace(promptOrDefault(u, "Provision a wallet for this agent? [Y/n]", "Y"))
-		createWallet = !strings.EqualFold(ans, "n") && !strings.EqualFold(ans, "no")
+		// Wallet defaults to OFF: most sub-agents don't need their own
+		// keystore + remote-signer — sale revenue routes to the master
+		// Hermes wallet by default (see `obol sell agent` payTo fallback).
+		// Opt in only when the sub-agent genuinely needs to hold/sign funds.
+		ans := strings.TrimSpace(promptOrDefault(u, "Provision a dedicated wallet for this agent? [y/N]", "N"))
+		createWallet = strings.EqualFold(ans, "y") || strings.EqualFold(ans, "yes")
 	}
 
 	// Fail fast on a pinned model LiteLLM doesn't serve. Without this the Agent

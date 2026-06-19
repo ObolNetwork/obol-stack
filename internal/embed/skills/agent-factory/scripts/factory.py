@@ -451,16 +451,21 @@ def parse_accept_option(raw, default_pay_to):
     if raw_addr:
         if not ADDR_RE.match(raw_addr):
             raise ValueError(f"--accept {raw!r}: asset must be a 0x ERC-20 address (got {raw_addr!r})")
-        if not (kv.get("decimals") or "").isdigit() or not (0 < int(kv["decimals"]) <= 255):
-            raise ValueError(f"--accept {raw!r}: raw asset needs decimals=<1-255>")
-        transfer = (kv.get("transfer") or "").lower()
+        # transfer defaults to permit2 (EIP-3009 is effectively USDC-only).
+        # decimals/symbol/eip712-* are optional here and filled best-effort
+        # from the chain by autofill_accept_payments, which errors if they
+        # still can't be resolved.
+        transfer = (kv.get("transfer") or "permit2").lower()
         if transfer not in ("eip3009", "permit2"):
-            raise ValueError(f"--accept {raw!r}: raw asset needs transfer=eip3009|permit2")
-        symbol, name, version = kv.get("symbol", ""), kv.get("eip712-name", ""), kv.get("eip712-version", "")
-        if not (symbol and name and version):
-            raise ValueError(f"--accept {raw!r}: raw asset needs symbol, eip712-name and eip712-version (the token's EIP-712 signing domain)")
-        payment["asset"] = {"address": raw_addr, "symbol": symbol, "decimals": int(kv["decimals"]),
-                            "transferMethod": transfer, "eip712Name": name, "eip712Version": version}
+            raise ValueError(f"--accept {raw!r}: transfer must be eip3009 or permit2")
+        dec = 0
+        if (kv.get("decimals") or "").strip():
+            if not kv["decimals"].isdigit() or not (0 < int(kv["decimals"]) <= 255):
+                raise ValueError(f"--accept {raw!r}: decimals must be 1-255")
+            dec = int(kv["decimals"])
+        payment["asset"] = {"address": raw_addr, "symbol": kv.get("symbol", ""), "decimals": dec,
+                            "transferMethod": transfer, "eip712Name": kv.get("eip712-name", ""),
+                            "eip712Version": kv.get("eip712-version", "")}
         dedup = f"{chain}\x00{raw_addr.lower()}"
     elif token_sym and token_sym.upper() != "USDC":
         entry = ASSET_REGISTRY.get(token_sym.upper(), {}).get(chain)
@@ -493,6 +498,121 @@ def build_accept_payments(accepts, default_pay_to):
     return payments
 
 
+def resolve_master_wallet():
+    """Best-effort: the master Hermes agent's own wallet (remote-signer key 0).
+    Used as the default payTo so sub-agents needn't provision their own wallet
+    + remote-signer. Returns "" when no signer/key is reachable, in which case
+    the caller falls back to requiring an explicit --pay-to."""
+    base = os.environ.get("REMOTE_SIGNER_URL", "http://remote-signer:9000").rstrip("/")
+    headers = {}
+    tok = os.environ.get("REMOTE_SIGNER_TOKEN", "").strip()
+    if tok:
+        headers["Authorization"] = f"Bearer {tok}"
+    try:
+        req = urllib.request.Request(f"{base}/api/v1/keys", headers=headers)
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+    except Exception:
+        return ""
+    for addr in (data.get("keys") if isinstance(data, dict) else data) or []:
+        if isinstance(addr, str) and ADDR_RE.match(addr.strip()):
+            return addr.strip()
+    return ""
+
+
+# In-pod eRPC for best-effort token-metadata reads. Mirrors the obol CLI's
+# tokenmeta.go but over the in-cluster eRPC the agent pods already use.
+ERPC_BASE = os.environ.get("ERPC_URL", "http://erpc.erpc.svc.cluster.local/rpc").rstrip("/")
+# Function selectors: decimals(), symbol(), eip712Domain() (EIP-5267).
+SEL_DECIMALS = "313ce567"
+SEL_SYMBOL = "95d89b41"
+SEL_EIP712DOMAIN = "84b0196e"
+
+
+def _erpc_eth_call(network, to, selector):
+    """eth_call(to, selector) via eRPC. Returns 0x-hex result or "" on failure."""
+    alias = CAIP2_TO_CHAIN.get(network, network)
+    alias = "mainnet" if alias == "ethereum" else alias
+    url = f"{ERPC_BASE}/{alias}"
+    payload = json.dumps({"jsonrpc": "2.0", "method": "eth_call",
+                          "params": [{"to": to, "data": "0x" + selector}, "latest"], "id": 1}).encode()
+    try:
+        req = urllib.request.Request(url, data=payload, method="POST",
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            out = json.loads(resp.read())
+        if "error" in out:
+            return ""
+        return out.get("result") or ""
+    except Exception:
+        return ""
+
+
+def _abi_string_at(hexstr, byte_offset):
+    """Decode an ABI string located at byte_offset within hexstr (no 0x)."""
+    pos = byte_offset * 2
+    if pos + 64 > len(hexstr):
+        return ""
+    length = int(hexstr[pos:pos + 64], 16)
+    start = pos + 64
+    raw = hexstr[start:start + length * 2]
+    try:
+        return bytes.fromhex(raw).decode("utf-8", "replace").strip()
+    except ValueError:
+        return ""
+
+
+def fetch_token_meta(network, addr):
+    """Best-effort decimals/symbol/eip712 (name,version) from chain. Each field
+    is independent; unreadable ones come back empty/zero."""
+    meta = {"decimals": 0, "symbol": "", "eip712Name": "", "eip712Version": ""}
+    dec = _erpc_eth_call(network, addr, SEL_DECIMALS)
+    if dec and dec != "0x":
+        try:
+            meta["decimals"] = int(dec, 16)
+        except ValueError:
+            pass
+    sym = _erpc_eth_call(network, addr, SEL_SYMBOL)
+    if sym and sym != "0x":
+        h = sym[2:]
+        if len(h) >= 64:
+            meta["symbol"] = _abi_string_at(h, int(h[0:64], 16))
+    dom = _erpc_eth_call(network, addr, SEL_EIP712DOMAIN)
+    if dom and dom != "0x":
+        h = dom[2:]
+        # head: fields(0), name@word1, version@word2, ...
+        if len(h) >= 192:
+            meta["eip712Name"] = _abi_string_at(h, int(h[64:128], 16))
+            meta["eip712Version"] = _abi_string_at(h, int(h[128:192], 16))
+    return meta
+
+
+def autofill_accept_payments(payments, fetch=fetch_token_meta):
+    """Fill missing raw-asset metadata from the chain (no-op for registry/USDC).
+    Errors when the signature-critical fields can't be resolved — never ships a
+    guess that would break settlement."""
+    for p in payments:
+        a = p.get("asset")
+        if not a:
+            continue  # USDC chain-default
+        if a.get("decimals") and a.get("eip712Name") and a.get("eip712Version"):
+            continue  # registry token or fully-specified raw asset
+        meta = fetch(p.get("network", ""), a["address"])
+        a["decimals"] = a.get("decimals") or meta.get("decimals", 0)
+        a["symbol"] = a.get("symbol") or meta.get("symbol", "")
+        a["eip712Name"] = a.get("eip712Name") or meta.get("eip712Name", "")
+        a["eip712Version"] = a.get("eip712Version") or meta.get("eip712Version", "")
+        missing = [label for key, label in
+                   (("decimals", "decimals"), ("eip712Name", "eip712-name"), ("eip712Version", "eip712-version"))
+                   if not a.get(key)]
+        if missing:
+            raise ValueError(
+                f"token {a['address']} on {p.get('network')}: could not read {', '.join(missing)} "
+                f"from the chain (token may not implement EIP-5267) — specify them in --accept")
+        if not a.get("symbol"):
+            a["symbol"] = "TOKEN"
+
+
 def _payment_symbol(payment):
     asset = payment.get("asset") or {}
     return asset.get("symbol") or "USDC"
@@ -508,7 +628,11 @@ def _payment_price(payment):
 def serviceoffer_resource(args, parent_ns):
     accepts = getattr(args, "accept", None) or []
     if accepts:
-        payments = build_accept_payments(accepts, args.pay_to)
+        # Reuse the payments built (and autofilled) in cmd_create when present,
+        # so the resolved on-chain metadata isn't discarded by a rebuild.
+        payments = getattr(args, "_payments", None)
+        if payments is None:
+            payments = build_accept_payments(accepts, args.pay_to)
         payment = payments[0]
     else:
         payment = {
@@ -610,14 +734,22 @@ def cmd_create(args, token, parent_ns, ssl_ctx):
         raise ValueError("--path must start with /")
     if args.max_timeout <= 0:
         raise ValueError("--max-timeout must be greater than zero")
+    # Default the recipient to the master Hermes agent's own wallet so a
+    # sub-agent needn't provision its own wallet + remote-signer just to sell.
+    if not args.pay_to:
+        args.pay_to = resolve_master_wallet()
+
     accepts = args.accept or []
+    args._payments = None
     if accepts:
-        # build_accept_payments validates each option (network, price, asset,
-        # pay-to); fail fast here so we don't create the Agent then choke.
-        build_accept_payments(accepts, args.pay_to)
+        # Build once here (fail fast before the Agent is created) and reuse in
+        # serviceoffer_resource. Autofill reads raw-asset metadata from chain.
+        payments = build_accept_payments(accepts, args.pay_to)
+        autofill_accept_payments(payments)
+        args._payments = payments
     else:
         if args.price and not args.pay_to:
-            raise ValueError("--pay-to is required when --price is set")
+            raise ValueError("--pay-to is required when --price is set (or provision the master wallet)")
         if args.price:
             validate_positive_decimal(args.price, "--price")
         if args.pay_to and not ADDR_RE.match(args.pay_to):
