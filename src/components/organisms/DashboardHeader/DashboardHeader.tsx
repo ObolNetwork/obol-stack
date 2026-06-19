@@ -3,7 +3,6 @@
 import { Box, Flex, Link, OpenInNew, styled } from '@obolnetwork/obol-ui';
 import { WalletConnection } from '../../molecules/WalletConnection';
 import { TopNav, type TopNavId } from '../TopNav';
-import { isWalletConnectConfigured } from '@/lib/config/wagmi';
 import { publicStorefrontUrl } from '@/lib/services/public-storefront';
 import { useTunnelURL } from '../../../hooks/useAgents';
 
@@ -135,7 +134,7 @@ export function DashboardHeader({
           Storefront
           <OpenInNew size="sm" />
         </StorefrontLink>
-        {isWalletConnectConfigured() && <WalletConnection />}
+        <WalletConnection />
       </Flex>
     </HeaderGrid>
   );

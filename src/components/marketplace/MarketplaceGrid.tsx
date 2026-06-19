@@ -8,7 +8,6 @@ import { MarketplaceCard } from './MarketplaceCard';
 export interface MarketplaceGridProps {
   items: readonly ServiceListItem[];
   onDetails?: (item: ServiceListItem) => void;
-  onBuy?: (item: ServiceListItem) => void;
 }
 
 const Grid = styled(Box, {
@@ -21,20 +20,11 @@ const Grid = styled(Box, {
   },
 });
 
-export function MarketplaceGrid({
-  items,
-  onDetails,
-  onBuy,
-}: MarketplaceGridProps) {
+export function MarketplaceGrid({ items, onDetails }: MarketplaceGridProps) {
   return (
     <Grid>
       {items.map(item => (
-        <MarketplaceCard
-          key={item.slug}
-          item={item}
-          onDetails={onDetails}
-          onBuy={onBuy}
-        />
+        <MarketplaceCard key={item.slug} item={item} onDetails={onDetails} />
       ))}
     </Grid>
   );

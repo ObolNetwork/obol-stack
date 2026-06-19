@@ -3,6 +3,17 @@
  */
 
 import { config } from '../config/environment.ts';
+import {
+  isClusterInternalUrl,
+  isUrlReachableFromRuntime,
+} from '../utils/cluster-url.ts';
+
+const EMPTY_SYSTEM_METRICS = {
+  memory: { total: 0, used: 0, available: 0, percentage: 0 },
+  cpu: { usage: 0 },
+  disk: { total: 0, used: 0, available: 0, percentage: 0 },
+  uptime: 0,
+};
 
 interface PrometheusResponse {
   status: string;
@@ -27,6 +38,10 @@ export class PrometheusClient {
    * Execute a Prometheus query
    */
   private async query(query: string): Promise<PrometheusResponse> {
+    if (!isUrlReachableFromRuntime(this.baseUrl)) {
+      throw new Error('prometheus unreachable from local dev');
+    }
+
     const url = `${this.baseUrl}/api/v1/query`;
     const params = new URLSearchParams({ query });
 
@@ -216,6 +231,10 @@ export class PrometheusClient {
    * Get system metrics
    */
   async getSystemMetrics() {
+    if (!isUrlReachableFromRuntime(this.baseUrl)) {
+      return EMPTY_SYSTEM_METRICS;
+    }
+
     try {
       // Get memory metrics
       const memTotal = await this.query('node_memory_MemTotal_bytes');
@@ -299,7 +318,9 @@ export class PrometheusClient {
         uptime: uptimeSeconds,
       };
     } catch (error) {
-      console.error('Failed to fetch system metrics:', error);
+      if (!isClusterInternalUrl(this.baseUrl)) {
+        console.error('Failed to fetch system metrics:', error);
+      }
       throw error;
     }
   }

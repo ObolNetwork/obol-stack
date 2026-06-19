@@ -73,18 +73,16 @@ interface HomeListingsWidgetProps {
 }
 
 export function HomeListingsWidget({ onManage }: HomeListingsWidgetProps) {
-  const { offers, loading } = useServiceOffers();
+  const { offers: myOffers, loading } = useServiceOffers();
 
-  if (loading && offers.length === 0) return null;
-  if (offers.length === 0) return null;
-
-  const liveOffers = offers.filter(o => !o.paused && !o.drainEndsAt);
+  if (loading && myOffers.length === 0) return null;
+  if (myOffers.length === 0) return null;
 
   return (
     <Card css={{ padding: '$lg' }}>
       <Flex css={{ alignItems: 'center', gap: '$xs', marginBottom: '$md' }}>
         <SectionTitle>My Listings</SectionTitle>
-        <CountBadge count={offers.length} />
+        <CountBadge count={myOffers.length} />
         <Box css={{ flex: 1 }} />
         <ManageButton onClick={onManage}>
           Manage
@@ -101,7 +99,7 @@ export function HomeListingsWidget({ onManage }: HomeListingsWidgetProps) {
       </Flex>
 
       <Flex css={{ flexDirection: 'column', gap: '$xs' }}>
-        {offers.map(offer => {
+        {myOffers.map(offer => {
           const status = deriveStatus(offer);
           const label = deriveStatusLabel(offer);
           const isPaused = offer.paused || status === 'unsynced';

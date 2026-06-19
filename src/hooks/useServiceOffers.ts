@@ -7,6 +7,7 @@ const REFRESH_INTERVAL_MS = 30_000;
 
 export function useServiceOffers() {
   const [offers, setOffers] = useState<ServiceOffer[]>([]);
+  const [pendingOffers, setPendingOffers] = useState<ServiceOffer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -19,6 +20,7 @@ export function useServiceOffers() {
       }
       const data = await response.json();
       setOffers(data.offers || []);
+      setPendingOffers(data.pendingOffers || []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
@@ -32,5 +34,5 @@ export function useServiceOffers() {
     return () => clearInterval(id);
   }, [fetchOffers]);
 
-  return { offers, loading, error, refetch: fetchOffers };
+  return { offers, pendingOffers, loading, error, refetch: fetchOffers };
 }

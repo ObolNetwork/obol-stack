@@ -6,6 +6,7 @@ import {
   computePreflight,
   kubectlBuyCommand,
   litellmCurlExample,
+  obolBuyInferenceCommand,
   multiplyAtomicString,
   multiplyDecimalString,
 } from './buy-command.ts';
@@ -57,6 +58,20 @@ describe('computePreflight', () => {
     const pre = computePreflight(baseItem, 0);
     assert.equal(pre.count, 1);
     assert.equal(pre.totalHuman, '10');
+  });
+});
+
+describe('obolBuyInferenceCommand', () => {
+  it('builds canonical CLI with seller URL and count', () => {
+    const cmd = obolBuyInferenceCommand(baseItem, 50, { yes: true });
+    assert.match(cmd, /^obol buy inference \\\n/);
+    assert.match(
+      cmd,
+      /'https:\/\/demo\.obol\.tech\/services\/demo-quant'/
+    );
+    assert.match(cmd, /--count 50/);
+    assert.match(cmd, /--yes/);
+    assert.match(cmd, /--model 'qwen3\.5:9b'/);
   });
 });
 

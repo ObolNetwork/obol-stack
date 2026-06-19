@@ -8,7 +8,7 @@ export interface RegistryBadge {
   variant: BadgeVariant;
 }
 
-const DEFAULT_REGISTRY_CHAIN_ID = 84532;
+const DEFAULT_REGISTRY_CHAIN_ID = 1;
 
 const REGISTRY_CHAIN_IDS: Partial<Record<ChainName, number>> = {
   mainnet: 1,

@@ -11,6 +11,7 @@ import {
   computePreflight,
   kubectlBuyCommand,
   litellmCurlExample,
+  obolBuyInferenceCommand,
 } from '@/lib/marketplace/buy-command';
 import type { ServiceListItem } from '@/lib/marketplace/types';
 
@@ -223,6 +224,10 @@ export function BuyDrawer({ item, open, onClose }: BuyDrawerProps) {
     [item, count]
   );
 
+  const obolCmd = useMemo(
+    () => (item ? obolBuyInferenceCommand(item, count, { yes: true }) : ''),
+    [item, count]
+  );
   const buyCmd = useMemo(
     () => (item ? buyPyCommand(item, count) : ''),
     [item, count]
@@ -332,7 +337,22 @@ export function BuyDrawer({ item, open, onClose }: BuyDrawerProps) {
           </Section>
 
           <Section>
-            <SectionTitle>Run from the host</SectionTitle>
+            <SectionTitle>Recommended — run on your Mac</SectionTitle>
+            <Text css={{ fontSize: '$1', color: '$body', marginBottom: '$xs' }}>
+              Pre-signs x402 payment auths via your agent wallet and wires
+              LiteLLM <code>paid/&lt;model&gt;</code>. Matches{' '}
+              <code>obol buy inference</code> in the stack CLI.
+            </Text>
+            <Box css={{ position: 'relative' }}>
+              <CodeBlock>{obolCmd}</CodeBlock>
+              <CopyAffordance>
+                <CopyButton text={obolCmd} title="Copy obol buy inference" />
+              </CopyAffordance>
+            </Box>
+          </Section>
+
+          <Section>
+            <SectionTitle>Advanced — kubectl exec</SectionTitle>
             <Box css={{ position: 'relative' }}>
               <CodeBlock>{execCmd}</CodeBlock>
               <CopyAffordance>
@@ -342,7 +362,7 @@ export function BuyDrawer({ item, open, onClose }: BuyDrawerProps) {
           </Section>
 
           <Section>
-            <SectionTitle>Inside the agent pod</SectionTitle>
+            <SectionTitle>Advanced — inside the agent pod</SectionTitle>
             <Box css={{ position: 'relative' }}>
               <CodeBlock>{buyCmd}</CodeBlock>
               <CopyAffordance>

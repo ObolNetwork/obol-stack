@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { PurchasesClient } from '@/lib/services/purchases';
 import { SellClient } from '@/lib/services/sell';
 import { PrometheusClient } from '@/lib/services/prometheus';
+import { chainLookupAliases } from '@/lib/marketplace/chain';
 import { offerNameFromEndpoint } from '@/lib/marketplace/settlement';
 import type { PurchaseListResponse, PurchaseRequest } from '@/types/purchase';
 import type { ServiceOffer } from '@/types/sell';
@@ -107,10 +108,13 @@ function resolveSettlement(
   if (!offerName || !chain) return { lastSettlementUnix: null };
 
   const candidates = offersByName.get(offerName) ?? [];
+  // Purchase CRs, ServiceOffers, and verifier metrics use different chain aliases.
+  const chainKeys = chainLookupAliases(chain);
   for (const ns of candidates) {
-    const key = `${ns}/${offerName}/${chain}`;
-    const ts = lastSettlements.get(key);
-    if (ts !== undefined) return { lastSettlementUnix: ts };
+    for (const chainKey of chainKeys) {
+      const ts = lastSettlements.get(`${ns}/${offerName}/${chainKey}`);
+      if (ts !== undefined) return { lastSettlementUnix: ts };
+    }
   }
   return { lastSettlementUnix: null };
 }

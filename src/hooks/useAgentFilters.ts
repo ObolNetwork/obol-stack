@@ -9,7 +9,7 @@ export function useAgentFilters() {
     undefined
   );
   const [chainFilter, setChainFilter] = useState<ChainOption | undefined>(
-    'base'
+    'mainnet'
   );
 
   // Single-select: clicking the active protocol deselects it
@@ -17,7 +17,10 @@ export function useAgentFilters() {
     setProtocolFilter(prev => (prev === p ? undefined : p));
   };
 
-  const hasActiveFilters = x402Only || !!protocolFilter || !!chainFilter;
+  const hasActiveFilters =
+    x402Only ||
+    !!protocolFilter ||
+    (chainFilter !== undefined && chainFilter !== 'mainnet');
 
   return {
     x402Only,

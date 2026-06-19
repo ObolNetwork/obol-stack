@@ -11,7 +11,6 @@ import {
 } from '@obolnetwork/obol-ui';
 import { StatusPill } from '../../atoms/StatusIndicator';
 import { CopyButton } from '../../atoms/CopyButton/CopyButton';
-import { SellInferenceModal } from '../SellInferenceModal';
 import {
   useOpenClawStatus,
   useWalletMetadata,
@@ -117,45 +116,6 @@ function truncateAddress(address: string): string {
   if (address.length <= 10) return address;
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
 }
-
-const SellDivider = styled(Box, {
-  height: '1px',
-  backgroundColor: '$stroke',
-  marginTop: '$md',
-});
-
-const SellCtaRow = styled(Flex, {
-  paddingTop: '$md',
-  alignItems: 'center',
-  justifyContent: 'space-between',
-});
-
-const SellLabel = styled(Text, {
-  fontSize: '$2',
-  color: '$body',
-  lineHeight: 1.4,
-});
-
-const SellButton = styled('button', {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: '6px',
-  padding: '$xxxs $sm',
-  borderRadius: '$pill',
-  border: '1px solid rgba(47, 228, 171, 0.3)',
-  background: 'rgba(47, 228, 171, 0.08)',
-  color: '#2FE4AB',
-  fontSize: '$2',
-  fontWeight: '$semibold',
-  cursor: 'pointer',
-  transition: 'all 0.15s ease',
-  whiteSpace: 'nowrap',
-
-  '&:hover': {
-    background: 'rgba(47, 228, 171, 0.15)',
-    borderColor: 'rgba(47, 228, 171, 0.5)',
-  },
-});
 
 export function OpenClawInstanceCard({
   instance,
@@ -296,37 +256,6 @@ export function OpenClawInstanceCard({
           </Text>
         </DashboardLinkWrapper>
       </ActionsRow>
-
-      {instance.id === 'default' && displayStatus === 'running' && (
-        <>
-          <SellDivider />
-          <SellCtaRow>
-            <SellLabel>Sell access to your models</SellLabel>
-            <SellInferenceModal
-              defaultWallet={primaryAddress ?? undefined}
-              trigger={
-                <SellButton>
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <circle cx="12" cy="12" r="10" />
-                    <line x1="12" y1="8" x2="12" y2="16" />
-                    <line x1="8" y1="12" x2="16" y2="12" />
-                  </svg>
-                  Sell
-                </SellButton>
-              }
-            />
-          </SellCtaRow>
-        </>
-      )}
     </CardContainer>
   );
 }

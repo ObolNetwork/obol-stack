@@ -7,8 +7,6 @@ import type {
 } from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
-import { useAccount } from 'wagmi';
-
 import { ChainIcon } from '@/components/atoms/ChainIcon';
 import { CopyButton } from '@/components/atoms/CopyButton';
 import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
@@ -20,6 +18,19 @@ import {
   type SellPaymentChain,
   type SellPaymentToken,
 } from '@/lib/services/sell-assets';
+import { SellFlowSteps } from '@/components/molecules/SellFlowSteps';
+import { useOperatorWallets } from '@/hooks/useOperatorWallets';
+import { DEFAULT_AGENT_ID } from '@/lib/services/agent-runtime';
+import {
+  buildSellHttpCli,
+  buildSellInferenceCli,
+} from '@/lib/sell/cli-commands';
+import { resolveUpstreamHealthPath } from '@/lib/sell/upstream-health';
+import {
+  httpPostCreateSteps,
+  inferencePostCreateSteps,
+  type SellFlowStep,
+} from '@/lib/sell/flow-steps';
 import type { ChainName } from '@/types/dashboard';
 
 export interface NewListingDialogProps {
@@ -30,8 +41,9 @@ export interface NewListingDialogProps {
 type ServiceType = 'inference' | 'route';
 type PaymentToken = SellPaymentToken;
 type PriceUnit = 'req' | 'mtok' | 'hour';
-type Visibility = 'local' | 'erc8004';
 type ChainKey = SellPaymentChain;
+
+const Mono = styled('span', { fontFamily: 'monospace' });
 
 const TOKEN_PREFIX: Record<PaymentToken, string> = {
   USDC: '$',
@@ -305,6 +317,7 @@ function TextInput({
   prefix,
   suffix,
   mono,
+  list,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -312,6 +325,7 @@ function TextInput({
   prefix?: React.ReactNode;
   suffix?: React.ReactNode;
   mono?: boolean;
+  list?: string;
 }) {
   return (
     <InputShell>
@@ -320,6 +334,7 @@ function TextInput({
         mono={mono}
         value={value}
         placeholder={placeholder}
+        list={list}
         onChange={(e: ChangeEvent<HTMLInputElement>) =>
           onChange(e.target.value)
         }
@@ -404,125 +419,6 @@ function ChainPicker({
   );
 }
 
-const VisibilityGrid = styled('div', {
-  display: 'grid',
-  gridTemplateColumns: '1fr 1fr',
-  gap: 8,
-});
-
-const RadioCardBtn = styled('button', {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 5,
-  padding: '12px 14px',
-  border: '1px solid $stroke',
-  background: '$bg03',
-  borderRadius: '$2',
-  cursor: 'pointer',
-  textAlign: 'left',
-  fontFamily: 'inherit',
-  minHeight: 88,
-  position: 'relative',
-
-  variants: {
-    active: {
-      true: {
-        background: '$obolMidGreen',
-        borderColor: '$obolGreen',
-      },
-    },
-  },
-});
-
-const RadioRow = styled('div', {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-});
-
-const RadioCircle = styled('span', {
-  width: 14,
-  height: 14,
-  borderRadius: '50%',
-  border: '2px solid $stroke',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexShrink: 0,
-
-  variants: {
-    active: {
-      true: {
-        borderColor: '$obolGreen',
-      },
-    },
-  },
-});
-
-const RadioInner = styled('span', {
-  width: 6,
-  height: 6,
-  borderRadius: '50%',
-  background: '$obolGreen',
-});
-
-const RadioTitle = styled('span', {
-  fontSize: '$3',
-  fontWeight: '$semibold',
-  color: '$light',
-
-  variants: {
-    active: {
-      true: { color: '$obolGreen' },
-    },
-  },
-});
-
-const RadioBadge = styled('span', {
-  fontSize: '$1',
-  padding: '2px 6px',
-  borderRadius: '$pill',
-  background: '$obolMidGreen',
-  color: '$obolGreen',
-  fontWeight: '$semibold',
-  lineHeight: 1,
-});
-
-const RadioSub = styled('div', {
-  fontSize: '$1',
-  color: '$body',
-  lineHeight: 1.5,
-  paddingLeft: 20,
-});
-
-function VisibilityCard({
-  active,
-  title,
-  badge,
-  sub,
-  onClick,
-}: {
-  active: boolean;
-  title: string;
-  badge?: string;
-  sub: string;
-  onClick: () => void;
-}) {
-  return (
-    <RadioCardBtn type="button" active={active} onClick={onClick}>
-      <RadioRow>
-        <RadioCircle active={active}>
-          {active ? <RadioInner /> : null}
-        </RadioCircle>
-        <RadioTitle active={active}>{title}</RadioTitle>
-        <span style={{ flex: 1 }} />
-        {badge ? <RadioBadge>{badge}</RadioBadge> : null}
-      </RadioRow>
-      <RadioSub>{sub}</RadioSub>
-    </RadioCardBtn>
-  );
-}
-
 // ── Footer buttons ──────────────────────────────────────────────────────
 
 const CliCopyGroup = styled('div', {
@@ -597,7 +493,15 @@ const Banner = styled('div', {
 // ── Main dialog ─────────────────────────────────────────────────────────
 
 export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
-  const { address } = useAccount();
+  const operator = useOperatorWallets();
+
+  // Default payout: stack remote-signer wallet (lives in hermes-obol-agent). Any --pay-to works in CLI.
+  const sellerWallet = useMemo(() => {
+    const master = operator.agents.find(
+      a => a.runtime === 'hermes' && a.instanceId === DEFAULT_AGENT_ID
+    );
+    return master?.addresses[0] ?? operator.agents[0]?.addresses[0];
+  }, [operator.agents]);
 
   const [type, setType] = useState<ServiceType>('route');
   const [name, setName] = useState('my-service');
@@ -607,13 +511,16 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
   const [priceToken, setPriceToken] = useState<PaymentToken>('USDC');
   const [priceUnit, setPriceUnit] = useState<PriceUnit>('req');
   const [chain, setChain] = useState<ChainKey>('base');
-  const [visibility, setVisibility] = useState<Visibility>('erc8004');
+  const [payoutWallet, setPayoutWallet] = useState('');
+
+  const defaultPayoutWallet = sellerWallet ?? '';
 
   const [submitting, setSubmitting] = useState(false);
   const [submitState, setSubmitState] = useState<'idle' | 'success' | 'error'>(
     'idle'
   );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [followUpSteps, setFollowUpSteps] = useState<SellFlowStep[]>([]);
 
   const paymentAsset = useMemo(
     () => resolveSellAsset(chain, priceToken, CLIENT_SELL_ASSET_ENV),
@@ -635,8 +542,10 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
       setSubmitting(false);
       setSubmitState('idle');
       setErrorMessage(null);
+      setFollowUpSteps([]);
+      setPayoutWallet(defaultPayoutWallet);
     }
-  }, [open]);
+  }, [open, defaultPayoutWallet]);
 
   // Escape closes the dialog (only when open + not submitting).
   useEffect(() => {
@@ -648,25 +557,40 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
     return () => window.removeEventListener('keydown', handler);
   }, [open, submitting, onClose]);
 
+  const payTo = payoutWallet.trim() || defaultPayoutWallet || '<payout wallet>';
   const cli = useMemo(() => {
-    const cmd = type === 'inference' ? 'obol sell inference' : 'obol sell http';
-    return [
-      `${cmd} \\`,
-      `  --name ${name} \\`,
-      type === 'inference'
-        ? `  --model ${model} \\`
-        : `  --upstream ${upstream} \\`,
-      `  --per-request ${priceAmount} \\`,
-      `  --token ${priceToken} \\`,
-      `  --chain ${chain} \\`,
-      `  --wallet ${address ?? '<connect wallet>'}`,
-    ].join('\n');
-  }, [type, name, model, upstream, priceAmount, priceToken, chain, address]);
+    const base = {
+      name: name.trim() || '<name>',
+      payTo,
+      chain,
+      token: priceToken,
+      pricePerRequest: priceAmount,
+    };
+    if (type === 'inference') {
+      return buildSellInferenceCli({
+        ...base,
+        model: model.trim() || '<model>',
+      });
+    }
+    const upstreamService = upstream.split(':')[0];
+    return buildSellHttpCli({
+      ...base,
+      upstream: upstreamService,
+      port: upstream.split(':')[1] ?? '8080',
+      namespace: 'llm',
+      healthPath: resolveUpstreamHealthPath(upstreamService),
+    });
+  }, [type, name, model, upstream, priceAmount, priceToken, chain, payTo]);
 
   if (!open) return null;
 
   const canSubmit =
-    Boolean(address) && !submitting && name.trim().length > 0 && !paymentError;
+    Boolean(payoutWallet.trim() || defaultPayoutWallet) &&
+    /^0x[a-fA-F0-9]{40}$/.test(payoutWallet.trim() || defaultPayoutWallet) &&
+    !submitting &&
+    name.trim().length > 0 &&
+    !paymentError &&
+    (type !== 'inference' || model.trim().length > 0);
 
   const handleTokenChange = (token: PaymentToken) => {
     const next = reconcileSellPaymentSelection(
@@ -693,8 +617,19 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
   };
 
   const handleSubmit = async () => {
-    if (!address) {
-      setErrorMessage('Connect a wallet first — it receives x402 payments.');
+    const wallet = (payoutWallet.trim() || defaultPayoutWallet).trim();
+    if (!wallet) {
+      setErrorMessage('Payout wallet (pay-to) is required.');
+      setSubmitState('error');
+      return;
+    }
+    if (!/^0x[a-fA-F0-9]{40}$/.test(wallet)) {
+      setErrorMessage('Payout wallet must be a valid 0x address.');
+      setSubmitState('error');
+      return;
+    }
+    if (type === 'inference' && !model.trim()) {
+      setErrorMessage('Model name is required for inference listings.');
       setSubmitState('error');
       return;
     }
@@ -706,25 +641,37 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
     setSubmitting(true);
     setSubmitState('idle');
     setErrorMessage(null);
+    setFollowUpSteps([]);
+
+    const isInference = type === 'inference';
+    const sellBase = {
+      name: name.trim(),
+      payTo: wallet,
+      chain,
+      token: priceToken,
+      pricePerRequest: priceAmount,
+    };
 
     try {
       const resp = await fetch('/api/sell/create', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          name,
+          name: name.trim(),
           namespace: 'llm',
-          type: type === 'inference' ? 'inference' : 'http',
-          wallet: address,
+          type: isInference ? 'inference' : 'http',
+          wallet,
           chain,
           token: priceToken,
           pricePerRequest: priceAmount,
-          upstream: type === 'inference' ? 'litellm' : upstream.split(':')[0],
-          port:
-            type === 'inference'
-              ? 4000
-              : Number(upstream.split(':')[1] ?? '8080') || 8080,
-          healthPath: '/health',
+          model: isInference ? model.trim() : undefined,
+          upstream: isInference ? undefined : upstream.split(':')[0],
+          port: isInference
+            ? undefined
+            : Number(upstream.split(':')[1] ?? '8080') || 8080,
+          healthPath: isInference
+            ? '/health'
+            : resolveUpstreamHealthPath(upstream.split(':')[0]),
         }),
       });
 
@@ -733,6 +680,21 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
         throw new Error(body || `HTTP ${resp.status}`);
       }
 
+      setFollowUpSteps(
+        isInference
+          ? inferencePostCreateSteps(
+              { ...sellBase, model: model.trim() },
+              'llm'
+            )
+          : httpPostCreateSteps(
+              {
+                ...sellBase,
+                upstream: upstream.split(':')[0],
+                port: Number(upstream.split(':')[1] ?? '8080') || 8080,
+              },
+              'llm'
+            )
+      );
       setSubmitState('success');
     } catch (err) {
       setSubmitState('error');
@@ -780,10 +742,36 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
         </Header>
 
         <Body>
-          {!address ? (
+          {!defaultPayoutWallet ? (
             <Banner tone="info">
-              Connect a wallet from the top-nav to enable submission. The
-              connected address receives x402 payments.
+              No default payout wallet found. Run{' '}
+              <Mono css={{ color: '$obolGreen' }}>obol agent init</Mono> or
+              enter any <Mono css={{ color: '$obolGreen' }}>pay-to</Mono>{' '}
+              address below.
+            </Banner>
+          ) : null}
+
+          <FormField
+            label="Payout wallet (pay-to)"
+            hint="Where buyer payments settle. Defaults to stack remote-signer; override for a different operator wallet."
+          >
+            <TextInput
+              value={payoutWallet}
+              onChange={v => {
+                setPayoutWallet(v);
+                setSubmitState('idle');
+                setErrorMessage(null);
+              }}
+              placeholder="0x..."
+              mono
+            />
+          </FormField>
+
+          {type === 'inference' ? (
+            <Banner tone="info">
+              Inference is served from your Mac (Ollama + gateway) — unrelated
+              to which model Hermes chats with. After create, run the CLI step
+              shown.
             </Banner>
           ) : null}
 
@@ -791,13 +779,16 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
             label="Service type"
             hint={
               type === 'inference'
-                ? 'An OpenAI-compatible LLM endpoint behind LiteLLM. Buyers call it like any model.'
+                ? 'Creates the listing, then run the gateway command on your Mac (shown after create).'
                 : "Any HTTP upstream — REST, MCP, webhook. Routed through the cluster's x402 verifier."
             }
           >
             <Segmented<ServiceType>
               value={type}
-              onChange={setType}
+              onChange={t => {
+                setType(t);
+                if (t === 'inference') setModel('qwen3.5:9b');
+              }}
               options={[
                 { k: 'inference', label: 'Inference (LLM)' },
                 { k: 'route', label: 'HTTP route' },
@@ -824,7 +815,10 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
               />
             </FormField>
             {type === 'inference' ? (
-              <FormField label="Upstream model" hint="Model served by LiteLLM.">
+              <FormField
+                label="Upstream model"
+                hint="Ollama model ID to sell — must be pulled on your Mac first with ollama pull <model>. Separate from which model your agents use."
+              >
                 <TextInput
                   mono
                   value={model}
@@ -910,32 +904,25 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
             />
           </FormField>
 
-          <FormField label="Visibility">
-            <VisibilityGrid>
-              <VisibilityCard
-                active={visibility === 'local'}
-                title="Local cluster"
-                sub="Only agents inside your cluster can discover and call this listing."
-                onClick={() => setVisibility('local')}
-              />
-              <VisibilityCard
-                active={visibility === 'erc8004'}
-                title="Public · ERC-8004"
-                badge="Recommended"
-                sub="Anchored on-chain in the public registry. Anyone with a wallet can discover and pay."
-                onClick={() => setVisibility('erc8004')}
-              />
-            </VisibilityGrid>
-          </FormField>
+          <Banner tone="info">
+            HTTP and inference listings join the cluster marketplace catalog
+            when ready. On-chain ERC-8004 registration is available for agent
+            listings — sell a sub-agent from the dashboard, then run{' '}
+            <Mono css={{ color: '$obolGreen' }}>obol sell register</Mono>.
+          </Banner>
 
+          {type === 'inference' ? (
+            <Banner tone="info">
+              Creates the listing in the cluster. You still need to run{' '}
+              <Mono css={{ color: '$obolGreen' }}>obol sell inference</Mono> on
+              your Mac — the numbered steps appear after create.
+            </Banner>
+          ) : null}
           {paymentError || (submitState === 'error' && errorMessage) ? (
             <Banner tone="error">{paymentError ?? errorMessage}</Banner>
           ) : null}
-          {submitState === 'success' ? (
-            <Banner tone="success">
-              Created. Reload the marketplace to see it appear once the
-              controller reconciles.
-            </Banner>
+          {submitState === 'success' && followUpSteps.length > 0 ? (
+            <SellFlowSteps title="Next steps" steps={followUpSteps} />
           ) : null}
         </Body>
 

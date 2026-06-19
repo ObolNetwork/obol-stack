@@ -7,7 +7,6 @@ import { ErrorState } from '../../molecules/ErrorState';
 import { Badge } from '../../atoms/Badge';
 import { Card } from '../../atoms/Card';
 import { ChainSelector } from '../../atoms/ChainSelector';
-import { CountBadge } from '../../atoms/CountBadge';
 import { SectionTitle } from '../../atoms/SectionTitle';
 import { ItemCard } from '../../atoms/ItemCard';
 import { SearchInput } from '../../atoms/SearchInput';
@@ -25,6 +24,36 @@ import {
   registryChainBadges,
   registryHealthBadge,
 } from '@/lib/services/registry-display';
+
+const AvatarStack = styled('div', {
+  display: 'flex',
+  alignItems: 'center',
+  flexShrink: 0,
+});
+
+const AvatarCircle = styled('div', {
+  width: 28,
+  height: 28,
+  borderRadius: '50%',
+  border: '2px solid $bg02',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  fontSize: '10px',
+  fontWeight: '$semibold',
+  flexShrink: 0,
+});
+
+const SEEDS = [
+  { letter: 'A', bg: 'rgba(47, 228, 171, 0.25)', color: '#2FE4AB' },
+  { letter: 'K', bg: 'rgba(60, 210, 221, 0.25)', color: '#3CD2DD' },
+  { letter: 'M', bg: 'rgba(145, 103, 228, 0.25)', color: '#9167E4' },
+  { letter: 'B', bg: 'rgba(250, 186, 90, 0.25)', color: '#FABA5A' },
+  { letter: 'S', bg: 'rgba(182, 234, 92, 0.25)', color: '#B6EA5C' },
+  { letter: 'H', bg: 'rgba(221, 96, 60, 0.25)', color: '#DD603C' },
+  { letter: 'P', bg: 'rgba(47, 228, 171, 0.25)', color: '#2FE4AB' },
+  { letter: 'C', bg: 'rgba(60, 210, 221, 0.25)', color: '#3CD2DD' },
+];
 
 const AgentList = styled(Box, {
   display: 'flex',
@@ -217,10 +246,66 @@ export function AgentRegistry() {
     x402Only
   );
 
+  const CHAIN_LABELS: Partial<Record<string, string>> = {
+    mainnet: 'Ethereum',
+    base: 'Base',
+    'base-sepolia': 'Base Sepolia',
+    sepolia: 'Sepolia',
+    hoodi: 'Hoodi',
+  };
+  const chainLabel = chainFilter
+    ? (CHAIN_LABELS[chainFilter] ?? chainFilter)
+    : 'Ethereum';
+
   const headerContent = (
-    <Flex css={{ alignItems: 'center', gap: '$sm' }}>
-      <SectionTitle>Agent Registry</SectionTitle>
-      {!loading && total > 0 && <CountBadge count={total} />}
+    <Flex
+      css={{
+        alignItems: 'center',
+        gap: '$md',
+        flex: 1,
+        minWidth: 0,
+        paddingRight: '$xl',
+      }}
+    >
+      {!loading && total > 0 && (
+        <AvatarStack css={{ flexShrink: 0 }}>
+          {SEEDS.map((seed, i) => (
+            <AvatarCircle
+              key={i}
+              style={{
+                marginLeft: i === 0 ? 0 : -8,
+                position: 'relative',
+                zIndex: SEEDS.length - i,
+                backgroundColor: seed.bg,
+                color: seed.color,
+              }}
+            >
+              {seed.letter}
+            </AvatarCircle>
+          ))}
+        </AvatarStack>
+      )}
+      <Box css={{ flex: 1, minWidth: 0 }}>
+        <Flex
+          css={{
+            alignItems: 'center',
+            gap: '$sm',
+            flexWrap: 'wrap',
+            width: 'auto',
+          }}
+        >
+          <SectionTitle>ERC-8004 On-chain Agent Registry</SectionTitle>
+          {!loading && total > 0 && (
+            <Text css={{ fontSize: '$2', color: '$muted' }}>
+              {total.toLocaleString()} on {chainLabel}
+            </Text>
+          )}
+        </Flex>
+        <Text css={{ fontSize: '$1', color: '$muted', marginTop: 2 }}>
+          Single-chain view · marketplace combines all 3 chains (Ethereum + Base
+          + Base Sepolia) · data from 8004scan.io
+        </Text>
+      </Box>
     </Flex>
   );
 
@@ -284,7 +369,10 @@ export function AgentRegistry() {
             </EmptyMessage>
           )}
           {agents.map(agent => (
-            <AgentCardItem key={agent.token_id} agent={agent} />
+            <AgentCardItem
+              key={`${agent.chain_id}-${agent.token_id}`}
+              agent={agent}
+            />
           ))}
         </AgentList>
         <Pagination

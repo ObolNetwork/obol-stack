@@ -47,6 +47,7 @@ export function useAgentStatus(instance: AgentInstance | null) {
 
   const runtime = instance?.runtime;
   const id = instance?.id;
+  const namespace = instance?.namespace;
 
   const fetchStatus = useCallback(async () => {
     if (!runtime || !id) {
@@ -58,9 +59,9 @@ export function useAgentStatus(instance: AgentInstance | null) {
 
     try {
       setLoading(true);
-      const response = await fetch(
-        `/api/agents/status?runtime=${runtime}&id=${id}`
-      );
+      const params = new URLSearchParams({ runtime, id });
+      if (namespace) params.set('namespace', namespace);
+      const response = await fetch(`/api/agents/status?${params}`);
 
       if (response.status === 404) {
         setStatus(null);
@@ -82,7 +83,7 @@ export function useAgentStatus(instance: AgentInstance | null) {
     } finally {
       setLoading(false);
     }
-  }, [id, runtime]);
+  }, [id, namespace, runtime]);
 
   useEffect(() => {
     fetchStatus();
