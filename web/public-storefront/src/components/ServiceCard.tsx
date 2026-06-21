@@ -23,6 +23,20 @@ function optionLabel(opt: ServicePayment): string {
   return `${opt.price.replace(/\s.*/, "")} ${sym} · ${opt.network}`;
 }
 
+// docsRef points a foreign agent at THIS operator's own self-contained docs
+// (served over the same tunnel as the endpoint) instead of the broad
+// obol.org/llms.txt: /skill.md carries the full x402 payment flow and
+// /openapi.json the exact request shapes. Falls back to a generic x402
+// pointer if the endpoint origin can't be parsed.
+function docsRef(endpoint: string): string {
+  try {
+    const origin = new URL(endpoint).origin;
+    return `Read ${origin}/skill.md for the x402 payment flow and ${origin}/openapi.json for the exact request shapes.`;
+  } catch {
+    return "See https://www.x402.org for how x402 micropayments work.";
+  }
+}
+
 const typeColors: Record<string, string> = {
   inference: "bg-obol-green/15 text-obol-green border border-obol-green/30",
   agent: "bg-obol-green/15 text-obol-green border border-obol-green/30",
@@ -283,10 +297,10 @@ function BuyViaOtherAgent({ service, opt }: { service: Service; opt: ServicePaym
   let prompt: string;
   if (kind === "inference") {
     const model = service.model || "the advertised model";
-    prompt = `Read https://obol.org/llms.txt to learn how Obol's x402 micropayments work. I want to use the remote LLM at ${service.endpoint} (model ${model}) as a paid OpenAI-compatible chat-completions endpoint. Pre-sign a budget of EIP-3009 or Permit2 authorisations and POST chat-completions bodies with the X-PAYMENT header attached.`;
+    prompt = `${docsRef(service.endpoint)} I want to use the remote LLM at ${service.endpoint} (model ${model}) as a paid OpenAI-compatible chat-completions endpoint. Pre-sign a budget of EIP-3009 or Permit2 authorisations and POST chat-completions bodies with the X-PAYMENT header attached.`;
   } else if (kind === "agent") {
     const modelLine = service.model ? ` (running ${service.model})` : "";
-    prompt = `Read https://obol.org/llms.txt to learn how Obol's x402 micropayments work. Help me call the Obol Agent at ${service.endpoint}${modelLine} — it's an autonomous agent (tools + skills + memory), not a raw LLM. POST OpenAI-style chat-completions JSON with a real prompt in \`messages\`, attach a signed EIP-3009 or Permit2 authorisation as \`X-PAYMENT\`, and report what the agent does.`;
+    prompt = `${docsRef(service.endpoint)} Help me call the Obol Agent at ${service.endpoint}${modelLine} — it's an autonomous agent (tools + skills + memory), not a raw LLM. POST OpenAI-style chat-completions JSON with a real prompt in \`messages\`, attach a signed EIP-3009 or Permit2 authorisation as \`X-PAYMENT\`, and report what the agent does.`;
   } else {
     prompt = `I want to purchase a service offered by an Obol Agent at ${service.endpoint} for ${opt.price} on ${opt.network}. Please install the run-obol-stack skill from https://github.com/ObolNetwork/skills, ask me for permission to set up the obol stack, and use the buy-x402 skill to make the purchase on my behalf.`;
   }

@@ -336,12 +336,31 @@ func buildTypeCopy(siteURL, endpoint string, d PaymentDisplay) typeCopy {
 	url := siteURL + endpoint
 	switch normalizeOfferType(d.OfferType) {
 	case "inference":
-		return inferenceCopy(url, d)
+		return inferenceCopy(url, siteURL, d)
 	case "agent":
-		return agentCopy(url, d)
+		return agentCopy(url, siteURL, d)
 	default:
-		return httpCopy(url, d)
+		return httpCopy(url, siteURL, d)
 	}
+}
+
+// x402GuideRef returns the self-contained "how to pay" pointer interpolated
+// into the "other AI agent" copy prompts. Rather than send a foreign agent
+// to the broad obol.org/llms.txt, we point it at THIS operator's own
+// catalog (`/skill.md`, human + agent readable, with the full x402 v2 loop)
+// and OpenAPI document (`/openapi.json`, exact request shapes) — both served
+// over the same tunnel as the paid endpoint, so a single fetch is enough to
+// learn how to pay. siteURL is the public origin (scheme://host); when empty
+// the prompt degrades to a generic x402 mention.
+func x402GuideRef(siteURL string) string {
+	siteURL = strings.TrimRight(siteURL, "/")
+	if siteURL == "" {
+		return "x402 micropayments (see https://www.x402.org)"
+	}
+	return fmt.Sprintf(
+		"x402 micropayments — read %s/skill.md for the full payment flow and %s/openapi.json for the exact request shapes",
+		siteURL, siteURL,
+	)
 }
 
 // normalizeOfferType collapses the spec.type values into the three render
@@ -365,7 +384,7 @@ func normalizeOfferType(t string) string {
 // local LiteLLM gateway. Secondary cards still expose the agent-prompt and
 // raw-JSON paths, but reframed so users understand they're buying remote
 // model time, not an agent with tools/memory.
-func inferenceCopy(url string, d PaymentDisplay) typeCopy {
+func inferenceCopy(url, siteURL string, d PaymentDisplay) typeCopy {
 	model := sanitizeDisplayToken(d.Model, "<model-id>")
 
 	// Positional seller URL, no required --model/--budget. Identity check
@@ -382,11 +401,10 @@ func inferenceCopy(url string, d PaymentDisplay) typeCopy {
 	)
 
 	other := fmt.Sprintf(
-		"Read https://obol.org/llms.txt to learn how Obol's x402 micropayments work. "+
-			"I want to use the remote LLM at %s (model %s) as a paid OpenAI-compatible "+
-			"chat-completions endpoint. Pre-sign a budget of EIP-3009/Permit2 authorizations "+
-			"and POST chat-completions bodies with the X-PAYMENT header attached.",
-		url, model,
+		"I want to use the remote LLM at %s (model %s) as a paid OpenAI-compatible "+
+			"chat-completions endpoint, paid with %s. Pre-sign a budget of EIP-3009/Permit2 "+
+			"authorizations and POST chat-completions bodies with the X-PAYMENT header attached.",
+		url, model, x402GuideRef(siteURL),
 	)
 
 	return typeCopy{
@@ -412,7 +430,7 @@ func inferenceCopy(url string, d PaymentDisplay) typeCopy {
 // Other-AI-Agent prompt cards drive the action, and a chat-completions
 // example sits next to the raw x402 JSON in the Pay-manually card to
 // make the wire shape obvious to readers walking the spec by hand.
-func agentCopy(url string, d PaymentDisplay) typeCopy {
+func agentCopy(url, siteURL string, d PaymentDisplay) typeCopy {
 	model := sanitizeDisplayToken(d.Model, "")
 	modelClause := ""
 	modelLine := ""
@@ -440,11 +458,11 @@ X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
 	)
 
 	other := fmt.Sprintf(
-		"Read https://obol.org/llms.txt to learn how Obol's x402 micropayments work. "+
-			"Help me call the Obol Agent at %s%s — it's an autonomous agent (tools + skills + memory), "+
-			"not a raw LLM. POST OpenAI-style chat-completions JSON with a real prompt in `messages`, "+
-			"attach a signed EIP-3009/Permit2 authorization as `X-PAYMENT`, and report what the agent does.",
-		url, modelLine,
+		"Help me call the Obol Agent at %s%s — it's an autonomous agent (tools + skills + memory), "+
+			"not a raw LLM. It's gated by %s. POST OpenAI-style chat-completions JSON with a real "+
+			"prompt in `messages`, attach a signed EIP-3009/Permit2 authorization as `X-PAYMENT`, "+
+			"and report what the agent does.",
+		url, modelLine, x402GuideRef(siteURL),
 	)
 
 	return typeCopy{
@@ -468,7 +486,7 @@ X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
 
 // httpCopy: legacy default. Stateless single-shot pay; no model, no
 // pre-payment, no LiteLLM mounting. Matches the pre-existing copy.
-func httpCopy(url string, d PaymentDisplay) typeCopy {
+func httpCopy(url, siteURL string, d PaymentDisplay) typeCopy {
 	priceClause := ""
 	if d.PriceDisplay != "" {
 		priceClause = " Pay " + d.PriceDisplay + "."
@@ -488,11 +506,9 @@ func httpCopy(url string, d PaymentDisplay) typeCopy {
 		onNet = " on " + d.NetworkLabel
 	}
 	other := fmt.Sprintf(
-		"Read https://obol.org/llms.txt and skim https://github.com/ObolNetwork/skills "+
-			"to learn how Obol Agents pay for x402 services. Then help me buy access to %s "+
-			"for %s%s. Sign the EIP-3009 or Permit2 authorization and call the endpoint "+
-			"with the X-PAYMENT header.",
-		url, priceWord, onNet,
+		"Help me buy access to %s for %s%s, paid with %s. Sign the EIP-3009 or Permit2 "+
+			"authorization and call the endpoint with the X-PAYMENT header.",
+		url, priceWord, onNet, x402GuideRef(siteURL),
 	)
 
 	return typeCopy{

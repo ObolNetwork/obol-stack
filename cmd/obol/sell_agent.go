@@ -35,15 +35,16 @@ Run ` + "`obol agent new <name> --skills ... --model ... --create-wallet`" + ` f
 to declare the agent, then ` + "`obol sell agent <name>`" + ` to make it sellable.
 
 Examples:
-  obol sell agent quant --price 0.01 --token USDC --chain base-sepolia
-  obol sell agent quant --price 10 --token OBOL --chain ethereum --pay-to 0xColdVault
+  obol sell agent quant --price 0.01 --token USDC --network base-sepolia
+  obol sell agent quant --price 10 --token OBOL --network ethereum --pay-to 0xColdVault
   obol sell agent quant --accept token=USDC,network=base,price=1 --accept token=OBOL,network=ethereum,price=10`,
 		Flags: append([]cli.Flag{
 			payToFlag("Recipient for sale revenue (defaults to the agent's own wallet when one was provisioned)"),
 			&cli.StringFlag{
-				Name:  "chain",
-				Usage: "Payment chain (base, base-sepolia, ethereum)",
-				Value: "base",
+				Name:    "network",
+				Aliases: []string{"chain"},
+				Usage:   "Payment network (base, base-sepolia, ethereum)",
+				Value:   "base",
 			},
 			&cli.StringFlag{
 				Name:  "token",
@@ -282,6 +283,11 @@ Examples:
 				return err
 			}
 
+			if !confirmOfferReplace(cfg, u, offerNs, name) {
+				u.Dim("Aborted; existing offer left unchanged.")
+				return nil
+			}
+
 			out, err := kubectlApplyOutput(cfg, manifest)
 			if err != nil {
 				return fmt.Errorf("apply ServiceOffer: %w", err)
@@ -309,7 +315,7 @@ Examples:
 			}
 
 			if !register {
-				u.Dim("Registration skipped (--no-register). Run `obol sell register --chain " + primaryNetwork + "` later for on-chain discovery.")
+				u.Dim("Registration skipped (--no-register). Run `obol sell register --network " + primaryNetwork + "` later for on-chain discovery.")
 			} else {
 				// sell agent is declare-only: it sets spec.registration and
 				// relies on the controller + a manual `obol sell register`. Make
@@ -512,7 +518,7 @@ func runAgentBackedDemo(
 		autoRegisterDemo(ctx, cfg, u, chain, tunnelURL)
 	} else {
 		u.Info("Registration skipped. The offer will still reach Ready when the agent is provisioned.")
-		u.Dim("  Run on-chain discovery later: obol sell register --chain " + chain)
+		u.Dim("  Run on-chain discovery later: obol sell register --network " + chain)
 	}
 
 	ready := waitForOfferReady(cfg, u, name, offerNs, 2*time.Minute)
