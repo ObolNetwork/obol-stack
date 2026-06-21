@@ -197,6 +197,54 @@ func TestBuildOpenAPIDocument_InferenceOffer(t *testing.T) {
 	}
 }
 
+// TestBuildOpenAPIDocument_MultiPaymentAdvertisesAllOptions locks in the
+// multi-currency x-payment-info contract: `price` stays the primary option
+// (for single-price indexers), and `accepts[]` lists every option with its
+// currency and CAIP-2 network so indexers can surface the cheapest.
+func TestBuildOpenAPIDocument_MultiPaymentAdvertisesAllOptions(t *testing.T) {
+	offer := readyOfferWithSpec("dual", "llm", monetizeapi.ServiceOfferSpec{
+		Type: "inference",
+		Payment: monetizeapi.ServiceOfferPayment{
+			Network: "base", PayTo: "0x1111111111111111111111111111111111111111",
+			Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "1"},
+		},
+		Payments: []monetizeapi.ServiceOfferPayment{
+			{
+				Network: "base", PayTo: "0x1111111111111111111111111111111111111111",
+				Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "1"},
+			},
+			{
+				Network: "ethereum", PayTo: "0x2222222222222222222222222222222222222222",
+				Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "10"},
+				Asset: monetizeapi.ServiceOfferAsset{Symbol: "OBOL", Address: "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7", Decimals: 18, TransferMethod: "permit2", EIP712Name: "Obol Network", EIP712Version: "1"},
+			},
+		},
+	})
+
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, ""))
+	op := dig(t, doc, "paths", "/services/dual/v1/chat/completions", "post")
+	xpay, _ := op.(map[string]any)["x-payment-info"].(map[string]any)
+	if xpay == nil {
+		t.Fatalf("x-payment-info missing")
+	}
+	// Primary price = first option (USDC on base → USD).
+	if price, _ := xpay["price"].(map[string]any); price["currency"] != "USD" || price["amount"] != "1" {
+		t.Errorf("primary price = %v, want USD/1", xpay["price"])
+	}
+	accepts, _ := xpay["accepts"].([]any)
+	if len(accepts) != 2 {
+		t.Fatalf("accepts = %v, want 2 options", xpay["accepts"])
+	}
+	a0 := accepts[0].(map[string]any)
+	if a0["currency"] != "USD" || a0["network"] != "eip155:8453" {
+		t.Errorf("accepts[0] = %v, want USD on eip155:8453", a0)
+	}
+	a1 := accepts[1].(map[string]any)
+	if a1["currency"] != "OBOL" || a1["amount"] != "10" || a1["network"] != "eip155:1" {
+		t.Errorf("accepts[1] = %v, want OBOL/10 on eip155:1", a1)
+	}
+}
+
 // TestBuildOpenAPIDocument_AgentOfferSameShapeAsInference locks in the
 // user-confirmed decision: agent-type offers ship the OpenAI chat
 // completions endpoint, identical to inference. Renderers don't need

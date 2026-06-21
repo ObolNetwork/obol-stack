@@ -935,20 +935,25 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 	lines := []string{
 		"# Obol Stack Service Catalog",
 		"",
-		fmt.Sprintf("> Generated from %d ready ServiceOffer(s).", len(ready)),
+		fmt.Sprintf("> Generated from %d ready ServiceOffer(s). Every service below is gated by [x402](https://www.x402.org) micropayments — no API key, no signup, no subscription.", len(ready)),
 		"",
-		fmt.Sprintf("> For machine-readable agent identity, see [/.well-known/agent-registration.json](%s/.well-known/agent-registration.json).", baseURL),
+		"> **Machine-readable:** " +
+			fmt.Sprintf("OpenAPI 3.1 (Swagger) at [`%s/openapi.json`](%s/openapi.json) · ", baseURL, baseURL) +
+			fmt.Sprintf("catalog feed at [`%s/api/services.json`](%s/api/services.json) · ", baseURL, baseURL) +
+			fmt.Sprintf("agent identity at [`%s/.well-known/agent-registration.json`](%s/.well-known/agent-registration.json).", baseURL, baseURL),
 		"",
 	}
 
+	lines = append(lines, skillCatalogHowToPay(baseURL)...)
+
 	if len(ready) == 0 {
-		lines = append(lines, "**No services currently available.**", "")
+		lines = append(lines, "## Services", "", "**No services currently available.**", "")
 		return strings.Join(lines, "\n")
 	}
 
 	lines = append(lines, "## Services", "")
-	lines = append(lines, "| Service | Type | Model | Price | Status | Endpoint |")
-	lines = append(lines, "|---------|------|-------|-------|--------|----------|")
+	lines = append(lines, "| Service | Type | Model | Pay with | Status | Endpoint |")
+	lines = append(lines, "|---------|------|-------|----------|--------|----------|")
 	for _, offer := range ready {
 		modelName := offer.Spec.Model.Name
 		if modelName == "" {
@@ -964,7 +969,7 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 			offer.Name,
 			fallbackOfferType(offer),
 			modelName,
-			describeOfferPrice(offer),
+			describeOfferPaymentsInline(offer),
 			status,
 			baseURL,
 			offer.EffectivePath(),
@@ -973,15 +978,23 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 	lines = append(lines, "", "## Service Details", "")
 	for _, offer := range ready {
 		modelName := offer.Spec.Model.Name
+		endpoint := baseURL + offer.EffectivePath()
 		lines = append(lines, fmt.Sprintf("### %s", offer.Name))
-		lines = append(lines, fmt.Sprintf("- **Endpoint**: `%s%s`", baseURL, offer.EffectivePath()))
+		lines = append(lines, fmt.Sprintf("- **Endpoint**: `%s`", endpoint))
+		lines = append(lines, fmt.Sprintf("- **Call**: %s", offerCallHint(offer, endpoint)))
 		lines = append(lines, fmt.Sprintf("- **Type**: %s", fallbackOfferType(offer)))
 		if modelName != "" {
 			lines = append(lines, fmt.Sprintf("- **Model**: %s", modelName))
 		}
-		lines = append(lines, fmt.Sprintf("- **Price**: %s", describeOfferPrice(offer)))
-		lines = append(lines, fmt.Sprintf("- **Pay To**: `%s`", firstNonEmpty(offer.Spec.Payment.PayTo, "—")))
-		lines = append(lines, fmt.Sprintf("- **Network**: %s", firstNonEmpty(offer.Spec.Payment.Network, "—")))
+		payments := offer.EffectivePayments()
+		if len(payments) == 1 {
+			lines = append(lines, fmt.Sprintf("- **Payment**: %s", describePaymentDetail(payments[0])))
+		} else {
+			lines = append(lines, "- **Payment options** (pick one):")
+			for i := range payments {
+				lines = append(lines, fmt.Sprintf("  %d. %s", i+1, describePaymentDetail(payments[i])))
+			}
+		}
 		if offer.IsDraining() {
 			lines = append(lines, fmt.Sprintf("- **Drain ends at**: %s", offer.DrainEndsAt().UTC().Format(time.RFC3339)))
 		}
@@ -993,6 +1006,43 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// skillCatalogHowToPay returns the self-contained "How to pay" section. It
+// is written so any LLM agent — not just one running on Obol Stack — can
+// pay these endpoints by following the x402 v2 loop, without first reading
+// any external doc. baseURL points the reader at the machine-readable specs.
+func skillCatalogHowToPay(baseURL string) []string {
+	return []string{
+		"## How to pay (x402)",
+		"",
+		"Calling any endpoint below follows the same five steps. No wallet onboarding " +
+			"beyond holding the settlement token — payment is per-request and gasless.",
+		"",
+		"1. **Call the endpoint with no payment.** You get `402 Payment Required` with a JSON " +
+			"body whose `accepts[]` array lists every payment the operator will take — each entry " +
+			"carries the price in atomic units (`maxAmountRequired`), the CAIP-2 chain id (`network`), " +
+			"the settlement token contract (`asset`), the recipient (`payTo`), and the transfer scheme.",
+		"2. **Pick one `accepts[]` entry** whose token + chain you can pay on. Sellers may advertise " +
+			"several (e.g. USDC on Base *or* OBOL on Ethereum); they are alternatives, you satisfy one.",
+		"3. **Sign an authorization** matching that entry — an EIP-3009 `TransferWithAuthorization` " +
+			"(USDC) or a Permit2 witness (most other ERC-20s, signalled by `extra.assetTransferMethod`). " +
+			"This is an off-chain signature; **no ETH/gas needed** — the operator's facilitator submits " +
+			"and pays for the on-chain settlement.",
+		"4. **Retry the identical request** with the signed payload base64-encoded in the `X-PAYMENT` header.",
+		"5. **On success** you get your `200` plus settlement metadata in the `X-PAYMENT-RESPONSE` header. " +
+			"For chat-completions endpoints, pass `\"stream\": true` for long-running calls.",
+		"",
+		fmt.Sprintf("**Exact request shapes:** the OpenAPI 3.1 document at [`%s/openapi.json`](%s/openapi.json) "+
+			"describes every operation's path, method, request/response body, and per-operation pricing "+
+			"(`x-payment-info`). Load it into any OpenAPI-aware client to generate a typed caller.", baseURL, baseURL),
+		"",
+		"**Already on Obol Stack?** The `buy-x402` skill automates the whole loop: " +
+			"`buy.py pay <endpoint>` for one-shot calls (add `--token <SYMBOL>` / `--network <chain>` to " +
+			"choose among multi-currency options), or `buy.py buy <name> --endpoint <url> --model <id>` to " +
+			"pre-authorize a batch of paid inference.",
+		"",
+	}
 }
 
 // offerOperationallyReady reports whether an offer is usable for x402
@@ -1356,6 +1406,79 @@ func decimalToAtomicString(amount string, decimals int) string {
 
 func describeOfferPrice(offer *monetizeapi.ServiceOffer) string {
 	return describePaymentPrice(offer.Spec.Payment)
+}
+
+// describeOfferPaymentsInline renders every accepted payment option of an
+// offer for the compact catalog table, e.g.
+// "1 USDC/request on base · 10 OBOL/request on ethereum". Buyers satisfy
+// any one of the listed options.
+func describeOfferPaymentsInline(offer *monetizeapi.ServiceOffer) string {
+	payments := offer.EffectivePayments()
+	parts := make([]string, 0, len(payments))
+	for i := range payments {
+		parts = append(parts, describePaymentInline(payments[i]))
+	}
+	if len(parts) == 0 {
+		return "—"
+	}
+	return strings.Join(parts, " · ")
+}
+
+// describePaymentInline is one option in compact form: "<price> on <network>".
+func describePaymentInline(p monetizeapi.ServiceOfferPayment) string {
+	return describePaymentPrice(p) + " on " + firstNonEmpty(p.Network, "—")
+}
+
+// describePaymentDetail is one option fully expanded for the per-service
+// detail block, e.g.
+// "1 USDC per request on `base` (eip155:8453) — pay to `0x…`; token `0x833…` (USDC, 6 decimals, eip3009)".
+func describePaymentDetail(p monetizeapi.ServiceOfferPayment) string {
+	var b strings.Builder
+	// describePaymentPrice yields "1 USDC/request"; spell the unit out for prose.
+	b.WriteString(strings.Replace(describePaymentPrice(p), "/", " per ", 1))
+	b.WriteString(" on `")
+	b.WriteString(firstNonEmpty(p.Network, "—"))
+	b.WriteString("`")
+	if caip, _ := caip2ForNetwork(p.Network); caip != "" {
+		b.WriteString(" (" + caip + ")")
+	}
+	if p.PayTo != "" {
+		b.WriteString(" — pay to `" + p.PayTo + "`")
+	}
+	if a := paymentAssetJSON(p); a != nil && (a.Address != "" || a.Symbol != "") {
+		b.WriteString("; token")
+		if a.Address != "" {
+			b.WriteString(" `" + a.Address + "`")
+		}
+		meta := make([]string, 0, 3)
+		if a.Symbol != "" {
+			meta = append(meta, a.Symbol)
+		}
+		if a.Decimals > 0 {
+			meta = append(meta, fmt.Sprintf("%d decimals", a.Decimals))
+		}
+		if a.TransferMethod != "" {
+			meta = append(meta, a.TransferMethod)
+		}
+		if len(meta) > 0 {
+			b.WriteString(" (" + strings.Join(meta, ", ") + ")")
+		}
+	}
+	return b.String()
+}
+
+// offerCallHint returns a one-line "how to invoke" hint for the service
+// detail block, derived from the offer type. inference/agent both speak the
+// OpenAI chat-completions wire format; http is operator-defined.
+func offerCallHint(offer *monetizeapi.ServiceOffer, endpoint string) string {
+	switch {
+	case offer.IsInference(), offer.IsAgent():
+		return fmt.Sprintf("`POST %s/v1/chat/completions` — OpenAI-compatible chat completions (supports `stream: true`)", endpoint)
+	case strings.EqualFold(offer.Spec.Type, "fine-tuning"):
+		return fmt.Sprintf("`POST %s` — multipart fine-tuning job (operator-defined payload)", endpoint)
+	default:
+		return fmt.Sprintf("`%s` — operator-defined request shape; see `/openapi.json`", endpoint)
+	}
 }
 
 // describePaymentPrice renders a single payment option as "<price> <SYMBOL>/<unit>".

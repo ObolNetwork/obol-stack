@@ -351,17 +351,53 @@ func openAPIGenericSuccessResponse(description string) map[string]any {
 // per-request approximation the verifier enforces on the 402 wire, so this
 // metadata never promises a cheaper call than the runtime charges.
 func offerPaymentInfoExtension(offer *monetizeapi.ServiceOffer) map[string]any {
-	price := map[string]any{"mode": "fixed"}
+	payments := offer.EffectivePayments()
 
-	if asset := offerAssetJSON(offer); asset != nil && asset.Symbol != "" {
+	info := map[string]any{
+		// `price` stays the PRIMARY option (payments[0]) for single-price
+		// indexers that read only this field.
+		"price":     paymentInfoPrice(payments[0]),
+		"protocols": []any{map[string]any{"x402": map[string]any{}}},
+	}
+
+	// For multi-currency offers, advertise every accepted option so indexers
+	// can surface the cheapest / a buyer's preferred chain. Each entry carries
+	// the same {mode,currency,amount} shape as `price`, plus the CAIP-2 chain.
+	// Omitted for single-payment offers — `price` already says everything.
+	if len(payments) > 1 {
+		accepts := make([]any, 0, len(payments))
+		for i := range payments {
+			entry := paymentInfoPrice(payments[i])
+			if net := strings.TrimSpace(payments[i].Network); net != "" {
+				if caip, _ := caip2ForNetwork(net); caip != "" {
+					entry["network"] = caip
+				} else {
+					entry["network"] = net
+				}
+			}
+			accepts = append(accepts, entry)
+		}
+		info["accepts"] = accepts
+	}
+
+	return info
+}
+
+// paymentInfoPrice renders one payment option as an x402scan-style price
+// object: {mode:"fixed", currency, amount}. USDC-settled options advertise
+// ISO-4217 "USD" (1:1); other assets advertise their token symbol. perMTok
+// prices collapse to the same per-request approximation the verifier enforces
+// on the wire, so this metadata never undercuts the runtime charge.
+func paymentInfoPrice(p monetizeapi.ServiceOfferPayment) map[string]any {
+	price := map[string]any{"mode": "fixed"}
+	if asset := paymentAssetJSON(p); asset != nil && asset.Symbol != "" {
 		if strings.EqualFold(asset.Symbol, "USDC") {
 			price["currency"] = "USD"
 		} else {
 			price["currency"] = asset.Symbol
 		}
 	}
-
-	if amount, unit := offerPriceRawAndUnit(offer); amount != "" {
+	if amount, unit := paymentPriceRawAndUnit(p); amount != "" {
 		if unit == "perMTok" {
 			if approx, err := schemas.ApproximateRequestPriceFromPerMTok(amount); err == nil {
 				amount = approx
@@ -369,11 +405,7 @@ func offerPaymentInfoExtension(offer *monetizeapi.ServiceOffer) map[string]any {
 		}
 		price["amount"] = amount
 	}
-
-	return map[string]any{
-		"price":     price,
-		"protocols": []any{map[string]any{"x402": map[string]any{}}},
-	}
+	return price
 }
 
 // operationTagsForOffer combines the offer's coarse type tag with any

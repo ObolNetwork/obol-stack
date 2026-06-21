@@ -1268,7 +1268,7 @@ func TestBuildSellUpdatePatch_NoFieldsErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when no update flags are set")
 	}
-	for _, sub := range []string{"--per-request", "--per-mtok", "--per-hour", "--pay-to", "--chain"} {
+	for _, sub := range []string{"--per-request", "--per-mtok", "--per-hour", "--pay-to", "--network"} {
 		if !strings.Contains(err.Error(), sub) {
 			t.Errorf("error must name flag %q so the operator learns the surface; got: %v", sub, err)
 		}
@@ -1449,7 +1449,7 @@ func TestBuildResumeGatewayArgs(t *testing.T) {
 				"--upstream", "http://127.0.0.1:8000",
 				"--pay-to", "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
 				"--listen", "0.0.0.0:8402",
-				"--chain", "base-sepolia",
+				"--network", "base-sepolia",
 				"--token", "OBOL",
 				"--per-mtok", "23",
 				"--facilitator", "https://x402.gcp.obol.tech",

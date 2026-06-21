@@ -100,7 +100,7 @@ Buyers pay per-request in the selected x402 token to access inference endpoints.
 
 Examples:
   obol sell inference my-qwen --model qwen3.5:4b --pay-to 0x... --price 0.001
-  obol sell inference my-llama --model llama3:8b --pay-to 0x... --chain base`,
+  obol sell inference my-llama --model llama3:8b --pay-to 0x... --network base`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "model",
@@ -120,9 +120,10 @@ Examples:
 				Usage: "Per-million-tokens price in the selected payment token (charged as an approximation at 1000 tok/request)",
 			},
 			&cli.StringFlag{
-				Name:  "chain",
-				Usage: "Payment chain (base, base-sepolia, ethereum)",
-				Value: "base",
+				Name:    "network",
+				Aliases: []string{"chain"},
+				Usage:   "Payment network (base, base-sepolia, ethereum)",
+				Value:   "base",
 			},
 			&cli.StringFlag{
 				Name:  "token",
@@ -555,7 +556,7 @@ Connect a buyer at http://localhost:<port>/mcp (streamable HTTP).
 
 Examples:
   # Front a weather API as a paid MCP tool (the canonical x402 paid-MCP shape):
-  obol sell mcp weather --pay-to 0x... --price 0.001 --chain base-sepolia \
+  obol sell mcp weather --pay-to 0x... --price 0.001 --network base-sepolia \
       --tool-name get_weather \
       --description 'Current weather for a city. Args: {city}' \
       --upstream https://your-weather-service/current
@@ -567,9 +568,10 @@ Examples:
 		Flags: []cli.Flag{
 			payToFlag("Payment recipient address"),
 			&cli.StringFlag{
-				Name:  "chain",
-				Usage: "Payment chain (base, base-sepolia, ethereum, polygon)",
-				Value: "base-sepolia",
+				Name:    "network",
+				Aliases: []string{"chain"},
+				Usage:   "Payment network (base, base-sepolia, ethereum, polygon)",
+				Value:   "base-sepolia",
 			},
 			&cli.StringFlag{
 				Name:  "price",
@@ -670,14 +672,15 @@ By default it also registers the seller agent on ERC-8004 after the route is liv
 Use --no-register to skip the on-chain registration step.
 
 Examples:
-  obol sell http my-cool-api --upstream my-svc.my-namespace.svc.cluster.local --port 8080 --pay-to 0x... --price 0.01 --chain base
-  obol sell http my-cool-api --upstream my-svc --port 8080 --pay-to 0x... --price 0.01 --chain base --no-register`,
+  obol sell http my-cool-api --upstream my-svc.my-namespace.svc.cluster.local --port 8080 --pay-to 0x... --price 0.01 --network base
+  obol sell http my-cool-api --upstream my-svc --port 8080 --pay-to 0x... --price 0.01 --network base --no-register`,
 		Flags: append([]cli.Flag{
 			payToFlag("Payment recipient address"),
 			&cli.StringFlag{
-				Name:  "chain",
-				Usage: "Payment chain (base, base-sepolia, ethereum)",
-				Value: "base",
+				Name:    "network",
+				Aliases: []string{"chain"},
+				Usage:   "Payment network (base, base-sepolia, ethereum)",
+				Value:   "base",
 			},
 			&cli.StringFlag{
 				Name:  "token",
@@ -830,10 +833,10 @@ Examples:
 					var err error
 					name, err = u.Input("Service name", "")
 					if err != nil || name == "" {
-						return fmt.Errorf("name required: obol sell http <name> --pay-to <addr> --chain <chain>")
+						return fmt.Errorf("name required: obol sell http <name> --pay-to <addr> --network <chain>")
 					}
 				} else {
-					return fmt.Errorf("name required: obol sell http <name> --pay-to <addr> --chain <chain>")
+					return fmt.Errorf("name required: obol sell http <name> --pay-to <addr> --network <chain>")
 				}
 			}
 			if err := validate.Name(name); err != nil {
@@ -867,10 +870,10 @@ Examples:
 			ns := cmd.String("namespace")
 
 			if cmd.String("upstream") == "" {
-				return fmt.Errorf("upstream service name required: use --upstream <service-name>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --pay-to 0x... --chain base-sepolia --price 0.001", name)
+				return fmt.Errorf("upstream service name required: use --upstream <service-name>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --pay-to 0x... --network base-sepolia --price 0.001", name)
 			}
 			if cmd.Int("port") == 0 {
-				return fmt.Errorf("upstream port required: use --port <port-number>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --pay-to 0x... --chain base-sepolia --price 0.001", name)
+				return fmt.Errorf("upstream port required: use --port <port-number>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --pay-to 0x... --network base-sepolia --price 0.001", name)
 			}
 
 			// Build the payment block(s): multi-currency via --accept, else
@@ -1120,7 +1123,7 @@ func buildSellUpdatePatch(payTo, chain string, price schemas.PriceTable) (map[st
 	}
 
 	if len(payment) == 0 {
-		return nil, errors.New("nothing to update: pass at least one of --per-request / --per-mtok / --per-hour / --pay-to / --chain")
+		return nil, errors.New("nothing to update: pass at least one of --per-request / --per-mtok / --per-hour / --pay-to / --network")
 	}
 
 	return map[string]any{
@@ -1380,7 +1383,7 @@ func serviceOfferStatusLines(namespace, name string, offer monetizeapi.ServiceOf
 	// Network/Asset/Price/Pay To lines; multi-currency offers list every option.
 	payments := offer.EffectivePayments()
 	if len(payments) <= 1 {
-		p := offer.Spec.Payment
+		p := effectivePaymentAsset(offer.Spec.Payment)
 		lines = append(lines,
 			fmt.Sprintf("Network:         %s", valueOrNone(p.Network)),
 			fmt.Sprintf("Asset:           %s", formatOfferAsset(p.Asset)),
@@ -1388,9 +1391,9 @@ func serviceOfferStatusLines(namespace, name string, offer monetizeapi.ServiceOf
 			fmt.Sprintf("Pay To:          %s", valueOrNone(p.PayTo)),
 		)
 	} else {
-		lines = append(lines, fmt.Sprintf("Payments:        %d accepted options", len(payments)))
+		lines = append(lines, fmt.Sprintf("Payments:        %d accepted options (buyer picks one)", len(payments)))
 		for i := range payments {
-			p := payments[i]
+			p := effectivePaymentAsset(payments[i])
 			lines = append(lines,
 				fmt.Sprintf("  - %s on %s → %s",
 					formatOfferPrice(p), valueOrNone(p.Network), valueOrNone(p.PayTo)),
@@ -1408,6 +1411,33 @@ func serviceOfferStatusLines(namespace, name string, offer monetizeapi.ServiceOf
 		lines = append(lines, formatConditionLine(cond))
 	}
 	return lines
+}
+
+// effectivePaymentAsset fills a payment's Asset block from the chain's
+// default settlement asset (USDC) when the offer left it implicit — i.e.
+// the seller passed --token USDC (or nothing) and never wrote an explicit
+// asset. This mirrors what the 402 wire and storefront catalog advertise,
+// so `obol sell status` shows "USDC (0x833…)" / "3 USDC per request" instead
+// of "(not set)" / "3 per request". Offers that already carry an explicit
+// asset (e.g. OBOL) are returned unchanged.
+func effectivePaymentAsset(p monetizeapi.ServiceOfferPayment) monetizeapi.ServiceOfferPayment {
+	if p.Asset.Symbol != "" || p.Asset.Address != "" {
+		return p
+	}
+	chain, err := x402verifier.ResolveChainInfo(p.Network)
+	if err != nil {
+		return p
+	}
+	def := chain.DefaultAsset()
+	p.Asset = monetizeapi.ServiceOfferAsset{
+		Address:        def.Address,
+		Symbol:         def.Symbol,
+		Decimals:       int64(def.Decimals),
+		TransferMethod: def.TransferMethod,
+		EIP712Name:     def.EIP712Name,
+		EIP712Version:  def.EIP712Version,
+	}
+	return p
 }
 
 // formatOfferAsset renders the payment asset as "SYMBOL" or
@@ -1515,7 +1545,7 @@ type demoSpec struct {
 	Price        string // default per-request price (in DefaultToken units)
 	Description  string // human-readable one-liner
 	NeedsERPC    bool   // whether the demo queries eRPC
-	DefaultChain string // default --chain when not explicitly set
+	DefaultChain string // default --network when not explicitly set
 	DefaultToken string // default --token when not explicitly set
 
 	// Agent is set on demo types that resolve to an agent-backed offer
@@ -1589,12 +1619,13 @@ Example:
   obol sell demo                                # hello @ 1 OBOL on ethereum
   obol sell demo blocks                         # blocks @ 0.0001 USDC on base-sepolia
   obol sell demo quant --price 5                # quant @ 5 OBOL on ethereum
-  obol sell demo hello --token USDC --chain base --price 0.001`,
+  obol sell demo hello --token USDC --network base --price 0.001`,
 		Flags: []cli.Flag{
 			payToFlag("Token recipient address"),
 			&cli.StringFlag{
-				Name:  "chain",
-				Usage: "Payment chain (defaults to demo type's default chain)",
+				Name:    "network",
+				Aliases: []string{"chain"},
+				Usage:   "Payment network (defaults to demo type's default chain)",
 			},
 			&cli.StringFlag{
 				Name:  "token",
@@ -1679,7 +1710,7 @@ Example:
 			}
 
 			// Resolve token metadata. resolveAssetTermsFor may flip chain to ethereum
-			// for non-USDC tokens when --chain wasn't explicitly set.
+			// for non-USDC tokens when --network wasn't explicitly set.
 			assetTerms, err := resolveAssetTermsFor(tokenName, &chain, chainExplicit)
 			if err != nil {
 				return err
@@ -1708,7 +1739,7 @@ Example:
 			// the previous default (auto-register on every demo) caused
 			// repeated `setMetadata` calls to revert at the contract once the
 			// agent already had x402 metadata, and required the demo wallet
-			// to hold ETH for gas. Operators run `obol sell register --chain ...`
+			// to hold ETH for gas. Operators run `obol sell register --network ...`
 			// when they actually want on-chain discovery.
 			register := cmd.Bool("register")
 			soManifest := buildDemoServiceOffer(name, demoNamespace, chain, wallet, price, register, spec, assetTerms)
@@ -1774,7 +1805,7 @@ Example:
 				autoRegisterDemo(ctx, cfg, u, chain, tunnelURL)
 			} else {
 				u.Info("Registration skipped (default for demos). The offer will still reach Ready.")
-				u.Dim("  Run on-chain discovery later: obol sell register --chain " + chain)
+				u.Dim("  Run on-chain discovery later: obol sell register --network " + chain)
 			}
 
 			// 6. Print try-it instructions.
@@ -1797,7 +1828,7 @@ func autoRegisterDemo(ctx context.Context, cfg *config.Config, u *ui.UI, chain, 
 
 	skipHint := func(reason string) {
 		u.Warnf("Skipping auto-register: %s", reason)
-		u.Dim("  You can run it manually later: obol sell register --chain " + chain)
+		u.Dim("  You can run it manually later: obol sell register --network " + chain)
 	}
 
 	if tunnelURL == "" {
@@ -1822,7 +1853,7 @@ func autoRegisterDemo(ctx context.Context, cfg *config.Config, u *ui.UI, chain, 
 	agentURI := strings.TrimRight(tunnelURL, "/") + "/.well-known/agent-registration.json"
 	if registerAgentOnNetworks(ctx, cfg, u, agentURI, signerNS, []erc8004.NetworkConfig{net}) == 0 {
 		u.Warn("Auto-register did not succeed.")
-		u.Dim("  Retry with: obol sell register --chain " + chain)
+		u.Dim("  Retry with: obol sell register --network " + chain)
 		return
 	}
 	u.Successf("Agent registered on %s.", net.Name)
@@ -2711,7 +2742,7 @@ so the controller picks up the new model.
 Examples:
   obol sell update my-api -n llm --per-request 0.002
   obol sell update my-api -n llm --per-mtok 5.0
-  obol sell update my-api -n llm --wallet 0xNew... --chain base
+  obol sell update my-api -n llm --wallet 0xNew... --network base
   obol sell update my-api -n llm --accept token=USDC,network=base,price=1 --accept token=OBOL,network=ethereum,price=10`,
 		Flags: append([]cli.Flag{
 			&cli.StringFlag{
@@ -2722,8 +2753,9 @@ Examples:
 			},
 			payToFlag("New payment recipient address"),
 			&cli.StringFlag{
-				Name:  "chain",
-				Usage: "New payment chain (base, base-sepolia, ethereum)",
+				Name:    "network",
+				Aliases: []string{"chain"},
+				Usage:   "New payment network (base, base-sepolia, ethereum)",
 			},
 			&cli.StringFlag{
 				Name:  "price",
@@ -2745,7 +2777,7 @@ Examples:
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			if cmd.NArg() == 0 {
-				return errors.New("name required: obol sell update <name> -n <ns> [--per-request N | --per-mtok N | --per-hour N | --accept ...] [--pay-to 0x...] [--chain base]")
+				return errors.New("name required: obol sell update <name> -n <ns> [--per-request N | --per-mtok N | --per-hour N | --accept ...] [--pay-to 0x...] [--network base]")
 			}
 
 			name := cmd.Args().First()
@@ -2958,9 +2990,10 @@ Reloads the payment verifier when configuration is changed.`,
 		Flags: []cli.Flag{
 			payToFlag("Payment recipient address"),
 			&cli.StringFlag{
-				Name:  "chain",
-				Usage: "Payment chain (base, base-sepolia, ethereum)",
-				Value: "base",
+				Name:    "network",
+				Aliases: []string{"chain"},
+				Usage:   "Payment network (base, base-sepolia, ethereum)",
+				Value:   "base",
 			},
 			&cli.StringFlag{
 				Name:    "facilitator-url",
@@ -3028,13 +3061,14 @@ the target chain (~$0.20–$0.50 of native gas typically suffices).
 
 Examples:
   obol sell register                                    # defaults to mainnet
-  obol sell register --chain base                       # register on base
-  obol sell register --chain base-sepolia               # add a Base Sepolia registration`,
+  obol sell register --network base                       # register on base
+  obol sell register --network base-sepolia               # add a Base Sepolia registration`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
-				Name:  "chain",
-				Usage: "Registration chain (mainnet, base, base-sepolia)",
-				Value: "mainnet",
+				Name:    "network",
+				Aliases: []string{"chain"},
+				Usage:   "Registration network (mainnet, base, base-sepolia)",
+				Value:   "mainnet",
 			},
 			&cli.StringFlag{
 				Name:  "endpoint",
@@ -3296,7 +3330,7 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 
 	identity.Status = monetizeapi.UpsertAgentIdentityRegistration(identity.Status, net.Name, agentID.String())
 	if err := applyAgentIdentity(cfg, identity); err != nil {
-		return fmt.Errorf("persist AgentIdentity registration %s on %s: %w\n\n  The on-chain registration succeeded; recover with `obol sell identity import --chain %s --agent-id %s`.", agentID, net.Name, err, net.Name, agentID)
+		return fmt.Errorf("persist AgentIdentity registration %s on %s: %w\n\n  The on-chain registration succeeded; recover with `obol sell identity import --network %s --agent-id %s`.", agentID, net.Name, err, net.Name, agentID)
 	}
 	return nil
 }
@@ -3627,6 +3661,29 @@ func kubectlApplyOutput(cfg *config.Config, manifest interface{}) (string, error
 
 	bin, kc := kubectl.Paths(cfg)
 	return kubectl.ApplyOutput(bin, kc, raw)
+}
+
+// confirmOfferReplace guards against silently overwriting an existing
+// ServiceOffer. `obol sell agent <name>` and `obol sell demo <name>` can
+// resolve to the same offer name+namespace (one offer per agent path), so a
+// second create would `kubectl apply` over the first with no warning. When an
+// offer already exists and we're on an interactive terminal, prompt before
+// replacing; the caller aborts on a "no". Non-interactive callers (resume,
+// flows, JSON) keep the idempotent apply behaviour and never block.
+//
+// Returns true to proceed with the apply, false to abort.
+func confirmOfferReplace(cfg *config.Config, u *ui.UI, namespace, name string) bool {
+	if !u.IsTTY() || u.IsJSON() {
+		return true
+	}
+	out, err := kubectlOutput(cfg, "get", "serviceoffer", name, "-n", namespace, "--ignore-not-found", "-o", "name")
+	if err != nil || strings.TrimSpace(out) == "" {
+		// Not found (or lookup failed) — nothing to replace; proceed.
+		return true
+	}
+	u.Warnf("A ServiceOffer named %q already exists in namespace %s.", name, namespace)
+	u.Dim("  Continuing will replace its payment terms, path, and registration with the new ones.")
+	return u.Confirm(fmt.Sprintf("Replace ServiceOffer %s/%s?", namespace, name), false)
 }
 
 func kubectlOutput(cfg *config.Config, args ...string) (string, error) {
@@ -4383,7 +4440,7 @@ func buildResumeGatewayArgs(d *inference.Deployment) []string {
 		args = append(args, "--listen", d.ListenAddr)
 	}
 	if d.Chain != "" {
-		args = append(args, "--chain", d.Chain)
+		args = append(args, "--network", d.Chain)
 	}
 	if d.AssetSymbol != "" {
 		args = append(args, "--token", d.AssetSymbol)
