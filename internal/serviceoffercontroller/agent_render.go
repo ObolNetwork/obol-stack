@@ -121,6 +121,9 @@ agent:
 skills:
   external_dirs:
     - /data/.hermes/obol-skills
+plugins:
+  enabled:
+    - pay_mcp
 `, model, litellmKey)
 }
 

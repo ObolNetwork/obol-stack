@@ -119,6 +119,55 @@ func TestGenerateConfig_UsesLiteLLMCustomProvider(t *testing.T) {
 	}
 }
 
+// syncObolPlugins seeds the embedded plugins into the master agent's
+// user-plugins dir on the host PVC ($HERMES_HOME/plugins). Lock that pay_mcp
+// lands there so the agent can discover it at boot.
+func TestSyncObolPlugins_SeedsPayMCP(t *testing.T) {
+	cfg := testConfig(t)
+	id := agentruntime.DefaultInstanceID
+	if err := syncObolPlugins(cfg, id); err != nil {
+		t.Fatalf("syncObolPlugins: %v", err)
+	}
+	home := agentruntime.HomePath(cfg, agentruntime.Hermes, id)
+	for _, f := range []string{"__init__.py", "plugin.yaml"} {
+		p := filepath.Join(home, pluginsDirName, "pay_mcp", f)
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("pay_mcp %s not seeded to user-plugins dir: %v", f, err)
+		}
+	}
+}
+
+// The master agent seeds the pay_mcp plugin into its user-plugins dir; a
+// user-installed plugin only loads when named in plugins.enabled, so the
+// generated config must enable it (else it is discovered-but-inert).
+func TestGenerateConfig_EnablesPayMCPPlugin(t *testing.T) {
+	raw, err := generateConfig(testConfig(t), "gpt-5.2")
+	if err != nil {
+		t.Fatalf("generateConfig() error = %v", err)
+	}
+	var cfg map[string]any
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal() error = %v", err)
+	}
+	pluginsCfg, ok := cfg["plugins"].(map[string]any)
+	if !ok {
+		t.Fatalf("plugins config missing or wrong type: %#v", cfg["plugins"])
+	}
+	enabled, ok := pluginsCfg["enabled"].([]any)
+	if !ok {
+		t.Fatalf("plugins.enabled missing or wrong type: %#v", pluginsCfg["enabled"])
+	}
+	found := false
+	for _, e := range enabled {
+		if fmt.Sprint(e) == "pay_mcp" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("plugins.enabled = %#v, want it to include pay_mcp", enabled)
+	}
+}
+
 func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 	values := generateValues(
 		"hermes-obol-agent",

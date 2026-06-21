@@ -150,6 +150,39 @@ func TestSeedHostFiles_FreshAgent(t *testing.T) {
 	if _, err := os.Stat(marker); err != nil {
 		t.Errorf("no-bundled-skills marker missing: %v", err)
 	}
+
+	// A fresh seed must also drop the pay_mcp plugin into the user-plugins dir
+	// so a wallet-bearing sell agent can settle paid MCP tools.
+	pluginInit := filepath.Join(HostPluginsPath(cfg, "quant"), "pay_mcp", "__init__.py")
+	if _, err := os.Stat(pluginInit); err != nil {
+		t.Errorf("pay_mcp plugin not seeded: %v", err)
+	}
+}
+
+// SeedHostPlugins seeds the embedded plugins into the agent's user-plugins dir
+// and must leave a user-added plugin with a different name untouched on re-seed.
+func TestSeedHostPlugins_SeedsAndPreserves(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.Config{DataDir: dir}
+
+	custom := filepath.Join(HostPluginsPath(cfg, "quant"), "operator-plugin")
+	if err := os.MkdirAll(custom, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(custom, "plugin.yaml"), []byte("name: operator-plugin\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := SeedHostPlugins(cfg, "quant"); err != nil {
+		t.Fatalf("SeedHostPlugins: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(HostPluginsPath(cfg, "quant"), "pay_mcp", "plugin.yaml")); err != nil {
+		t.Errorf("pay_mcp not seeded: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(custom, "plugin.yaml")); err != nil {
+		t.Errorf("operator plugin clobbered by seed: %v", err)
+	}
 }
 
 // The marker must already exist on a re-seed (e.g. agent objective change) —

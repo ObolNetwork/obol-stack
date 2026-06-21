@@ -45,6 +45,13 @@ func HostSkillsPath(cfg *config.Config, name string) string {
 	return filepath.Join(HostHomePath(cfg, name), "obol-skills")
 }
 
+// HostPluginsPath is the per-agent user-plugins dir. Hermes discovers
+// directory plugins at $HERMES_HOME/plugins; with HERMES_HOME=/data/.hermes
+// inside the pod that resolves here on the host PVC.
+func HostPluginsPath(cfg *config.Config, name string) string {
+	return filepath.Join(HostHomePath(cfg, name), "plugins")
+}
+
 // HostSoulPath is where the seeded Hermes identity file lives. Hermes reads
 // uppercase SOUL.md from HERMES_HOME, so keep this path aligned with upstream
 // Hermes profile semantics.
@@ -112,7 +119,26 @@ func SeedHostFiles(cfg *config.Config, name string, skills []string, objective s
 	if err := writeNoBundledSkillsMarker(cfg, name); err != nil {
 		return false, fmt.Errorf("write no-bundled-skills marker: %w", err)
 	}
+	if err := SeedHostPlugins(cfg, name); err != nil {
+		return false, fmt.Errorf("seed plugins: %w", err)
+	}
 	return WriteSoul(cfg, name, objective, opts.OverwriteSoul)
+}
+
+// SeedHostPlugins copies the embedded hermes plugins into the agent's
+// user-plugins dir on the host PVC. The plugins are enabled via the
+// plugins.enabled list in the rendered Hermes config (see
+// serviceoffercontroller.renderHermesConfig); pay_mcp stays inert unless the
+// pod also has a signer (REMOTE_SIGNER_URL), which the reconciler wires only
+// for wallet-bearing agents. Refreshes shipped plugins on every reconcile and
+// leaves user-added plugins with other names untouched (CopyPlugins only
+// writes embedded files).
+func SeedHostPlugins(cfg *config.Config, name string) error {
+	dst := HostPluginsPath(cfg, name)
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return fmt.Errorf("create plugins dir %s: %w", dst, err)
+	}
+	return embed.CopyPlugins(dst)
 }
 
 // writeNoBundledSkillsMarker drops a `.no-bundled-skills` file into the agent's
