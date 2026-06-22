@@ -837,6 +837,44 @@ func TestBuildServiceCatalogJSON_MultiPayment(t *testing.T) {
 	}
 }
 
+func TestBuildServiceCatalogJSON_ZeroDecimalAssetAtomicPrice(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "whole-token", Namespace: "default"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "http",
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base",
+				PayTo:   "0x1111111111111111111111111111111111111111",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "2"},
+				Asset: monetizeapi.ServiceOfferAsset{
+					Address:        "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+					Symbol:         "WHOLE",
+					Decimals:       0,
+					TransferMethod: "permit2",
+					EIP712Name:     "Whole Token",
+					EIP712Version:  "1",
+				},
+			},
+			Registration: monetizeapi.ServiceOfferRegistration{Description: "zero-decimal token service"},
+		},
+		Status: monetizeapi.ServiceOfferStatus{Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}}},
+	}
+
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com")
+	assertServiceCatalogSchema(t, jsonStr)
+
+	var services []schemas.ServiceCatalogEntry
+	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	if len(services) != 1 || len(services[0].Payments) != 1 {
+		t.Fatalf("services/payments = %+v, want one payment", services)
+	}
+	if got := services[0].Payments[0].PriceAtomicUnits; got != "2" {
+		t.Fatalf("zero-decimal priceAtomicUnits = %q, want 2", got)
+	}
+}
+
 func TestBuildServiceCatalogJSON_Empty(t *testing.T) {
 	jsonStr := buildServiceCatalogJSON(nil, "https://example.com")
 	assertServiceCatalogSchema(t, jsonStr)

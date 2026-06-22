@@ -458,10 +458,10 @@ def parse_accept_option(raw, default_pay_to):
         transfer = (kv.get("transfer") or "permit2").lower()
         if transfer not in ("eip3009", "permit2"):
             raise ValueError(f"--accept {raw!r}: transfer must be eip3009 or permit2")
-        dec = 0
+        dec = -1
         if (kv.get("decimals") or "").strip():
-            if not kv["decimals"].isdigit() or not (0 < int(kv["decimals"]) <= 255):
-                raise ValueError(f"--accept {raw!r}: decimals must be 1-255")
+            if not kv["decimals"].isdigit() or not (0 <= int(kv["decimals"]) <= 255):
+                raise ValueError(f"--accept {raw!r}: decimals must be 0-255")
             dec = int(kv["decimals"])
         payment["asset"] = {"address": raw_addr, "symbol": kv.get("symbol", ""), "decimals": dec,
                             "transferMethod": transfer, "eip712Name": kv.get("eip712-name", ""),
@@ -565,11 +565,12 @@ def _abi_string_at(hexstr, byte_offset):
 def fetch_token_meta(network, addr):
     """Best-effort decimals/symbol/eip712 (name,version) from chain. Each field
     is independent; unreadable ones come back empty/zero."""
-    meta = {"decimals": 0, "symbol": "", "eip712Name": "", "eip712Version": ""}
+    meta = {"decimals": 0, "decimalsSet": False, "symbol": "", "eip712Name": "", "eip712Version": ""}
     dec = _erpc_eth_call(network, addr, SEL_DECIMALS)
     if dec and dec != "0x":
         try:
             meta["decimals"] = int(dec, 16)
+            meta["decimalsSet"] = True
         except ValueError:
             pass
     sym = _erpc_eth_call(network, addr, SEL_SYMBOL)
@@ -595,16 +596,17 @@ def autofill_accept_payments(payments, fetch=fetch_token_meta):
         a = p.get("asset")
         if not a:
             continue  # USDC chain-default
-        if a.get("decimals") and a.get("eip712Name") and a.get("eip712Version"):
+        if a.get("decimals", -1) >= 0 and a.get("eip712Name") and a.get("eip712Version"):
             continue  # registry token or fully-specified raw asset
         meta = fetch(p.get("network", ""), a["address"])
-        a["decimals"] = a.get("decimals") or meta.get("decimals", 0)
+        if a.get("decimals", -1) < 0 and meta.get("decimalsSet"):
+            a["decimals"] = meta.get("decimals", 0)
         a["symbol"] = a.get("symbol") or meta.get("symbol", "")
         a["eip712Name"] = a.get("eip712Name") or meta.get("eip712Name", "")
         a["eip712Version"] = a.get("eip712Version") or meta.get("eip712Version", "")
         missing = [label for key, label in
                    (("decimals", "decimals"), ("eip712Name", "eip712-name"), ("eip712Version", "eip712-version"))
-                   if not a.get(key)]
+                   if (a.get(key, -1) < 0 if key == "decimals" else not a.get(key))]
         if missing:
             raise ValueError(
                 f"token {a['address']} on {p.get('network')}: could not read {', '.join(missing)} "

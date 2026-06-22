@@ -57,6 +57,18 @@ func TestParseAcceptOption_RawAssetEscapeHatch(t *testing.T) {
 	}
 }
 
+func TestParseAcceptOption_RawAssetAllowsZeroDecimals(t *testing.T) {
+	raw := "asset=0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,decimals=0,transfer=permit2," +
+		"eip712-name=Whole Token,eip712-version=1,symbol=WHOLE,network=base,price=1,pay-to=" + testPayTo
+	opt, _, err := parseAcceptOption(raw, "")
+	if err != nil {
+		t.Fatalf("zero-decimal raw asset: unexpected error: %v", err)
+	}
+	if opt.Asset.Decimals != 0 || !opt.AssetDecimalsSet {
+		t.Fatalf("zero-decimal raw asset decimals = %d set=%v, want 0,true", opt.Asset.Decimals, opt.AssetDecimalsSet)
+	}
+}
+
 func TestParseAcceptOption_Errors(t *testing.T) {
 	cases := []struct {
 		name, raw, want string
@@ -91,14 +103,14 @@ func TestParseAcceptOption_RawAssetDefersToAutofill(t *testing.T) {
 	if opt.Asset.Address != "0x"+strings.Repeat("b", 40) || opt.Asset.TransferMethod != schemas.AssetTransferMethodPermit2 {
 		t.Fatalf("partial raw asset = %+v, want address set + permit2 default", opt.Asset)
 	}
-	if opt.Asset.Decimals != 0 || opt.Asset.EIP712Name != "" {
-		t.Errorf("decimals/eip712 should be empty pending autofill, got %+v", opt.Asset)
+	if opt.Asset.Decimals != -1 || opt.Asset.EIP712Name != "" {
+		t.Errorf("decimals/eip712 should be pending autofill, got %+v", opt.Asset)
 	}
 }
 
 func TestAutofillAcceptPayments(t *testing.T) {
 	ctx := context.Background()
-	full := tokenMeta{Decimals: 18, Symbol: "FOO", EIP712Name: "Foo Token", EIP712Version: "1"}
+	full := tokenMeta{Decimals: 18, DecimalsSet: true, Symbol: "FOO", EIP712Name: "Foo Token", EIP712Version: "1"}
 
 	// (1) Partial raw asset → filled from chain.
 	pays, _ := buildAcceptPayments([]string{"asset=0x" + strings.Repeat("b", 40) + ",network=base,price=1,pay-to=" + testPayTo}, "")
@@ -138,6 +150,22 @@ func TestAutofillAcceptPayments(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "could not read") {
 		t.Fatalf("expected unresolved-fields error, got %v", err)
+	}
+
+	// (4) decimals=0 is a valid ERC-20 precision and must not be treated as
+	// missing once the seller supplied it explicitly.
+	pays, _ = buildAcceptPayments([]string{
+		"asset=0x" + strings.Repeat("d", 40) + ",decimals=0,eip712-name=Whole Token,eip712-version=1,network=base,price=1,pay-to=" + testPayTo,
+	}, "")
+	calls = 0
+	if err := autofillAcceptPayments(ctx, pays, func(_ context.Context, _, _ string) (tokenMeta, error) {
+		calls++
+		return tokenMeta{}, nil
+	}); err != nil {
+		t.Fatalf("explicit zero decimals should be complete, got %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("explicit zero decimals should not trigger autofill, got %d calls", calls)
 	}
 }
 

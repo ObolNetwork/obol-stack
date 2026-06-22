@@ -31,6 +31,7 @@ const erc20MetaABI = `[
 // couldn't be read is left at its zero value (independent per call).
 type tokenMeta struct {
 	Decimals      int
+	DecimalsSet   bool
 	Symbol        string
 	EIP712Name    string
 	EIP712Version string
@@ -75,6 +76,7 @@ func fetchTokenMeta(ctx context.Context, cfg *config.Config, network, tokenAddr 
 	if err := c.Call(opts, &out, "decimals"); err == nil && len(out) == 1 {
 		if d, ok := out[0].(uint8); ok {
 			meta.Decimals = int(d)
+			meta.DecimalsSet = true
 		}
 	}
 	out = nil
@@ -97,8 +99,10 @@ func fetchTokenMeta(ctx context.Context, cfg *config.Config, network, tokenAddr 
 
 // assetComplete reports whether a raw-asset block has the signature-critical
 // fields filled (decimals + EIP-712 domain). Symbol is cosmetic and excluded.
+// Decimals uses -1 as the pre-autofill "not provided/read yet" sentinel so
+// decimals=0 remains a valid, explicit ERC-20 precision.
 func assetComplete(a schemas.AssetTerms) bool {
-	return a.Decimals > 0 && a.EIP712Name != "" && a.EIP712Version != ""
+	return a.Decimals >= 0 && a.EIP712Name != "" && a.EIP712Version != ""
 }
 
 // autofillAcceptPayments fills missing token metadata on raw-asset payment
@@ -120,7 +124,7 @@ func autofillAcceptPayments(ctx context.Context, payments []map[string]any, fetc
 				"could not read token %s on %s from chain: %w\n  Fix: pass decimals=,eip712-name=,eip712-version= in --accept, or run `obol network add %s` so eRPC can reach the chain",
 				a.Address, network, err, network)
 		}
-		if a.Decimals == 0 {
+		if a.Decimals < 0 && meta.DecimalsSet {
 			a.Decimals = meta.Decimals
 		}
 		if a.Symbol == "" {
@@ -134,7 +138,7 @@ func autofillAcceptPayments(ctx context.Context, payments []map[string]any, fetc
 		}
 		if !assetComplete(a) {
 			var missing []string
-			if a.Decimals == 0 {
+			if a.Decimals < 0 {
 				missing = append(missing, "decimals")
 			}
 			if a.EIP712Name == "" {

@@ -802,8 +802,23 @@ def _supports_erc20_permit(address, token_contract, chain=None):
     try:
         _get_erc20_permit_nonce(address, token_contract, chain)
         return True
-    except Exception:
+    except (Exception, SystemExit):
         return False
+
+
+def _payment_uses_gasless_permit(signer_address, asset, chain, transfer_method):
+    """Whether the selected payment asset can use the gasless Permit2 path.
+
+    The 402 `extensions` object is top-level, so a multi-payment seller can
+    advertise gasless support because one option supports it. Scope the decision
+    back to the selected asset before skipping Permit2 allowance checks or
+    signing EIP-2612 permits.
+    """
+    return (
+        transfer_method == "permit2" and
+        bool(asset) and
+        _supports_erc20_permit(signer_address, asset, chain)
+    )
 
 
 def _get_token_allowance(owner, token_contract, spender, chain=None):
@@ -837,7 +852,7 @@ def _ensure_permit2_allowance(signer_address, asset, chain, transfer_method, ext
     """
     if transfer_method != "permit2":
         return
-    if extensions and "eip2612GasSponsoring" in extensions:
+    if _payment_uses_gasless_permit(signer_address, asset, chain, transfer_method):
         return
     allowance = _get_token_allowance(signer_address, asset, PERMIT2_ADDRESS, chain)
     if allowance is None:
@@ -993,9 +1008,11 @@ def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payme
     transfer_method = extra.get("assetTransferMethod", "eip3009")
     domain_name = extra.get("name", USDC_DOMAIN_NAME)
     domain_version = extra.get("version", USDC_DOMAIN_VERSION)
-    eip2612_enabled = (
-        transfer_method == "permit2" and
-        ("eip2612GasSponsoring" in extensions or _supports_erc20_permit(signer_address, payment.get("asset", usdc_addr), chain))
+    eip2612_enabled = _payment_uses_gasless_permit(
+        signer_address,
+        payment.get("asset", usdc_addr),
+        chain,
+        transfer_method,
     )
     permit_nonce_base = int(_get_erc20_permit_nonce(signer_address, payment.get("asset", usdc_addr), chain)) if eip2612_enabled else None
 
