@@ -1021,8 +1021,9 @@ func skillCatalogHowToPay(baseURL string) []string {
 		"",
 		"1. **Call the endpoint with no payment.** You get `402 Payment Required` with a JSON " +
 			"body whose `accepts[]` array lists every payment the operator will take — each entry " +
-			"carries the price in atomic units (`maxAmountRequired`), the CAIP-2 chain id (`network`), " +
-			"the settlement token contract (`asset`), the recipient (`payTo`), and the transfer scheme.",
+			"carries the price in atomic units (`amount`; legacy sellers may use `maxAmountRequired`), " +
+			"the CAIP-2 chain id (`network`), the settlement token contract (`asset`), the recipient " +
+			"(`payTo`), and the transfer scheme.",
 		"2. **Pick one `accepts[]` entry** whose token + chain you can pay on. Sellers may advertise " +
 			"several (e.g. USDC on Base *or* OBOL on Ethereum); they are alternatives, you satisfy one.",
 		"3. **Sign an authorization** matching that entry — an EIP-3009 `TransferWithAuthorization` " +
@@ -1215,7 +1216,7 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 		asset := offerAssetJSON(offer)
 		if asset != nil {
 			svc.Asset = asset
-			if raw != "" && asset.Decimals > 0 {
+			if raw != "" && catalogAssetHasKnownDecimals(asset) {
 				svc.PriceAtomicUnits = decimalToAtomicString(raw, int(asset.Decimals))
 			}
 		}
@@ -1284,7 +1285,7 @@ func paymentAssetJSON(p monetizeapi.ServiceOfferPayment) *schemas.ServiceCatalog
 	if a.EIP712Name != "" || a.EIP712Version != "" {
 		out.EIP712Domain = &schemas.ServiceCatalogEIP712Domain{Name: a.EIP712Name, Version: a.EIP712Version}
 	}
-	if def, ok := defaultUSDCForNetwork(p.Network); ok {
+	if def, ok := defaultUSDCForNetwork(p.Network); ok && shouldBackfillDefaultAsset(out, def) {
 		// Backfill any unset fields from chain defaults so consumers always
 		// see a complete asset block when the network is known.
 		if out.Address == "" {
@@ -1304,6 +1305,15 @@ func paymentAssetJSON(p monetizeapi.ServiceOfferPayment) *schemas.ServiceCatalog
 		}
 	}
 	return out
+}
+
+func shouldBackfillDefaultAsset(out *schemas.ServiceCatalogAsset, def schemas.ServiceCatalogAsset) bool {
+	if out == nil {
+		return false
+	}
+	addressMatchesDefault := out.Address == "" || strings.EqualFold(out.Address, def.Address)
+	symbolMatchesDefault := out.Symbol == "" || strings.EqualFold(out.Symbol, def.Symbol)
+	return addressMatchesDefault && symbolMatchesDefault
 }
 
 // caip2ForNetwork maps a chain name (or CAIP-2 string) to (CAIP-2, chainID).
@@ -1526,13 +1536,20 @@ func buildCatalogPayments(offer *monetizeapi.ServiceOffer) []schemas.ServiceCata
 		opt.CAIP2Network, opt.ChainID = caip2ForNetwork(p.Network)
 		if asset := paymentAssetJSON(p); asset != nil {
 			opt.Asset = asset
-			if opt.PriceRaw != "" && asset.Decimals > 0 {
+			if opt.PriceRaw != "" && catalogAssetHasKnownDecimals(asset) {
 				opt.PriceAtomicUnits = decimalToAtomicString(opt.PriceRaw, int(asset.Decimals))
 			}
 		}
 		out = append(out, opt)
 	}
 	return out
+}
+
+func catalogAssetHasKnownDecimals(asset *schemas.ServiceCatalogAsset) bool {
+	if asset == nil {
+		return false
+	}
+	return asset.Decimals > 0 || asset.EIP712Domain != nil
 }
 
 func marshalRegistrationDocument(document erc8004.AgentRegistration) (string, string, error) {

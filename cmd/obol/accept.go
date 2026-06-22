@@ -41,6 +41,9 @@ type acceptOption struct {
 	PriceKey string // perRequest | perMTok | perHour | perEpoch
 	PriceVal string
 	Asset    schemas.AssetTerms
+	// AssetDecimalsSet distinguishes an explicitly supplied decimals=0 from an
+	// omitted decimals field while raw-asset metadata is still being autofilled.
+	AssetDecimalsSet bool
 	// dedupKey identifies the (chain, token) pair for duplicate detection.
 	dedupKey string
 }
@@ -167,13 +170,15 @@ func parseAcceptOption(raw, defaultPayTo string) (acceptOption, int64, error) {
 		if transfer != schemas.AssetTransferMethodEIP3009 && transfer != schemas.AssetTransferMethodPermit2 {
 			return acceptOption{}, 0, fmt.Errorf("--accept %q: transfer must be eip3009 or permit2", raw)
 		}
-		dec := 0
+		dec := -1
+		decimalsSet := false
 		if d := strings.TrimSpace(kv["decimals"]); d != "" {
 			n, derr := strconv.Atoi(d)
-			if derr != nil || n <= 0 || n > 255 {
-				return acceptOption{}, 0, fmt.Errorf("--accept %q: decimals must be 1-255", raw)
+			if derr != nil || n < 0 || n > 255 {
+				return acceptOption{}, 0, fmt.Errorf("--accept %q: decimals must be 0-255", raw)
 			}
 			dec = n
+			decimalsSet = true
 		}
 		opt.Asset = schemas.AssetTerms{
 			Address: rawAddr, Symbol: strings.TrimSpace(kv["symbol"]), Decimals: dec,
@@ -181,6 +186,7 @@ func parseAcceptOption(raw, defaultPayTo string) (acceptOption, int64, error) {
 			EIP712Name:     strings.TrimSpace(kv["eip712-name"]),
 			EIP712Version:  strings.TrimSpace(kv["eip712-version"]),
 		}
+		opt.AssetDecimalsSet = decimalsSet
 		opt.dedupKey = canonicalChain + "\x00" + strings.ToLower(rawAddr)
 
 	default:
