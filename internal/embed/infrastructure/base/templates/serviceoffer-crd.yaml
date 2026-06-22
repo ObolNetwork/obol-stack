@@ -100,7 +100,8 @@ spec:
               listing:
                 description: |-
                   Listing controls how the offer is presented on the public storefront
-                  (ordering weight and grouping category). Cosmetic only.
+                  (ordering weight and grouping category). Cosmetic only — it does not
+                  affect routing, pricing, or payment.
                 properties:
                   category:
                     description: |-
@@ -109,8 +110,8 @@ spec:
                     type: string
                   weight:
                     description: |-
-                      Weight orders offers on the storefront: higher sorts earlier.
-                      Equal weights fall back to alphabetical by name. Defaults to 0.
+                      Weight orders offers on the storefront: higher sorts earlier. Offers
+                      with equal weight fall back to alphabetical by name. Defaults to 0.
                     type: integer
                 type: object
               model:
@@ -136,6 +137,12 @@ spec:
                 pattern: ^/[a-zA-Z0-9/_.-]*$
                 type: string
               payment:
+                description: |-
+                  Primary accepted payment. Always set, including for multi-payment
+                  offers, where it MUST mirror payments[0] — discovery surfaces that
+                  predate multi-payment (the catalog, skill.md, kubectl printcolumns)
+                  read this singular block. The x402 verifier reads the full set via
+                  EffectivePayments.
                 properties:
                   asset:
                     description: |-
@@ -215,10 +222,12 @@ spec:
                 type: object
               payments:
                 description: |-
-                  Payments lists every accepted payment option (one per currency/network).
-                  When non-empty it is the source of truth for the x402 402 accepts[] array;
-                  the buyer picks one option and the verifier settles whichever was used.
-                  payments[0] is the primary option and MUST equal spec.payment.
+                  Payments lists every accepted payment option for this offer (one per
+                  currency/network). When non-empty it is the source of truth for the
+                  x402 verifier's 402 accepts[] array: the buyer picks one option and
+                  the verifier settles whichever was used. payments[0] is the primary
+                  option and MUST equal spec.payment. Empty means a single-payment
+                  offer described by spec.payment alone. See EffectivePayments.
                 items:
                   properties:
                     asset:
@@ -276,14 +285,16 @@ spec:
                             only.
                           type: string
                         perHour:
-                          description: Per-compute-hour price in USDC. Fine-tuning only.
+                          description: Per-compute-hour price in USDC. Fine-tuning
+                            only.
                           type: string
                         perMTok:
-                          description: Per-million-tokens price in USDC. Inference only.
+                          description: Per-million-tokens price in USDC. Inference
+                            only.
                           type: string
                         perRequest:
-                          description: Flat per-request price in USDC. Applicable to
-                            all types.
+                          description: Flat per-request price in USDC. Applicable
+                            to all types.
                           type: string
                       type: object
                     scheme:
