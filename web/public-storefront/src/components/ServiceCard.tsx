@@ -165,7 +165,7 @@ function BuyViaObolAgent({ service }: { service: Service }) {
   }
 
   if (kind === "agent") {
-    const prompt = `Use the buy-x402 skill's \`pay\` command to call the Obol Agent at ${service.endpoint}. This is an *agent*, not a raw model — it has skills, tools, and memory. In the chat-completions body, send a real user message describing what you want it to do, for example: {"role": "user", "content": "<your task for this agent>"}. Do not pay without a clear instruction.`;
+    const prompt = `Use the buy-x402 skill's \`pay\` command to call the Obol Agent at ${service.endpoint}. This is an *agent*, not a raw model — it has its own skills, tools, and memory. Include a clear instruction in the chat-completions body so the agent knows what to do.`;
     return (
       <div className="space-y-2">
         <p className="text-xs text-text-muted">
@@ -178,14 +178,14 @@ function BuyViaObolAgent({ service }: { service: Service }) {
     );
   }
 
-  // http (default): legacy single-shot pay — include an explicit task so
-  // buyers don't pay for a call with no payload.
-  const prompt = `Use the buy-x402 skill's \`pay\` command to call ${service.endpoint}. Pay ${service.price} on ${service.network}. In the request body, send what this endpoint expects (e.g. JSON with your question or task) — do not call it empty-handed. Example for a JSON API: {"message": "<what you want this endpoint to do>"}. Report the response.`;
+  // http (default): legacy single-shot pay.
+  const prompt = `Use the buy-x402 skill's \`pay\` command to call ${service.endpoint} once. Pay ${service.price} on ${service.network}. Use the method and payload the seller documents. Report what it returns.`;
   return (
     <div className="space-y-2">
       <p className="text-xs text-text-muted">
-        Paste this into your Obol agent. Replace the example message with your
-        real task before paying — each call spends {service.price}.
+        Paste this into your Obol agent. The agent uses the built-in{" "}
+        <code className="font-mono text-obol-green">buy-x402</code> skill to
+        sign one authorisation and call the endpoint.
       </p>
       <Snippet code={prompt} />
     </div>
@@ -203,7 +203,7 @@ function BuyViaOtherAgent({ service }: { service: Service }) {
     const modelLine = service.model ? ` (running ${service.model})` : "";
     prompt = `Read https://obol.org/llms.txt to learn how Obol's x402 micropayments work. Help me call the Obol Agent at ${service.endpoint}${modelLine} — it's an autonomous agent (tools + skills + memory), not a raw LLM. POST OpenAI-style chat-completions JSON with a real prompt in \`messages\`, attach a signed EIP-3009 or Permit2 authorisation as \`X-PAYMENT\`, and report what the agent does.`;
   } else {
-    prompt = `Read https://obol.org/llms.txt and skim https://github.com/ObolNetwork/skills to learn how Obol x402 payments work. Help me buy one call to ${service.endpoint} for ${service.price} on ${service.network}. Before paying, ask me what I want the endpoint to do and include that in the request body (do not send an empty request). Sign EIP-3009 or Permit2, attach X-PAYMENT, and report the response.`;
+    prompt = `I want to purchase a service offered by an Obol Agent at ${service.endpoint} for ${service.price} on ${service.network}. Please install the run-obol-stack skill from https://github.com/ObolNetwork/skills, ask me for permission to set up the obol stack, and use the buy-x402 skill to make the purchase on my behalf.`;
   }
 
   return (
