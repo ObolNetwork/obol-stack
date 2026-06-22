@@ -245,35 +245,44 @@ export class PrometheusClient {
         'avg(rate(node_cpu_seconds_total{mode!="idle"}[5m]))'
       );
 
-      // Get disk metrics - try multiple approaches
-      let diskTotal, diskAvailable;
-      try {
-        // Try with device filter first
+      // Disk metrics. We query the root filesystem instead of pinning a
+      // device name — on most Linux hosts the root device is nvme0n1pN or
+      // sdaN, not /dev/vda1 (which is a KVM/virtio name). Filtering by
+      // mountpoint="/" and excluding the pseudo-filesystems that
+      // node-exporter exposes (tmpfs/overlay/squashfs/...) gives us the
+      // real backing disk on baremetal, VMs, and container hosts alike.
+      // sum() collapses multiple results into one in case node-exporter
+      // returns per-fstype duplicates.
+      //
+      // Note: this.query() returns an empty result set rather than
+      // throwing when Prometheus matches no series, so try/catch is the
+      // wrong tool here. We detect "no data" by checking the result array
+      // length after the fact and fall back to a broader query.
+      const fsExcludes =
+        'tmpfs|overlay|squashfs|aufs|fuse.lxcfs|nsfs|devtmpfs|ramfs';
+      let diskTotal = await this.query(
+        `sum(node_filesystem_size_bytes{mountpoint="/",fstype!~"${fsExcludes}"})`
+      );
+      let diskAvailable = await this.query(
+        `sum(node_filesystem_avail_bytes{mountpoint="/",fstype!~"${fsExcludes}"})`
+      );
+
+      // Broader fallback: some node-exporter setups (k3s, containerized
+      // hosts) don't expose "/" but do expose the largest real filesystem
+      // somewhere else. Pick the largest filesystem by total bytes.
+      if (!diskTotal.data.result.length) {
         diskTotal = await this.query(
-          'node_filesystem_size_bytes{device="/dev/vda1",fstype="ext4"}'
+          `max(node_filesystem_size_bytes{fstype!~"${fsExcludes}"})`
         );
         diskAvailable = await this.query(
-          'node_filesystem_avail_bytes{device="/dev/vda1",fstype="ext4"}'
+          `max(node_filesystem_avail_bytes{fstype!~"${fsExcludes}"})`
         );
-      } catch (e) {
+      }
+
+      if (!diskTotal.data.result.length) {
         console.warn(
-          'Device-specific disk query failed, trying generic query:',
-          e
+          'Prometheus returned no disk metrics; node-exporter may not be scraping the host filesystem'
         );
-        try {
-          // Fallback to any ext4 filesystem
-          diskTotal = await this.query(
-            'node_filesystem_size_bytes{fstype="ext4"}'
-          );
-          diskAvailable = await this.query(
-            'node_filesystem_avail_bytes{fstype="ext4"}'
-          );
-        } catch (e2) {
-          console.warn('Generic disk query failed:', e2);
-          // Return dummy data for disk if both fail
-          diskTotal = { data: { result: [] } };
-          diskAvailable = { data: { result: [] } };
-        }
       }
 
       // Get uptime
