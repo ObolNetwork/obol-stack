@@ -70,6 +70,7 @@ type Controller struct {
 	purchaseInformer     cache.SharedIndexInformer
 	agentInformer        cache.SharedIndexInformer
 	configMapInformer    cache.SharedIndexInformer
+	storefrontProfileInformer cache.SharedIndexInformer
 	offerQueue           workqueue.TypedRateLimitingInterface[string]
 	registrationQueue    workqueue.TypedRateLimitingInterface[string]
 	identityQueue        workqueue.TypedRateLimitingInterface[string]
@@ -113,6 +114,10 @@ func New(cfg *rest.Config) (*Controller, error) {
 		options.FieldSelector = fields.OneTermEqualSelector("metadata.name", "obol-stack-config").String()
 	})
 	configMapInformer := configMapFactory.ForResource(monetizeapi.ConfigMapGVR).Informer()
+	storefrontProfileFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 0, storefront.ProfileNamespace, func(options *metav1.ListOptions) {
+		options.FieldSelector = fields.OneTermEqualSelector("metadata.name", storefront.ProfileConfigMap).String()
+	})
+	storefrontProfileInformer := storefrontProfileFactory.ForResource(monetizeapi.ConfigMapGVR).Informer()
 
 	controller := &Controller{
 		kubeClient:           kubeClient,
@@ -133,8 +138,9 @@ func New(cfg *rest.Config) (*Controller, error) {
 		identityInformer:     identityInformer,
 		purchaseInformer:     purchaseInformer,
 		agentInformer:        agentInformer,
-		configMapInformer:    configMapInformer,
-		offerQueue:           workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		configMapInformer:         configMapInformer,
+		storefrontProfileInformer: storefrontProfileInformer,
+		offerQueue:                workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		registrationQueue:    workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		identityQueue:        workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
 		purchaseQueue:        workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
@@ -203,6 +209,11 @@ func New(cfg *rest.Config) (*Controller, error) {
 		UpdateFunc: func(_, newObj any) { controller.enqueueDiscoveryRefresh(newObj) },
 		DeleteFunc: controller.enqueueDiscoveryRefresh,
 	})
+	storefrontProfileInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    controller.enqueueStorefrontProfileRefresh,
+		UpdateFunc: func(_, newObj any) { controller.enqueueStorefrontProfileRefresh(newObj) },
+		DeleteFunc: controller.enqueueStorefrontProfileRefresh,
+	})
 
 	return controller, nil
 }
@@ -220,6 +231,7 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 	go c.purchaseInformer.Run(ctx.Done())
 	go c.agentInformer.Run(ctx.Done())
 	go c.configMapInformer.Run(ctx.Done())
+	go c.storefrontProfileInformer.Run(ctx.Done())
 	if !cache.WaitForCacheSync(ctx.Done(),
 		c.offerInformer.HasSynced,
 		c.registrationInformer.HasSynced,
@@ -227,6 +239,7 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 		c.purchaseInformer.HasSynced,
 		c.agentInformer.HasSynced,
 		c.configMapInformer.HasSynced,
+		c.storefrontProfileInformer.HasSynced,
 	) {
 		return fmt.Errorf("wait for informer sync")
 	}
@@ -322,12 +335,19 @@ func (c *Controller) enqueueDiscoveryRefresh(obj any) {
 		for _, item := range c.identityInformer.GetStore().List() {
 			c.enqueueIdentity(item)
 		}
+	}
+}
+
+func (c *Controller) enqueueStorefrontProfileRefresh(obj any) {
+	u := asUnstructured(obj)
+	if u == nil {
 		return
 	}
-	if ns == storefront.ProfileNamespace && name == storefront.ProfileConfigMap {
-		log.Printf("serviceoffer-controller: storefront profile change detected, refreshing skill catalog")
-		c.enqueueSkillCatalogRefresh()
+	if u.GetNamespace() != storefront.ProfileNamespace || u.GetName() != storefront.ProfileConfigMap {
+		return
 	}
+	log.Printf("serviceoffer-controller: storefront profile change detected, refreshing skill catalog")
+	c.enqueueSkillCatalogRefresh()
 }
 
 func (c *Controller) enqueueSkillCatalogRefresh() {
@@ -1142,7 +1162,7 @@ func (c *Controller) reconcileRegistrationTombstone(ctx context.Context, raw *un
 }
 
 func (c *Controller) loadStorefrontProfile(ctx context.Context) (*schemas.StorefrontProfile, error) {
-	cm, err := c.configMaps.Namespace(skillCatalogNamespace).Get(ctx, storefront.ProfileConfigMap, metav1.GetOptions{})
+	cm, err := c.configMaps.Namespace(storefront.ProfileNamespace).Get(ctx, storefront.ProfileConfigMap, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, nil

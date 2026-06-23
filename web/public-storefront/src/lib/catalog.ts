@@ -1,3 +1,4 @@
+import { cache } from "react";
 import type { Service, StorefrontProfile } from "@/types";
 
 const SERVICES_URL =
@@ -27,7 +28,7 @@ export function isDefaultStorefrontLogo(logoUrl: string): boolean {
   );
 }
 
-export async function fetchServices(): Promise<Service[]> {
+export const fetchServices = cache(async (): Promise<Service[]> => {
   try {
     const res = await fetchCatalog("/api/services.json");
     if (!res.ok) return [];
@@ -35,9 +36,9 @@ export async function fetchServices(): Promise<Service[]> {
   } catch {
     return [];
   }
-}
+});
 
-export async function fetchStorefront(): Promise<StorefrontProfile> {
+export const fetchStorefront = cache(async (): Promise<StorefrontProfile> => {
   try {
     const res = await fetchCatalog("/api/storefront.json");
     if (!res.ok) return DEFAULT_STOREFRONT;
@@ -50,4 +51,4 @@ export async function fetchStorefront(): Promise<StorefrontProfile> {
   } catch {
     return DEFAULT_STOREFRONT;
   }
-}
+});

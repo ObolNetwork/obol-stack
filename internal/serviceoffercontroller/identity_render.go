@@ -3,6 +3,7 @@ package serviceoffercontroller
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 
@@ -106,7 +107,15 @@ func identityDocumentMetadata(identity *monetizeapi.AgentIdentity, offers []*mon
 
 func buildStorefrontJSON(baseURL string, explicit *schemas.StorefrontProfile) string {
 	profile := storefront.ResolvePublished(explicit, baseURL)
-	out, _ := json.MarshalIndent(profile, "", "  ")
+	out, err := json.MarshalIndent(profile, "", "  ")
+	if err != nil {
+		log.Printf("serviceoffer-controller: marshal storefront profile: %v", err)
+		fallback, ferr := json.MarshalIndent(storefront.ResolvePublished(nil, baseURL), "", "  ")
+		if ferr != nil {
+			return "{}"
+		}
+		return string(fallback)
+	}
 	return string(out)
 }
 

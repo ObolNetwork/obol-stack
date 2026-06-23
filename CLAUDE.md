@@ -62,6 +62,7 @@ Integration tests use `//go:build integration`; skip when prerequisites missing.
 | Public (tunnel) | none | `/.well-known/agent-registration.json` | ERC-8004 httpd |
 | Public (tunnel) | none | `/skill.md` | service catalog |
 | Public (tunnel) | none | `/api/services.json` | service catalog JSON feed |
+| Public (tunnel) | none | `/api/storefront.json` | storefront branding JSON feed |
 | Public (tunnel) | tunnel hostname only | `/` | storefront landing page (Next.js) |
 
 **NEVER remove hostname restrictions from frontend or eRPC HTTPRoutes** — exposing the frontend/RPC to the public internet is a critical security flaw.
@@ -426,6 +427,7 @@ The Cloudflare tunnel exposes the cluster to the public internet. Only x402-gate
 - `/services/*` — x402 payment-gated, safe by design
 - `/.well-known/agent-registration.json` — ERC-8004 discovery
 - `/skill.md` — machine-readable service catalog
+- `/api/storefront.json` — storefront branding profile (display name, tagline, logo)
 - `/` on tunnel hostname — static storefront landing page (busybox httpd)
 
 ## Dependencies
