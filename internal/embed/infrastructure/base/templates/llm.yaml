@@ -303,14 +303,14 @@ spec:
         - name: x402-buyer
           # Pinned by sha256 digest (multi-arch manifest list, amd64+arm64)
           # so the deployed sidecar is byte-for-byte identical across QA
-          # hosts. The :81a5c52 tag is preserved for human readability; the
+          # hosts. The :2e8a97e tag is preserved for human readability; the
           # digest is authoritative.
           # Previous tag-only pin allowed the local-build path to silently
           # reuse a 5-day-old `:latest` image and ate the release-smoke 503
           # investigation: stale buyer serialized X-PAYMENT with empty
           # authorization fields → facilitator /verify 400 → 503 cascade
           # across flow-08/11/14/13. See internal/embed/embed_image_pin_test.go.
-          image: ghcr.io/obolnetwork/x402-buyer:81a5c52@sha256:66ffab3d6089004f184699527138176df516fa27fe88684b2e744fa213c07206
+          image: ghcr.io/obolnetwork/x402-buyer:2e8a97e@sha256:9a5de078a65561c7aa53c0a0eea2d8b15d59f037bca574b19d27506e5016171a
           imagePullPolicy: IfNotPresent
           # PSS Restricted + writable PVC. On fresh clusters the StorageClass
           # asks local-path-provisioner for local PVs, so kubelet applies the
