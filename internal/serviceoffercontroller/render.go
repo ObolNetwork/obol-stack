@@ -24,6 +24,7 @@ const (
 	skillCatalogConfigMapName = "obol-skill-md"
 	skillCatalogRouteName     = "obol-skill-md-route"
 	servicesJSONRouteName     = "obol-services-json-route"
+	storefrontJSONRouteName   = "obol-storefront-json-route"
 	openAPIRouteName          = "obol-openapi-route"
 	apiDocsRouteName          = "obol-api-docs-route"
 )
@@ -247,7 +248,7 @@ func agentIdentityLabels(identity *monetizeapi.AgentIdentity, appName string) ma
 	}
 }
 
-func buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML string) *unstructured.Unstructured {
+func buildSkillCatalogConfigMap(content, servicesJSON, storefrontJSON, openAPIJSON, apiDocsHTML string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
@@ -261,11 +262,12 @@ func buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML 
 				},
 			},
 			"data": map[string]any{
-				"skill.md":      content,
-				"services.json": servicesJSON,
-				"openapi.json":  openAPIJSON,
-				"api.html":      apiDocsHTML,
-				"httpd.conf":    ".md:text/markdown\n.json:application/json\n.html:text/html\n",
+				"skill.md":        content,
+				"services.json":   servicesJSON,
+				"storefront.json": storefrontJSON,
+				"openapi.json":    openAPIJSON,
+				"api.html":        apiDocsHTML,
+				"httpd.conf":      ".md:text/markdown\n.json:application/json\n.html:text/html\n",
 			},
 		},
 	}
@@ -326,6 +328,7 @@ func buildSkillCatalogDeployment(contentHash string) *unstructured.Unstructured 
 									"items": []any{
 										map[string]any{"key": "skill.md", "path": "skill.md"},
 										map[string]any{"key": "services.json", "path": "api/services.json"},
+										map[string]any{"key": "storefront.json", "path": "api/storefront.json"},
 										map[string]any{"key": "openapi.json", "path": "openapi.json"},
 										// busybox httpd resolves /api/ → /api/index.html, so the
 										// Scalar shell sits at api/index.html. The /api Exact
@@ -559,6 +562,50 @@ func buildServicesJSONHTTPRoute() *unstructured.Unstructured {
 								"path": map[string]any{
 									"type":  "Exact",
 									"value": "/api/services.json",
+								},
+							},
+						},
+						"backendRefs": []any{
+							map[string]any{
+								"name":      skillCatalogConfigMapName,
+								"namespace": skillCatalogNamespace,
+								"port":      int64(8080),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func buildStorefrontJSONHTTPRoute() *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "HTTPRoute",
+			"metadata": map[string]any{
+				"name":      storefrontJSONRouteName,
+				"namespace": skillCatalogNamespace,
+				"labels": map[string]any{
+					"obol.org/managed-by": "serviceoffer-controller",
+				},
+			},
+			"spec": map[string]any{
+				"parentRefs": []any{
+					map[string]any{
+						"name":        "traefik-gateway",
+						"namespace":   "traefik",
+						"sectionName": "web",
+					},
+				},
+				"rules": []any{
+					map[string]any{
+						"matches": []any{
+							map[string]any{
+								"path": map[string]any{
+									"type":  "Exact",
+									"value": "/api/storefront.json",
 								},
 							},
 						},

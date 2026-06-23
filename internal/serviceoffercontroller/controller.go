@@ -16,6 +16,8 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/ObolNetwork/obol-stack/internal/storefront"
 	"github.com/ethereum/go-ethereum/common"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -308,18 +310,41 @@ func (c *Controller) enqueueDiscoveryRefresh(obj any) {
 	if u == nil {
 		return
 	}
-	if u.GetNamespace() != "obol-frontend" || u.GetName() != "obol-stack-config" {
+	ns, name := u.GetNamespace(), u.GetName()
+	if ns == "obol-frontend" && name == "obol-stack-config" {
+		log.Printf("serviceoffer-controller: base URL change detected, refreshing offers and registration requests")
+		for _, item := range c.offerInformer.GetStore().List() {
+			c.enqueueOffer(item)
+		}
+		for _, item := range c.registrationInformer.GetStore().List() {
+			c.enqueueRegistration(item)
+		}
+		for _, item := range c.identityInformer.GetStore().List() {
+			c.enqueueIdentity(item)
+		}
 		return
 	}
-	log.Printf("serviceoffer-controller: base URL change detected, refreshing offers and registration requests")
-	for _, item := range c.offerInformer.GetStore().List() {
-		c.enqueueOffer(item)
+	if ns == storefront.ProfileNamespace && name == storefront.ProfileConfigMap {
+		log.Printf("serviceoffer-controller: storefront profile change detected, refreshing skill catalog")
+		c.enqueueSkillCatalogRefresh()
 	}
-	for _, item := range c.registrationInformer.GetStore().List() {
-		c.enqueueRegistration(item)
+}
+
+func (c *Controller) enqueueSkillCatalogRefresh() {
+	items := c.offerInformer.GetStore().List()
+	if len(items) > 0 {
+		// Any single offer reconcile rebuilds the full catalog (including storefront.json).
+		c.enqueueOffer(items[0])
+		return
 	}
-	for _, item := range c.identityInformer.GetStore().List() {
-		c.enqueueIdentity(item)
+	go c.refreshSkillCatalogAsync()
+}
+
+func (c *Controller) refreshSkillCatalogAsync() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := c.reconcileSkillCatalog(ctx, nil); err != nil {
+		log.Printf("serviceoffer-controller: refresh skill catalog: %v", err)
 	}
 }
 
@@ -1116,6 +1141,24 @@ func (c *Controller) reconcileRegistrationTombstone(ctx context.Context, raw *un
 	return c.updateRegistrationStatus(ctx, raw, status)
 }
 
+func (c *Controller) loadStorefrontProfile(ctx context.Context) (*schemas.StorefrontProfile, error) {
+	cm, err := c.configMaps.Namespace(skillCatalogNamespace).Get(ctx, storefront.ProfileConfigMap, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	raw, found, err := unstructured.NestedString(cm.Object, "data", storefront.ProfileDataKey)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+	return storefront.ParseProfile(raw)
+}
+
 // reconcileSkillCatalog rebuilds the /skill.md ConfigMap/Deployment/Service/
 // HTTPRoute from the current set of Ready ServiceOffers. If `override` is
 // non-nil, that offer replaces (or is appended to) the informer-cached copy
@@ -1158,6 +1201,11 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 
 	content := buildSkillCatalogMarkdown(offers, baseURL)
 	servicesJSON := buildServiceCatalogJSON(offers, baseURL)
+	storefrontProfile, err := c.loadStorefrontProfile(ctx)
+	if err != nil {
+		return err
+	}
+	storefrontJSON := buildStorefrontJSON(baseURL, storefrontProfile)
 	// buildOpenAPIDocument prefers the tunnel URL for the public `servers[0]`
 	// entry; baseURL is sourced from obol-stack-config.tunnelURL via
 	// registrationBaseURL, which is also what /skill.md and services.json
@@ -1166,9 +1214,9 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	// when tunnelURL changes — see enqueueDiscoveryRefresh).
 	openAPIJSON := buildOpenAPIDocument(offers, baseURL)
 	apiDocsHTML := scalarHTML()
-	contentHash := fmt.Sprintf("%x", md5Sum(content+servicesJSON+openAPIJSON+apiDocsHTML))[:8]
+	contentHash := fmt.Sprintf("%x", md5Sum(content+servicesJSON+storefrontJSON+openAPIJSON+apiDocsHTML))[:8]
 
-	if err := c.applyObject(ctx, c.configMaps.Namespace(skillCatalogNamespace), buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML)); err != nil {
+	if err := c.applyObject(ctx, c.configMaps.Namespace(skillCatalogNamespace), buildSkillCatalogConfigMap(content, servicesJSON, storefrontJSON, openAPIJSON, apiDocsHTML)); err != nil {
 		return err
 	}
 	if err := c.applyObject(ctx, c.deployments.Namespace(skillCatalogNamespace), buildSkillCatalogDeployment(contentHash)); err != nil {
@@ -1181,6 +1229,9 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 		return err
 	}
 	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildServicesJSONHTTPRoute()); err != nil {
+		return err
+	}
+	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildStorefrontJSONHTTPRoute()); err != nil {
 		return err
 	}
 	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildOpenAPIHTTPRoute()); err != nil {

@@ -1,12 +1,15 @@
 package serviceoffercontroller
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/ObolNetwork/obol-stack/internal/storefront"
 )
 
 // IdentityRegistrationView is the identity-driven inputs needed to render an
@@ -99,6 +102,12 @@ func identityDocumentMetadata(identity *monetizeapi.AgentIdentity, offers []*mon
 		image = baseURL + "/agent-icon.png"
 	}
 	return name, description, image
+}
+
+func buildStorefrontJSON(baseURL string, explicit *schemas.StorefrontProfile) string {
+	profile := storefront.ResolvePublished(explicit, baseURL)
+	out, _ := json.MarshalIndent(profile, "", "  ")
+	return string(out)
 }
 
 func buildIdentityOnChainRegistrations(identity *monetizeapi.AgentIdentity) []erc8004.OnChainReg {

@@ -63,6 +63,7 @@ func sellCommand(cfg *config.Config) *cli.Command {
 			sellPricingCommand(cfg),
 			sellRegisterCommand(cfg),
 			sellIdentityCommand(cfg),
+			sellStorefrontCommand(cfg),
 			sellInfoCommand(cfg),
 			sellResumeCommand(cfg),
 		},

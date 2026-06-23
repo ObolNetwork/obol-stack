@@ -1,11 +1,13 @@
 package serviceoffercontroller
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -246,5 +248,42 @@ func TestBuildIdentityRegistrationDocument_DescriptionPrecedence(t *testing.T) {
 				t.Errorf("Description = %q, want %q", doc.Description, tc.wantDoc)
 			}
 		})
+	}
+}
+
+func TestBuildStorefrontJSON_UsesExplicitProfile(t *testing.T) {
+	explicit := &schemas.StorefrontProfile{
+		DisplayName: "Acme Inference",
+		Tagline:     "Custom seller tagline",
+		LogoURL:     "https://cdn.example/logo.png",
+	}
+
+	jsonStr := buildStorefrontJSON("https://seller.example", explicit)
+	var profile schemas.StorefrontProfile
+	if err := json.Unmarshal([]byte(jsonStr), &profile); err != nil {
+		t.Fatalf("unmarshal storefront profile: %v", err)
+	}
+	if profile.DisplayName != "Acme Inference" {
+		t.Fatalf("DisplayName = %q", profile.DisplayName)
+	}
+	if profile.Tagline != "Custom seller tagline" {
+		t.Fatalf("Tagline = %q", profile.Tagline)
+	}
+	if profile.LogoURL != "https://cdn.example/logo.png" {
+		t.Fatalf("LogoURL = %q", profile.LogoURL)
+	}
+}
+
+func TestBuildStorefrontJSON_Defaults(t *testing.T) {
+	jsonStr := buildStorefrontJSON("https://seller.example", nil)
+	var profile schemas.StorefrontProfile
+	if err := json.Unmarshal([]byte(jsonStr), &profile); err != nil {
+		t.Fatalf("unmarshal storefront profile: %v", err)
+	}
+	if profile.DisplayName != "Obol Stack" {
+		t.Fatalf("DisplayName = %q", profile.DisplayName)
+	}
+	if profile.Tagline == "" {
+		t.Fatal("Tagline empty")
 	}
 }

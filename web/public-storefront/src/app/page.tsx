@@ -1,42 +1,25 @@
-import type { Service } from "@/types";
+import { fetchServices, fetchStorefront } from "@/lib/catalog";
 import { Header } from "@/components/Header";
 import { ServicesList } from "@/components/ServicesList";
 import { PaymentFlow } from "@/components/PaymentFlow";
-
-// Always render fresh — newly-deployed demos must appear immediately. The
-// underlying services.json is built from a Kubernetes ConfigMap that the
-// controller updates on every ServiceOffer reconcile, and the client list
-// then polls every 10s to surface further changes without a page reload.
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
-async function getServices(): Promise<Service[]> {
-  try {
-    const res = await fetch(
-      `${process.env.SERVICES_URL ?? "http://obol-skill-md.x402.svc:8080"}/api/services.json`,
-      { cache: "no-store" },
-    );
-    if (!res.ok) return [];
-    return res.json();
-  } catch {
-    return [];
-  }
-}
-
 export default async function Home() {
-  const services = await getServices();
+  const [services, storefront] = await Promise.all([
+    fetchServices(),
+    fetchStorefront(),
+  ]);
 
   return (
     <>
-      <Header />
+      <Header storefront={storefront} />
       <main className="max-w-3xl mx-auto px-4 py-10">
         <section className="mb-8">
           <h1 className="text-3xl font-bold text-text-light mb-2">
-            Agent services
+            {storefront.displayName}
           </h1>
-          <p className="text-text-body">
-            This Obol Agent offers the following services for digital payment:
-          </p>
+          <p className="text-text-body">{storefront.tagline}</p>
         </section>
 
         <ServicesList initial={services} />

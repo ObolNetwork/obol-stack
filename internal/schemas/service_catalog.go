@@ -102,3 +102,11 @@ type ServiceCatalogEIP712Domain struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
 }
+
+// StorefrontProfile is the minimal branding payload served at
+// /api/storefront.json for the public storefront.
+type StorefrontProfile struct {
+	DisplayName string `json:"displayName"`
+	Tagline     string `json:"tagline"`
+	LogoURL     string `json:"logoUrl"`
+}
