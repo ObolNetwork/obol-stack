@@ -1,0 +1,240 @@
+# Release Prep — repin embedded x402 image pins via a reviewed PR.
+#
+# Replaces the old push-time `repin-embedded-pins` job in
+# docker-publish-x402.yml, which committed the pin bump directly to protected
+# `main` and was rejected on every run (BRANCH_PROTECTION_RULE_VIOLATION:
+# changes must go through a PR + lint-test). That design fought branch
+# protection on every push; this one works with it.
+#
+# Run this once when preparing a release (the natural moment the pins need to be
+# fresh — release.yml's verify-x402-pins gate is also release-time). It:
+#   1. builds the four x402 images for the release commit, and
+#   2. opens an auto-merging PR that repins the embedded manifests to them.
+#
+# The pin bump lands through the normal review path — NO ruleset bypass, no
+# privileged push to `main`. The commit is made with the GraphQL
+# createCommitOnBranch API onto a *feature* branch (unprotected), so it is
+# GitHub-verified (satisfies the no-unsigned-commits rule) without any bypass.
+#
+# CI-on-the-PR caveat: GitHub does not trigger workflows for commits authored by
+# the default GITHUB_TOKEN, so the opened PR's required checks won't run on their
+# own. Two ways to handle it (see docs/release-x402-pins.md):
+#   - Zero-touch: set repo variable REPIN_APP_ID + secret REPIN_APP_PRIVATE_KEY
+#     for a minimal GitHub App (contents:write + pull-requests:write, NOT on any
+#     ruleset bypass list). The job mints a short-lived token; the PR's checks
+#     run and auto-merge engages after a maintainer approval.
+#   - No-secret: leave them unset. The verified PR is still opened with
+#     GITHUB_TOKEN; a maintainer closes & reopens it to fire CI, approves, and it
+#     auto-merges.
+
+name: Release Prep - repin x402 pins
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Release target commit or branch. Images are built from it and the pins point at it.'
+        required: true
+        default: main
+        type: string
+      base:
+        description: 'Branch to open the repin PR against.'
+        required: true
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Build the four x402 images for the release commit so the pins can reference
+  # them by digest. Mirrors docker-publish-x402.yml's build matrix; images are
+  # tagged by the release commit's short and long SHA (repin-x402-images.sh
+  # resolves the digest from the short-SHA tag).
+  # ---------------------------------------------------------------------------
+  build-images:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { image: obolnetwork/x402-verifier, dockerfile: Dockerfile.x402-verifier }
+          - { image: obolnetwork/x402-buyer, dockerfile: Dockerfile.x402-buyer }
+          - { image: obolnetwork/serviceoffer-controller, dockerfile: Dockerfile.serviceoffer-controller }
+          - { image: obolnetwork/demo-server, dockerfile: Dockerfile.demo-server }
+    steps:
+      - name: Checkout release ref
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Resolve release SHA
+        id: sha
+        run: |
+          {
+            echo "long=$(git rev-parse HEAD)"
+            echo "short=$(git rev-parse --short=7 HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (tagged by release SHA)
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ matrix.image }}:${{ steps.sha.outputs.short }}
+            ${{ env.REGISTRY }}/${{ matrix.image }}:${{ steps.sha.outputs.long }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          provenance: true
+          sbom: true
+
+  # ---------------------------------------------------------------------------
+  # Repin the embedded manifests to the images just built and open an
+  # auto-merging PR. Verified commit onto a feature branch (no bypass); the PR
+  # goes through normal review.
+  # ---------------------------------------------------------------------------
+  open-repin-pr:
+    needs: build-images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # Optional: a minimal, NO-BYPASS GitHub App so the PR's CI triggers and
+      # auto-merge can engage. Skipped cleanly when the variable is unset.
+      - name: Mint app token (optional)
+        id: app
+        if: ${{ vars.REPIN_APP_ID != '' }}
+        uses: actions/create-github-app-token@67018539274d69449ef7c02e8e71183d1719ab42 # v2.1.4
+        with:
+          app-id: ${{ vars.REPIN_APP_ID }}
+          private-key: ${{ secrets.REPIN_APP_PRIVATE_KEY }}
+
+      - name: Select token
+        id: tok
+        env:
+          APP_TOKEN: ${{ steps.app.outputs.token }}
+          DEFAULT_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$APP_TOKEN" ]; then
+            echo "value=$APP_TOKEN" >> "$GITHUB_OUTPUT"
+            echo "is_app=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=$DEFAULT_TOKEN" >> "$GITHUB_OUTPUT"
+            echo "is_app=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout release ref
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+          token: ${{ steps.tok.outputs.value }}
+
+      - name: Repin embedded images to the release build
+        id: repin
+        run: |
+          SHORT="$(git rev-parse --short=7 HEAD)"
+          echo "short=$SHORT" >> "$GITHUB_OUTPUT"
+          echo "head=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          .github/scripts/repin-x402-images.sh "$SHORT"
+          changed="$(git diff --name-only)"
+          if [ -z "$changed" ]; then
+            echo "embedded pins already current for $SHORT; nothing to do"
+            echo "noop=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # The repin script may only ever touch the two pin-carrying templates.
+          while IFS= read -r f; do
+            case "$f" in
+              internal/embed/infrastructure/base/templates/x402.yaml) ;;
+              internal/embed/infrastructure/base/templates/llm.yaml) ;;
+              *) echo "::error::repin produced an unexpected change: $f"; exit 1 ;;
+            esac
+          done <<< "$changed"
+          echo "noop=false" >> "$GITHUB_OUTPUT"
+
+      - name: Open verified, auto-merging repin PR
+        if: steps.repin.outputs.noop == 'false'
+        env:
+          GH_TOKEN: ${{ steps.tok.outputs.value }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ inputs.base }}
+          SHORT: ${{ steps.repin.outputs.short }}
+          HEAD_OID: ${{ steps.repin.outputs.head }}
+          IS_APP: ${{ steps.tok.outputs.is_app }}
+        run: |
+          set -euo pipefail
+          BRANCH="chore/repin-x402-${SHORT}"
+
+          # Create (or reset) the feature branch at the release commit. A feature
+          # branch is unprotected, so this needs no bypass.
+          if gh api "repos/$REPO/git/ref/heads/$BRANCH" >/dev/null 2>&1; then
+            gh api -X PATCH "repos/$REPO/git/refs/heads/$BRANCH" -f sha="$HEAD_OID" -F force=true >/dev/null
+          else
+            gh api "repos/$REPO/git/refs" -f ref="refs/heads/$BRANCH" -f sha="$HEAD_OID" >/dev/null
+          fi
+
+          # Verified commit of the two pin files via createCommitOnBranch.
+          jq -n \
+            --arg repo "$REPO" --arg branch "$BRANCH" --arg head "$HEAD_OID" \
+            --arg msg "chore(ci): repin x402 images to ${SHORT}" \
+            --arg body "Automated by release-prep for the release at ${HEAD_OID}. Verified via the GitHub API; lands through PR review (no ruleset bypass)." \
+            --arg x402 "$(base64 < internal/embed/infrastructure/base/templates/x402.yaml | tr -d '\n')" \
+            --arg llm "$(base64 < internal/embed/infrastructure/base/templates/llm.yaml | tr -d '\n')" \
+            '{
+              query: "mutation($input: CreateCommitOnBranchInput!) { createCommitOnBranch(input: $input) { commit { oid } } }",
+              variables: {input: {
+                branch: {repositoryNameWithOwner: $repo, branchName: $branch},
+                expectedHeadOid: $head,
+                message: {headline: $msg, body: $body},
+                fileChanges: {additions: [
+                  {path: "internal/embed/infrastructure/base/templates/x402.yaml", contents: $x402},
+                  {path: "internal/embed/infrastructure/base/templates/llm.yaml", contents: $llm}
+                ]}
+              }}
+            }' | gh api graphql --input - >/dev/null
+
+          # Open the PR (idempotent: reuse if it already exists for this branch).
+          if [ "$IS_APP" = "true" ]; then
+            NUDGE="CI runs automatically (app-authored)."
+          else
+            NUDGE="GitHub does not run CI on GITHUB_TOKEN-authored PRs. A maintainer: **close & reopen** this PR to fire checks, then approve."
+          fi
+          PR_BODY=$(printf '%s\n' \
+            "Repins the embedded x402 image pins to the \`${SHORT}\` build for the upcoming release." \
+            "" \
+            "- Verified commit (createCommitOnBranch), feature branch -> PR review. No ruleset bypass." \
+            "- ${NUDGE}" \
+            "- After merge, tag the release on the merge commit; release.yml's verify-x402-pins gate will pass.")
+          if ! gh pr view "$BRANCH" --repo "$REPO" >/dev/null 2>&1; then
+            gh pr create --repo "$REPO" --base "$BASE" --head "$BRANCH" \
+              --title "chore(ci): repin x402 images to ${SHORT}" --body "$PR_BODY"
+          fi
+
+          # Enable auto-merge so it lands the moment review + checks are satisfied.
+          gh pr merge "$BRANCH" --repo "$REPO" --squash --auto \
+            || echo "::warning::could not enable auto-merge (repo auto-merge disabled, or checks not yet runnable); merge manually after approval"
