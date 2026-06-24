@@ -210,6 +210,8 @@ func TestHTMLAware_InferenceShowsCLIPrimaryAndDescription(t *testing.T) {
 	// in "operator's hardware" appears raw, not entity-encoded.
 	mustContain(t, body, "agent runs locally")
 	mustContain(t, body, "remote operator's hardware")
+	mustContain(t, body, "OpenAI-style chat-completions")
+	mustContain(t, body, `/v1/chat/completions`)
 }
 
 // Agent offers should explain that the buyer is paying an autonomous
@@ -284,6 +286,7 @@ func TestHTMLAware_HTTPKeepsLegacyCopy(t *testing.T) {
 	body := w.Body.String()
 	mustContain(t, body, "Pay with your Obol Agent")
 	mustContain(t, body, "buy-x402 skill")
+	mustContain(t, body, "Use the method and payload the seller documents")
 	if strings.Contains(body, "obol buy inference") {
 		t.Errorf("http-type 402 page should NOT show the inference CLI primary card")
 	}
