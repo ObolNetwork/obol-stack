@@ -47,7 +47,7 @@ func nodeTokenCommand(cfg *config.Config) *cli.Command {
 
 			if backend.Name() != stack.BackendK3s {
 				return fmt.Errorf(
-					"obol node requires the k3s backend (current backend: %q)\n"+
+					"obol stack node requires the k3s backend (current backend: %q)\n"+
 						"A k3d/Docker master cannot accept remote node joins — its flannel overlay is not routable off-host.\n"+
 						"Re-init on a Linux host with: obol stack init --backend k3s",
 					backend.Name())
