@@ -32,14 +32,17 @@ var networkChainIDs = map[string]int{
 }
 
 type localERPCRegistration struct {
-	ChainID int
-	Alias   string
+	ChainID  int
+	Alias    string
 	Endpoint string
 }
 
-func resolveLocalERPCRegistration(networkType, id string, values struct {
+type localERPCValues struct {
 	Network string `yaml:"network"`
-}) (localERPCRegistration, error) {
+	Chain   string `yaml:"chain"`
+}
+
+func resolveLocalERPCRegistration(networkType, id string, values localERPCValues) (localERPCRegistration, error) {
 	namespace := fmt.Sprintf("%s-%s", networkType, id)
 
 	switch networkType {
@@ -55,7 +58,12 @@ func resolveLocalERPCRegistration(networkType, id string, values struct {
 			Endpoint: fmt.Sprintf("http://ethereum-execution.%s.svc.cluster.local:8545", namespace),
 		}, nil
 	case "hl-node":
-		switch strings.ToLower(strings.TrimSpace(values.Network)) {
+		chain := strings.TrimSpace(values.Chain)
+		if chain == "" {
+			chain = values.Network
+		}
+
+		switch strings.ToLower(strings.TrimSpace(chain)) {
 		case "mainnet":
 			return localERPCRegistration{
 				ChainID:  999,
@@ -69,7 +77,7 @@ func resolveLocalERPCRegistration(networkType, id string, values struct {
 				Endpoint: fmt.Sprintf("http://hl-node.%s.svc.cluster.local:3001/evm", namespace),
 			}, nil
 		default:
-			return localERPCRegistration{}, fmt.Errorf("unknown hl-node network %q — expected mainnet or testnet", values.Network)
+			return localERPCRegistration{}, fmt.Errorf("unknown hl-node chain %q — expected mainnet or testnet", chain)
 		}
 	default:
 		return localERPCRegistration{}, errNoERPCRegistration
@@ -90,9 +98,7 @@ func RegisterERPCUpstream(cfg *config.Config, networkType, id string) error {
 		return fmt.Errorf("could not read values.yaml: %w", err)
 	}
 
-	var values struct {
-		Network string `yaml:"network"`
-	}
+	var values localERPCValues
 	if err := yaml.Unmarshal(valuesContent, &values); err != nil {
 		return fmt.Errorf("could not parse values.yaml: %w", err)
 	}

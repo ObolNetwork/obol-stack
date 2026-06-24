@@ -1,9 +1,14 @@
 package network
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"gopkg.in/yaml.v3"
 )
 
@@ -396,6 +401,7 @@ func TestResolveLocalERPCRegistration(t *testing.T) {
 		networkType string
 		id          string
 		network     string
+		chain       string
 		want        localERPCRegistration
 	}{
 		{
@@ -413,7 +419,7 @@ func TestResolveLocalERPCRegistration(t *testing.T) {
 			name:        "hl-node mainnet",
 			networkType: "hl-node",
 			id:          "mainnet",
-			network:     "mainnet",
+			chain:       "Mainnet",
 			want: localERPCRegistration{
 				ChainID:  999,
 				Alias:    "hyperevm",
@@ -424,7 +430,7 @@ func TestResolveLocalERPCRegistration(t *testing.T) {
 			name:        "hl-node testnet",
 			networkType: "hl-node",
 			id:          "testnet",
-			network:     "testnet",
+			chain:       "Testnet",
 			want: localERPCRegistration{
 				ChainID:  998,
 				Alias:    "hyperevm-testnet",
@@ -435,9 +441,10 @@ func TestResolveLocalERPCRegistration(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := resolveLocalERPCRegistration(tt.networkType, tt.id, struct {
-				Network string `yaml:"network"`
-			}{Network: tt.network})
+			got, err := resolveLocalERPCRegistration(tt.networkType, tt.id, localERPCValues{
+				Network: tt.network,
+				Chain:   tt.chain,
+			})
 			if err != nil {
 				t.Fatalf("resolve local erpc registration: %v", err)
 			}
@@ -448,10 +455,70 @@ func TestResolveLocalERPCRegistration(t *testing.T) {
 	}
 }
 
+func TestResolveLocalERPCRegistrationReadsHLNodeChainValue(t *testing.T) {
+	var values localERPCValues
+	if err := yaml.Unmarshal([]byte("chain: Mainnet\n"), &values); err != nil {
+		t.Fatalf("parse values: %v", err)
+	}
+
+	got, err := resolveLocalERPCRegistration("hl-node", "review", values)
+	if err != nil {
+		t.Fatalf("resolve local erpc registration: %v", err)
+	}
+	if got.Alias != "hyperevm" {
+		t.Fatalf("alias = %q, want hyperevm", got.Alias)
+	}
+	if got.Endpoint != "http://hl-node.hl-node-review.svc.cluster.local:3001/evm" {
+		t.Fatalf("endpoint = %q", got.Endpoint)
+	}
+}
+
+func TestInstallHLNodeValuesResolveERPCRegistration(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := &config.Config{
+		ConfigDir: filepath.Join(tmp, "config"),
+		DataDir:   filepath.Join(tmp, "data"),
+		BinDir:    filepath.Join(tmp, "bin"),
+		StateDir:  filepath.Join(tmp, "state"),
+	}
+
+	var stdout, stderr bytes.Buffer
+	u := ui.NewForTest(&stdout, &stderr)
+	if err := Install(cfg, u, "hl-node", map[string]string{"id": "review"}, false); err != nil {
+		t.Fatalf("Install() error = %v\nstderr:\n%s", err, stderr.String())
+	}
+
+	valuesBytes, err := os.ReadFile(filepath.Join(cfg.ConfigDir, "networks", "hl-node", "review", "values.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var values localERPCValues
+	if err := yaml.Unmarshal(valuesBytes, &values); err != nil {
+		t.Fatalf("parse values: %v", err)
+	}
+	if values.Network != "" {
+		t.Fatalf("hl-node values should not rely on network field, got %q", values.Network)
+	}
+	if values.Chain != "Mainnet" {
+		t.Fatalf("chain = %q, want Mainnet", values.Chain)
+	}
+
+	got, err := resolveLocalERPCRegistration("hl-node", "review", values)
+	if err != nil {
+		t.Fatalf("resolve local erpc registration: %v", err)
+	}
+	if got != (localERPCRegistration{
+		ChainID:  999,
+		Alias:    "hyperevm",
+		Endpoint: "http://hl-node.hl-node-review.svc.cluster.local:3001/evm",
+	}) {
+		t.Fatalf("registration = %+v", got)
+	}
+}
+
 func TestResolveLocalERPCRegistrationRejectsUnknownHLNetwork(t *testing.T) {
-	_, err := resolveLocalERPCRegistration("hl-node", "dev", struct {
-		Network string `yaml:"network"`
-	}{Network: "devnet"})
+	_, err := resolveLocalERPCRegistration("hl-node", "dev", localERPCValues{Chain: "devnet"})
 	if err == nil {
 		t.Fatal("expected unknown hl-node network error")
 	}
