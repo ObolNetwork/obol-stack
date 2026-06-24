@@ -150,10 +150,24 @@ func TestServiceOfferCRD_Fields(t *testing.T) {
 
 	// Required fields in spec (aligned with x402/ERC-8004 schema). agent
 	// joins this list as part of the type=agent offer flow.
-	for _, field := range []string{"type", "agent", "model", "upstream", "payment", "path", "registration"} {
+	for _, field := range []string{"type", "agent", "model", "upstream", "payment", "payments", "listing", "path", "registration"} {
 		if _, exists := pm[field]; !exists {
 			t.Errorf("spec.properties missing field %q", field)
 		}
+	}
+
+	// payments[] items must carry the same required payment fields as the
+	// singular payment block (it advertises the x402 accepts[] array).
+	paymentsItems := nested(v0, "schema", "openAPIV3Schema", "properties", "spec",
+		"properties", "payments", "items", "properties")
+	if pim, ok := paymentsItems.(map[string]any); ok {
+		for _, field := range []string{"network", "payTo", "price", "asset", "maxTimeoutSeconds"} {
+			if _, exists := pim[field]; !exists {
+				t.Errorf("spec.payments.items.properties missing field %q", field)
+			}
+		}
+	} else {
+		t.Errorf("spec.payments.items.properties is not a map: %T", paymentsItems)
 	}
 
 	typeProp, _ := pm["type"].(map[string]any)
@@ -875,6 +889,8 @@ func TestServiceOfferControllerSecretRBAC_Scoped(t *testing.T) {
 
 	readNames := map[string]bool{}
 	deleteNames := map[string]bool{}
+	updateNames := map[string]bool{}
+	patchNames := map[string]bool{}
 	var sawCreate bool
 	for _, r := range rules {
 		rm := r.(map[string]any)
@@ -908,9 +924,25 @@ func TestServiceOfferControllerSecretRBAC_Scoped(t *testing.T) {
 			if verbs["delete"] {
 				deleteNames[n] = true
 			}
+			if verbs["update"] {
+				updateNames[n] = true
+			}
+			if verbs["patch"] {
+				patchNames[n] = true
+			}
 		}
-		if verbs["list"] || verbs["watch"] || verbs["update"] || verbs["patch"] {
-			t.Error("serviceoffer-controller scoped secrets rule must not grant list/watch/update/patch — Secrets are create-only in the reconciler and all reads are by name")
+		if verbs["list"] || verbs["watch"] {
+			t.Error("serviceoffer-controller scoped secrets rule must not grant list/watch — all reads are by name")
+		}
+		// update/patch is allowed only on remote-signer-keystore, which the
+		// reconciler updates via backfillSignerAuthToken to add the bearer
+		// token key to keystores minted before signer auth existed.
+		if verbs["update"] || verbs["patch"] {
+			for n := range names {
+				if n != "remote-signer-keystore" {
+					t.Errorf("serviceoffer-controller must not grant secrets:update/patch on %s — only remote-signer-keystore is mutated (auth-token backfill)", n)
+				}
+			}
 		}
 		if names["litellm-secrets"] && verbs["delete"] {
 			t.Error("serviceoffer-controller must not grant secrets:delete on litellm-secrets; the code only reads LITELLM_MASTER_KEY")
@@ -929,6 +961,16 @@ func TestServiceOfferControllerSecretRBAC_Scoped(t *testing.T) {
 			// and the CR is stranded in Terminating.
 			t.Errorf("serviceoffer-controller must grant resourceName-scoped secrets:delete on %s for agent teardown", name)
 		}
+	}
+	// backfillSignerAuthToken (agent_wallet.go) calls Update on the keystore
+	// Secret to add the signer-auth bearer token to legacy keystores. Without
+	// update + patch the Agent stays in Provisioning and every downstream
+	// ServiceOffer condition blocks on WaitingForAgent.
+	if !updateNames["remote-signer-keystore"] {
+		t.Error("serviceoffer-controller must grant resourceName-scoped secrets:update on remote-signer-keystore for backfillSignerAuthToken")
+	}
+	if !patchNames["remote-signer-keystore"] {
+		t.Error("serviceoffer-controller must grant resourceName-scoped secrets:patch on remote-signer-keystore for backfillSignerAuthToken")
 	}
 	if !sawCreate {
 		t.Error("serviceoffer-controller must retain secrets:create for minting the per-agent API token + wallet keystore in dynamic namespaces")

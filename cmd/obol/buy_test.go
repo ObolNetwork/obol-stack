@@ -8,6 +8,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/buy"
+	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 )
 
@@ -597,6 +598,39 @@ func TestLooksLikeURL(t *testing.T) {
 	for in, want := range cases {
 		if got := looksLikeURL(in); got != want {
 			t.Errorf("looksLikeURL(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
+// TestBuyInference_NoBYOKArm pins that `obol buy inference` is x402-only:
+// the BYOK provider arm (which previously dispatched to setupCloudProvider
+// when a provider id was passed) has been removed in favour of
+// `obol model setup`. The `--api-key` and `--free` flags went with it.
+// The command name stays reserved for future remote-credit top-ups.
+func TestBuyInference_NoBYOKArm(t *testing.T) {
+	cmd := buyInferenceCommand(&config.Config{})
+
+	// BYOK-only flags must be gone; the x402 surface keeps --seller.
+	gone := map[string]bool{"api-key": false, "free": false}
+	stillHere := map[string]bool{"seller": false}
+	for _, f := range cmd.Flags {
+		for _, n := range f.Names() {
+			if _, ok := gone[n]; ok {
+				gone[n] = true
+			}
+			if _, ok := stillHere[n]; ok {
+				stillHere[n] = true
+			}
+		}
+	}
+	for n, found := range gone {
+		if found {
+			t.Errorf("buy inference must not expose --%s (BYOK arm removed; use `obol model setup`)", n)
+		}
+	}
+	for n, found := range stillHere {
+		if !found {
+			t.Errorf("buy inference missing --%s flag", n)
 		}
 	}
 }

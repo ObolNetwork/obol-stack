@@ -316,9 +316,14 @@ data:
 func kubectlApply(cfg *config.Config, u *ui.UI, kubeconfigPath string, manifest []byte) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 
+	// Server-side apply: the server performs the merge, so kubectl skips the
+	// client-side OpenAPI schema download (`/openapi/v2`). That endpoint is flaky
+	// on freshly-started k3d clusters and returns EOF/timeouts even when normal
+	// CRUD works, which would otherwise fail this apply. Matches the robust apply
+	// path used elsewhere (openclaw, serviceoffer-controller).
 	cmd := exec.Command(kubectlPath,
 		"--kubeconfig", kubeconfigPath,
-		"apply", "-f", "-",
+		"apply", "--server-side", "--force-conflicts", "-f", "-",
 	)
 
 	cmd.Stdin = bytes.NewReader(manifest)

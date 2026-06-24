@@ -291,6 +291,64 @@ if not policy.get("enabled") or policy.get("maxUnitPrice") != "43":
 	}
 }
 
+func TestBuyPyGaslessPermitScopedToSelectedAsset(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not installed")
+	}
+
+	destDir := t.TempDir()
+	if err := CopySkills(destDir); err != nil {
+		t.Fatalf("CopySkills: %v", err)
+	}
+
+	buyPy := filepath.Join(destDir, "buy-x402", "scripts", "buy.py")
+	script := `
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("buy", sys.argv[1])
+buy = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(buy)
+
+gasless = "0x1111111111111111111111111111111111111111"
+plain = "0x2222222222222222222222222222222222222222"
+calls = []
+
+def fake_nonce(address, token, chain=None):
+    calls.append(("nonce", token))
+    if token == gasless:
+        return "7"
+    raise RuntimeError("token has no ERC20Permit")
+
+def fake_allowance(owner, token, spender, chain=None):
+    calls.append(("allowance", token))
+    return 1
+
+buy._get_erc20_permit_nonce = fake_nonce
+buy._get_token_allowance = fake_allowance
+
+if not buy._payment_uses_gasless_permit("0xsigner", gasless, "base", "permit2"):
+    raise SystemExit("gasless-capable token was not detected")
+if buy._payment_uses_gasless_permit("0xsigner", plain, "base", "permit2"):
+    raise SystemExit("top-level gasless extension leaked to a non-permit token")
+
+buy._ensure_permit2_allowance(
+    "0xsigner",
+    plain,
+    "base",
+    "permit2",
+    extensions={"eip2612GasSponsoring": {"info": {"version": "1"}}},
+)
+if ("allowance", plain) not in calls:
+    raise SystemExit(f"plain permit2 token skipped allowance check: {calls!r}")
+`
+	cmd := exec.Command("python3", "-c", script, buyPy)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("buy.py gasless scoping regression failed:\n%s\n%v", output, err)
+	}
+}
+
 func TestAgentFactoryPy_Syntax(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not installed")
@@ -311,6 +369,52 @@ func TestAgentFactoryPy_Syntax(t *testing.T) {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("factory.py has syntax errors:\n%s\n%v", output, err)
+	}
+}
+
+func TestAgentFactoryPy_AcceptAllowsZeroDecimals(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not installed")
+	}
+
+	destDir := t.TempDir()
+	if err := CopySkills(destDir); err != nil {
+		t.Fatalf("CopySkills: %v", err)
+	}
+
+	factoryPy := filepath.Join(destDir, "agent-factory", "scripts", "factory.py")
+	script := `
+import importlib.util
+import sys
+
+spec = importlib.util.spec_from_file_location("factory", sys.argv[1])
+factory = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(factory)
+
+pay_to = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+raw = "asset=0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,decimals=0,transfer=permit2,eip712-name=Whole Token,eip712-version=1,symbol=WHOLE,network=base,price=1,pay-to=" + pay_to
+payment, _ = factory.parse_accept_option(raw, "")
+if payment["asset"]["decimals"] != 0:
+    raise SystemExit(f"explicit decimals=0 was not preserved: {payment!r}")
+
+payments = factory.build_accept_payments([
+    "asset=0xcccccccccccccccccccccccccccccccccccccccc,network=base,price=1,pay-to=" + pay_to,
+], "")
+if payments[0]["asset"]["decimals"] != -1:
+    raise SystemExit(f"omitted decimals should use pending sentinel: {payments!r}")
+
+def fetch(network, addr):
+    return {"decimals": 0, "decimalsSet": True, "symbol": "WHOLE", "eip712Name": "Whole Token", "eip712Version": "1"}
+
+factory.autofill_accept_payments(payments, fetch)
+asset = payments[0]["asset"]
+if asset["decimals"] != 0 or asset["eip712Name"] != "Whole Token":
+    raise SystemExit(f"zero-decimal autofill failed: {asset!r}")
+`
+	cmd := exec.Command("python3", "-c", script, factoryPy)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("factory.py zero-decimal accept regression failed:\n%s\n%v", output, err)
 	}
 }
 
@@ -369,8 +473,13 @@ args = SimpleNamespace(
 )
 offer = factory.serviceoffer_resource(args, "hermes-obol-agent")
 registration = offer["spec"]["registration"]
-if registration.get("enabled") is not True:
-    raise SystemExit("registration metadata did not enable registration")
+# §5 decoupling: register_name/description populate the block for discovery,
+# but on-chain registration (enabled) is driven ONLY by --register. Here
+# register=False, so the block is present yet enabled stays False.
+if registration.get("enabled") is not False:
+    raise SystemExit("registration.enabled must follow --register, not register-name")
+if registration.get("name") != "Medical Advisor":
+    raise SystemExit(f"registration name not populated: {registration!r}")
 if registration.get("skills") != ["privacy-filter"]:
     raise SystemExit(f"registration skills did not inherit agent skills: {registration!r}")
 expected_metadata = {

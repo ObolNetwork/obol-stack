@@ -68,19 +68,22 @@ func (v *Verifier) load(cfg *PricingConfig) error {
 		return fmt.Errorf("resolve chain: %w", err)
 	}
 
-	// Pre-resolve all unique chain names (global + per-route overrides)
-	// so HandleVerify avoids per-request chain resolution.
+	// Pre-resolve all unique chain names (global + every per-route payment
+	// option's network) so HandleVerify avoids per-request chain resolution.
 	chains := map[string]ChainInfo{cfg.Chain: chain}
-	for _, r := range cfg.Routes {
-		if r.Network != "" {
-			if _, ok := chains[r.Network]; !ok {
-				rc, err := ResolveChainInfo(r.Network)
-				if err != nil {
-					return fmt.Errorf("resolve chain for route %q: %w", r.Pattern, err)
-				}
-
-				chains[r.Network] = rc
+	for i := range cfg.Routes {
+		for _, opt := range cfg.Routes[i].PaymentOptions() {
+			if opt.Network == "" {
+				continue
 			}
+			if _, ok := chains[opt.Network]; ok {
+				continue
+			}
+			rc, err := ResolveChainInfo(opt.Network)
+			if err != nil {
+				return fmt.Errorf("resolve chain for route %q: %w", cfg.Routes[i].Pattern, err)
+			}
+			chains[opt.Network] = rc
 		}
 	}
 
@@ -107,11 +110,20 @@ func (v *Verifier) load(cfg *PricingConfig) error {
 	// keeping alerts (e.g. "no settlements after challenge") tied to dead
 	// labels.
 	live := make(map[string]struct{}, len(cfg.Routes))
-	for _, r := range cfg.Routes {
+	for i := range cfg.Routes {
+		r := &cfg.Routes[i]
 		if r.OfferNamespace == "" && r.OfferName == "" {
 			continue
 		}
-		live[r.OfferNamespace+"\x00"+r.OfferName+"\x00"+r.Network+"\x00"+r.AssetSymbol] = struct{}{}
+		// A multi-payment offer emits one metric series per (chain, asset)
+		// it accepts, so register every option's labels — otherwise the
+		// prune step below would drop the non-primary series. Build the key
+		// from labelsForPaymentOption so it byte-matches the emitted labels
+		// (incl. the "unknown" asset fallback).
+		for _, opt := range r.PaymentOptions() {
+			l := labelsForPaymentOption(r, opt)
+			live[l["offer_namespace"]+"\x00"+l["offer_name"]+"\x00"+l["chain"]+"\x00"+l["asset_symbol"]] = struct{}{}
+		}
 	}
 	v.metrics.pruneSeriesNotIn(live)
 
@@ -139,7 +151,7 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 
 	cfg := v.config.Load()
 
-	rule, requirement, extensions, _, chain, asset, ok := v.matchPaidRouteFull(cfg, uri)
+	mr, ok := v.matchPaidRouteFull(cfg, uri)
 	if !ok {
 		// Check if this URI is under a tracked paid prefix. If yes,
 		// the route was supposed to match but didn't — fail closed
@@ -173,23 +185,27 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 	// When the inner handler runs (payment approved), it sets the Authorization
 	// header if the route has upstreamAuth configured. Traefik's authResponseHeaders
 	// copies this to the forwarded request, authenticating it with the upstream.
-	labels := prometheusLabels(rule)
-	v.metrics.requestsTotal.With(labels).Inc()
+	primaryLabels := mr.labels
+	v.metrics.requestsTotal.With(primaryLabels).Inc()
 
-	wallet := cfg.Wallet
-	if rule.PayTo != "" {
-		wallet = rule.PayTo
-	}
-	display := buildPaymentDisplay(rule, chain, asset, wallet, requirement.Amount)
+	// The HTML 402 page shows the primary payment option; the JSON accepts[]
+	// (mr.requirements) carries every option for programmatic buyers. Rich
+	// multi-option rendering on the human page is deferred to the storefront.
+	primary := mr.requirements[0]
+	display := buildPaymentDisplay(mr.rule, mr.chain, mr.asset, primary.PayTo, primary.Amount)
 
+	// matchedLabels is updated to the option the buyer actually pays with, so
+	// revenue/failure metrics attribute to the right (chain, asset).
+	matchedLabels := primaryLabels
 	middleware := NewForwardAuthMiddleware(ForwardAuthConfig{
 		FacilitatorURL:      cfg.FacilitatorURL,
 		VerifyOnly:          cfg.VerifyOnly,
-		Extensions:          extensions,
+		Extensions:          mr.extensions,
 		SendPaymentRequired: NewHTMLAwarePaymentRequired(display),
-	}, []x402types.PaymentRequirements{requirement})
+		OnPaymentMatched:    func(req x402types.PaymentRequirements) { matchedLabels = mr.labelsForMatched(req) },
+	}, mr.requirements)
 
-	upstreamAuth := rule.UpstreamAuth
+	upstreamAuth := mr.rule.UpstreamAuth
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if upstreamAuth != "" {
 			w.Header().Set("Authorization", upstreamAuth)
@@ -203,13 +219,13 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case tracker.status == http.StatusOK && r.Header.Get("X-Payment") != "":
-		v.metrics.paymentVerified.With(labels).Inc()
-		v.metrics.chargedRequests.With(labels).Inc()
-		v.metrics.lastPaymentSuccess.With(labels).SetToCurrentTime()
+		v.metrics.paymentVerified.With(matchedLabels).Inc()
+		v.metrics.chargedRequests.With(matchedLabels).Inc()
+		v.metrics.lastPaymentSuccess.With(matchedLabels).SetToCurrentTime()
 	case tracker.status == http.StatusPaymentRequired && r.Header.Get("X-Payment") != "":
-		v.metrics.paymentFailed.With(labels).Inc()
+		v.metrics.paymentFailed.With(matchedLabels).Inc()
 	case tracker.status == http.StatusPaymentRequired:
-		v.metrics.paymentRequired.With(labels).Inc()
+		v.metrics.paymentRequired.With(primaryLabels).Inc()
 	}
 }
 
@@ -219,27 +235,26 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	cfg := v.config.Load()
 
-	rule, requirement, extensions, labels, chain, asset, ok := v.matchPaidRouteFull(cfg, r.URL.Path)
+	mr, ok := v.matchPaidRouteFull(cfg, r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 
-	v.metrics.requestsTotal.With(labels).Inc()
+	primaryLabels := mr.labels
+	v.metrics.requestsTotal.With(primaryLabels).Inc()
 
-	proxy, err := buildUpstreamProxy(rule)
+	proxy, err := buildUpstreamProxy(mr.rule)
 	if err != nil {
-		log.Printf("x402-verifier: build upstream proxy for %s/%s: %v", rule.OfferNamespace, rule.OfferName, err)
+		log.Printf("x402-verifier: build upstream proxy for %s/%s: %v", mr.rule.OfferNamespace, mr.rule.OfferName, err)
 		http.Error(w, "upstream unavailable", http.StatusInternalServerError)
 		return
 	}
 
-	wallet := cfg.Wallet
-	if rule.PayTo != "" {
-		wallet = rule.PayTo
-	}
-	display := buildPaymentDisplay(rule, chain, asset, wallet, requirement.Amount)
+	primary := mr.requirements[0]
+	display := buildPaymentDisplay(mr.rule, mr.chain, mr.asset, primary.PayTo, primary.Amount)
 
+	matchedLabels := primaryLabels
 	middleware := NewForwardAuthMiddleware(ForwardAuthConfig{
 		FacilitatorURL: cfg.FacilitatorURL,
 		// HandleProxy is the in-process seller gateway: it proxies to the real
@@ -248,9 +263,10 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		// per-request) verifyOnly=false warning on this safe path.
 		VerifyOnly:          false,
 		SettlesInProcess:    true,
-		Extensions:          extensions,
+		Extensions:          mr.extensions,
 		SendPaymentRequired: NewHTMLAwarePaymentRequired(display),
-	}, []x402types.PaymentRequirements{requirement})
+		OnPaymentMatched:    func(req x402types.PaymentRequirements) { matchedLabels = mr.labelsForMatched(req) },
+	}, mr.requirements)
 
 	hadPayment := r.Header.Get("X-PAYMENT") != ""
 	tracker := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
@@ -258,14 +274,14 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case tracker.status == http.StatusPaymentRequired && !hadPayment:
-		v.metrics.paymentRequired.With(labels).Inc()
+		v.metrics.paymentRequired.With(primaryLabels).Inc()
 	case tracker.status == http.StatusPaymentRequired:
-		v.metrics.paymentFailed.With(labels).Inc()
+		v.metrics.paymentFailed.With(matchedLabels).Inc()
 	case tracker.status < http.StatusBadRequest && hadPayment:
-		v.metrics.paymentVerified.With(labels).Inc()
+		v.metrics.paymentVerified.With(matchedLabels).Inc()
 		if tracker.Header().Get("X-PAYMENT-RESPONSE") != "" {
-			v.metrics.chargedRequests.With(labels).Inc()
-			v.metrics.lastPaymentSuccess.With(labels).SetToCurrentTime()
+			v.metrics.chargedRequests.With(matchedLabels).Inc()
+			v.metrics.lastPaymentSuccess.With(matchedLabels).SetToCurrentTime()
 		}
 	}
 }
@@ -300,41 +316,100 @@ func (v *Verifier) MetricsHandler() http.Handler {
 	return v.metrics.handler()
 }
 
-func (v *Verifier) matchPaidRoute(cfg *PricingConfig, uri string) (*RouteRule, x402types.PaymentRequirements, map[string]any, prometheus.Labels, bool) {
-	rule, req, ext, labels, _, _, ok := v.matchPaidRouteFull(cfg, uri)
-	return rule, req, ext, labels, ok
+// matchedRoute is the resolved view of a paid route for one request: the
+// rule, the full x402 accepts[] (one PaymentRequirements per accepted payment
+// option, requirements[0] = primary), the top-level extensions, and the
+// primary option's chain/asset/labels for the HTML 402 display + default
+// metrics. optionLabels is parallel to requirements for per-option metric
+// attribution once the buyer picks one.
+type matchedRoute struct {
+	rule         *RouteRule
+	requirements []x402types.PaymentRequirements
+	optionLabels []prometheus.Labels
+	extensions   map[string]any
+	chain        ChainInfo
+	asset        AssetInfo
+	labels       prometheus.Labels
 }
 
-// matchPaidRouteFull is matchPaidRoute plus the resolved chain and asset,
-// which the HTML 402 renderer needs for display copy. Internal-only.
-func (v *Verifier) matchPaidRouteFull(cfg *PricingConfig, uri string) (*RouteRule, x402types.PaymentRequirements, map[string]any, prometheus.Labels, ChainInfo, AssetInfo, bool) {
+// labelsForMatched returns the metric labels for the payment option the buyer
+// actually satisfied, matching by the same fields findMatchingRequirementV1
+// uses. Falls back to the primary option's labels if no match is found.
+func (m *matchedRoute) labelsForMatched(req x402types.PaymentRequirements) prometheus.Labels {
+	for i := range m.requirements {
+		r := m.requirements[i]
+		if r.Network == req.Network && r.Asset == req.Asset && r.PayTo == req.PayTo && r.Amount == req.Amount {
+			return m.optionLabels[i]
+		}
+	}
+	return m.labels
+}
+
+// matchPaidRouteFull matches a URI to a paid route and resolves the full set
+// of accepted payment options into x402 PaymentRequirements. Returns nil,false
+// when no rule matches or none of its options resolve to a known chain.
+func (v *Verifier) matchPaidRouteFull(cfg *PricingConfig, uri string) (*matchedRoute, bool) {
 	rule := matchRoute(cfg.Routes, uri)
 	if rule == nil {
-		return nil, x402types.PaymentRequirements{}, nil, nil, ChainInfo{}, AssetInfo{}, false
-	}
-
-	wallet := cfg.Wallet
-	if rule.PayTo != "" {
-		wallet = rule.PayTo
-	}
-
-	chainName := cfg.Chain
-	if rule.Network != "" {
-		chainName = rule.Network
+		return nil, false
 	}
 
 	chains := v.chains.Load()
-	chain, ok := (*chains)[chainName]
-	if !ok {
-		log.Printf("x402-verifier: chain %q not pre-resolved for route %q", chainName, rule.Pattern)
-		return nil, x402types.PaymentRequirements{}, nil, nil, ChainInfo{}, AssetInfo{}, false
+	opts := rule.PaymentOptions()
+	reqs := make([]x402types.PaymentRequirements, 0, len(opts))
+	optLabels := make([]prometheus.Labels, 0, len(opts))
+	var primaryChain ChainInfo
+	var primaryAsset AssetInfo
+	var extensions map[string]any
+	for i := range opts {
+		opt := opts[i]
+		chainName := cfg.Chain
+		if opt.Network != "" {
+			chainName = opt.Network
+		}
+		chain, ok := (*chains)[chainName]
+		if !ok {
+			// Skip this option rather than failing the whole route — other
+			// options may still be payable. (load() pre-resolves every
+			// option's network, so this is defensive.)
+			log.Printf("x402-verifier: chain %q not pre-resolved for route %q option %d", chainName, rule.Pattern, i)
+			continue
+		}
+		wallet := cfg.Wallet
+		if opt.PayTo != "" {
+			wallet = opt.PayTo
+		}
+		asset := ResolveAssetInfoForPayment(chain, opt)
+		req := BuildV2RequirementWithAsset(chain, asset, opt.Price, wallet, opt.MaxTimeoutSeconds)
+		mergeAgentExtras(&req, rule)
+		reqs = append(reqs, req)
+		optLabels = append(optLabels, labelsForPaymentOption(rule, opt))
+		if len(reqs) == 1 {
+			primaryChain = chain
+			primaryAsset = asset
+		}
+		// Advertise gasless approve at the top level if ANY accepted option
+		// supports it (e.g. an OBOL/Permit2 option alongside USDC). The buyer
+		// only takes the permit flow when paying with the supporting asset.
+		if extensions == nil {
+			if ext := BuildExtensionsForAsset(asset); ext != nil {
+				extensions = ext
+			}
+		}
 	}
-
-	asset := ResolveAssetInfo(chain, rule)
-	requirement := BuildV2RequirementWithAsset(chain, asset, rule.Price, wallet, rule.MaxTimeoutSeconds)
-	mergeAgentExtras(&requirement, rule)
-	extensions := WithBazaar(BuildExtensionsForAsset(asset), rule.OfferType, rule.Model)
-	return rule, requirement, extensions, prometheusLabels(rule), chain, asset, true
+	if len(reqs) == 0 {
+		return nil, false
+	}
+	extensions = WithBazaar(extensions, rule.OfferType, rule.Model)
+	return &matchedRoute{
+		rule:         rule,
+		requirements: reqs,
+		optionLabels: optLabels,
+		extensions:   extensions,
+		chain:        primaryChain,
+		asset:        primaryAsset,
+		labels:       optLabels[0],
+	}, true
 }
 
 // isUnderPaidPrefix reports whether uri starts with any of the URI
@@ -592,7 +667,16 @@ func prometheusLabels(rule *RouteRule) prometheus.Labels {
 	// against the ServiceOffer CR at query time. Cardinality cost is zero
 	// because each offer pins exactly one asset — the new dimension is
 	// functionally constant within the existing (ns, name) group.
-	asset := rule.AssetSymbol
+	// The inline fields describe the primary payment option; delegate so
+	// primary and per-option labels share one definition.
+	return labelsForPaymentOption(rule, RoutePayment{Network: rule.Network, AssetSymbol: rule.AssetSymbol})
+}
+
+// labelsForPaymentOption builds the metric label set for one accepted payment
+// option of a route. A multi-payment offer emits one series per option so
+// revenue/charges attribute to the actual (chain, asset) the buyer used.
+func labelsForPaymentOption(rule *RouteRule, opt RoutePayment) prometheus.Labels {
+	asset := opt.AssetSymbol
 	if asset == "" {
 		// Defensive: a missing symbol is operationally ugly in PromQL.
 		// Empty-string labels are legal in Prometheus but render as a
@@ -604,7 +688,7 @@ func prometheusLabels(rule *RouteRule) prometheus.Labels {
 	return prometheus.Labels{
 		"offer_namespace": rule.OfferNamespace,
 		"offer_name":      rule.OfferName,
-		"chain":           rule.Network,
+		"chain":           opt.Network,
 		"asset_symbol":    asset,
 	}
 }

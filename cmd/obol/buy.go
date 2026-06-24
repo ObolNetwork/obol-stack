@@ -66,27 +66,26 @@ func buyCommand(cfg *config.Config) *cli.Command {
 func buyInferenceCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "inference",
-		Usage:     "Buy paid inference from an x402-gated seller via the obol-agent",
+		Usage:     "Buy inference for your agents from an x402-gated seller",
 		ArgsUsage: "[<seller-url>]",
-		Description: `Pre-authorizes an x402-gated inference seller through an obol-agent's wallet.
+		Description: `Buy x402-gated inference from a seller.
 
-Hand the command a seller URL — either a storefront base
-("https://inference.v1337.org") or a specific offer
-("https://inference.v1337.org/services/aeon") — and the CLI will walk
-/api/services.json, pick the inference offer, and pre-sign authorizations
-via the agent's remote signer.
+Hand the command a seller URL (a storefront base like
+"https://inference.v1337.org" or a specific offer ".../services/aeon") and
+the CLI walks /api/services.json, picks the inference offer, and pre-signs
+payment authorizations via the agent's remote signer. With no argument the
+public ` + x402verifier.DefaultBuySellerURL + ` storefront is used.
 
-With no URL, the public ` + x402verifier.DefaultBuySellerURL + ` storefront is used.
+In a TTY the flow prompts for auto-refill, request count, and confirmation.
+Pass --yes / -y for non-interactive runs (--count required).
 
-In a TTY, the CLI prompts for auto-refill, request count, and
-confirmation. Pass --yes / -y for non-interactive runs (CI, scripts) —
---count is required in that mode.
+For hosted BYOK providers (Venice, OpenRouter, …) use ` + "`obol model setup`" + `
+instead — that path takes the API key and wires LiteLLM directly, no x402.
 
 Examples:
     obol buy inference
     obol buy inference https://inference.v1337.org/services/aeon
-    obol buy inference https://seller.example/services/foo --yes --count 100
-    obol buy inference https://seller.example/services/foo --auto-refill --refill-threshold 5 --refill-count 25`,
+    obol buy inference https://seller.example/services/foo --yes --count 100`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "seller",
@@ -166,6 +165,19 @@ Examples:
 // confirm → exec buy.py → optional model prefer + agent sync.
 func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) error {
 	u := getUI(cmd)
+
+	// If the argument names a hosted provider in the registry (venice,
+	// openrouter, …) rather than a seller URL, the user wants BYOK setup,
+	// not an x402 purchase. Redirect to `obol model setup`. The command
+	// name stays reserved for future credit top-up flows against the same
+	// remote providers.
+	arg := strings.TrimSpace(cmd.String("seller"))
+	if arg == "" {
+		arg = strings.TrimSpace(cmd.Args().First())
+	}
+	if prof, ok := model.ProviderByID(arg); ok && prof.ID != model.ProviderOllama {
+		return fmt.Errorf("BYOK provider setup moved — run: obol model setup --provider %s", prof.ID)
+	}
 
 	u.Info("Purchasing remote inference for running Obol Agents")
 

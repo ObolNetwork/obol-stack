@@ -236,6 +236,15 @@ If the tunnel isn't running or you want a fresh URL:
 obol tunnel restart
 ```
 
+> **Get a permanent URL once you're selling.** Quick-tunnel URLs change on every
+> restart, so buyers who bookmarked the old one hit errors. When you're ready to
+> attract buyers, create a stable hostname: create a tunnel in the Cloudflare
+> dashboard (Networks → Tunnels), route its Public Hostname to
+> `http://traefik.traefik.svc.cluster.local:80`, then run
+> `obol tunnel setup --hostname stack.example.com <connector-token>` (paste the
+> whole `cloudflared tunnel run --token …` line — Obol extracts the token). This
+> needs only a least-privilege connector token, not an account-wide API key.
+
 ### 1.6 Verify Your Paths
 
 Test each route to confirm everything is wired correctly:

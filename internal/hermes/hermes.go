@@ -1063,7 +1063,8 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
 
 func syncRuntimeFiles(cfg *config.Config, id string, configData []byte, u *ui.UI) error {
 	targetDir := agentruntime.HomePath(cfg, agentruntime.Hermes, id)
-	ensureVolumeWritable(cfg, targetDir, u)
+	ensureVolumeWritableFn(cfg, targetDir, u)
+	defer fixRuntimeVolumeOwnershipFn(cfg, targetDir, u)
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create Hermes home %s: %w", targetDir, err)
 	}

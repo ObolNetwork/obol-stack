@@ -234,19 +234,24 @@ Skills are delivered via host-path PVC injection — no ConfigMap size limits, w
 
 ## Public Access (Cloudflare Tunnel)
 
-Expose your stack to the internet via Cloudflare Tunnel:
+A tunnel exposes your stack to the public internet so buyers can discover and
+pay for the services you sell. You don't need it for local use — set one up once
+you're ready to sell, to get a permanent URL.
 
 ```bash
-# Check tunnel status (quick tunnel mode is the default)
+# Check tunnel status (a temporary quick-tunnel URL is the default)
 obol tunnel status
 
-# Use a persistent hostname
-obol tunnel login --hostname stack.example.com
-
-# Or provision via API
-obol tunnel provision --hostname stack.example.com \
-  --account-id ... --zone-id ... --api-token ...
+# Create a permanent URL. Create a tunnel in the Cloudflare dashboard
+# (Networks → Tunnels), route its Public Hostname to
+# http://traefik.traefik.svc.cluster.local:80, then paste the connector token —
+# you can paste the whole `cloudflared tunnel run --token …` line:
+obol tunnel setup --hostname stack.example.com <connector-token>
 ```
+
+This uses a least-privilege, single-tunnel connector token — no account-wide API
+key required. (Advanced: `obol tunnel setup --management local` uses a browser
+login on this machine instead, which needs `cloudflared` installed.)
 
 ## Managing the Stack
 

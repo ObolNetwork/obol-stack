@@ -66,6 +66,54 @@
         }
       }
     },
+    "paymentOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "price",
+        "payTo",
+        "network"
+      ],
+      "properties": {
+        "price": {
+          "type": "string",
+          "minLength": 1
+        },
+        "priceRaw": {
+          "$ref": "#/$defs/decimalString"
+        },
+        "priceUnit": {
+          "type": "string",
+          "enum": [
+            "perRequest",
+            "perMTok",
+            "perHour",
+            "perEpoch"
+          ]
+        },
+        "priceAtomicUnits": {
+          "$ref": "#/$defs/atomicUnits"
+        },
+        "payTo": {
+          "$ref": "#/$defs/evmAddress"
+        },
+        "network": {
+          "type": "string",
+          "minLength": 1
+        },
+        "caip2Network": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+:[0-9]+$"
+        },
+        "chainId": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "asset": {
+          "$ref": "#/$defs/asset"
+        }
+      }
+    },
     "service": {
       "type": "object",
       "additionalProperties": false,
@@ -77,8 +125,7 @@
         "price",
         "payTo",
         "network",
-        "description",
-        "isDemo"
+        "description"
       ],
       "properties": {
         "name": {
@@ -155,8 +202,21 @@
           },
           "description": "OASF skills or buy-x402 skills the agent advertises. For type=agent offers this mirrors the resolved Agent.spec.skills allow-list; for non-agent offers it mirrors spec.registration.skills."
         },
-        "isDemo": {
-          "type": "boolean"
+        "category": {
+          "type": "string",
+          "description": "Storefront grouping section (e.g. \"demo\"). Empty/absent means the default section. Mirrors spec.listing.category."
+        },
+        "weight": {
+          "type": "integer",
+          "description": "Orders offers within a category: higher sorts earlier. Mirrors spec.listing.weight."
+        },
+        "payments": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/paymentOption"
+          },
+          "description": "Every accepted payment option (one per currency/network). payments[0] mirrors the flat price/payTo/network/asset fields."
         },
         "registrationPending": {
           "type": "boolean"

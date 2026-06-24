@@ -242,27 +242,43 @@ func (c ChainInfo) DefaultAsset() AssetInfo {
 // ResolveAssetInfo applies any route-level asset overrides on top of the
 // chain's default settlement asset.
 func ResolveAssetInfo(chain ChainInfo, rule *RouteRule) AssetInfo {
-	asset := chain.DefaultAsset()
 	if rule == nil {
-		return asset
+		return chain.DefaultAsset()
 	}
-	if rule.AssetAddress != "" {
-		asset.Address = rule.AssetAddress
+	// The inline asset fields describe the primary payment option.
+	return ResolveAssetInfoForPayment(chain, RoutePayment{
+		AssetAddress:        rule.AssetAddress,
+		AssetSymbol:         rule.AssetSymbol,
+		AssetDecimals:       rule.AssetDecimals,
+		AssetTransferMethod: rule.AssetTransferMethod,
+		EIP712Name:          rule.EIP712Name,
+		EIP712Version:       rule.EIP712Version,
+	})
+}
+
+// ResolveAssetInfoForPayment applies a single payment option's asset
+// overrides on top of the chain default. Same precedence and registry-flag
+// re-derivation as ResolveAssetInfo, but scoped to one accepted payment so a
+// multi-payment route resolves each option independently.
+func ResolveAssetInfoForPayment(chain ChainInfo, p RoutePayment) AssetInfo {
+	asset := chain.DefaultAsset()
+	if p.AssetAddress != "" {
+		asset.Address = p.AssetAddress
 	}
-	if rule.AssetSymbol != "" {
-		asset.Symbol = rule.AssetSymbol
+	if p.AssetSymbol != "" {
+		asset.Symbol = p.AssetSymbol
 	}
-	if rule.AssetDecimals > 0 {
-		asset.Decimals = rule.AssetDecimals
+	if p.AssetDecimals > 0 {
+		asset.Decimals = p.AssetDecimals
 	}
-	if rule.AssetTransferMethod != "" {
-		asset.TransferMethod = rule.AssetTransferMethod
+	if p.AssetTransferMethod != "" {
+		asset.TransferMethod = p.AssetTransferMethod
 	}
-	if rule.EIP712Name != "" {
-		asset.EIP712Name = rule.EIP712Name
+	if p.EIP712Name != "" {
+		asset.EIP712Name = p.EIP712Name
 	}
-	if rule.EIP712Version != "" {
-		asset.EIP712Version = rule.EIP712Version
+	if p.EIP712Version != "" {
+		asset.EIP712Version = p.EIP712Version
 	}
 
 	// Re-derive registry-driven flags (gasless approve, etc.) from the token

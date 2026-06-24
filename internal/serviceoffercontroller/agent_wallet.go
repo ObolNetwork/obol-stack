@@ -15,11 +15,12 @@ import (
 // Constants for the per-agent remote-signer side-stack. Image pinned by
 // digest is desirable but the chart still publishes by tag — keeping the
 // version synced with agentruntime.RemoteSignerChartVersion's notes
-// (chart 0.3.2 → image v0.3.0, the canonical recovery-id behaviour).
+// (chart 0.3.3 → image v0.4.0, the first image that honours
+// SIGNER__AUTH__TOKEN).
 const (
 	remoteSignerName  = "remote-signer"
 	remoteSignerPort  = 9000
-	remoteSignerImage = "ghcr.io/obolnetwork/remote-signer:v0.3.0"
+	remoteSignerImage = "ghcr.io/obolnetwork/remote-signer:v0.4.0"
 	// Image hard-codes /data/keystores as the default and reads its
 	// config under the SIGNER__... env namespace; values picked to match
 	// the master agent's working config in hermes-obol-agent.
@@ -34,8 +35,8 @@ const (
 	// Bearer token for the signer's REST API. Injected into the signer
 	// as SIGNER__AUTH__TOKEN and into Hermes as REMOTE_SIGNER_TOKEN —
 	// defense-in-depth on top of the agent-isolation NetworkPolicy.
-	// Signer images < v0.4.0 ignore the env, so injection is a safe
-	// no-op until the image pin advances.
+	// Honoured by signer image v0.4.0+ (the version chart 0.3.3 ships);
+	// older images silently ignore the env.
 	remoteSignerAuthTokenKey = "authToken"
 )
 

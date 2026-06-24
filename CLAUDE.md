@@ -87,8 +87,8 @@ obol
 │   └── skills      add, remove, list
 ├── model           setup (has sub: custom), status, token, sync, pull, list, prefer, discover, remove
 ├── app             install, sync, list, delete
-├── tunnel          status, setup, login, provision, restart, stop, logs
-├── domain          search, check, register
+├── tunnel          status, setup, restart, stop, logs (login hidden: browser-managed fallback)
+├── domain          list, search, check, register
 ├── kubectl/helm/helmfile/k9s   Passthrough (auto KUBECONFIG)
 ├── update          Helm + CLI version check (--json)
 ├── upgrade         Apply chart upgrades (--defaults-only, --pinned, --major)
@@ -102,6 +102,7 @@ obol
 - `sell info <name>` prints purchase instructions (URL, model, buy.py command).
 - `sell mcp [name]` runs a foreground x402-paid MCP server: forwards buyer JSON args to a backend HTTP service, injecting the seller's own API key (buyer never sees it). Payment rides MCP `_meta` (`internal/x402mcp`).
 - `sell resume` replays every persisted sell offer (inference incl. detached host-gateway relaunch; http/agent/demo-agent via the manifest ledger at `$OBOL_CONFIG_DIR/sell-http/`) — run after a host reboot; `obol stack up` runs the same path. `--install-boot-unit` adds a systemd user unit (Linux). `sell mcp` is foreground-only, no offer, not resumed.
+- `tunnel setup [<token>]`: the one permanent-URL command. Connector-token based (dashboard-managed) — no host binary, no account-wide API key. Accepts the bare connector token, the `--token` flag, a positional arg, or the whole `cloudflared tunnel run --token …` line (prefix stripped via `extractConnectorToken`). Reuses the remote runtime (`ProvisionWithToken` → `TUNNEL_TOKEN` secret, chart `management_mode=remote`); DNS/ingress are configured by the user in the Cloudflare dashboard (route Public Hostname → `http://traefik.traefik.svc.cluster.local:80`), not via API. The API-token provisioning path was removed (no more `tunnel provision`, no setup `--api-token/--account-id/--zone-id/--register-domain`). `--management local` (alias hidden `tunnel login`) is the browser fallback (needs `cloudflared`). `tunnel status` reads connector health from cloudflared's in-cluster `/ready`+`/metrics` (port 2000, no token) plus a public HTTP probe; concise by default, `--verbose` for replicas/pods, `--no-probe` to stay offline. Domain management lives under `obol domain` (`list`, `search`, `check`, `register`) — an optional CLI wrapper around Cloudflare Registrar; still uses a scoped Cloudflare **API token** (Account → Domain perm, via `--api-token`/`CLOUDFLARE_API_TOKEN`; on a TTY it walks you through token creation and prompts). `--api-token` deliberately has NO `-t` alias to avoid colliding with `tunnel setup -t` (connector token — a different credential). `register` is billable (needs a payment method on the CF account); on success it prints the `obol tunnel setup --hostname …` handoff.
 - `hermes` is passthrough to native hermes CLI via `hermes.CLI()` (cmd/obol/hermes.go:27). No Go-level subcommands registered.
 - `bootstrap` (cmd/obol/bootstrap.go) is a hidden command for installer use only — not user-facing.
 
@@ -261,6 +262,17 @@ Caveats:
 **LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy → Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). Auto-configured with Ollama models during `obol stack up` (no manual `obol model setup`). `ConfigureLiteLLM()` patches config + Secret + restarts or hot-adds via LiteLLM model API. Paid remote inference: Obol LiteLLM fork + `x402-buyer` sidecar, with static `paid/*` → `openai/*` → `http://127.0.0.1:8402` route (wildcard catch-all, requires >=1 concrete `paid/<model>` entry to be useful). Hermes uses provider `"custom"` pointed at `http://litellm.llm.svc.cluster.local:4000/v1`; optional OpenClaw instances reuse the `"openai"` provider slot (ollama slot disabled). Agent configs use `dangerouslyDisableDeviceAuth` for Traefik-proxied access.
 
 **Auto-configuration**: `obol stack up` → `autoConfigureLLM()` detects host Ollama models, patches LiteLLM config. `obolup.sh` → `check_agent_model_api_key()` reads `~/.openclaw/openclaw.json`, resolves API key from `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` (Anthropic) or `OPENAI_API_KEY` (OpenAI), exports for downstream.
+
+**BYOK cloud providers** (easiest getting-started path) — provider knowledge is a single registry in `internal/model/model.go` (`knownProviders` / `ProviderInfo` with `Mode`/`BaseURL`/`Default`/`KeyURL`/`JoinURL`/`Free`); adding a provider is one row, no per-provider switch. `KeyURL` is the API-key dashboard (assumes account); optional `JoinURL` is a new-user landing page (may carry a referral tag) used in preference to `KeyURL` for browser-open and "new to X? Sign up" hints. Built-in: `anthropic`, `openai`, `ollama` (native/local) + OpenAI-compatible aggregators `venice`, `openrouter`, `nvidia`, `gmi`, `novita`, `huggingface` (`Mode=openai-compatible` → `model_list` entry `openai/<id>` + explicit `api_base` + key from the provider's env var; no wildcard). When `--model` is omitted, setup uses the registry `Default` or lists the live `GET <base>/v1/models` (TTY picker / non-TTY error naming real ids). `--free` seeds the curated free-tier model snapshot (currently OpenRouter only) intersected against the live `/v1/models` response to drop rotated-out ids; auto-applied for `openrouter` when no `--model` is passed.
+
+Single front door: `obol model setup` (engine: `setupCloudProvider` in `cmd/obol/model.go`). Interactive picker defaults to OpenRouter — `obol model setup` with no flags walks a TTY user through provider pick → browser open at `JoinURL`/`KeyURL` → key prompt → free-roster seeding. Scriptable variant: `obol model setup --provider <id> --api-key <key>`. Unlisted endpoints: `obol model setup custom --endpoint … --model …`. `obol buy inference <provider>` is reserved for future credit top-ups against remote providers; today it errors with a redirect to `obol model setup`. `obol buy inference [<seller-url>]` (URL or no arg) is the **x402 crypto-paid seller** path — unchanged.
+
+```bash
+obol model setup                                       # interactive; default = openrouter + free roster
+obol model setup --provider venice                     # opens https://venice.ai/chat?ref=ZynMuD (TTY) + prompts for key
+obol model setup --provider venice --api-key $VENICE_API_KEY   # scriptable / CI
+obol model setup --provider openrouter --model openrouter/auto # paid OpenRouter (skips free-roster seeding)
+```
 
 **External OpenAI-compatible LLM** (vLLM / sglang / mlx-lm / remote GPU) — canonical user flow, no ConfigMap surgery:
 

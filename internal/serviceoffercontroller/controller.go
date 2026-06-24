@@ -1433,7 +1433,7 @@ func truncateMessage(message string) string {
 func awaitingExternalRegistrationMessage(chain string) string {
 	cmd := "obol sell register"
 	if chain = strings.TrimSpace(chain); chain != "" {
-		cmd += " --chain " + chain
+		cmd += " --network " + chain
 	}
 	return truncateMessage("Awaiting external ERC-8004 registration tx — submit with `" + cmd + "`; offer already serves paid traffic")
 }

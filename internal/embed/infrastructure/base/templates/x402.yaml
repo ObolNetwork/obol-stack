@@ -143,16 +143,19 @@ rules:
   # ServiceAccount + PVC are namespace-scoped child resources.
   #
   # Secrets: the reconciler touches exactly three, by name:
-  #   - litellm-secrets        get               (read LITELLM_MASTER_KEY, ns llm)
-  #   - hermes-api-server      get/delete/create (mint the agent API token)
-  #   - remote-signer-keystore get/delete/create (mint the agent wallet keystore)
-  # Secrets are create-only in the reconciler (isCreateOnlyKind): the API token
-  # is preserved, not rotated, and the keystore is minted once and never
-  # reshaped, so no `update`/`patch` verb is needed. `litellm-secrets` is
-  # get-only; delete is confined to the two per-agent Secret names that teardown
-  # owns. `create` is split into its own rule below: resourceNames cannot scope
-  # create, and agent namespaces are minted dynamically, so create stays
-  # namespace-wide. That is an integrity surface only.
+  #   - litellm-secrets        get                      (read LITELLM_MASTER_KEY, ns llm)
+  #   - hermes-api-server      get/delete/create        (mint the agent API token)
+  #   - remote-signer-keystore get/update/patch/delete/create (mint + backfill auth token)
+  # `hermes-api-server` is create-only: the token is preserved, not rotated.
+  # `remote-signer-keystore` needs `update`/`patch` for a one-shot backfill
+  # path (backfillSignerAuthToken in agent_wallet.go) that adds the
+  # signer-auth bearer-token key to keystores minted before signer auth
+  # existed. Idempotent: presence of the key (even empty) is a no-op, so
+  # operator-rotated tokens are never clobbered. `litellm-secrets` is
+  # get-only; delete is confined to the two per-agent Secret names that
+  # teardown owns. `create` is split into its own rule below: resourceNames
+  # cannot scope create, and agent namespaces are minted dynamically, so
+  # create stays namespace-wide. That is an integrity surface only.
   - apiGroups: [""]
     resources: ["serviceaccounts"]
     verbs: ["create"]
@@ -173,8 +176,12 @@ rules:
     verbs: ["get"]
   - apiGroups: [""]
     resources: ["secrets"]
-    resourceNames: ["hermes-api-server", "remote-signer-keystore"]
+    resourceNames: ["hermes-api-server"]
     verbs: ["get", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["remote-signer-keystore"]
+    verbs: ["get", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["create"]
@@ -255,7 +262,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: verifier
-          image: ghcr.io/obolnetwork/x402-verifier:d16d167@sha256:1d501bbaa14cd3bfc37cffa47c1c8d19a5743e86cb6066bc73f3197b89ca0abf
+          image: ghcr.io/obolnetwork/x402-verifier:2e8a97e@sha256:cb827c358454fe2242602f3e2d78afde28b59bac747538d4b22cbabbf8e49c44
           imagePullPolicy: IfNotPresent
           # PSS Restricted: per-container hardening. Verifier is a Go binary
           # reading two RO ConfigMaps; no writeable rootfs paths required.
@@ -357,7 +364,7 @@ spec:
           # bug; b39bcaa (post-rc10 main) carries it, and also ships PR #590's
           # actionable pending-registration status message.
           # See TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix.
-          image: ghcr.io/obolnetwork/serviceoffer-controller:d16d167@sha256:ab2bc596b0c2b40664519d01e37aea349a6df22dd1b4ed5e44c1c9e1fcf89519
+          image: ghcr.io/obolnetwork/serviceoffer-controller:2e8a97e@sha256:b4809c6e132c6da27e97955e1e806341b5e03e0a2ff05840843c9e0ddfbfe218
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

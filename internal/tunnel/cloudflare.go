@@ -12,35 +12,13 @@ import (
 	"slices"
 	"strings"
 	"time"
-
-	"golang.org/x/net/publicsuffix"
 )
 
 const cloudflareAPIBaseURL = "https://api.cloudflare.com/client/v4"
 
-var errCloudflareZoneNotFound = errors.New("cloudflare zone not found")
-
-type cloudflareTunnel struct {
-	ID          string                       `json:"id"`
-	Name        string                       `json:"name,omitempty"`
-	Token       string                       `json:"token,omitempty"`
-	Status      string                       `json:"status,omitempty"`
-	Connections []cloudflareTunnelConnection `json:"connections,omitempty"`
-}
-
-type cloudflareTunnelConnection struct {
-	ID string `json:"id,omitempty"`
-}
-
 type cloudflareAccount struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
-}
-
-type cloudflareZone struct {
-	ID      string            `json:"id"`
-	Name    string            `json:"name"`
-	Account cloudflareAccount `json:"account"`
 }
 
 type cloudflareDomainPricing struct {
@@ -55,6 +33,17 @@ type cloudflareRegistrarDomain struct {
 	Pricing     *cloudflareDomainPricing `json:"pricing,omitempty"`
 	Reason      string                   `json:"reason,omitempty"`
 	Tier        string                   `json:"tier,omitempty"`
+}
+
+// cloudflareOwnedDomain is a domain already held in the account, as returned by
+// the registrar domains list endpoint (distinct from the availability shape).
+type cloudflareOwnedDomain struct {
+	Name             string `json:"name"`
+	ExpiresAt        string `json:"expires_at,omitempty"`
+	AutoRenew        bool   `json:"auto_renew"`
+	Locked           bool   `json:"locked"`
+	CurrentRegistrar string `json:"current_registrar,omitempty"`
+	RegistryStatuses string `json:"registry_statuses,omitempty"`
 }
 
 type cloudflareRegistrationRequest struct {
@@ -84,14 +73,6 @@ type cloudflareRegistrarWorkflow struct {
 	Error     *cloudflareWorkflowError `json:"error,omitempty"`
 }
 
-type dnsRecord struct {
-	ID      string `json:"id"`
-	Type    string `json:"type"`
-	Name    string `json:"name"`
-	Content string `json:"content"`
-	Proxied bool   `json:"proxied"`
-}
-
 type cloudflareClient struct {
 	apiToken   string
 	baseURL    string
@@ -117,20 +98,6 @@ func newCloudflareClient(apiToken string) *cloudflareClient {
 			Timeout: 30 * time.Second,
 		},
 	}
-}
-
-func extractZoneName(hostname string) (string, error) {
-	hostname = normalizeHostname(hostname)
-	if hostname == "" {
-		return "", errors.New("hostname is required")
-	}
-
-	zoneName, err := publicsuffix.EffectiveTLDPlusOne(hostname)
-	if err != nil {
-		return "", fmt.Errorf("derive zone from hostname %q: %w", hostname, err)
-	}
-
-	return zoneName, nil
 }
 
 func (c *cloudflareClient) ListAccounts() ([]cloudflareAccount, error) {
@@ -165,153 +132,6 @@ func (c *cloudflareClient) ResolveAccountID(explicitAccountID string) (string, e
 	default:
 		return "", errors.New("--account-id is required because the Cloudflare token can access multiple accounts")
 	}
-}
-
-func (c *cloudflareClient) ResolveZoneForHostname(hostname string) (*cloudflareZone, error) {
-	zoneName, err := extractZoneName(hostname)
-	if err != nil {
-		return nil, err
-	}
-
-	q := url.Values{}
-	q.Set("name", zoneName)
-
-	var resp cloudflareAPIResponse[[]cloudflareZone]
-	if err := c.doJSON(http.MethodGet, "/zones?"+q.Encode(), nil, nil, &resp); err != nil {
-		return nil, err
-	}
-
-	if !resp.Success {
-		return nil, c.apiError("cloudflare zone lookup failed", resp.Errors)
-	}
-
-	for _, zone := range resp.Result {
-		if strings.EqualFold(zone.Name, zoneName) {
-			zoneCopy := zone
-			return &zoneCopy, nil
-		}
-	}
-
-	return nil, fmt.Errorf("%w: %s", errCloudflareZoneNotFound, zoneName)
-}
-
-func (c *cloudflareClient) CreateTunnel(accountID, tunnelName string) (*cloudflareTunnel, error) {
-	reqBody := map[string]any{
-		"name":       tunnelName,
-		"config_src": "cloudflare",
-	}
-
-	var resp cloudflareAPIResponse[cloudflareTunnel]
-	if err := c.doJSON(http.MethodPost, fmt.Sprintf("/accounts/%s/cfd_tunnel", accountID), reqBody, nil, &resp); err != nil {
-		return nil, err
-	}
-
-	if !resp.Success {
-		return nil, c.apiError("cloudflare tunnel create failed", resp.Errors)
-	}
-
-	return &resp.Result, nil
-}
-
-func (c *cloudflareClient) GetTunnel(accountID, tunnelID string) (*cloudflareTunnel, error) {
-	var resp cloudflareAPIResponse[cloudflareTunnel]
-	if err := c.doJSON(http.MethodGet, fmt.Sprintf("/accounts/%s/cfd_tunnel/%s", accountID, tunnelID), nil, nil, &resp); err != nil {
-		return nil, err
-	}
-
-	if !resp.Success {
-		return nil, c.apiError("cloudflare tunnel fetch failed", resp.Errors)
-	}
-
-	return &resp.Result, nil
-}
-
-func (c *cloudflareClient) GetTunnelToken(accountID, tunnelID string) (string, error) {
-	var resp cloudflareAPIResponse[string]
-	if err := c.doJSON(http.MethodGet, fmt.Sprintf("/accounts/%s/cfd_tunnel/%s/token", accountID, tunnelID), nil, nil, &resp); err != nil {
-		return "", err
-	}
-
-	if !resp.Success || resp.Result == "" {
-		return "", c.apiError("cloudflare tunnel token fetch failed", resp.Errors)
-	}
-
-	return resp.Result, nil
-}
-
-func (c *cloudflareClient) UpdateTunnelConfiguration(accountID, tunnelID, hostname, serviceURL string) error {
-	reqBody := map[string]any{
-		"config": map[string]any{
-			"ingress": []map[string]any{
-				{
-					"hostname":      hostname,
-					"service":       serviceURL,
-					"originRequest": map[string]any{},
-				},
-				{
-					"service": "http_status:404",
-				},
-			},
-		},
-	}
-
-	var resp cloudflareAPIResponse[map[string]any]
-	endpoint := fmt.Sprintf("/accounts/%s/cfd_tunnel/%s/configurations", accountID, tunnelID)
-	if err := c.doJSON(http.MethodPut, endpoint, reqBody, nil, &resp); err != nil {
-		return err
-	}
-
-	if !resp.Success {
-		return c.apiError("cloudflare tunnel configuration update failed", resp.Errors)
-	}
-
-	return nil
-}
-
-func (c *cloudflareClient) UpsertTunnelDNSRecord(zoneID, hostname, content string) error {
-	q := url.Values{}
-	q.Set("type", "CNAME")
-	q.Set("name", hostname)
-
-	var listResp cloudflareAPIResponse[[]dnsRecord]
-	endpoint := fmt.Sprintf("/zones/%s/dns_records?%s", zoneID, q.Encode())
-	if err := c.doJSON(http.MethodGet, endpoint, nil, nil, &listResp); err != nil {
-		return err
-	}
-
-	if !listResp.Success {
-		return c.apiError("cloudflare dns record list failed", listResp.Errors)
-	}
-
-	reqBody := map[string]any{
-		"type":    "CNAME",
-		"proxied": true,
-		"name":    hostname,
-		"content": content,
-	}
-
-	if len(listResp.Result) > 0 {
-		var updResp cloudflareAPIResponse[dnsRecord]
-		updateEndpoint := fmt.Sprintf("/zones/%s/dns_records/%s", zoneID, listResp.Result[0].ID)
-		if err := c.doJSON(http.MethodPut, updateEndpoint, reqBody, nil, &updResp); err != nil {
-			return err
-		}
-		if !updResp.Success {
-			return c.apiError("cloudflare dns record update failed", updResp.Errors)
-		}
-		return nil
-	}
-
-	var createResp cloudflareAPIResponse[dnsRecord]
-	createEndpoint := fmt.Sprintf("/zones/%s/dns_records", zoneID)
-	if err := c.doJSON(http.MethodPost, createEndpoint, reqBody, nil, &createResp); err != nil {
-		return err
-	}
-	if !createResp.Success {
-		return c.apiError("cloudflare dns record create failed", createResp.Errors)
-	}
-
-	return nil
 }
 
 func (c *cloudflareClient) SearchRegistrarDomains(accountID, query string, limit int, extensions []string) ([]cloudflareRegistrarDomain, error) {
@@ -361,6 +181,19 @@ func (c *cloudflareClient) CheckRegistrarDomains(accountID string, domains []str
 	}
 
 	return resp.Result.Domains, nil
+}
+
+func (c *cloudflareClient) ListRegistrarDomains(accountID string) ([]cloudflareOwnedDomain, error) {
+	var resp cloudflareAPIResponse[[]cloudflareOwnedDomain]
+	endpoint := fmt.Sprintf("/accounts/%s/registrar/domains", accountID)
+	if err := c.doJSON(http.MethodGet, endpoint, nil, nil, &resp); err != nil {
+		return nil, err
+	}
+	if !resp.Success {
+		return nil, c.apiError("cloudflare registrar domain list failed", resp.Errors)
+	}
+
+	return resp.Result, nil
 }
 
 func (c *cloudflareClient) CreateRegistration(accountID string, req cloudflareRegistrationRequest, respondAsync bool) (*cloudflareRegistrarWorkflow, error) {
@@ -444,6 +277,9 @@ func (c *cloudflareClient) doJSON(method, endpoint string, reqBody any, headers 
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if hint := cloudflareAuthHint(respBody); hint != "" {
+			return fmt.Errorf("cloudflare api error (%s): %s\n%s", resp.Status, strings.TrimSpace(string(respBody)), hint)
+		}
 		return fmt.Errorf("cloudflare api error (%s): %s", resp.Status, strings.TrimSpace(string(respBody)))
 	}
 
@@ -456,6 +292,41 @@ func (c *cloudflareClient) doJSON(method, endpoint string, reqBody any, headers 
 	}
 
 	return nil
+}
+
+// cloudflareAuthHint inspects a Cloudflare error response body for the
+// authorization-format error codes (6003 "Invalid request headers", 6111
+// "Invalid format for Authorization header") that signal a malformed or
+// wrong-type credential, and returns an actionable hint. The codes can appear
+// either at the top level or nested in an error_chain.
+func cloudflareAuthHint(body []byte) string {
+	var parsed struct {
+		Errors []struct {
+			Code       int `json:"code"`
+			ErrorChain []struct {
+				Code int `json:"code"`
+			} `json:"error_chain"`
+		} `json:"errors"`
+	}
+	if json.Unmarshal(body, &parsed) != nil {
+		return ""
+	}
+	authError := false
+	for _, e := range parsed.Errors {
+		if e.Code == 6003 || e.Code == 6111 {
+			authError = true
+		}
+		for _, chained := range e.ErrorChain {
+			if chained.Code == 6003 || chained.Code == 6111 {
+				authError = true
+			}
+		}
+	}
+	if !authError {
+		return ""
+	}
+	return "hint: that credential is not a valid Cloudflare API token. Don't use your Global API Key, account email, or a tunnel connector token here.\n" +
+		"      Create a scoped API token at https://dash.cloudflare.com/profile/api-tokens."
 }
 
 func (c *cloudflareClient) apiError(prefix string, errs []cloudflareAPIError) error {

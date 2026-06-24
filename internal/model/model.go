@@ -37,19 +37,177 @@ const (
 	ProviderOpenAI    = "openai"
 )
 
-// Known provider definitions — no need to query the running pod.
-var knownProviders = []ProviderInfo{
-	{ID: ProviderAnthropic, Name: "Anthropic", EnvVar: "ANTHROPIC_API_KEY", AltEnvVars: []string{"CLAUDE_CODE_OAUTH_TOKEN"}},
-	{ID: ProviderOpenAI, Name: "OpenAI", EnvVar: "OPENAI_API_KEY"},
-	{ID: ProviderOllama, Name: "Ollama (local)", EnvVar: ""},
-}
+// apiMode selects how a provider's LiteLLM model_list entries are shaped.
+type apiMode string
 
-// ProviderInfo describes an LLM provider.
+const (
+	// modeAnthropic: native LiteLLM anthropic routing + prompt-cache markers
+	// + an anthropic/* wildcard. Key read from EnvVar.
+	modeAnthropic apiMode = "anthropic"
+	// modeOpenAI: native LiteLLM openai/ routing + an openai/* wildcard.
+	modeOpenAI apiMode = "openai"
+	// modeOllama: local ollama_chat/ entries pointed at the in-cluster Ollama.
+	modeOllama apiMode = "ollama"
+	// modeOpenAICompatible: any OpenAI-compatible BYOK aggregator (OpenRouter,
+	// Venice, NVIDIA, …). Explicit entries only, Model="openai/<id>" with an
+	// explicit api_base = BaseURL and key read from EnvVar. No wildcard:
+	// aggregator namespaces are huge and overlapping, so we register only the
+	// models the operator asked for.
+	modeOpenAICompatible apiMode = "openai-compatible"
+)
+
+// ProviderInfo describes an LLM provider. knownProviders is the single
+// source of truth: adding a provider is one row here, and every layer (the
+// setup CLI, default-model selection, LiteLLM entry shaping, status, and
+// the persisted record) reads from this struct instead of a per-provider
+// switch.
 type ProviderInfo struct {
-	ID         string   // provider id (e.g. "anthropic", "openai", "ollama")
+	ID         string   // provider id (e.g. "anthropic", "openai", "venice")
 	Name       string   // display name
 	EnvVar     string   // primary env var for API key (empty for Ollama)
 	AltEnvVars []string // fallback env vars checked in order (e.g. CLAUDE_CODE_OAUTH_TOKEN)
+	Mode       apiMode  // how model_list entries are shaped
+	BaseURL    string   // OpenAI-compatible base_url (modeOpenAICompatible only)
+	Default    string   // default chat model when --model is omitted ("" = ask/require)
+	KeyURL     string   // where to create an API key (assumes existing account)
+	JoinURL    string   // optional new-user landing page (may carry a referral
+	// tag). When set, `obol model setup` opens this in preference to KeyURL
+	// (browser open) and surfaces it as a "new to X? sign up" Dim hint above
+	// the keys-dashboard hint.
+	Free []string // curated zero-marginal-cost model ids (seeded by --free)
+}
+
+// IsBYOK reports whether the provider is a BYOK OpenAI-compatible
+// aggregator reached over the public internet (as opposed to a native
+// provider or the local Ollama).
+func (p ProviderInfo) IsBYOK() bool { return p.Mode == modeOpenAICompatible }
+
+// knownProviders is the registry of supported LLM providers. The first
+// three are native/local; the rest are BYOK OpenAI-compatible aggregators —
+// each is pure data, no bespoke wiring. base_url values are intentionally
+// without a trailing /v1 where LiteLLM appends it; aggregator paths that
+// already include /v1 keep it (LiteLLM only auto-appends for bare hosts).
+var knownProviders = []ProviderInfo{
+	{
+		ID: ProviderAnthropic, Name: "Anthropic", EnvVar: "ANTHROPIC_API_KEY",
+		AltEnvVars: []string{"CLAUDE_CODE_OAUTH_TOKEN"}, Mode: modeAnthropic,
+		Default: "claude-sonnet-4-6", KeyURL: "https://console.anthropic.com/settings/keys",
+	},
+	{
+		ID: ProviderOpenAI, Name: "OpenAI", EnvVar: "OPENAI_API_KEY", Mode: modeOpenAI,
+		Default: "gpt-5.5", KeyURL: "https://platform.openai.com/api-keys",
+	},
+	{
+		ID: ProviderOllama, Name: "Ollama (local)", EnvVar: "", Mode: modeOllama,
+	},
+	// ── BYOK OpenAI-compatible aggregators (the easy getting-started path) ──
+	// model_list entries are pure data: Model="openai/<id>", api_base=BaseURL,
+	// key from EnvVar. Default models that can't be statically pinned (the
+	// aggregator's catalog rotates) are left blank — setup then resolves a
+	// model from the live /v1/models list or --model.
+	{
+		ID: "venice", Name: "Venice", EnvVar: "VENICE_API_KEY", Mode: modeOpenAICompatible,
+		BaseURL: "https://api.venice.ai/api/v1",
+		KeyURL:  "https://venice.ai/settings/api",
+		JoinURL: "https://venice.ai/chat?ref=ZynMuD",
+	},
+	{
+		ID: "openrouter", Name: "OpenRouter", EnvVar: "OPENROUTER_API_KEY", Mode: modeOpenAICompatible,
+		BaseURL: "https://openrouter.ai/api/v1", Default: "openrouter/auto",
+		KeyURL: "https://openrouter.ai/keys",
+		// Curated zero-cost models (snapshot — OpenRouter's free roster
+		// rotates; pass --model for any other). Seeded by `--free`.
+		Free: []string{
+			"openrouter/elephant-alpha",
+			"openrouter/owl-alpha",
+			"poolside/laguna-m.1:free",
+			"tencent/hy3-preview:free",
+			"nvidia/nemotron-3-super-120b-a12b:free",
+			"nvidia/nemotron-3-ultra-550b-a55b:free",
+			"inclusionai/ring-2.6-1t:free",
+		},
+	},
+	{
+		ID: "nvidia", Name: "NVIDIA NIM", EnvVar: "NVIDIA_API_KEY", Mode: modeOpenAICompatible,
+		BaseURL: "https://integrate.api.nvidia.com/v1", KeyURL: "https://build.nvidia.com",
+	},
+	{
+		ID: "gmi", Name: "GMI Cloud", EnvVar: "GMI_API_KEY", Mode: modeOpenAICompatible,
+		BaseURL: "https://api.gmi-serving.com/v1", KeyURL: "https://console.gmicloud.ai",
+	},
+	{
+		ID: "novita", Name: "Novita", EnvVar: "NOVITA_API_KEY", Mode: modeOpenAICompatible,
+		BaseURL: "https://api.novita.ai/openai/v1", KeyURL: "https://novita.ai/settings/key-management",
+	},
+	{
+		ID: "huggingface", Name: "Hugging Face Router", EnvVar: "HF_TOKEN", Mode: modeOpenAICompatible,
+		BaseURL: "https://router.huggingface.co/v1", KeyURL: "https://huggingface.co/settings/tokens",
+	},
+}
+
+// ProviderByID returns the registry entry for id and whether it was found.
+func ProviderByID(id string) (ProviderInfo, bool) {
+	for _, p := range knownProviders {
+		if p.ID == id {
+			return p, true
+		}
+	}
+	return ProviderInfo{}, false
+}
+
+// FetchOpenAICompatibleModels lists model ids from a provider's
+// OpenAI-compatible GET <baseURL>/models endpoint. Used at setup time to
+// resolve a real model id when an aggregator has no statically-pinnable
+// default (its catalog rotates). Best-effort: a non-200, a network error,
+// or an unparseable body returns an error the caller falls back from
+// (prompt for / require --model). The just-entered apiKey authenticates
+// the call from the host.
+func FetchOpenAICompatibleModels(baseURL, apiKey string) ([]string, error) {
+	endpoint := strings.TrimRight(baseURL, "/") + "/models"
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("models endpoint returned %d", resp.StatusCode)
+	}
+
+	var parsed struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("parse models response: %w", err)
+	}
+
+	ids := make([]string, 0, len(parsed.Data))
+	for _, m := range parsed.Data {
+		if m.ID != "" {
+			ids = append(ids, m.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, errors.New("models endpoint returned no models")
+	}
+	return ids, nil
 }
 
 // ProviderStatus captures effective global LiteLLM provider state.
@@ -1308,16 +1466,42 @@ var WellKnownModels = map[string][]string{
 	},
 }
 
-// buildModelEntries creates LiteLLM model_list entries for a provider.
-// Cloud providers (anthropic, openai) get a wildcard entry plus explicit
-// entries for the requested models. Ollama gets explicit entries only
-// (wildcards are broken for ollama_chat/).
+// buildModelEntries creates LiteLLM model_list entries for a provider,
+// shaped by its registry Mode:
+//   - anthropic/openai: explicit entries (so the chosen model wins Rank's
+//     "first chat-capable" rule) followed by a <provider>/* wildcard.
+//   - ollama: explicit ollama_chat/ entries only (wildcards are broken).
+//   - openai-compatible: explicit openai/<id> entries with an explicit
+//     api_base = BaseURL and key from EnvVar — no wildcard.
+//
+// A provider not in the registry falls back to the generic openai/<id>
+// shape keyed on <PROVIDER>_API_KEY (legacy `setup custom` behavior).
 func buildModelEntries(provider string, models []string) []ModelEntry {
-	var entries []ModelEntry
+	p, ok := ProviderByID(provider)
+	if !ok {
+		// Unknown provider: legacy generic shape (no api_base).
+		var entries []ModelEntry
+		for _, m := range models {
+			entries = append(entries, ModelEntry{
+				ModelName: m,
+				LiteLLMParams: LiteLLMParams{
+					Model:  provider + "/" + m,
+					APIKey: fmt.Sprintf("os.environ/%s_API_KEY", strings.ToUpper(provider)),
+				},
+			})
+		}
+		return entries
+	}
 
-	switch provider {
-	case ProviderOllama:
-		// Explicit entries — ollama_chat/* wildcards are broken in LiteLLM
+	keyRef := ""
+	if p.EnvVar != "" {
+		keyRef = "os.environ/" + p.EnvVar
+	}
+
+	var entries []ModelEntry
+	switch p.Mode {
+	case modeOllama:
+		// Explicit entries — ollama_chat/* wildcards are broken in LiteLLM.
 		for _, m := range models {
 			entries = append(entries, ModelEntry{
 				ModelName: m,
@@ -1327,7 +1511,7 @@ func buildModelEntries(provider string, models []string) []ModelEntry {
 				},
 			})
 		}
-	case ProviderAnthropic:
+	case modeAnthropic:
 		cachePoints := anthropicCacheControlPoints()
 		// Explicit entries first so the user-selected model is the primary
 		// under model.Rank's "first chat-capable wins" rule. Hermes cannot
@@ -1338,39 +1522,41 @@ func buildModelEntries(provider string, models []string) []ModelEntry {
 				ModelName: m,
 				LiteLLMParams: LiteLLMParams{
 					Model:                       m,
-					APIKey:                      "os.environ/ANTHROPIC_API_KEY",
+					APIKey:                      keyRef,
 					CacheControlInjectionPoints: cachePoints,
 				},
 			})
 		}
-		// Wildcard: routes any anthropic model without explicit registration.
 		entries = append(entries, ModelEntry{
 			ModelName: "anthropic/*",
 			LiteLLMParams: LiteLLMParams{
 				Model:                       "anthropic/*",
-				APIKey:                      "os.environ/ANTHROPIC_API_KEY",
+				APIKey:                      keyRef,
 				CacheControlInjectionPoints: cachePoints,
 			},
 		})
-	case ProviderOpenAI:
+	case modeOpenAI:
 		// Explicit-before-wildcard, same rationale as Anthropic above.
 		for _, m := range models {
 			entries = append(entries, ModelEntry{
 				ModelName:     m,
-				LiteLLMParams: LiteLLMParams{Model: "openai/" + m, APIKey: "os.environ/OPENAI_API_KEY"},
+				LiteLLMParams: LiteLLMParams{Model: "openai/" + m, APIKey: keyRef},
 			})
 		}
 		entries = append(entries, ModelEntry{
 			ModelName:     "openai/*",
-			LiteLLMParams: LiteLLMParams{Model: "openai/*", APIKey: "os.environ/OPENAI_API_KEY"},
+			LiteLLMParams: LiteLLMParams{Model: "openai/*", APIKey: keyRef},
 		})
-	default:
+	case modeOpenAICompatible:
+		// Explicit openai-shaped entries with an explicit api_base. No
+		// wildcard — the aggregator's catalog is huge and overlaps others.
 		for _, m := range models {
 			entries = append(entries, ModelEntry{
 				ModelName: m,
 				LiteLLMParams: LiteLLMParams{
-					Model:  provider + "/" + m,
-					APIKey: fmt.Sprintf("os.environ/%s_API_KEY", strings.ToUpper(provider)),
+					Model:   "openai/" + m,
+					APIBase: p.BaseURL,
+					APIKey:  keyRef,
 				},
 			})
 		}
@@ -1464,6 +1650,18 @@ func detectProvider(entry ModelEntry) string {
 	}
 
 	model := entry.LiteLLMParams.Model
+	// BYOK aggregator entries are openai-shaped (openai/<id>) but carry an
+	// explicit api_base — match it back to the registry so status groups
+	// them under their real provider (venice, openrouter, …) rather than
+	// "openai". Checked before the bare openai/ prefix below.
+	if base := entry.LiteLLMParams.APIBase; base != "" && strings.HasPrefix(model, ProviderOpenAI+"/") {
+		for _, p := range knownProviders {
+			if p.Mode == modeOpenAICompatible && p.BaseURL == base {
+				return p.ID
+			}
+		}
+	}
+
 	// Wildcard entries
 	if strings.HasPrefix(model, ProviderAnthropic+"/") {
 		return ProviderAnthropic

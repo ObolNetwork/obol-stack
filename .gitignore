@@ -48,6 +48,7 @@ node_modules/
 # Next.js build artifacts
 .next/
 next-env.d.ts
+tsconfig.tsbuildinfo
 
 # Environment variables
 .env
