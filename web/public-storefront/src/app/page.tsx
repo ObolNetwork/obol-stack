@@ -1,4 +1,4 @@
-import { fetchServices, fetchStorefront } from "@/lib/catalog";
+import { DEFAULT_HERO_TITLE, fetchServices, fetchStorefront } from "@/lib/catalog";
 import { Header } from "@/components/Header";
 import { ServicesList } from "@/components/ServicesList";
 import { PaymentFlow } from "@/components/PaymentFlow";
@@ -17,7 +17,7 @@ export default async function Home() {
       <main className="max-w-3xl mx-auto px-4 py-10">
         <section className="mb-8">
           <h1 className="text-3xl font-bold text-text-light mb-2">
-            {storefront.displayName}
+            {DEFAULT_HERO_TITLE}
           </h1>
           <p className="text-text-body">{storefront.tagline}</p>
         </section>

@@ -2,7 +2,11 @@ import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
 import { DM_Sans } from "next/font/google";
 import type { Service } from "@/types";
-import { fetchServices, fetchStorefront, isDefaultStorefrontLogo } from "@/lib/catalog";
+import {
+  fetchServices,
+  fetchStorefront,
+  isDefaultStorefrontLogo,
+} from "@/lib/catalog";
 import "./globals.css";
 
 const dmSans = DM_Sans({
@@ -11,9 +15,6 @@ const dmSans = DM_Sans({
   weight: ["400", "500", "600", "700"],
   variable: "--font-dm-sans",
 });
-
-const DEFAULT_TITLE = "Buy agent services";
-const DEFAULT_DESCRIPTION = "Unlock Agent and API services with digital payments.";
 
 // Derive the public site URL from the incoming request so OG/Twitter scrapers
 // see the tunnel hostname they hit (rather than the in-cluster default). Falls
@@ -34,11 +35,17 @@ async function resolveSiteUrl(): Promise<string> {
   return process.env.NEXT_PUBLIC_SITE_URL ?? "http://obol.stack:8080";
 }
 
-function buildDynamicCopy(storefrontName: string, tagline: string, services: Service[]) {
+const DEFAULT_TITLE_SUFFIX = "Buy agent services";
+
+function buildDynamicCopy(
+  storefrontName: string,
+  tagline: string,
+  services: Service[],
+) {
   if (services.length === 0) {
     return {
-      title: `${storefrontName} — ${DEFAULT_TITLE}`,
-      description: tagline || DEFAULT_DESCRIPTION,
+      title: `${storefrontName} — ${DEFAULT_TITLE_SUFFIX}`,
+      description: tagline,
     };
   }
   const total = services.length;
@@ -49,9 +56,7 @@ function buildDynamicCopy(storefrontName: string, tagline: string, services: Ser
     .map((s) => s.model ?? s.name)
     .filter(Boolean)
     .join(", ");
-  const description = sample
-    ? `${tagline} ${sample}.`
-    : tagline || DEFAULT_DESCRIPTION;
+  const description = sample ? `${tagline} ${sample}.` : tagline;
   return { title, description };
 }
 
@@ -130,7 +135,7 @@ function JsonLd({
     "@context": "https://schema.org",
     "@type": "WebSite",
     name: storefrontName,
-    description: storefrontTagline || DEFAULT_DESCRIPTION,
+    description: storefrontTagline,
     url: siteUrl,
     publisher: {
       "@type": "Organization",

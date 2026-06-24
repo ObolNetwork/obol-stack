@@ -28,6 +28,8 @@ export function isDefaultStorefrontLogo(logoUrl: string): boolean {
   );
 }
 
+export const DEFAULT_HERO_TITLE = "Agent services";
+
 export const fetchServices = cache(async (): Promise<Service[]> => {
   try {
     const res = await fetchCatalog("/api/services.json");
