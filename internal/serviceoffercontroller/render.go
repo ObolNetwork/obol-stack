@@ -14,6 +14,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/ObolNetwork/obol-stack/internal/storefront"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -24,7 +25,6 @@ const (
 	skillCatalogConfigMapName = "obol-skill-md"
 	skillCatalogRouteName     = "obol-skill-md-route"
 	servicesJSONRouteName     = "obol-services-json-route"
-	storefrontJSONRouteName   = "obol-storefront-json-route"
 	openAPIRouteName          = "obol-openapi-route"
 	apiDocsRouteName          = "obol-api-docs-route"
 )
@@ -248,7 +248,7 @@ func agentIdentityLabels(identity *monetizeapi.AgentIdentity, appName string) ma
 	}
 }
 
-func buildSkillCatalogConfigMap(content, servicesJSON, storefrontJSON, openAPIJSON, apiDocsHTML string) *unstructured.Unstructured {
+func buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML string) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
@@ -262,12 +262,11 @@ func buildSkillCatalogConfigMap(content, servicesJSON, storefrontJSON, openAPIJS
 				},
 			},
 			"data": map[string]any{
-				"skill.md":        content,
-				"services.json":   servicesJSON,
-				"storefront.json": storefrontJSON,
-				"openapi.json":    openAPIJSON,
-				"api.html":        apiDocsHTML,
-				"httpd.conf":      ".md:text/markdown\n.json:application/json\n.html:text/html\n",
+				"skill.md":      content,
+				"services.json": servicesJSON,
+				"openapi.json":  openAPIJSON,
+				"api.html":      apiDocsHTML,
+				"httpd.conf":    ".md:text/markdown\n.json:application/json\n.html:text/html\n",
 			},
 		},
 	}
@@ -328,7 +327,6 @@ func buildSkillCatalogDeployment(contentHash string) *unstructured.Unstructured 
 									"items": []any{
 										map[string]any{"key": "skill.md", "path": "skill.md"},
 										map[string]any{"key": "services.json", "path": "api/services.json"},
-										map[string]any{"key": "storefront.json", "path": "api/storefront.json"},
 										map[string]any{"key": "openapi.json", "path": "openapi.json"},
 										// busybox httpd resolves /api/ → /api/index.html, so the
 										// Scalar shell sits at api/index.html. The /api Exact
@@ -562,50 +560,6 @@ func buildServicesJSONHTTPRoute() *unstructured.Unstructured {
 								"path": map[string]any{
 									"type":  "Exact",
 									"value": "/api/services.json",
-								},
-							},
-						},
-						"backendRefs": []any{
-							map[string]any{
-								"name":      skillCatalogConfigMapName,
-								"namespace": skillCatalogNamespace,
-								"port":      int64(8080),
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
-func buildStorefrontJSONHTTPRoute() *unstructured.Unstructured {
-	return &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "gateway.networking.k8s.io/v1",
-			"kind":       "HTTPRoute",
-			"metadata": map[string]any{
-				"name":      storefrontJSONRouteName,
-				"namespace": skillCatalogNamespace,
-				"labels": map[string]any{
-					"obol.org/managed-by": "serviceoffer-controller",
-				},
-			},
-			"spec": map[string]any{
-				"parentRefs": []any{
-					map[string]any{
-						"name":        "traefik-gateway",
-						"namespace":   "traefik",
-						"sectionName": "web",
-					},
-				},
-				"rules": []any{
-					map[string]any{
-						"matches": []any{
-							map[string]any{
-								"path": map[string]any{
-									"type":  "Exact",
-									"value": "/api/storefront.json",
 								},
 							},
 						},
@@ -1164,8 +1118,8 @@ func offerAwaitingRegistration(offer *monetizeapi.ServiceOffer) bool {
 	return false
 }
 
-// buildServiceCatalogJSON returns a JSON array of operationally-ready
-// ServiceOffers for the public storefront feed (/api/services.json).
+// buildServiceCatalogJSON returns the public /api/services.json envelope:
+// seller branding plus operationally-ready ServiceOffers.
 //
 // The filter is operationally-ready (route published, payment gate
 // active, upstream healthy) rather than the stricter controller
@@ -1175,8 +1129,9 @@ func offerAwaitingRegistration(offer *monetizeapi.ServiceOffer) bool {
 // up` until they funded the agent wallet and ran `obol sell register`.
 // That UX failed the "all paid services come back automatically" promise
 // of the stack-up resume feature.
-func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string) string {
+func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string, explicit *schemas.StorefrontProfile) string {
 	baseURL = strings.TrimRight(baseURL, "/")
+	profile := storefront.ResolvePublished(explicit, baseURL)
 
 	now := time.Now()
 	var ready []*monetizeapi.ServiceOffer
@@ -1275,9 +1230,34 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 		services = append(services, svc)
 	}
 
-	out, err := json.MarshalIndent(services, "", "  ")
+	catalog := schemas.ServiceCatalog{
+		DisplayName: profile.DisplayName,
+		Tagline:     profile.Tagline,
+		LogoURL:     profile.LogoURL,
+		Services:    services,
+	}
+	if catalog.Services == nil {
+		catalog.Services = []schemas.ServiceCatalogEntry{}
+	}
+
+	out, err := json.MarshalIndent(catalog, "", "  ")
 	if err != nil {
-		return "[]"
+		return fallbackServiceCatalogJSON(baseURL)
+	}
+	return string(out)
+}
+
+func fallbackServiceCatalogJSON(baseURL string) string {
+	profile := storefront.ResolvePublished(nil, baseURL)
+	catalog := schemas.ServiceCatalog{
+		DisplayName: profile.DisplayName,
+		Tagline:     profile.Tagline,
+		LogoURL:     profile.LogoURL,
+		Services:    []schemas.ServiceCatalogEntry{},
+	}
+	out, err := json.MarshalIndent(catalog, "", "  ")
+	if err != nil {
+		return `{"displayName":"Obol Stack","tagline":"Unlock Agent and API services with digital payments.","logoUrl":"/obol-stack-logo.png","services":[]}`
 	}
 	return string(out)
 }

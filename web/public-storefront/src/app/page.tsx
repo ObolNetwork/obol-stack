@@ -1,4 +1,4 @@
-import { DEFAULT_HERO_TITLE, fetchServices, fetchStorefront } from "@/lib/catalog";
+import { DEFAULT_HERO_TITLE, fetchCatalogDocument } from "@/lib/catalog";
 import { Header } from "@/components/Header";
 import { ServicesList } from "@/components/ServicesList";
 import { PaymentFlow } from "@/components/PaymentFlow";
@@ -6,23 +6,20 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export default async function Home() {
-  const [services, storefront] = await Promise.all([
-    fetchServices(),
-    fetchStorefront(),
-  ]);
+  const catalog = await fetchCatalogDocument();
 
   return (
     <>
-      <Header storefront={storefront} />
+      <Header storefront={catalog} />
       <main className="max-w-3xl mx-auto px-4 py-10">
         <section className="mb-8">
           <h1 className="text-3xl font-bold text-text-light mb-2">
             {DEFAULT_HERO_TITLE}
           </h1>
-          <p className="text-text-body">{storefront.tagline}</p>
+          <p className="text-text-body">{catalog.tagline}</p>
         </section>
 
-        <ServicesList initial={services} />
+        <ServicesList initial={catalog.services} />
 
         <div className="mt-10 space-y-4">
           <PaymentFlow />

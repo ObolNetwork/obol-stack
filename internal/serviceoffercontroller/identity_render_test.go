@@ -251,39 +251,39 @@ func TestBuildIdentityRegistrationDocument_DescriptionPrecedence(t *testing.T) {
 	}
 }
 
-func TestBuildStorefrontJSON_UsesExplicitProfile(t *testing.T) {
+func TestBuildServiceCatalogJSON_UsesExplicitProfile(t *testing.T) {
 	explicit := &schemas.StorefrontProfile{
 		DisplayName: "Acme Inference",
 		Tagline:     "Custom seller tagline",
 		LogoURL:     "https://cdn.example/logo.png",
 	}
 
-	jsonStr := buildStorefrontJSON("https://seller.example", explicit)
-	var profile schemas.StorefrontProfile
-	if err := json.Unmarshal([]byte(jsonStr), &profile); err != nil {
-		t.Fatalf("unmarshal storefront profile: %v", err)
+	jsonStr := buildServiceCatalogJSON(nil, "https://seller.example", explicit)
+	catalog := decodeServiceCatalog(t, jsonStr)
+	if catalog.DisplayName != "Acme Inference" {
+		t.Fatalf("DisplayName = %q", catalog.DisplayName)
 	}
-	if profile.DisplayName != "Acme Inference" {
-		t.Fatalf("DisplayName = %q", profile.DisplayName)
+	if catalog.Tagline != "Custom seller tagline" {
+		t.Fatalf("Tagline = %q", catalog.Tagline)
 	}
-	if profile.Tagline != "Custom seller tagline" {
-		t.Fatalf("Tagline = %q", profile.Tagline)
-	}
-	if profile.LogoURL != "https://cdn.example/logo.png" {
-		t.Fatalf("LogoURL = %q", profile.LogoURL)
+	if catalog.LogoURL != "https://cdn.example/logo.png" {
+		t.Fatalf("LogoURL = %q", catalog.LogoURL)
 	}
 }
 
-func TestBuildStorefrontJSON_Defaults(t *testing.T) {
-	jsonStr := buildStorefrontJSON("https://seller.example", nil)
-	var profile schemas.StorefrontProfile
-	if err := json.Unmarshal([]byte(jsonStr), &profile); err != nil {
-		t.Fatalf("unmarshal storefront profile: %v", err)
+func TestBuildServiceCatalogJSON_DefaultBranding(t *testing.T) {
+	jsonStr := buildServiceCatalogJSON(nil, "https://seller.example", nil)
+	var catalog schemas.ServiceCatalog
+	if err := json.Unmarshal([]byte(jsonStr), &catalog); err != nil {
+		t.Fatalf("unmarshal catalog: %v", err)
 	}
-	if profile.DisplayName != "Obol Stack" {
-		t.Fatalf("DisplayName = %q", profile.DisplayName)
+	if catalog.DisplayName != "Obol Stack" {
+		t.Fatalf("DisplayName = %q", catalog.DisplayName)
 	}
-	if profile.Tagline == "" {
+	if catalog.Tagline == "" {
 		t.Fatal("Tagline empty")
+	}
+	if catalog.LogoURL != "https://seller.example/obol-stack-logo.png" {
+		t.Fatalf("LogoURL = %q", catalog.LogoURL)
 	}
 }

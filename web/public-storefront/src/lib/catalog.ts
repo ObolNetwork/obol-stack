@@ -30,27 +30,45 @@ export function isDefaultStorefrontLogo(logoUrl: string): boolean {
 
 export const DEFAULT_HERO_TITLE = "Agent services";
 
-export const fetchServices = cache(async (): Promise<Service[]> => {
-  try {
-    const res = await fetchCatalog("/api/services.json");
-    if (!res.ok) return [];
-    return res.json();
-  } catch {
-    return [];
+export interface ServiceCatalogDocument extends StorefrontProfile {
+  services: Service[];
+}
+
+function parseCatalogDocument(data: unknown): ServiceCatalogDocument {
+  if (!data || typeof data !== "object" || Array.isArray(data)) {
+    return { ...DEFAULT_STOREFRONT, services: [] };
   }
+  const doc = data as Partial<ServiceCatalogDocument>;
+  return {
+    displayName: doc.displayName || DEFAULT_STOREFRONT.displayName,
+    tagline: doc.tagline || DEFAULT_STOREFRONT.tagline,
+    logoUrl: doc.logoUrl || DEFAULT_STOREFRONT.logoUrl,
+    services: Array.isArray(doc.services) ? doc.services : [],
+  };
+}
+
+export const fetchCatalogDocument = cache(
+  async (): Promise<ServiceCatalogDocument> => {
+    try {
+      const res = await fetchCatalog("/api/services.json");
+      if (!res.ok) return { ...DEFAULT_STOREFRONT, services: [] };
+      return parseCatalogDocument(await res.json());
+    } catch {
+      return { ...DEFAULT_STOREFRONT, services: [] };
+    }
+  },
+);
+
+export const fetchServices = cache(async (): Promise<Service[]> => {
+  const catalog = await fetchCatalogDocument();
+  return catalog.services;
 });
 
 export const fetchStorefront = cache(async (): Promise<StorefrontProfile> => {
-  try {
-    const res = await fetchCatalog("/api/storefront.json");
-    if (!res.ok) return DEFAULT_STOREFRONT;
-    const data = (await res.json()) as Partial<StorefrontProfile>;
-    return {
-      displayName: data.displayName || DEFAULT_STOREFRONT.displayName,
-      tagline: data.tagline || DEFAULT_STOREFRONT.tagline,
-      logoUrl: data.logoUrl || DEFAULT_STOREFRONT.logoUrl,
-    };
-  } catch {
-    return DEFAULT_STOREFRONT;
-  }
+  const catalog = await fetchCatalogDocument();
+  return {
+    displayName: catalog.displayName,
+    tagline: catalog.tagline,
+    logoUrl: catalog.logoUrl,
+  };
 });

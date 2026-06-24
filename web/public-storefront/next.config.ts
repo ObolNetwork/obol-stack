@@ -13,10 +13,6 @@ const nextConfig: NextConfig = {
         source: "/api/services.json",
         destination: `${servicesURL}/api/services.json`,
       },
-      {
-        source: "/api/storefront.json",
-        destination: `${servicesURL}/api/storefront.json`,
-      },
     ];
   },
 };
