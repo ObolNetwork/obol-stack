@@ -70,7 +70,7 @@ function buildAgentPayAgentCommand(
   agentTask: string,
 ): string {
   const modelId = model || "<model-id>";
-  return `pay-agent ${endpoint} --model ${modelId} --message ${quoteAgentTask(agentTask)}`;
+  return `pay-agent ${endpoint} --model ${JSON.stringify(modelId)} --message ${quoteAgentTask(agentTask)}`;
 }
 
 function buildAgentObolPrompt(
@@ -95,6 +95,7 @@ export function ServiceCard({ service }: { service: Service }) {
   const multiPay = options.length > 1;
   const kind = normalizeOfferType(service.type);
   const needsAgentTask = kind === "agent";
+  const taskReady = agentTask.trim().length > 0;
 
   const anchorId = `service-${service.name}`;
   const copyAnchor = () => {
@@ -254,7 +255,9 @@ export function ServiceCard({ service }: { service: Service }) {
             <BuyViaObolAgent
               service={service}
               opt={opt}
+              kind={kind}
               agentTask={agentTask}
+              taskReady={taskReady}
               requireTask={needsAgentTask}
             />
           )}
@@ -262,7 +265,9 @@ export function ServiceCard({ service }: { service: Service }) {
             <BuyViaOtherAgent
               service={service}
               opt={opt}
+              kind={kind}
               agentTask={agentTask}
+              taskReady={taskReady}
               requireTask={needsAgentTask}
             />
           )}
@@ -270,7 +275,9 @@ export function ServiceCard({ service }: { service: Service }) {
             <BuyWithCode
               service={service}
               opt={opt}
+              kind={kind}
               agentTask={agentTask}
+              taskReady={taskReady}
               requireTask={needsAgentTask}
             />
           )}
@@ -316,16 +323,18 @@ function TabBar({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
 function BuyViaObolAgent({
   service,
   opt,
+  kind,
   agentTask,
+  taskReady,
   requireTask,
 }: {
   service: Service;
   opt: ServicePayment;
+  kind: "inference" | "agent" | "http";
   agentTask: string;
+  taskReady: boolean;
   requireTask: boolean;
 }) {
-  const kind = normalizeOfferType(service.type);
-  const taskReady = agentTask.trim().length > 0;
 
   if (kind === "inference") {
     const model = service.model || "<model-id>";
@@ -389,16 +398,18 @@ function BuyViaObolAgent({
 function BuyViaOtherAgent({
   service,
   opt,
+  kind,
   agentTask,
+  taskReady,
   requireTask,
 }: {
   service: Service;
   opt: ServicePayment;
+  kind: "inference" | "agent" | "http";
   agentTask: string;
+  taskReady: boolean;
   requireTask: boolean;
 }) {
-  const kind = normalizeOfferType(service.type);
-  const taskReady = agentTask.trim().length > 0;
 
   let prompt: string;
   if (kind === "inference") {
@@ -438,16 +449,18 @@ function BuyViaOtherAgent({
 function BuyWithCode({
   service,
   opt,
+  kind,
   agentTask,
+  taskReady,
   requireTask,
 }: {
   service: Service;
   opt: ServicePayment;
+  kind: "inference" | "agent" | "http";
   agentTask: string;
+  taskReady: boolean;
   requireTask: boolean;
 }) {
-  const kind = normalizeOfferType(service.type);
-  const taskReady = agentTask.trim().length > 0;
   return (
     <div className="space-y-4">
       <div>
@@ -489,7 +502,7 @@ Content-Type: application/json
 X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
 
 {
-${service.model ? `  "model": "${service.model}",\n` : ""}  "messages": [
+${service.model ? `  "model": ${JSON.stringify(service.model)},\n` : ""}  "messages": [
     {"role": "user", "content": ${quoteAgentTask(agentTask)}}
   ]
 }`}
@@ -588,8 +601,8 @@ function Snippet({
           copyDisabled
             ? "cursor-not-allowed border-stroke text-text-muted"
             : copied
-            ? "border-obol-green text-obol-green"
-            : "border-stroke text-text-body hover:border-obol-green hover:text-obol-green"
+            ? "cursor-pointer border-obol-green text-obol-green"
+            : "cursor-pointer border-stroke text-text-body hover:border-obol-green hover:text-obol-green"
         }`}
       >
         {copied ? "Copied" : "Copy"}
