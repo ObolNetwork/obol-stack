@@ -421,6 +421,17 @@ func inferenceCopy(url, siteURL string, d PaymentDisplay) typeCopy {
 		PrimaryPayload: cmd,
 		PromptObol:     prompt,
 		PromptOther:    other,
+		ChatCompletionsNote: "Direct HTTP buyers use OpenAI-style chat-completions. A minimal paid request looks like:",
+		ChatCompletionsBody: fmt.Sprintf(`POST %s/v1/chat/completions
+Content-Type: application/json
+X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
+
+{
+  "model": "%s",
+  "messages": [
+    {"role": "user", "content": "<your prompt>"}
+  ]
+}`, strings.TrimSuffix(url, "/"), model),
 	}
 }
 
@@ -450,11 +461,12 @@ X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
   ]
 }`, url, modelClause)
 
+	modelFlag := sanitizeDisplayToken(d.Model, "<model-id>")
 	prompt := fmt.Sprintf(
-		"Use the buy-x402 skill's `pay` command to call the Obol Agent at %s%s. "+
-			"This is an *agent*, not a raw model — it has its own skills, tools, and memory. "+
-			"Include a clear instruction in the chat-completions body so the agent knows what to do.",
-		url, modelLine,
+		"Use the buy-x402 skill's `pay-agent` command to buy one round of work from this Obol Agent%s. "+
+			"This is an *agent*, not a raw model — it has its own skills, tools, and memory. Example:\n\n"+
+			"pay-agent %s --model %s --message \"<your prompt to this agent goes here>\"",
+		modelLine, url, modelFlag,
 	)
 
 	other := fmt.Sprintf(
@@ -495,7 +507,10 @@ func httpCopy(url, siteURL string, d PaymentDisplay) typeCopy {
 	if d.NetworkLabel != "" {
 		netClause = " Network: " + d.NetworkLabel + "."
 	}
-	prompt := fmt.Sprintf("Use the buy-x402 skill's `pay` command to call %s once.%s%s", url, priceClause, netClause)
+	prompt := fmt.Sprintf(
+		"Use the buy-x402 skill's `pay` command to call %s once.%s%s "+
+			"Use the method and payload the seller documents.",
+		url, priceClause, netClause)
 
 	priceWord := "the listed price"
 	if d.PriceDisplay != "" {

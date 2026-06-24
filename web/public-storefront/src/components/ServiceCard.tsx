@@ -54,16 +54,48 @@ function normalizeOfferType(t: string): "inference" | "agent" | "http" {
 }
 
 type Tab = "agent" | "other-ai" | "code";
+const AGENT_TASK_PLACEHOLDER = "Summarise the README and list the top 3 risks.";
+
+function resolvedAgentTask(task: string): string {
+  return task.trim() || AGENT_TASK_PLACEHOLDER;
+}
+
+function quoteAgentTask(task: string): string {
+  return JSON.stringify(resolvedAgentTask(task));
+}
+
+function buildAgentPayAgentCommand(
+  endpoint: string,
+  model: string | undefined,
+  agentTask: string,
+): string {
+  const modelId = model || "<model-id>";
+  return `pay-agent ${endpoint} --model ${JSON.stringify(modelId)} --message ${quoteAgentTask(agentTask)}`;
+}
+
+function buildAgentObolPrompt(
+  endpoint: string,
+  model: string | undefined,
+  agentTask: string,
+): string {
+  return `Use the buy-x402 skill's \`pay-agent\` command to buy one round of work from this Obol Agent (skills, tools, and memory — not a raw LLM):
+
+${buildAgentPayAgentCommand(endpoint, model, agentTask)}`;
+}
 
 export function ServiceCard({ service }: { service: Service }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("agent");
   const [copied, setCopied] = useState(false);
+  const [agentTask, setAgentTask] = useState("");
 
   const options = paymentOptions(service);
   const [optIdx, setOptIdx] = useState(0);
   const opt = options[optIdx] ?? options[0];
   const multiPay = options.length > 1;
+  const kind = normalizeOfferType(service.type);
+  const needsAgentTask = kind === "agent";
+  const taskReady = agentTask.trim().length > 0;
 
   const anchorId = `service-${service.name}`;
   const copyAnchor = () => {
@@ -194,11 +226,61 @@ export function ServiceCard({ service }: { service: Service }) {
             </div>
           )}
 
+          {needsAgentTask && (
+            <div className="space-y-1.5">
+              <label
+                htmlFor={`${anchorId}-task`}
+                className="block text-xs font-semibold text-text-light"
+              >
+                What should this agent do?
+              </label>
+              <textarea
+                id={`${anchorId}-task`}
+                value={agentTask}
+                onChange={(e) => setAgentTask(e.target.value)}
+                rows={3}
+                placeholder={AGENT_TASK_PLACEHOLDER}
+                className="w-full rounded border border-stroke bg-bg01 px-3 py-2 text-sm text-text-light placeholder:text-text-muted focus:border-obol-green focus:outline-none"
+              />
+              <p className="text-xs text-text-muted">
+                This updates the prompts below so the copied text is ready to
+                use.
+              </p>
+            </div>
+          )}
+
           <TabBar tab={tab} onChange={setTab} />
 
-          {tab === "agent" && <BuyViaObolAgent service={service} opt={opt} />}
-          {tab === "other-ai" && <BuyViaOtherAgent service={service} opt={opt} />}
-          {tab === "code" && <BuyWithCode service={service} opt={opt} />}
+          {tab === "agent" && (
+            <BuyViaObolAgent
+              service={service}
+              opt={opt}
+              kind={kind}
+              agentTask={agentTask}
+              taskReady={taskReady}
+              requireTask={needsAgentTask}
+            />
+          )}
+          {tab === "other-ai" && (
+            <BuyViaOtherAgent
+              service={service}
+              opt={opt}
+              kind={kind}
+              agentTask={agentTask}
+              taskReady={taskReady}
+              requireTask={needsAgentTask}
+            />
+          )}
+          {tab === "code" && (
+            <BuyWithCode
+              service={service}
+              opt={opt}
+              kind={kind}
+              agentTask={agentTask}
+              taskReady={taskReady}
+              requireTask={needsAgentTask}
+            />
+          )}
         </div>
       )}
     </div>
@@ -238,8 +320,21 @@ function TabBar({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
 // `pay` against chat-completions for agents, `obol buy inference` CLI
 // for inference). Mirrors inferenceCopy/agentCopy/httpCopy in
 // internal/x402/paymentrequired.go.
-function BuyViaObolAgent({ service, opt }: { service: Service; opt: ServicePayment }) {
-  const kind = normalizeOfferType(service.type);
+function BuyViaObolAgent({
+  service,
+  opt,
+  kind,
+  agentTask,
+  taskReady,
+  requireTask,
+}: {
+  service: Service;
+  opt: ServicePayment;
+  kind: "inference" | "agent" | "http";
+  agentTask: string;
+  taskReady: boolean;
+  requireTask: boolean;
+}) {
 
   if (kind === "inference") {
     const model = service.model || "<model-id>";
@@ -264,15 +359,24 @@ function BuyViaObolAgent({ service, opt }: { service: Service; opt: ServicePayme
   }
 
   if (kind === "agent") {
-    const prompt = `Use the buy-x402 skill's \`pay\` command to call the Obol Agent at ${service.endpoint}. This is an *agent*, not a raw model — it has its own skills, tools, and memory. Include a clear instruction in the chat-completions body so the agent knows what to do.`;
+    const prompt = buildAgentObolPrompt(
+      service.endpoint,
+      service.model,
+      agentTask,
+    );
     return (
       <div className="space-y-2">
         <p className="text-xs text-text-muted">
-          Paste this into your Obol agent. You&apos;re paying another agent
-          for one round of work — be specific about what you want it to do.
-          The buy-x402 skill signs and sends the payment for you.
+          Paste this into your Obol agent. It runs{" "}
+          <code className="font-mono text-obol-green">pay-agent</code> for you
+          — one signed payment, one streaming response. Fill in your task above
+          before copying.
         </p>
-        <Snippet code={prompt} />
+        <Snippet
+          code={prompt}
+          copyDisabled={requireTask && !taskReady}
+          copyDisabledReason="Enter your task above first"
+        />
       </div>
     );
   }
@@ -291,8 +395,21 @@ function BuyViaObolAgent({ service, opt }: { service: Service; opt: ServicePayme
   );
 }
 
-function BuyViaOtherAgent({ service, opt }: { service: Service; opt: ServicePayment }) {
-  const kind = normalizeOfferType(service.type);
+function BuyViaOtherAgent({
+  service,
+  opt,
+  kind,
+  agentTask,
+  taskReady,
+  requireTask,
+}: {
+  service: Service;
+  opt: ServicePayment;
+  kind: "inference" | "agent" | "http";
+  agentTask: string;
+  taskReady: boolean;
+  requireTask: boolean;
+}) {
 
   let prompt: string;
   if (kind === "inference") {
@@ -300,7 +417,7 @@ function BuyViaOtherAgent({ service, opt }: { service: Service; opt: ServicePaym
     prompt = `${docsRef(service.endpoint)} I want to use the remote LLM at ${service.endpoint} (model ${model}) as a paid OpenAI-compatible chat-completions endpoint. Pre-sign a budget of EIP-3009 or Permit2 authorisations and POST chat-completions bodies with the X-PAYMENT header attached.`;
   } else if (kind === "agent") {
     const modelLine = service.model ? ` (running ${service.model})` : "";
-    prompt = `${docsRef(service.endpoint)} Help me call the Obol Agent at ${service.endpoint}${modelLine} — it's an autonomous agent (tools + skills + memory), not a raw LLM. POST OpenAI-style chat-completions JSON with a real prompt in \`messages\`, attach a signed EIP-3009 or Permit2 authorisation as \`X-PAYMENT\`, and report what the agent does.`;
+    prompt = `${docsRef(service.endpoint)} Help me call the Obol Agent at ${service.endpoint}${modelLine} — it's an autonomous agent (tools + skills + memory), not a raw LLM. POST OpenAI-style chat-completions JSON with this user message in \`messages\`: {"role":"user","content":${quoteAgentTask(agentTask)}}. Attach a signed EIP-3009 or Permit2 authorisation as \`X-PAYMENT\`, and report what the agent does.`;
   } else {
     prompt = `I want to purchase a service offered by an Obol Agent at ${service.endpoint} for ${opt.price} on ${opt.network}. Please install the run-obol-stack skill from https://github.com/ObolNetwork/skills, ask me for permission to set up the obol stack, and use the buy-x402 skill to make the purchase on my behalf.`;
   }
@@ -320,13 +437,30 @@ function BuyViaOtherAgent({ service, opt }: { service: Service; opt: ServicePaym
         </a>{" "}
         bootstraps the stack and asks for your permission before spending.
       </p>
-      <Snippet code={prompt} />
+      <Snippet
+        code={prompt}
+        copyDisabled={requireTask && !taskReady}
+        copyDisabledReason="Enter your task above first"
+      />
     </div>
   );
 }
 
-function BuyWithCode({ service, opt }: { service: Service; opt: ServicePayment }) {
-  const kind = normalizeOfferType(service.type);
+function BuyWithCode({
+  service,
+  opt,
+  kind,
+  agentTask,
+  taskReady,
+  requireTask,
+}: {
+  service: Service;
+  opt: ServicePayment;
+  kind: "inference" | "agent" | "http";
+  agentTask: string;
+  taskReady: boolean;
+  requireTask: boolean;
+}) {
   return (
     <div className="space-y-4">
       <div>
@@ -368,10 +502,12 @@ Content-Type: application/json
 X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
 
 {
-${service.model ? `  "model": "${service.model}",\n` : ""}  "messages": [
-    {"role": "user", "content": "<your prompt to this agent goes here>"}
+${service.model ? `  "model": ${JSON.stringify(service.model)},\n` : ""}  "messages": [
+    {"role": "user", "content": ${quoteAgentTask(agentTask)}}
   ]
 }`}
+            copyDisabled={requireTask && !taskReady}
+            copyDisabledReason="Enter your task above first"
           />
         </div>
       )}
@@ -434,10 +570,19 @@ print(resp.json())`;
   );
 }
 
-function Snippet({ code }: { code: string }) {
+function Snippet({
+  code,
+  copyDisabled = false,
+  copyDisabledReason,
+}: {
+  code: string;
+  copyDisabled?: boolean;
+  copyDisabledReason?: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   const copy = () => {
+    if (copyDisabled) return;
     navigator.clipboard.writeText(code);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -450,10 +595,14 @@ function Snippet({ code }: { code: string }) {
       </pre>
       <button
         onClick={copy}
-        className={`absolute top-2 right-2 rounded-md border bg-bg03 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider transition-colors cursor-pointer ${
-          copied
-            ? "border-obol-green text-obol-green"
-            : "border-stroke text-text-body hover:border-obol-green hover:text-obol-green"
+        disabled={copyDisabled}
+        title={copyDisabled ? copyDisabledReason : undefined}
+        className={`absolute top-2 right-2 rounded-md border bg-bg03 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider transition-colors ${
+          copyDisabled
+            ? "cursor-not-allowed border-stroke text-text-muted"
+            : copied
+            ? "cursor-pointer border-obol-green text-obol-green"
+            : "cursor-pointer border-stroke text-text-body hover:border-obol-green hover:text-obol-green"
         }`}
       >
         {copied ? "Copied" : "Copy"}
