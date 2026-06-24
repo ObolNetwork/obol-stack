@@ -389,3 +389,73 @@ func TestNetworkChainIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveLocalERPCRegistration(t *testing.T) {
+	tests := []struct {
+		name        string
+		networkType string
+		id          string
+		network     string
+		want        localERPCRegistration
+	}{
+		{
+			name:        "ethereum mainnet",
+			networkType: "ethereum",
+			id:          "mainnet",
+			network:     "mainnet",
+			want: localERPCRegistration{
+				ChainID:  1,
+				Alias:    "mainnet",
+				Endpoint: "http://ethereum-execution.ethereum-mainnet.svc.cluster.local:8545",
+			},
+		},
+		{
+			name:        "hl-node mainnet",
+			networkType: "hl-node",
+			id:          "mainnet",
+			network:     "mainnet",
+			want: localERPCRegistration{
+				ChainID:  999,
+				Alias:    "hyperevm",
+				Endpoint: "http://hl-node.hl-node-mainnet.svc.cluster.local:3001/evm",
+			},
+		},
+		{
+			name:        "hl-node testnet",
+			networkType: "hl-node",
+			id:          "testnet",
+			network:     "testnet",
+			want: localERPCRegistration{
+				ChainID:  998,
+				Alias:    "hyperevm-testnet",
+				Endpoint: "http://hl-node.hl-node-testnet.svc.cluster.local:3001/evm",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveLocalERPCRegistration(tt.networkType, tt.id, struct {
+				Network string `yaml:"network"`
+			}{Network: tt.network})
+			if err != nil {
+				t.Fatalf("resolve local erpc registration: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("registration = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveLocalERPCRegistrationRejectsUnknownHLNetwork(t *testing.T) {
+	_, err := resolveLocalERPCRegistration("hl-node", "dev", struct {
+		Network string `yaml:"network"`
+	}{Network: "devnet"})
+	if err == nil {
+		t.Fatal("expected unknown hl-node network error")
+	}
+	if !strings.Contains(err.Error(), "expected mainnet or testnet") {
+		t.Fatalf("error = %q, want mainnet/testnet guidance", err)
+	}
+}
