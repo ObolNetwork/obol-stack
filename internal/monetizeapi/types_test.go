@@ -5,6 +5,33 @@ import (
 	"testing"
 )
 
+// TestEffectivePayments covers the single→multi-payment fallback: an offer
+// with only spec.payment yields a one-element slice synthesized from it,
+// while spec.payments (when set) is returned verbatim and wins over the
+// singular block. Downstream (the x402 verifier) relies on this so legacy
+// single-payment CRs and new multi-payment offers share one code path.
+func TestEffectivePayments(t *testing.T) {
+	single := &ServiceOffer{Spec: ServiceOfferSpec{
+		Payment: ServiceOfferPayment{Network: "base", PayTo: "0xaaa", Price: ServiceOfferPriceTable{PerRequest: "0.001"}},
+	}}
+	got := single.EffectivePayments()
+	if len(got) != 1 || got[0].Network != "base" || got[0].PayTo != "0xaaa" {
+		t.Fatalf("single-payment fallback = %+v, want one element mirroring spec.payment", got)
+	}
+
+	multi := &ServiceOffer{Spec: ServiceOfferSpec{
+		Payment: ServiceOfferPayment{Network: "base", PayTo: "0xaaa", Price: ServiceOfferPriceTable{PerRequest: "1"}},
+		Payments: []ServiceOfferPayment{
+			{Network: "base", PayTo: "0xaaa", Price: ServiceOfferPriceTable{PerRequest: "1"}},
+			{Network: "ethereum", PayTo: "0xbbb", Price: ServiceOfferPriceTable{PerRequest: "10"}},
+		},
+	}}
+	got = multi.EffectivePayments()
+	if len(got) != 2 || got[1].Network != "ethereum" || got[1].PayTo != "0xbbb" {
+		t.Fatalf("multi-payment = %+v, want the verbatim 2-element payments slice", got)
+	}
+}
+
 // TestPurchaseAutoRefill_JSONRoundTrip asserts every field on
 // PurchaseAutoRefill marshals to JSON and unmarshals back without loss. The
 // MaxTotal + MaxSpendPerDay fields were added to match the CRD spec; this test

@@ -136,14 +136,16 @@ func TestHTMLAware_RendersHTMLOnTextHTML(t *testing.T) {
 	mustContain(t, body, `href="https://sepolia.basescan.org/address/`+testPayTo+`"`)
 	mustContain(t, body, "View on block explorer")
 
-	// All three "ways to pay" prompts must be present, including the agent
-	// instructions referencing the buy-x402 skill, llms.txt, and the public
-	// skills repo.
+	// All three "ways to pay" prompts must be present. The "other AI agent"
+	// prompt now points at THIS operator's own self-contained docs (served
+	// over the same tunnel) rather than the broad obol.org/llms.txt: the
+	// /skill.md catalog (full x402 payment flow) and /openapi.json (exact
+	// request shapes).
 	mustContain(t, body, "Pay with your Obol Agent")
 	mustContain(t, body, "buy-x402 skill")
 	mustContain(t, body, "Pay with another AI agent")
-	mustContain(t, body, "https://obol.org/llms.txt")
-	mustContain(t, body, "https://github.com/ObolNetwork/skills")
+	mustContain(t, body, "/skill.md")
+	mustContain(t, body, "/openapi.json")
 	mustContain(t, body, "Pay manually (raw HTTP 402)")
 
 	// Footer link back to the same tunnel root (storefront).
@@ -429,7 +431,7 @@ func TestInferenceCopy_StripsShellMetacharsFromCommand(t *testing.T) {
 		Model:     "x; rm -rf ~",
 		OfferName: "a && curl evil",
 	}
-	c := inferenceCopy("https://agent.example.tunnel.dev/services/x", d)
+	c := inferenceCopy("https://agent.example.tunnel.dev/services/x", "https://agent.example.tunnel.dev", d)
 	for _, bad := range []string{"rm -rf", "&&", "curl evil", ";"} {
 		if strings.Contains(c.PrimaryPayload, bad) {
 			t.Fatalf("hostile token leaked into command payload %q (contains %q)", c.PrimaryPayload, bad)

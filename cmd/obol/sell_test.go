@@ -285,6 +285,8 @@ func TestSellHTTP_Flags(t *testing.T) {
 		"namespace", "upstream", "port", "health-path", "path",
 		"max-timeout",
 		"register", "no-register", "register-name", "register-description", "register-image",
+		// multi-currency + storefront listing flags (Phase 3)
+		"accept", "weight", "category",
 	)
 
 	assertStringDefault(t, flags, "chain", "base")
@@ -293,6 +295,17 @@ func TestSellHTTP_Flags(t *testing.T) {
 	assertStringDefault(t, flags, "health-path", "/health")
 	assertIntDefault(t, flags, "port", 8080)
 	assertIntDefault(t, flags, "max-timeout", 300)
+}
+
+func TestSellAgent_AcceptFlags(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := sellCommand(cfg)
+	agent := findSubcommand(t, cmd, "agent")
+	flags := flagMap(agent)
+	requireFlags(t, flags,
+		"wallet", "chain", "token", "price", "per-request",
+		"accept", "weight", "category", "description",
+	)
 }
 
 func TestBuildSellRegistrationConfig_DefaultEnabled(t *testing.T) {
@@ -358,6 +371,28 @@ func TestServiceOfferStatusLines(t *testing.T) {
 	} {
 		if !strings.Contains(joined, want) {
 			t.Fatalf("status lines missing %q\n%s", want, joined)
+		}
+	}
+}
+
+func TestServiceOfferStatusLines_MultiPayment(t *testing.T) {
+	offer := monetizeapi.ServiceOffer{
+		Spec: monetizeapi.ServiceOfferSpec{
+			Payment: monetizeapi.ServiceOfferPayment{Network: "base", PayTo: "0xAAA", Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "1"}},
+			Payments: []monetizeapi.ServiceOfferPayment{
+				{Network: "base", PayTo: "0xAAA", Asset: monetizeapi.ServiceOfferAsset{Symbol: "USDC"}, Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "1"}},
+				{Network: "ethereum", PayTo: "0xBBB", Asset: monetizeapi.ServiceOfferAsset{Symbol: "OBOL"}, Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "10"}},
+			},
+		},
+	}
+	joined := strings.Join(serviceOfferStatusLines("agent-x", "x", offer, ""), "\n")
+	for _, want := range []string{
+		"Payments:        2 accepted options",
+		"1 USDC per request on base → 0xAAA",
+		"10 OBOL per request on ethereum → 0xBBB",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("multi-payment status missing %q\n%s", want, joined)
 		}
 	}
 }
@@ -1233,7 +1268,7 @@ func TestBuildSellUpdatePatch_NoFieldsErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when no update flags are set")
 	}
-	for _, sub := range []string{"--per-request", "--per-mtok", "--per-hour", "--pay-to", "--chain"} {
+	for _, sub := range []string{"--per-request", "--per-mtok", "--per-hour", "--pay-to", "--network"} {
 		if !strings.Contains(err.Error(), sub) {
 			t.Errorf("error must name flag %q so the operator learns the surface; got: %v", sub, err)
 		}
@@ -1414,7 +1449,7 @@ func TestBuildResumeGatewayArgs(t *testing.T) {
 				"--upstream", "http://127.0.0.1:8000",
 				"--pay-to", "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
 				"--listen", "0.0.0.0:8402",
-				"--chain", "base-sepolia",
+				"--network", "base-sepolia",
 				"--token", "OBOL",
 				"--per-mtok", "23",
 				"--facilitator", "https://x402.gcp.obol.tech",

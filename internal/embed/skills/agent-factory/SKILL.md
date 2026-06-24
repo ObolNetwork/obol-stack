@@ -24,6 +24,31 @@ python3 scripts/factory.py create medical-advisor \
   --register-name "Medical Advisor"
 ```
 
+### Multiple currencies / networks (one agent, one offer)
+
+Use repeatable `--accept` instead of `--price`/`--network` to advertise several
+payment options on a single offer (the buyer picks one). `token=<symbol>` pulls
+the asset metadata from the built-in registry; for an unlisted token supply it
+inline with `asset=0x..,decimals=..,transfer=eip3009|permit2,eip712-name=..,eip712-version=..,symbol=..`:
+
+```bash
+python3 scripts/factory.py create bankr-analyst \
+  --model openrouter/auto --skills bankr-token-analysis --create-wallet \
+  --accept token=OBOL,network=ethereum,price=10 \
+  --accept token=USDC,network=base,price=1,pay-to=0xColdVault \
+  --description "Paid token-analysis agent"
+```
+
+Each `--accept` may carry its own `pay-to`; otherwise it inherits `--pay-to`,
+which **defaults to the master Hermes agent's own wallet** — so a sub-agent
+needn't provision its own wallet just to take payment (pass `--create-wallet`
+only when it genuinely needs to hold/sign funds). For an unlisted token the
+`asset=0x..` escape hatch needs only the address: `decimals`, `symbol`, and the
+EIP-712 domain (`eip712-name`/`eip712-version`) are read from the chain
+(EIP-5267) when omitted, and `transfer` defaults to `permit2`; the factory
+errors and asks you to specify them if they can't be read. ERC-8004
+registration uses the first option's network.
+
 ## Commands
 
 | Command | Description |

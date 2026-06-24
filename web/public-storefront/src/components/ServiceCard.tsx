@@ -1,7 +1,41 @@
 "use client";
 
 import { useState } from "react";
-import type { Service } from "@/types";
+import type { Service, ServicePayment } from "@/types";
+
+// paymentOptions returns the service's accepted payment options, falling back
+// to the flat fields for catalogs predating multi-currency.
+function paymentOptions(service: Service): ServicePayment[] {
+  if (service.payments && service.payments.length > 0) return service.payments;
+  return [
+    {
+      price: service.price,
+      priceRaw: service.priceRaw,
+      payTo: service.payTo,
+      network: service.network,
+      asset: service.asset,
+    },
+  ];
+}
+
+function optionLabel(opt: ServicePayment): string {
+  const sym = opt.asset?.symbol ?? "USDC";
+  return `${opt.price.replace(/\s.*/, "")} ${sym} · ${opt.network}`;
+}
+
+// docsRef points a foreign agent at THIS operator's own self-contained docs
+// (served over the same tunnel as the endpoint) instead of the broad
+// obol.org/llms.txt: /skill.md carries the full x402 payment flow and
+// /openapi.json the exact request shapes. Falls back to a generic x402
+// pointer if the endpoint origin can't be parsed.
+function docsRef(endpoint: string): string {
+  try {
+    const origin = new URL(endpoint).origin;
+    return `Read ${origin}/skill.md for the x402 payment flow and ${origin}/openapi.json for the exact request shapes.`;
+  } catch {
+    return "See https://www.x402.org for how x402 micropayments work.";
+  }
+}
 
 const typeColors: Record<string, string> = {
   inference: "bg-obol-green/15 text-obol-green border border-obol-green/30",
@@ -20,22 +54,79 @@ function normalizeOfferType(t: string): "inference" | "agent" | "http" {
 }
 
 type Tab = "agent" | "other-ai" | "code";
+const AGENT_TASK_PLACEHOLDER = "Summarise the README and list the top 3 risks.";
+
+function resolvedAgentTask(task: string): string {
+  return task.trim() || AGENT_TASK_PLACEHOLDER;
+}
+
+function quoteAgentTask(task: string): string {
+  return JSON.stringify(resolvedAgentTask(task));
+}
+
+function buildAgentPayAgentCommand(
+  endpoint: string,
+  model: string | undefined,
+  agentTask: string,
+): string {
+  const modelId = model || "<model-id>";
+  return `pay-agent ${endpoint} --model ${modelId} --message ${quoteAgentTask(agentTask)}`;
+}
+
+function buildAgentObolPrompt(
+  endpoint: string,
+  model: string | undefined,
+  agentTask: string,
+): string {
+  return `Use the buy-x402 skill's \`pay-agent\` command to buy one round of work from this Obol Agent (skills, tools, and memory — not a raw LLM):
+
+${buildAgentPayAgentCommand(endpoint, model, agentTask)}`;
+}
 
 export function ServiceCard({ service }: { service: Service }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("agent");
+  const [copied, setCopied] = useState(false);
+  const [agentTask, setAgentTask] = useState("");
+
+  const options = paymentOptions(service);
+  const [optIdx, setOptIdx] = useState(0);
+  const opt = options[optIdx] ?? options[0];
+  const multiPay = options.length > 1;
+  const kind = normalizeOfferType(service.type);
+  const needsAgentTask = kind === "agent";
+
+  const anchorId = `service-${service.name}`;
+  const copyAnchor = () => {
+    const url = `${window.location.origin}${window.location.pathname}#${anchorId}`;
+    navigator.clipboard.writeText(url);
+    window.location.hash = anchorId;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
-    <div className="rounded-lg border border-stroke bg-bg02 p-5 transition-colors hover:bg-bg03">
+    <div
+      id={anchorId}
+      className="scroll-mt-4 rounded-lg border border-stroke bg-bg02 p-5 transition-colors hover:bg-bg03"
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 mb-1">
             <h3 className="text-lg font-semibold text-text-light truncate">
               {service.name}
             </h3>
-            {service.isDemo && (
+            <button
+              onClick={copyAnchor}
+              title="Copy link to this service"
+              aria-label="Copy link to this service"
+              className="shrink-0 text-text-muted hover:text-obol-green text-sm cursor-pointer font-mono"
+            >
+              {copied ? "✓" : "#"}
+            </button>
+            {service.category && (
               <span className="shrink-0 rounded px-1.5 py-0.5 text-xs bg-obol-green/15 text-obol-green border border-obol-green/30">
-                demo
+                {service.category}
               </span>
             )}
           </div>
@@ -61,14 +152,32 @@ export function ServiceCard({ service }: { service: Service }) {
       </div>
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm mb-4">
-        <div>
-          <span className="text-text-muted">Price</span>
-          <p className="text-text-light font-mono text-xs">{service.price}</p>
-        </div>
-        <div>
-          <span className="text-text-muted">Network</span>
-          <p className="text-text-light font-mono text-xs">{service.network}</p>
-        </div>
+        {multiPay ? (
+          <div className="col-span-2">
+            <span className="text-text-muted">
+              Pay with {options.length} options
+            </span>
+            <ul className="mt-1 space-y-0.5">
+              {options.map((o, i) => (
+                <li key={`${o.network}-${o.asset?.symbol ?? "USDC"}`} className="text-text-light font-mono text-xs">
+                  {optionLabel(o)}
+                  {i === optIdx && open ? " ←" : ""}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <>
+            <div>
+              <span className="text-text-muted">Price</span>
+              <p className="text-text-light font-mono text-xs">{opt.price}</p>
+            </div>
+            <div>
+              <span className="text-text-muted">Network</span>
+              <p className="text-text-light font-mono text-xs">{opt.network}</p>
+            </div>
+          </>
+        )}
         {service.model && (
           <div className="col-span-2">
             <span className="text-text-muted">Model</span>
@@ -95,11 +204,76 @@ export function ServiceCard({ service }: { service: Service }) {
 
       {open && (
         <div className="mt-4 space-y-4">
+          {multiPay && (
+            <div>
+              <p className="text-xs text-text-muted mb-1.5">Pay with</p>
+              <div className="flex flex-wrap gap-1.5">
+                {options.map((o, i) => (
+                  <button
+                    key={`${o.network}-${o.asset?.symbol ?? "USDC"}`}
+                    onClick={() => setOptIdx(i)}
+                    className={`rounded border px-2.5 py-1 text-xs font-mono cursor-pointer transition-colors ${
+                      i === optIdx
+                        ? "border-obol-green text-obol-green bg-obol-green/10"
+                        : "border-stroke text-text-body hover:border-obol-green/50"
+                    }`}
+                  >
+                    {optionLabel(o)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {needsAgentTask && (
+            <div className="space-y-1.5">
+              <label
+                htmlFor={`${anchorId}-task`}
+                className="block text-xs font-semibold text-text-light"
+              >
+                What should this agent do?
+              </label>
+              <textarea
+                id={`${anchorId}-task`}
+                value={agentTask}
+                onChange={(e) => setAgentTask(e.target.value)}
+                rows={3}
+                placeholder={AGENT_TASK_PLACEHOLDER}
+                className="w-full rounded border border-stroke bg-bg01 px-3 py-2 text-sm text-text-light placeholder:text-text-muted focus:border-obol-green focus:outline-none"
+              />
+              <p className="text-xs text-text-muted">
+                This updates the prompts below so the copied text is ready to
+                use.
+              </p>
+            </div>
+          )}
+
           <TabBar tab={tab} onChange={setTab} />
 
-          {tab === "agent" && <BuyViaObolAgent service={service} />}
-          {tab === "other-ai" && <BuyViaOtherAgent service={service} />}
-          {tab === "code" && <BuyWithCode service={service} />}
+          {tab === "agent" && (
+            <BuyViaObolAgent
+              service={service}
+              opt={opt}
+              agentTask={agentTask}
+              requireTask={needsAgentTask}
+            />
+          )}
+          {tab === "other-ai" && (
+            <BuyViaOtherAgent
+              service={service}
+              opt={opt}
+              agentTask={agentTask}
+              requireTask={needsAgentTask}
+            />
+          )}
+          {tab === "code" && (
+            <BuyWithCode
+              service={service}
+              opt={opt}
+              agentTask={agentTask}
+              requireTask={needsAgentTask}
+            />
+          )}
         </div>
       )}
     </div>
@@ -139,8 +313,19 @@ function TabBar({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
 // `pay` against chat-completions for agents, `obol buy inference` CLI
 // for inference). Mirrors inferenceCopy/agentCopy/httpCopy in
 // internal/x402/paymentrequired.go.
-function BuyViaObolAgent({ service }: { service: Service }) {
+function BuyViaObolAgent({
+  service,
+  opt,
+  agentTask,
+  requireTask,
+}: {
+  service: Service;
+  opt: ServicePayment;
+  agentTask: string;
+  requireTask: boolean;
+}) {
   const kind = normalizeOfferType(service.type);
+  const taskReady = agentTask.trim().length > 0;
 
   if (kind === "inference") {
     const model = service.model || "<model-id>";
@@ -165,21 +350,30 @@ function BuyViaObolAgent({ service }: { service: Service }) {
   }
 
   if (kind === "agent") {
-    const prompt = `Use the buy-x402 skill's \`pay\` command to call the Obol Agent at ${service.endpoint}. This is an *agent*, not a raw model — it has its own skills, tools, and memory. Include a clear instruction in the chat-completions body so the agent knows what to do.`;
+    const prompt = buildAgentObolPrompt(
+      service.endpoint,
+      service.model,
+      agentTask,
+    );
     return (
       <div className="space-y-2">
         <p className="text-xs text-text-muted">
-          Paste this into your Obol agent. You&apos;re paying another agent
-          for one round of work — be specific about what you want it to do.
-          The buy-x402 skill signs and sends the payment for you.
+          Paste this into your Obol agent. It runs{" "}
+          <code className="font-mono text-obol-green">pay-agent</code> for you
+          — one signed payment, one streaming response. Fill in your task above
+          before copying.
         </p>
-        <Snippet code={prompt} />
+        <Snippet
+          code={prompt}
+          copyDisabled={requireTask && !taskReady}
+          copyDisabledReason="Enter your task above first"
+        />
       </div>
     );
   }
 
   // http (default): legacy single-shot pay.
-  const prompt = `Use the buy-x402 skill's \`pay\` command to call ${service.endpoint} once. Pay ${service.price} on ${service.network}. Use the method and payload the seller documents. Report what it returns.`;
+  const prompt = `Use the buy-x402 skill's \`pay\` command to call ${service.endpoint} once. Pay ${opt.price} on ${opt.network}. Report what it returns.`;
   return (
     <div className="space-y-2">
       <p className="text-xs text-text-muted">
@@ -192,18 +386,29 @@ function BuyViaObolAgent({ service }: { service: Service }) {
   );
 }
 
-function BuyViaOtherAgent({ service }: { service: Service }) {
+function BuyViaOtherAgent({
+  service,
+  opt,
+  agentTask,
+  requireTask,
+}: {
+  service: Service;
+  opt: ServicePayment;
+  agentTask: string;
+  requireTask: boolean;
+}) {
   const kind = normalizeOfferType(service.type);
+  const taskReady = agentTask.trim().length > 0;
 
   let prompt: string;
   if (kind === "inference") {
     const model = service.model || "the advertised model";
-    prompt = `Read https://obol.org/llms.txt to learn how Obol's x402 micropayments work. I want to use the remote LLM at ${service.endpoint} (model ${model}) as a paid OpenAI-compatible chat-completions endpoint. Pre-sign a budget of EIP-3009 or Permit2 authorisations and POST chat-completions bodies with the X-PAYMENT header attached.`;
+    prompt = `${docsRef(service.endpoint)} I want to use the remote LLM at ${service.endpoint} (model ${model}) as a paid OpenAI-compatible chat-completions endpoint. Pre-sign a budget of EIP-3009 or Permit2 authorisations and POST chat-completions bodies with the X-PAYMENT header attached.`;
   } else if (kind === "agent") {
     const modelLine = service.model ? ` (running ${service.model})` : "";
-    prompt = `Read https://obol.org/llms.txt to learn how Obol's x402 micropayments work. Help me call the Obol Agent at ${service.endpoint}${modelLine} — it's an autonomous agent (tools + skills + memory), not a raw LLM. POST OpenAI-style chat-completions JSON with a real prompt in \`messages\`, attach a signed EIP-3009 or Permit2 authorisation as \`X-PAYMENT\`, and report what the agent does.`;
+    prompt = `${docsRef(service.endpoint)} Help me call the Obol Agent at ${service.endpoint}${modelLine} — it's an autonomous agent (tools + skills + memory), not a raw LLM. POST OpenAI-style chat-completions JSON with this user message in \`messages\`: {"role":"user","content":${quoteAgentTask(agentTask)}}. Attach a signed EIP-3009 or Permit2 authorisation as \`X-PAYMENT\`, and report what the agent does.`;
   } else {
-    prompt = `I want to purchase a service offered by an Obol Agent at ${service.endpoint} for ${service.price} on ${service.network}. Please install the run-obol-stack skill from https://github.com/ObolNetwork/skills, ask me for permission to set up the obol stack, and use the buy-x402 skill to make the purchase on my behalf.`;
+    prompt = `I want to purchase a service offered by an Obol Agent at ${service.endpoint} for ${opt.price} on ${opt.network}. Please install the run-obol-stack skill from https://github.com/ObolNetwork/skills, ask me for permission to set up the obol stack, and use the buy-x402 skill to make the purchase on my behalf.`;
   }
 
   return (
@@ -221,13 +426,28 @@ function BuyViaOtherAgent({ service }: { service: Service }) {
         </a>{" "}
         bootstraps the stack and asks for your permission before spending.
       </p>
-      <Snippet code={prompt} />
+      <Snippet
+        code={prompt}
+        copyDisabled={requireTask && !taskReady}
+        copyDisabledReason="Enter your task above first"
+      />
     </div>
   );
 }
 
-function BuyWithCode({ service }: { service: Service }) {
+function BuyWithCode({
+  service,
+  opt,
+  agentTask,
+  requireTask,
+}: {
+  service: Service;
+  opt: ServicePayment;
+  agentTask: string;
+  requireTask: boolean;
+}) {
   const kind = normalizeOfferType(service.type);
+  const taskReady = agentTask.trim().length > 0;
   return (
     <div className="space-y-4">
       <div>
@@ -251,7 +471,7 @@ function BuyWithCode({ service }: { service: Service }) {
         <h4 className="text-xs font-semibold text-text-light mb-2">
           2. Pay for the service
         </h4>
-        <LanguageTabs service={service} />
+        <LanguageTabs service={service} opt={opt} />
       </div>
 
       {kind === "agent" && (
@@ -270,9 +490,11 @@ X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
 
 {
 ${service.model ? `  "model": "${service.model}",\n` : ""}  "messages": [
-    {"role": "user", "content": "<your prompt to this agent goes here>"}
+    {"role": "user", "content": ${quoteAgentTask(agentTask)}}
   ]
 }`}
+            copyDisabled={requireTask && !taskReady}
+            copyDisabledReason="Enter your task above first"
           />
         </div>
       )}
@@ -300,16 +522,16 @@ ${service.model ? `  "model": "${service.model}",\n` : ""}  "messages": [
   );
 }
 
-function LanguageTabs({ service }: { service: Service }) {
+function LanguageTabs({ service, opt }: { service: Service; opt: ServicePayment }) {
   // Layout reserves a language selector slot for future JS/TS additions —
   // Python is the only currently-supported snippet.
   const [lang] = useState<"python">("python");
 
-  // Prefer the resolved asset symbol from the catalog. The previous
-  // network-based heuristic mislabeled OBOL on base-sepolia as USDC and
-  // any non-mainnet USDC deployment as OBOL.
+  // Prefer the resolved asset symbol from the selected payment option. The
+  // previous network-based heuristic mislabeled OBOL on base-sepolia as USDC
+  // and any non-mainnet USDC deployment as OBOL.
   const tokenName =
-    service.asset?.symbol ?? (service.network === "ethereum" ? "OBOL" : "USDC");
+    opt.asset?.symbol ?? (opt.network === "ethereum" ? "OBOL" : "USDC");
   const python = `import httpx
 from x402.client import x402_client
 
@@ -335,10 +557,19 @@ print(resp.json())`;
   );
 }
 
-function Snippet({ code }: { code: string }) {
+function Snippet({
+  code,
+  copyDisabled = false,
+  copyDisabledReason,
+}: {
+  code: string;
+  copyDisabled?: boolean;
+  copyDisabledReason?: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   const copy = () => {
+    if (copyDisabled) return;
     navigator.clipboard.writeText(code);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -351,8 +582,12 @@ function Snippet({ code }: { code: string }) {
       </pre>
       <button
         onClick={copy}
-        className={`absolute top-2 right-2 rounded-md border bg-bg03 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider transition-colors cursor-pointer ${
-          copied
+        disabled={copyDisabled}
+        title={copyDisabled ? copyDisabledReason : undefined}
+        className={`absolute top-2 right-2 rounded-md border bg-bg03 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider transition-colors ${
+          copyDisabled
+            ? "cursor-not-allowed border-stroke text-text-muted"
+            : copied
             ? "border-obol-green text-obol-green"
             : "border-stroke text-text-body hover:border-obol-green hover:text-obol-green"
         }`}

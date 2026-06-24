@@ -35,14 +35,16 @@ Run ` + "`obol agent new <name> --skills ... --model ... --create-wallet`" + ` f
 to declare the agent, then ` + "`obol sell agent <name>`" + ` to make it sellable.
 
 Examples:
-  obol sell agent quant --price 0.01 --token USDC --chain base-sepolia
-  obol sell agent quant --price 10 --token OBOL --chain ethereum --pay-to 0xColdVault`,
-		Flags: []cli.Flag{
+  obol sell agent quant --price 0.01 --token USDC --network base-sepolia
+  obol sell agent quant --price 10 --token OBOL --network ethereum --pay-to 0xColdVault
+  obol sell agent quant --accept token=USDC,network=base,price=1 --accept token=OBOL,network=ethereum,price=10`,
+		Flags: append([]cli.Flag{
 			payToFlag("Recipient for sale revenue (defaults to the agent's own wallet when one was provisioned)"),
 			&cli.StringFlag{
-				Name:  "chain",
-				Usage: "Payment chain (base, base-sepolia, ethereum)",
-				Value: "base",
+				Name:    "network",
+				Aliases: []string{"chain"},
+				Usage:   "Payment network (base, base-sepolia, ethereum)",
+				Value:   "base",
 			},
 			&cli.StringFlag{
 				Name:  "token",
@@ -79,7 +81,7 @@ Examples:
 				Aliases: []string{"register-description"},
 				Usage:   "Human-readable description of the service. Surfaced on the 402 payment page, in the storefront catalog, and (when registration is enabled) on the ERC-8004 registration document. Defaults to the agent's objective.",
 			},
-		},
+		}, acceptFlags()...),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			if cmd.NArg() != 1 {
@@ -128,40 +130,88 @@ Examples:
 				}
 			}
 
-			price := strings.TrimSpace(cmd.String("price"))
-			if price == "" {
-				price = strings.TrimSpace(cmd.String("per-request"))
-			}
-			if price == "" {
-				return fmt.Errorf("price required: use --price or --per-request")
-			}
+			accepts := cmd.StringSlice("accept")
 
-			chain := cmd.String("chain")
-			tokenName := cmd.String("token")
-
-			// Resolve token metadata. resolveAssetTermsFor may flip chain
-			// when the token isn't supported on the requested chain.
-			chainExplicit := cmd.IsSet("chain")
-			assetTerms, err := resolveAssetTermsFor(tokenName, &chain, chainExplicit)
-			if err != nil {
-				return err
-			}
-
+			// Resolve the default revenue recipient: --pay-to → agent's own
+			// wallet → host remote-signer. In --accept mode this is the
+			// default each option inherits when it omits its own pay-to.
 			payTo := strings.TrimSpace(cmd.String("pay-to"))
 			if payTo == "" {
-				// Default order: agent's own wallet → host remote-signer.
 				if agent.WalletAddress != "" {
 					payTo = agent.WalletAddress
 					u.Infof("Routing revenue to agent's own wallet: %s", payTo)
-				} else if resolved, err := hermes.ResolveWalletAddress(cfg); err == nil {
+				} else if resolved, rerr := hermes.ResolveWalletAddress(cfg); rerr == nil {
 					payTo = resolved
 					u.Infof("Routing revenue to host remote-signer wallet: %s", payTo)
-				} else {
+				} else if len(accepts) == 0 {
 					return fmt.Errorf("recipient required: use --pay-to <addr> or provision a wallet at agent creation time")
 				}
 			}
-			if err := x402verifier.ValidateWallet(payTo); err != nil {
-				return err
+			if payTo != "" {
+				if err := x402verifier.ValidateWallet(payTo); err != nil {
+					return err
+				}
+			}
+
+			// Build the payment block(s): multi-currency via --accept, else
+			// the singular --chain/--token/--price flags. The primary option
+			// (payments[0]) drives the success line + registration metadata.
+			var payment map[string]any
+			var paymentsList []map[string]any
+			var primaryNetwork, primaryPayTo, primarySymbol, primaryPrice string
+			if len(accepts) > 0 {
+				paymentsList, err = buildAcceptPayments(accepts, payTo)
+				if err != nil {
+					return err
+				}
+				// Best-effort fill of raw-asset metadata from the chain
+				// (no-op for registry/USDC options).
+				if err := autofillAcceptPayments(ctx, paymentsList, func(ctx context.Context, network, addr string) (tokenMeta, error) {
+					return fetchTokenMeta(ctx, cfg, network, addr)
+				}); err != nil {
+					return err
+				}
+				payment = paymentsList[0]
+				primaryNetwork, _ = payment["network"].(string)
+				primaryPayTo, _ = payment["payTo"].(string)
+				primarySymbol = paymentSymbol(payment)
+				primaryPrice = paymentPriceValue(payment)
+			} else {
+				price := strings.TrimSpace(cmd.String("price"))
+				if price == "" {
+					price = strings.TrimSpace(cmd.String("per-request"))
+				}
+				if price == "" {
+					return fmt.Errorf("price required: use --price/--per-request, or --accept for multi-currency")
+				}
+				if payTo == "" {
+					return fmt.Errorf("recipient required: use --pay-to <addr> or provision a wallet at agent creation time")
+				}
+				chain := cmd.String("chain")
+				tokenName := cmd.String("token")
+				// resolveAssetTermsFor may flip chain when the token isn't
+				// supported on the requested chain.
+				assetTerms, aerr := resolveAssetTermsFor(tokenName, &chain, cmd.IsSet("chain"))
+				if aerr != nil {
+					return aerr
+				}
+				payment = map[string]any{
+					"scheme":            "exact",
+					"network":           chain,
+					"payTo":             payTo,
+					"maxTimeoutSeconds": cmd.Int("max-timeout"),
+					"price":             map[string]any{"perRequest": price},
+				}
+				if !assetTerms.IsZero() {
+					payment["asset"] = assetTerms
+				}
+				primaryNetwork = chain
+				primaryPayTo = payTo
+				primarySymbol = assetTerms.Symbol
+				if primarySymbol == "" {
+					primarySymbol = strings.ToUpper(tokenName)
+				}
+				primaryPrice = price
 			}
 
 			path := strings.TrimSpace(cmd.String("path"))
@@ -183,18 +233,6 @@ Examples:
 			// the controller to resolve upstream from the Agent CR; we
 			// don't supply spec.upstream here.
 			offerNs := agent.Namespace
-			payment := map[string]any{
-				"scheme":            "exact",
-				"network":           chain,
-				"payTo":             payTo,
-				"maxTimeoutSeconds": cmd.Int("max-timeout"),
-				"price": map[string]any{
-					"perRequest": price,
-				},
-			}
-			if !assetTerms.IsZero() {
-				payment["asset"] = assetTerms
-			}
 			spec := map[string]any{
 				"type": "agent",
 				"agent": map[string]any{
@@ -206,6 +244,10 @@ Examples:
 				"payment": payment,
 				"path":    path,
 			}
+			if paymentsList != nil {
+				spec["payments"] = paymentsList
+			}
+			applyListingFlags(cmd, spec)
 			// The registration block is always set — the catalog
 			// (/api/services.json, /skill.md) and the 402 page read
 			// registration.description and registration.skills regardless
@@ -217,16 +259,14 @@ Examples:
 			for i, s := range agent.Skills {
 				skills[i] = s
 			}
-			symbol := assetTerms.Symbol
-			if symbol == "" {
-				symbol = strings.ToUpper(tokenName)
-			}
 			spec["registration"] = map[string]any{
 				"enabled":     register,
 				"name":        regName,
 				"description": regDesc,
 				"skills":      skills,
-				"metadata":    agentOfferRegistrationMetadata(agent, price, symbol, chain),
+				// Registration is per-chain — use the primary (first) payment
+				// option's network, the locked decision for multi-payment offers.
+				"metadata": agentOfferRegistrationMetadata(agent, primaryPrice, primarySymbol, primaryNetwork),
 			}
 
 			manifest := map[string]any{
@@ -243,6 +283,11 @@ Examples:
 				return err
 			}
 
+			if !confirmOfferReplace(cfg, u, offerNs, name) {
+				u.Dim("Aborted; existing offer left unchanged.")
+				return nil
+			}
+
 			out, err := kubectlApplyOutput(cfg, manifest)
 			if err != nil {
 				return fmt.Errorf("apply ServiceOffer: %w", err)
@@ -254,7 +299,10 @@ Examples:
 			if strings.Contains(out, "configured") || strings.Contains(out, "unchanged") {
 				action = "updated"
 			}
-			u.Successf("ServiceOffer %s/%s %s (type: agent, %s %s/req → %s)", offerNs, name, action, price, assetTerms.Symbol, payTo)
+			u.Successf("ServiceOffer %s/%s %s (type: agent, %s %s/req → %s)", offerNs, name, action, primaryPrice, primarySymbol, primaryPayTo)
+			if paymentsList != nil {
+				u.Infof("Accepted payments: %s", acceptSummary(paymentsList))
+			}
 			u.Infof("Reconciler will resolve agent.ref → derive upstream → publish payment gate + route")
 			u.Infof("Check status: obol sell status %s -n %s", name, offerNs)
 
@@ -267,7 +315,7 @@ Examples:
 			}
 
 			if !register {
-				u.Dim("Registration skipped (--no-register). Run `obol sell register --chain " + chain + "` later for on-chain discovery.")
+				u.Dim("Registration skipped (--no-register). Run `obol sell register --network " + primaryNetwork + "` later for on-chain discovery.")
 			} else {
 				// sell agent is declare-only: it sets spec.registration and
 				// relies on the controller + a manual `obol sell register`. Make
@@ -281,8 +329,8 @@ Examples:
 				}
 				printRegistrationNotice(u, registrationNotice{
 					Mode:        regNoticeDeclareOnly,
-					Chain:       chain,
-					PayTo:       payTo,
+					Chain:       primaryNetwork,
+					PayTo:       primaryPayTo,
 					AgentWallet: aw,
 					OfferName:   name,
 					Namespace:   offerNs,
@@ -426,6 +474,12 @@ func runAgentBackedDemo(
 		"skills":      skillsAny,
 		"metadata":    agentOfferRegistrationMetadata(agentForMetadata, price, symbol, chain),
 	}
+	// Demo services are an ordinary storefront category. Agent-backed demos
+	// live in agent-<name> (the controller's confused-deputy guard forces
+	// spec.agent.ref.namespace == offer.namespace), so the catalog can't
+	// infer "demo" from the namespace — listing.category is the explicit
+	// signal and groups them with the http demos on the storefront.
+	specMap["listing"] = map[string]any{"category": "demo"}
 
 	soManifest := map[string]any{
 		"apiVersion": "obol.org/v1alpha1",
@@ -433,17 +487,6 @@ func runAgentBackedDemo(
 		"metadata": map[string]any{
 			"name":      name,
 			"namespace": offerNs,
-			// Agent-backed demos can't live in the legacy "demo"
-			// namespace today (the controller's confused-deputy guard at
-			// agent_resolver.go forces spec.agent.ref.namespace ==
-			// offer.namespace), so the catalog renderer can't infer
-			// "demo" from offer.namespace alone. The obol.org/demo
-			// label is the explicit signal — keep it set here so quant
-			// and friends show up under "Demo services" on the
-			// storefront. Drop this once the catalog renderer's
-			// cross-namespace guard is relaxed to infer demo offers
-			// from their namespace.
-			"labels": map[string]any{"obol.org/demo": "true"},
 		},
 		"spec": specMap,
 	}
@@ -475,7 +518,7 @@ func runAgentBackedDemo(
 		autoRegisterDemo(ctx, cfg, u, chain, tunnelURL)
 	} else {
 		u.Info("Registration skipped. The offer will still reach Ready when the agent is provisioned.")
-		u.Dim("  Run on-chain discovery later: obol sell register --chain " + chain)
+		u.Dim("  Run on-chain discovery later: obol sell register --network " + chain)
 	}
 
 	ready := waitForOfferReady(cfg, u, name, offerNs, 2*time.Minute)

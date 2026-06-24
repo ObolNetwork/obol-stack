@@ -802,8 +802,23 @@ def _supports_erc20_permit(address, token_contract, chain=None):
     try:
         _get_erc20_permit_nonce(address, token_contract, chain)
         return True
-    except Exception:
+    except (Exception, SystemExit):
         return False
+
+
+def _payment_uses_gasless_permit(signer_address, asset, chain, transfer_method):
+    """Whether the selected payment asset can use the gasless Permit2 path.
+
+    The 402 `extensions` object is top-level, so a multi-payment seller can
+    advertise gasless support because one option supports it. Scope the decision
+    back to the selected asset before skipping Permit2 allowance checks or
+    signing EIP-2612 permits.
+    """
+    return (
+        transfer_method == "permit2" and
+        bool(asset) and
+        _supports_erc20_permit(signer_address, asset, chain)
+    )
 
 
 def _get_token_allowance(owner, token_contract, spender, chain=None):
@@ -837,7 +852,7 @@ def _ensure_permit2_allowance(signer_address, asset, chain, transfer_method, ext
     """
     if transfer_method != "permit2":
         return
-    if extensions and "eip2612GasSponsoring" in extensions:
+    if _payment_uses_gasless_permit(signer_address, asset, chain, transfer_method):
         return
     allowance = _get_token_allowance(signer_address, asset, PERMIT2_ADDRESS, chain)
     if allowance is None:
@@ -993,9 +1008,11 @@ def _presign_auths(signer_address, pay_to, price, chain, usdc_addr, count, payme
     transfer_method = extra.get("assetTransferMethod", "eip3009")
     domain_name = extra.get("name", USDC_DOMAIN_NAME)
     domain_version = extra.get("version", USDC_DOMAIN_VERSION)
-    eip2612_enabled = (
-        transfer_method == "permit2" and
-        ("eip2612GasSponsoring" in extensions or _supports_erc20_permit(signer_address, payment.get("asset", usdc_addr), chain))
+    eip2612_enabled = _payment_uses_gasless_permit(
+        signer_address,
+        payment.get("asset", usdc_addr),
+        chain,
+        transfer_method,
     )
     permit_nonce_base = int(_get_erc20_permit_nonce(signer_address, payment.get("asset", usdc_addr), chain)) if eip2612_enabled else None
 
@@ -1477,6 +1494,110 @@ def _probe_endpoint(endpoint_url, model_id="test", kind="inference", method=None
         return None
 
 
+# ---------------------------------------------------------------------------
+# Payment-option selection (multi-currency offers)
+# ---------------------------------------------------------------------------
+
+def _option_symbol(acc):
+    """Best-effort token symbol for one 402 accepts[] entry (e.g. USDC, OBOL)."""
+    sym, _, _ = _asset_display_meta(acc.get("asset"), acc.get("extra"))
+    return sym
+
+
+def _option_chain(acc):
+    """Canonical chain name for one accepts[] entry, or the raw value."""
+    try:
+        return _normalize_chain_name(acc.get("network"))
+    except ValueError:
+        return (acc.get("network") or "").strip()
+
+
+def _option_matches(acc, token, network):
+    if token and _option_symbol(acc).upper() != token.strip().upper():
+        return False
+    if network:
+        try:
+            want = _resolve_chain(network)
+        except ValueError:
+            want = network.strip()
+        if _option_chain(acc) != want:
+            return False
+    return True
+
+
+def _print_options(accepts, stream):
+    for i, acc in enumerate(accepts):
+        amount = acc.get("amount", acc.get("maxAmountRequired", "?"))
+        price = _format_amount(amount, acc.get("asset"), acc.get("extra")) if amount != "?" else "?"
+        print(f"  [{i + 1}] {price} on {_option_chain(acc)}  (payTo {acc.get('payTo', '?')})", file=stream)
+
+
+def _filter_desc(token, network):
+    bits = []
+    if token:
+        bits.append(f"token={token}")
+    if network:
+        bits.append(f"network={network}")
+    return " ".join(bits) or "the given filter"
+
+
+def _select_payment(accepts, token=None, network=None, index=None):
+    """Choose one payment option from a 402 accepts[] list.
+
+    Selection precedence:
+      - --payment-option <N>: pick that 1-based entry.
+      - --token / --network: filter; must resolve to exactly one (applied even
+        for a single-option offer, so it doubles as a safety guard).
+      - single option: returned as-is.
+      - multiple options, no selector: prompt on a TTY; otherwise error and
+        list the options so the agent can re-run with a selector.
+    Exits with a helpful message on ambiguity / no match.
+    """
+    if not accepts:
+        print("No payment options in 402 response.", file=sys.stderr)
+        sys.exit(1)
+
+    if index is not None:
+        try:
+            idx = int(index)
+        except (TypeError, ValueError):
+            print(f"Error: --payment-option must be a number 1-{len(accepts)}", file=sys.stderr)
+            sys.exit(1)
+        if idx < 1 or idx > len(accepts):
+            print(f"Error: --payment-option {idx} out of range (1-{len(accepts)})", file=sys.stderr)
+            sys.exit(1)
+        return accepts[idx - 1]
+
+    if token or network:
+        matches = [a for a in accepts if _option_matches(a, token, network)]
+        if len(matches) == 1:
+            return matches[0]
+        if not matches:
+            print(f"Error: no advertised payment option matches {_filter_desc(token, network)}.", file=sys.stderr)
+        else:
+            print(f"Error: {_filter_desc(token, network)} matches {len(matches)} options — "
+                  f"narrow it (use --token AND --network, or --payment-option N).", file=sys.stderr)
+        _print_options(accepts, sys.stderr)
+        sys.exit(1)
+
+    if len(accepts) == 1:
+        return accepts[0]
+
+    if sys.stdin.isatty():
+        print(f"This service accepts {len(accepts)} payment options:")
+        _print_options(accepts, sys.stdout)
+        while True:
+            ans = input(f"Choose payment option [1-{len(accepts)}]: ").strip()
+            if ans.isdigit() and 1 <= int(ans) <= len(accepts):
+                return accepts[int(ans) - 1]
+            print("  Enter a number from the list.")
+
+    print(f"Error: this service accepts {len(accepts)} payment options — choose one with "
+          f"--token <SYMBOL>, --network <chain>, or --payment-option <N>:", file=sys.stderr)
+    _print_options(accepts, sys.stderr)
+    sys.exit(1)
+
+
 def cmd_probe(endpoint_url, model_id=None, kind="inference", method=None):
     """Probe an endpoint for x402 pricing and print results."""
     pricing = _probe_endpoint(endpoint_url, model_id, kind=kind, method=method)
@@ -1524,6 +1645,10 @@ def cmd_probe(endpoint_url, model_id=None, kind="inference", method=None):
             print(f"    eip712:  {domain.get('name', '?')} / {domain.get('version', '?')}  (signing domain)")
         print()
 
+    if len(pricing.get("accepts", [])) > 1:
+        print("Multiple payment options — pick one when paying with "
+              "--token <SYMBOL>, --network <chain>, or --payment-option <N>.")
+
     return pricing
 
 
@@ -1542,11 +1667,12 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
         sys.exit(1)
 
     accepts = pricing.get("accepts", [])
-    if not accepts:
-        print("No payment options in 402 response.", file=sys.stderr)
-        sys.exit(1)
-
-    payment = accepts[0]
+    payment = _select_payment(
+        accepts,
+        token=opts.get("token"),
+        network=opts.get("network"),
+        index=opts.get("payment_option"),
+    )
     pay_to = payment.get("payTo", "")
     try:
         chain = _normalize_chain_name(payment.get("network", DEFAULT_CHAIN))
@@ -2115,7 +2241,7 @@ def cmd_balance(chain=None):
 # Pay (single-shot HTTP/x402 purchase)
 # ---------------------------------------------------------------------------
 
-def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=None):
+def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=None, token=None, payment_option=None):
     """Single-shot paid HTTP request: probe → pre-sign one auth → send with X-PAYMENT.
 
     Stateless. Does not create a PurchaseRequest, does not touch the buyer
@@ -2145,30 +2271,15 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=Non
         sys.exit(1)
 
     accepts = pricing.get("accepts", [])
-    if not accepts:
-        print("No payment options in 402 response.", file=sys.stderr)
-        sys.exit(1)
-
-    payment = accepts[0]
+    # --network/--token now SELECT among advertised options (and still guard:
+    # an unmatched filter errors with the option list rather than signing).
+    payment = _select_payment(accepts, token=token, network=network, index=payment_option)
     pay_to = payment.get("payTo", "")
     try:
         chain = _normalize_chain_name(payment.get("network", DEFAULT_CHAIN))
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
-    if network:
-        try:
-            requested = _resolve_chain(network)
-        except ValueError as exc:
-            print(f"Error: --network: {exc}", file=sys.stderr)
-            sys.exit(1)
-        if requested != chain:
-            print(
-                f"Error: seller is on {chain} but --network {network} was requested.\n"
-                f"Drop --network to accept the seller's chain, or pick a different endpoint.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
     price = str(payment.get("amount", payment.get("maxAmountRequired", "0")))
     asset = payment.get("asset") or _canonical_usdc(chain)
 
@@ -2261,7 +2372,7 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=Non
         sys.exit(1)
 
 
-def cmd_pay_agent(url, messages=None, model_id=None, network=None, timeout=None, body=None):
+def cmd_pay_agent(url, messages=None, model_id=None, network=None, timeout=None, body=None, token=None, payment_option=None):
     """Single-shot paid streaming agent call: probe -> sign one auth -> SSE-stream.
 
     Sibling of `cmd_pay` for `type=agent` ServiceOffers. Differences from
@@ -2329,29 +2440,13 @@ def cmd_pay_agent(url, messages=None, model_id=None, network=None, timeout=None,
         sys.exit(1)
 
     accepts = pricing.get("accepts", [])
-    if not accepts:
-        print("No payment options in 402 response.", file=sys.stderr)
-        sys.exit(1)
-
-    payment = accepts[0]
+    payment = _select_payment(accepts, token=token, network=network, index=payment_option)
     pay_to = payment.get("payTo", "")
     try:
         chain = _normalize_chain_name(payment.get("network", DEFAULT_CHAIN))
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
-    if network:
-        try:
-            requested = _resolve_chain(network)
-        except ValueError as exc:
-            print(f"Error: --network: {exc}", file=sys.stderr)
-            sys.exit(1)
-        if requested != chain:
-            print(
-                f"Error: seller is on {chain} but --network {network} was requested.",
-                file=sys.stderr,
-            )
-            sys.exit(1)
     price = str(payment.get("amount", payment.get("maxAmountRequired", "0")))
     asset = payment.get("asset") or _canonical_usdc(chain)
     if not pay_to:
@@ -2608,15 +2703,19 @@ def usage():
     print("Commands:")
     print("  probe <endpoint-url> [--model <id>] [--type http|inference|agent] [--method GET|POST]")
     print("                                               Probe x402 pricing (default --type inference)")
-    print("  pay <url> [--type http|inference] [--method GET|POST] [--data '<body>'] [--network <name>] [--timeout <seconds>]")
+    print("  pay <url> [--type http|inference] [--method GET|POST] [--data '<body>'] [--timeout <seconds>]")
+    print("       [--token <SYMBOL>] [--network <name>] [--payment-option <N>]")
     print("                                               Single-shot paid request (sign 1 auth, attach X-PAYMENT)")
-    print("                                               --network is a guard: aborts if seller is on a different chain")
-    print("  pay-agent <url> --model <id> [--message '<text>' | --data '<json>'] [--network <name>] [--timeout <seconds>]")
+    print("                                               Multi-currency offers: pick which asset/price to pay with")
+    print("                                               --token/--network/--payment-option (probe to see options)")
+    print("  pay-agent <url> --model <id> [--message '<text>' | --data '<json>'] [--timeout <seconds>]")
+    print("       [--token <SYMBOL>] [--network <name>] [--payment-option <N>]")
     print("                                               Single-shot paid streaming agent call (POST /v1/chat/completions,")
     print("                                               stream: true). Each SSE event flushes to stdout so a calling")
     print("                                               agent can re-emit the stream to its own user. Default timeout 1h.")
     print("  buy <name> --endpoint <url> --model <id>     Pre-sign + configure paid/<model>")
     print("       [--budget <micro-units>] [--count <N>]")
+    print("       [--token <SYMBOL>] [--network <name>] [--payment-option <N>]   pick the asset/price on multi-currency offers")
     print("       [--auto-refill[=true|false]] [--refill-threshold <N>]")
     print("       [--refill-count <N>] [--cost-cap <atomic-units>]")
     print("       [--auth-ttl <seconds|never>] [--set-default]")
@@ -2681,6 +2780,8 @@ if __name__ == "__main__":
             kind=kind,
             network=opts.get("network"),
             timeout=timeout,
+            token=opts.get("token"),
+            payment_option=opts.get("payment_option"),
         )
 
     elif cmd == "pay-agent":
@@ -2708,6 +2809,8 @@ if __name__ == "__main__":
             network=opts.get("network"),
             timeout=timeout,
             body=opts.get("data"),
+            token=opts.get("token"),
+            payment_option=opts.get("payment_option"),
         )
 
     elif cmd == "buy":

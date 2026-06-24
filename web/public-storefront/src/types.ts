@@ -5,6 +5,18 @@ export interface ServiceAsset {
   transferMethod?: string;
 }
 
+// ServicePayment is one accepted (price, payTo, network, asset) option.
+// Mirrors the catalog's ServiceCatalogPaymentOption. A service advertising
+// several is paid in any one of them — the buyer picks.
+export interface ServicePayment {
+  price: string;
+  priceRaw?: string;
+  priceUnit?: string;
+  payTo: string;
+  network: string;
+  asset?: ServiceAsset;
+}
+
 export interface Service {
   name: string;
   namespace: string;
@@ -28,5 +40,14 @@ export interface Service {
   // offers it mirrors spec.registration.skills. Rendered as pills on
   // the ServiceCard, matching the 402 page.
   skills?: string[];
-  isDemo: boolean;
+  // payments is every accepted payment option (one per currency/network).
+  // payments[0] mirrors the flat price/network/payTo/asset fields. Absent on
+  // catalogs predating multi-currency — fall back to the flat fields.
+  payments?: ServicePayment[];
+  // category groups the service into a storefront section (e.g. "demo").
+  // Absent/empty means the default section. Mirrors spec.listing.category —
+  // demo services are just category="demo", not a special case.
+  category?: string;
+  // weight orders services within a category; higher sorts earlier.
+  weight?: number;
 }
