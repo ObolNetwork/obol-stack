@@ -683,6 +683,14 @@ func sellHTTPCommand(cfg *config.Config) *cli.Command {
 		Name:      "http",
 		Usage:     "Sell any local HTTP service with x402 payments",
 		ArgsUsage: "<name>",
+		// --accept carries a comma-separated key=value list per option
+		// (token=USDC,network=base,price=1). cli/v3 slice flags split on ","
+		// by default, which would shred one option into several fragments and
+		// fail with "network is required". Disable the separator so each
+		// --accept is one whole value; parseAcceptKV does its own "," split.
+		// The repeatable --register-skills/-domains/-metadata flags are
+		// unaffected in practice (each value is a single token / key=value).
+		DisableSliceFlagSeparator: true,
 		Description: `Publishes a payment gated HTTP API to any service within the stack.
 By default it also registers the seller agent on ERC-8004 after the route is live.
 Use --no-register to skip the on-chain registration step.
@@ -2748,6 +2756,9 @@ func sellUpdateCommand(cfg *config.Config) *cli.Command {
 		Name:      "update",
 		Usage:     "Update pricing or wallet on an existing ServiceOffer in place",
 		ArgsUsage: "<name>",
+		// See sell http: keep one --accept value intact (no cli/v3 "," split)
+		// so multi-currency updates parse. parseAcceptKV splits internally.
+		DisableSliceFlagSeparator: true,
 		Description: `Patches a live ServiceOffer without deleting it. Only the fields you pass
 are changed; everything else is preserved. The serviceoffer-controller will
 reconcile the new payment config automatically.

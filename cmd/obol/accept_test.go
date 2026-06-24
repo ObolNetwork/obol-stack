@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/urfave/cli/v3"
 )
 
 const testPayTo = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -198,5 +199,64 @@ func TestBuildAcceptPayments(t *testing.T) {
 	}, testPayTo)
 	if err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("expected duplicate error, got %v", err)
+	}
+}
+
+// TestSellAccept_CommaSeparatorDisabled is the regression guard for the
+// multi-currency --accept bug: cli/v3 StringSliceFlag splits values on ","
+// by default, so "--accept token=USDC,network=base,price=1" was shredded into
+// three fragments and parsing failed with "network is required". The unit
+// tests above never caught it because they call parseAcceptOption /
+// buildAcceptPayments directly, bypassing cli/v3 argv parsing entirely.
+func TestSellAccept_CommaSeparatorDisabled(t *testing.T) {
+	// (1) Structural guard: every sell command carrying --accept must keep the
+	// separator disabled, or multi-currency offers silently break again.
+	cfg := newTestConfig(t)
+	for _, name := range []string{"http", "agent", "update"} {
+		sub := findSubcommand(t, sellCommand(cfg), name)
+		if !sub.DisableSliceFlagSeparator {
+			t.Errorf("sell %s: DisableSliceFlagSeparator must be true so a comma-joined --accept stays one value", name)
+		}
+	}
+
+	// (2) Behavioral: drive real cli/v3 argv parsing. With the separator
+	// disabled each --accept arrives whole; with the default separator the same
+	// argv shreds, proving the field is load-bearing (not a no-op).
+	run := func(disable bool) []string {
+		var got []string
+		cmd := &cli.Command{
+			Name:                      "x",
+			DisableSliceFlagSeparator: disable,
+			Flags:                     []cli.Flag{&cli.StringSliceFlag{Name: "accept"}},
+			Action: func(_ context.Context, c *cli.Command) error {
+				got = c.StringSlice("accept")
+				return nil
+			},
+		}
+		err := cmd.Run(context.Background(), []string{
+			"x",
+			"--accept", "token=USDC,network=base,price=1",
+			"--accept", "token=OBOL,network=ethereum,price=10",
+		})
+		if err != nil {
+			t.Fatalf("run(disable=%v): %v", disable, err)
+		}
+		return got
+	}
+
+	whole := run(true)
+	if len(whole) != 2 {
+		t.Fatalf("disabled separator: got %d values %q, want 2 whole options", len(whole), whole)
+	}
+	if _, err := buildAcceptPayments(whole, testPayTo); err != nil {
+		t.Fatalf("whole --accept values should build payments, got: %v", err)
+	}
+
+	shredded := run(false)
+	if len(shredded) == 2 {
+		t.Fatal("default cli/v3 separator unexpectedly kept --accept whole; the fix may be a no-op")
+	}
+	if _, err := buildAcceptPayments(shredded, testPayTo); err == nil {
+		t.Error("shredded --accept fragments should fail to build payments (the original bug)")
 	}
 }

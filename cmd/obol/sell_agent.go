@@ -25,6 +25,9 @@ func sellAgentCommand(cfg *config.Config) *cli.Command {
 		Name:      "agent",
 		Usage:     "Gate an existing Obol Stack agent with x402 payments",
 		ArgsUsage: "<name>",
+		// See sell http: keep one --accept value intact (no cli/v3 "," split)
+		// so multi-currency offers parse. parseAcceptKV splits internally.
+		DisableSliceFlagSeparator: true,
 		Description: `Wraps an existing Agent (created with ` + "`obol agent new <name>`" + `) with a
 ServiceOffer of type=agent. The serviceoffer-controller resolves
 spec.agent.ref into the agent's cluster endpoint, surfaces the agent's
