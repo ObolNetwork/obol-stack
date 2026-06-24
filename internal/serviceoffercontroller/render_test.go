@@ -38,6 +38,15 @@ func assertServiceCatalogSchema(t *testing.T, jsonStr string) {
 	}
 }
 
+func decodeServiceCatalog(t *testing.T, jsonStr string) schemas.ServiceCatalog {
+	t.Helper()
+	var catalog schemas.ServiceCatalog
+	if err := json.Unmarshal([]byte(jsonStr), &catalog); err != nil {
+		t.Fatalf("unmarshal catalog: %v\n%s", err, jsonStr)
+	}
+	return catalog
+}
+
 func TestBuildHTTPRoute(t *testing.T) {
 	offer := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo", Namespace: "llm", UID: types.UID("demo-uid")},
@@ -757,13 +766,10 @@ func TestBuildServiceCatalogJSON(t *testing.T) {
 		},
 	}
 
-	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{readyOffer, notReadyOffer}, "https://example.com")
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{readyOffer, notReadyOffer}, "https://example.com", nil)
 	assertServiceCatalogSchema(t, jsonStr)
 
-	var services []schemas.ServiceCatalogEntry
-	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
-		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
-	}
+	services := decodeServiceCatalog(t, jsonStr).Services
 
 	if len(services) != 1 {
 		t.Fatalf("expected 1 ready service, got %d", len(services))
@@ -809,13 +815,10 @@ func TestBuildServiceCatalogJSON_MultiPayment(t *testing.T) {
 		Status: monetizeapi.ServiceOfferStatus{Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}}},
 	}
 
-	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com")
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com", nil)
 	assertServiceCatalogSchema(t, jsonStr)
 
-	var services []schemas.ServiceCatalogEntry
-	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
+	services := decodeServiceCatalog(t, jsonStr).Services
 	if len(services) != 1 {
 		t.Fatalf("want 1 service, got %d", len(services))
 	}
@@ -860,13 +863,10 @@ func TestBuildServiceCatalogJSON_ZeroDecimalAssetAtomicPrice(t *testing.T) {
 		Status: monetizeapi.ServiceOfferStatus{Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}}},
 	}
 
-	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com")
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com", nil)
 	assertServiceCatalogSchema(t, jsonStr)
 
-	var services []schemas.ServiceCatalogEntry
-	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
+	services := decodeServiceCatalog(t, jsonStr).Services
 	if len(services) != 1 || len(services[0].Payments) != 1 {
 		t.Fatalf("services/payments = %+v, want one payment", services)
 	}
@@ -876,10 +876,14 @@ func TestBuildServiceCatalogJSON_ZeroDecimalAssetAtomicPrice(t *testing.T) {
 }
 
 func TestBuildServiceCatalogJSON_Empty(t *testing.T) {
-	jsonStr := buildServiceCatalogJSON(nil, "https://example.com")
+	jsonStr := buildServiceCatalogJSON(nil, "https://example.com", nil)
 	assertServiceCatalogSchema(t, jsonStr)
-	if jsonStr != "[]" {
-		t.Errorf("expected empty array, got %q", jsonStr)
+	catalog := decodeServiceCatalog(t, jsonStr)
+	if len(catalog.Services) != 0 {
+		t.Errorf("expected empty services, got %d", len(catalog.Services))
+	}
+	if catalog.DisplayName == "" || catalog.Tagline == "" || catalog.LogoURL == "" {
+		t.Errorf("expected default seller branding, got %+v", catalog)
 	}
 }
 
@@ -914,13 +918,10 @@ func TestBuildServiceCatalogJSON_AgentOfferUsesResolvedModel(t *testing.T) {
 		},
 	}
 
-	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://seller.example")
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://seller.example", nil)
 	assertServiceCatalogSchema(t, jsonStr)
 
-	var services []schemas.ServiceCatalogEntry
-	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
-		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
-	}
+	services := decodeServiceCatalog(t, jsonStr).Services
 	if len(services) != 1 {
 		t.Fatalf("expected 1 service, got %d: %s", len(services), jsonStr)
 	}
@@ -991,12 +992,9 @@ func TestBuildServiceCatalogJSON_ExcludesNonReady(t *testing.T) {
 		},
 	}
 
-	jsonStr := buildServiceCatalogJSON(offers, "https://example.com")
+	jsonStr := buildServiceCatalogJSON(offers, "https://example.com", nil)
 
-	var services []schemas.ServiceCatalogEntry
-	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
-		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
-	}
+	services := decodeServiceCatalog(t, jsonStr).Services
 	if len(services) != 1 {
 		t.Fatalf("expected exactly 1 service (ready-svc), got %d: %+v", len(services), services)
 	}
@@ -1007,14 +1005,19 @@ func TestBuildServiceCatalogJSON_ExcludesNonReady(t *testing.T) {
 	// Pure-additive wire schema: active offers must serialize without
 	// `available` (no field at all). Consumers detect drain via the
 	// presence of `drainEndsAt`, not via a legacy `available` boolean.
-	var raw []map[string]any
+	var raw map[string]any
 	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
 		t.Fatalf("invalid raw JSON: %v\n%s", err, jsonStr)
 	}
-	if _, ok := raw[0]["available"]; ok {
+	servicesRaw, _ := raw["services"].([]any)
+	if len(servicesRaw) != 1 {
+		t.Fatalf("expected 1 raw service entry, got %d", len(servicesRaw))
+	}
+	svc0, _ := servicesRaw[0].(map[string]any)
+	if _, ok := svc0["available"]; ok {
 		t.Errorf("ready-svc JSON contains `available` key; drain wire schema must be additive (drainEndsAt only)")
 	}
-	if _, ok := raw[0]["drainEndsAt"]; ok {
+	if _, ok := svc0["drainEndsAt"]; ok {
 		t.Errorf("ready-svc JSON contains `drainEndsAt`; should only appear on draining offers")
 	}
 }
@@ -1059,17 +1062,19 @@ func TestBuildServiceCatalogJSON_DrainLifecycle(t *testing.T) {
 	exp.Spec.DrainAt = &expDrainAt
 	exp.Spec.DrainGracePeriod = &expGrace
 
-	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{&pre, &mid, &exp}, "https://example.com")
-	var raw []map[string]any
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{&pre, &mid, &exp}, "https://example.com", nil)
+	var raw map[string]any
 	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
 		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
 	}
-	if len(raw) != 2 {
-		t.Fatalf("expected 2 services (pre + mid; expired filtered out), got %d: %+v", len(raw), raw)
+	servicesRaw, _ := raw["services"].([]any)
+	if len(servicesRaw) != 2 {
+		t.Fatalf("expected 2 services (pre + mid; expired filtered out), got %d: %+v", len(servicesRaw), servicesRaw)
 	}
 
 	byName := map[string]map[string]any{}
-	for _, s := range raw {
+	for _, item := range servicesRaw {
+		s, _ := item.(map[string]any)
 		name, _ := s["name"].(string)
 		byName[name] = s
 	}
@@ -1125,12 +1130,9 @@ func TestBuildServiceCatalogJSON_SortOrder(t *testing.T) {
 		makeOffer("bravo"),
 	}
 
-	jsonStr := buildServiceCatalogJSON(offers, "https://example.com")
+	jsonStr := buildServiceCatalogJSON(offers, "https://example.com", nil)
 
-	var services []schemas.ServiceCatalogEntry
-	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
+	services := decodeServiceCatalog(t, jsonStr).Services
 	names := []string{services[0].Name, services[1].Name, services[2].Name}
 	want := []string{"alpha", "bravo", "charlie"}
 	for i := range want {
@@ -1161,13 +1163,10 @@ func TestBuildServiceCatalogJSON_PerMTokPricing(t *testing.T) {
 		},
 	}
 
-	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com")
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com", nil)
 	assertServiceCatalogSchema(t, jsonStr)
 
-	var services []schemas.ServiceCatalogEntry
-	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
+	services := decodeServiceCatalog(t, jsonStr).Services
 	if len(services) != 1 {
 		t.Fatalf("expected 1 service, got %d", len(services))
 	}
@@ -1209,13 +1208,10 @@ func TestBuildServiceCatalogJSON_FallbackDescription(t *testing.T) {
 		},
 	}
 
-	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com")
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com", nil)
 	assertServiceCatalogSchema(t, jsonStr)
 
-	var services []schemas.ServiceCatalogEntry
-	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
+	services := decodeServiceCatalog(t, jsonStr).Services
 	if len(services) != 1 {
 		t.Fatalf("expected 1 service, got %d", len(services))
 	}
@@ -1239,12 +1235,9 @@ func TestBuildServiceCatalogJSON_BaseURLTrailingSlash(t *testing.T) {
 		},
 	}
 
-	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com/")
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com/", nil)
 
-	var services []schemas.ServiceCatalogEntry
-	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
+	services := decodeServiceCatalog(t, jsonStr).Services
 	if len(services) != 1 {
 		t.Fatalf("expected 1 service, got %d", len(services))
 	}
@@ -1278,13 +1271,10 @@ func TestBuildServiceCatalogJSON_AssetAndCAIP2Defaults(t *testing.T) {
 		},
 	}
 
-	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com")
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com", nil)
 	assertServiceCatalogSchema(t, jsonStr)
 
-	var services []schemas.ServiceCatalogEntry
-	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
-		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
-	}
+	services := decodeServiceCatalog(t, jsonStr).Services
 	if len(services) != 1 {
 		t.Fatalf("expected 1 service, got %d", len(services))
 	}
@@ -1365,13 +1355,10 @@ func TestBuildServiceCatalogJSON_ExplicitOBOLToken(t *testing.T) {
 		},
 	}
 
-	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com")
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com", nil)
 	assertServiceCatalogSchema(t, jsonStr)
 
-	var services []schemas.ServiceCatalogEntry
-	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
-		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
-	}
+	services := decodeServiceCatalog(t, jsonStr).Services
 	if len(services) != 1 {
 		t.Fatalf("expected 1 service, got %d", len(services))
 	}
@@ -1533,11 +1520,8 @@ func TestBuildServiceCatalogJSON_IncludesPendingRegistrationOffers(t *testing.T)
 			},
 		},
 	}
-	jsonStr := buildServiceCatalogJSON(offers, "https://inference.example.com")
-	var services []schemas.ServiceCatalogEntry
-	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
-		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
-	}
+	jsonStr := buildServiceCatalogJSON(offers, "https://inference.example.com", nil)
+	services := decodeServiceCatalog(t, jsonStr).Services
 	if len(services) != 1 {
 		t.Fatalf("expected 1 service in catalog, got %d: %+v", len(services), services)
 	}
@@ -1575,11 +1559,8 @@ func TestBuildServiceCatalogJSON_RegistrationPendingFalseForFullyReady(t *testin
 			},
 		},
 	}
-	jsonStr := buildServiceCatalogJSON(offers, "https://example.com")
-	var services []schemas.ServiceCatalogEntry
-	if err := json.Unmarshal([]byte(jsonStr), &services); err != nil {
-		t.Fatalf("invalid JSON: %v\n%s", err, jsonStr)
-	}
+	jsonStr := buildServiceCatalogJSON(offers, "https://example.com", nil)
+	services := decodeServiceCatalog(t, jsonStr).Services
 	if len(services) != 1 {
 		t.Fatalf("expected 1 service, got %d", len(services))
 	}

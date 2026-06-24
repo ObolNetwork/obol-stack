@@ -103,7 +103,7 @@ func TestBuildAgentIdentityRegistrationDeployment_RestrictedPSS(t *testing.T) {
 // TestBuildSkillCatalogConfigMap: exposes skill.md + services.json + openapi.json
 // + api docs HTML + httpd conf.
 func TestBuildSkillCatalogConfigMap(t *testing.T) {
-	cm := buildSkillCatalogConfigMap("# Catalog", `[{"name":"a"}]`, `{"displayName":"Acme"}`, `{"openapi":"3.1.0"}`, "<html>shell</html>")
+	cm := buildSkillCatalogConfigMap("# Catalog", `{"displayName":"Acme","tagline":"t","logoUrl":"https://x/logo.png","services":[{"name":"a"}]}`, `{"openapi":"3.1.0"}`, "<html>shell</html>")
 
 	if cm.GetName() != skillCatalogConfigMapName {
 		t.Errorf("name = %q, want %q", cm.GetName(), skillCatalogConfigMapName)
@@ -115,11 +115,8 @@ func TestBuildSkillCatalogConfigMap(t *testing.T) {
 	if data["skill.md"] != "# Catalog" {
 		t.Errorf("skill.md payload mismatch, got %v", data["skill.md"])
 	}
-	if data["services.json"] != `[{"name":"a"}]` {
+	if !strings.Contains(data["services.json"].(string), `"displayName":"Acme"`) {
 		t.Errorf("services.json payload mismatch, got %v", data["services.json"])
-	}
-	if data["storefront.json"] != `{"displayName":"Acme"}` {
-		t.Errorf("storefront.json payload mismatch, got %v", data["storefront.json"])
 	}
 	if data["openapi.json"] != `{"openapi":"3.1.0"}` {
 		t.Errorf("openapi.json payload mismatch, got %v", data["openapi.json"])
@@ -165,10 +162,9 @@ func TestBuildSkillCatalogDeployment(t *testing.T) {
 	podSpec, _ := template1["spec"].(map[string]any)
 	volumes, _ := podSpec["volumes"].([]any)
 	expectedPaths := map[string]string{
-		"services.json":   "api/services.json",
-		"storefront.json": "api/storefront.json",
-		"openapi.json":    "openapi.json",
-		"api.html":        "api/index.html",
+		"services.json": "api/services.json",
+		"openapi.json":  "openapi.json",
+		"api.html":      "api/index.html",
 	}
 	foundPaths := map[string]string{}
 	for _, v := range volumes {

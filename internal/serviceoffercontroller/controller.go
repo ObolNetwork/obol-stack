@@ -353,7 +353,7 @@ func (c *Controller) enqueueStorefrontProfileRefresh(obj any) {
 func (c *Controller) enqueueSkillCatalogRefresh() {
 	items := c.offerInformer.GetStore().List()
 	if len(items) > 0 {
-		// Any single offer reconcile rebuilds the full catalog (including storefront.json).
+		// Any single offer reconcile rebuilds the full catalog.
 		c.enqueueOffer(items[0])
 		return
 	}
@@ -1220,12 +1220,11 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	}
 
 	content := buildSkillCatalogMarkdown(offers, baseURL)
-	servicesJSON := buildServiceCatalogJSON(offers, baseURL)
 	storefrontProfile, err := c.loadStorefrontProfile(ctx)
 	if err != nil {
 		return err
 	}
-	storefrontJSON := buildStorefrontJSON(baseURL, storefrontProfile)
+	servicesJSON := buildServiceCatalogJSON(offers, baseURL, storefrontProfile)
 	// buildOpenAPIDocument prefers the tunnel URL for the public `servers[0]`
 	// entry; baseURL is sourced from obol-stack-config.tunnelURL via
 	// registrationBaseURL, which is also what /skill.md and services.json
@@ -1234,9 +1233,9 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	// when tunnelURL changes — see enqueueDiscoveryRefresh).
 	openAPIJSON := buildOpenAPIDocument(offers, baseURL)
 	apiDocsHTML := scalarHTML()
-	contentHash := fmt.Sprintf("%x", md5Sum(content+servicesJSON+storefrontJSON+openAPIJSON+apiDocsHTML))[:8]
+	contentHash := fmt.Sprintf("%x", md5Sum(content+servicesJSON+openAPIJSON+apiDocsHTML))[:8]
 
-	if err := c.applyObject(ctx, c.configMaps.Namespace(skillCatalogNamespace), buildSkillCatalogConfigMap(content, servicesJSON, storefrontJSON, openAPIJSON, apiDocsHTML)); err != nil {
+	if err := c.applyObject(ctx, c.configMaps.Namespace(skillCatalogNamespace), buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML)); err != nil {
 		return err
 	}
 	if err := c.applyObject(ctx, c.deployments.Namespace(skillCatalogNamespace), buildSkillCatalogDeployment(contentHash)); err != nil {
@@ -1249,9 +1248,6 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 		return err
 	}
 	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildServicesJSONHTTPRoute()); err != nil {
-		return err
-	}
-	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildStorefrontJSONHTTPRoute()); err != nil {
 		return err
 	}
 	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildOpenAPIHTTPRoute()); err != nil {

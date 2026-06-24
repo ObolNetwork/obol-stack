@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,7 +23,6 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentcrd"
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/enclave"
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/images"
@@ -63,7 +61,6 @@ func sellCommand(cfg *config.Config) *cli.Command {
 			sellPricingCommand(cfg),
 			sellRegisterCommand(cfg),
 			sellIdentityCommand(cfg),
-			sellStorefrontCommand(cfg),
 			sellInfoCommand(cfg),
 			sellResumeCommand(cfg),
 		},
@@ -3557,91 +3554,6 @@ func (pf *signerPortForwarder) Stop() {
 		if pf.cmd.Process != nil {
 			pf.cmd.Process.Kill()
 		}
-	}
-}
-
-// sellInfoCommand returns info about a local inference gateway deployment.
-// Kept for the enclave pubkey functionality.
-func sellInfoCommand(cfg *config.Config) *cli.Command {
-	return &cli.Command{
-		Name:      "info",
-		Usage:     "Show inference gateway deployment details and encryption key",
-		ArgsUsage: "<name>",
-		Flags: []cli.Flag{
-			&cli.BoolFlag{
-				Name:    "json",
-				Aliases: []string{"j"},
-				Usage:   "Output as JSON",
-			},
-		},
-		Action: func(ctx context.Context, cmd *cli.Command) error {
-			u := getUI(cmd)
-			name := cmd.Args().First()
-			if name == "" {
-				return fmt.Errorf("usage: obol sell info <name>")
-			}
-
-			store := inference.NewStore(cfg.ConfigDir)
-			d, err := store.Get(name)
-			if err != nil {
-				return err
-			}
-
-			var k enclave.Key
-			var keyErr error
-			if d.TEEType != "" {
-				k, keyErr = tee.NewKey(d.EnclaveTag, d.ModelHash)
-			} else {
-				k, keyErr = enclave.NewKey(d.EnclaveTag)
-			}
-
-			if u.IsJSON() || cmd.Bool("json") {
-				out := map[string]any{
-					"name":                      d.Name,
-					"enclave_tag":               d.EnclaveTag,
-					"listen_addr":               d.ListenAddr,
-					"upstream_url":              d.UpstreamURL,
-					"wallet_address":            d.WalletAddress,
-					"price_per_request":         d.PricePerRequest,
-					"price_per_mtok":            d.PricePerMTok,
-					"approx_tokens_per_request": d.ApproxTokensPerRequest,
-					"chain":                     d.Chain,
-					"facilitator_url":           d.FacilitatorURL,
-					"created_at":                d.CreatedAt,
-					"updated_at":                d.UpdatedAt,
-					"algorithm":                 "ECIES-P256-HKDF-SHA256-AES256GCM",
-				}
-				if keyErr == nil {
-					out["pubkey"] = hex.EncodeToString(k.PublicKeyBytes())
-					out["persistent"] = k.Persistent()
-				} else {
-					out["pubkey_error"] = keyErr.Error()
-				}
-				return u.JSON(out)
-			}
-
-			u.Printf("Name:         %s", d.Name)
-			u.Printf("Enclave tag:  %s", d.EnclaveTag)
-			u.Printf("Algorithm:    ECIES-P256-HKDF-SHA256-AES256GCM")
-			if keyErr == nil {
-				u.Printf("Pubkey:       %s", hex.EncodeToString(k.PublicKeyBytes()))
-				u.Printf("Persistent:   %v", k.Persistent())
-			} else {
-				u.Printf("Pubkey:       (unavailable: %v)", keyErr)
-			}
-			u.Blank()
-			u.Printf("Listen:       %s", d.ListenAddr)
-			u.Printf("Upstream:     %s", d.UpstreamURL)
-			u.Printf("Wallet:       %s", d.WalletAddress)
-			u.Printf("Price:        %s", formatInferencePriceSummary(d, ""))
-			u.Printf("Chain:        %s", d.Chain)
-			u.Printf("Facilitator:  %s", d.FacilitatorURL)
-			u.Printf("Created:      %s", d.CreatedAt)
-			if d.UpdatedAt != "" {
-				u.Printf("Updated:      %s", d.UpdatedAt)
-			}
-			return nil
-		},
 	}
 }
 

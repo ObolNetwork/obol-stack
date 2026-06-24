@@ -19,32 +19,32 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-func sellStorefrontCommand(cfg *config.Config) *cli.Command {
+func sellInfoCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
-		Name:  "storefront",
-		Usage: "Configure public storefront branding (name, tagline, logo)",
-		Description: `Sets the seller-wide storefront profile served at /api/storefront.json.
+		Name:  "info",
+		Usage: "Configure public seller branding in /api/services.json",
+		Description: `Sets seller-wide display name, tagline, and logo in the public catalog.
 This is independent of individual ServiceOffers and ERC-8004 identity.
 
 Examples:
-  obol sell storefront set --display-name "Acme Labs" --tagline "Paid APIs." --logo-url "https://acme.example/logo.png"
-  obol sell storefront show
-  obol sell storefront reset`,
+  obol sell info set --display-name "Acme Labs" --tagline "Paid APIs." --logo-url "https://acme.example/logo.png"
+  obol sell info show
+  obol sell info reset`,
 		Commands: []*cli.Command{
-			sellStorefrontSetCommand(cfg),
-			sellStorefrontShowCommand(cfg),
-			sellStorefrontResetCommand(cfg),
+			sellInfoSetCommand(cfg),
+			sellInfoShowCommand(cfg),
+			sellInfoResetCommand(cfg),
 		},
 	}
 }
 
-func sellStorefrontSetCommand(cfg *config.Config) *cli.Command {
+func sellInfoSetCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "set",
-		Usage: "Set storefront display name, tagline, and/or logo URL",
+		Usage: "Set seller display name, tagline, and/or logo URL",
 		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "display-name", Usage: "Storefront title shown in the header and page hero"},
-			&cli.StringFlag{Name: "tagline", Usage: "Short subtitle under the storefront title"},
+			&cli.StringFlag{Name: "display-name", Usage: "Seller title shown in the storefront header"},
+			&cli.StringFlag{Name: "tagline", Usage: "Short subtitle under the storefront hero"},
 			&cli.StringFlag{Name: "logo-url", Usage: "Logo image URL (https://... or /path on this host)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -65,33 +65,33 @@ func sellStorefrontSetCommand(cfg *config.Config) *cli.Command {
 				return err
 			}
 
-			current, err := loadStorefrontProfile(cfg)
+			current, err := loadSellerProfile(cfg)
 			if err != nil {
 				return err
 			}
 			merged := storefront.MergeProfile(current, patch)
-			if err := applyStorefrontProfile(cfg, merged); err != nil {
+			if err := applySellerProfile(cfg, merged); err != nil {
 				return err
 			}
 
-			published, err := waitForPublishedStorefront(cfg, &merged, 45*time.Second)
+			published, err := waitForPublishedCatalog(cfg, &merged, 45*time.Second)
 			if err != nil {
 				return err
 			}
 
-			u.Success("Storefront profile updated")
-			printStorefrontProfile(u, published)
+			u.Success("Seller profile updated")
+			printSellerProfile(u, published)
 			u.Blank()
-			u.Dim("Verify: curl -s http://obol.stack:8080/api/storefront.json | jq .")
+			u.Dim("Verify: curl -s http://obol.stack:8080/api/services.json | jq '{displayName,tagline,logoUrl}'")
 			return nil
 		},
 	}
 }
 
-func sellStorefrontShowCommand(cfg *config.Config) *cli.Command {
+func sellInfoShowCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "show",
-		Usage: "Show the current storefront profile",
+		Usage: "Show the current seller profile",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{Name: "json", Aliases: []string{"j"}, Usage: "Output as JSON"},
 		},
@@ -100,25 +100,25 @@ func sellStorefrontShowCommand(cfg *config.Config) *cli.Command {
 			if err := kubectl.EnsureCluster(cfg); err != nil {
 				return err
 			}
-			profile, err := loadStorefrontProfile(cfg)
+			profile, err := loadSellerProfile(cfg)
 			if err != nil {
 				return err
 			}
-			baseURL, _ := storefrontBaseURL(cfg)
+			baseURL, _ := sellerBaseURL(cfg)
 			published := storefront.ResolvePublished(&profile, baseURL)
 			if u.IsJSON() || cmd.Bool("json") {
 				return u.JSON(published)
 			}
-			printStorefrontProfile(u, published)
+			printSellerProfile(u, published)
 			return nil
 		},
 	}
 }
 
-func sellStorefrontResetCommand(cfg *config.Config) *cli.Command {
+func sellInfoResetCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "reset",
-		Usage: "Remove custom storefront branding and restore defaults",
+		Usage: "Remove custom seller branding and restore defaults",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			if err := kubectl.EnsureCluster(cfg); err != nil {
@@ -127,23 +127,23 @@ func sellStorefrontResetCommand(cfg *config.Config) *cli.Command {
 			bin, kc := kubectl.Paths(cfg)
 			if err := kubectl.RunSilent(bin, kc, "delete", "configmap", storefront.ProfileConfigMap,
 				"-n", storefront.ProfileNamespace, "--ignore-not-found"); err != nil {
-				return fmt.Errorf("delete storefront profile: %w", err)
+				return fmt.Errorf("delete seller profile: %w", err)
 			}
 			_ = os.Remove(storefront.ProfileLocalPath(cfg))
 
-			published, err := waitForPublishedStorefront(cfg, nil, 45*time.Second)
+			published, err := waitForPublishedCatalog(cfg, nil, 45*time.Second)
 			if err != nil {
 				return err
 			}
 
-			u.Success("Storefront profile reset to defaults")
-			printStorefrontProfile(u, published)
+			u.Success("Seller profile reset to defaults")
+			printSellerProfile(u, published)
 			return nil
 		},
 	}
 }
 
-func loadStorefrontProfile(cfg *config.Config) (schemas.StorefrontProfile, error) {
+func loadSellerProfile(cfg *config.Config) (schemas.StorefrontProfile, error) {
 	if raw, err := kubectlOutput(cfg, "get", "configmap", storefront.ProfileConfigMap,
 		"-n", storefront.ProfileNamespace, "-o", "jsonpath={.data."+storefront.ProfileDataKey+"}"); err == nil {
 		if p, err := storefront.ParseProfile(raw); err != nil {
@@ -162,7 +162,7 @@ func loadStorefrontProfile(cfg *config.Config) (schemas.StorefrontProfile, error
 	return schemas.StorefrontProfile{}, nil
 }
 
-func applyStorefrontProfile(cfg *config.Config, profile schemas.StorefrontProfile) error {
+func applySellerProfile(cfg *config.Config, profile schemas.StorefrontProfile) error {
 	if err := os.MkdirAll(filepath.Dir(storefront.ProfileLocalPath(cfg)), 0o700); err != nil {
 		return err
 	}
@@ -178,35 +178,39 @@ func applyStorefrontProfile(cfg *config.Config, profile schemas.StorefrontProfil
 		return err
 	}
 	if err := kubectlApply(cfg, manifest); err != nil {
-		return fmt.Errorf("apply storefront profile: %w", err)
+		return fmt.Errorf("apply seller profile: %w", err)
 	}
 	return nil
 }
 
-func waitForPublishedStorefront(cfg *config.Config, explicit *schemas.StorefrontProfile, timeout time.Duration) (schemas.StorefrontProfile, error) {
-	want := storefront.ResolvePublished(explicit, mustStorefrontBaseURL(cfg))
+func waitForPublishedCatalog(cfg *config.Config, explicit *schemas.StorefrontProfile, timeout time.Duration) (schemas.StorefrontProfile, error) {
+	want := storefront.ResolvePublished(explicit, mustSellerBaseURL(cfg))
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		raw, err := kubectlOutput(cfg, "get", "configmap", "obol-skill-md",
-			"-n", storefront.ProfileNamespace, "-o", "jsonpath={.data.storefront\\.json}")
+			"-n", storefront.ProfileNamespace, "-o", "jsonpath={.data.services\\.json}")
 		if err == nil && strings.TrimSpace(raw) != "" {
-			var got schemas.StorefrontProfile
-			if err := json.Unmarshal([]byte(raw), &got); err == nil && storefrontProfilesEqual(got, want) {
-				return got, nil
+			var got schemas.ServiceCatalog
+			if err := json.Unmarshal([]byte(raw), &got); err == nil && sellerProfilesEqual(got, want) {
+				return schemas.StorefrontProfile{
+					DisplayName: got.DisplayName,
+					Tagline:     got.Tagline,
+					LogoURL:     got.LogoURL,
+				}, nil
 			}
 		}
 		time.Sleep(2 * time.Second)
 	}
-	return want, fmt.Errorf("timed out waiting for controller to publish /api/storefront.json")
+	return want, fmt.Errorf("timed out waiting for controller to publish /api/services.json")
 }
 
-func storefrontProfilesEqual(a, b schemas.StorefrontProfile) bool {
-	return strings.TrimSpace(a.DisplayName) == strings.TrimSpace(b.DisplayName) &&
-		strings.TrimSpace(a.Tagline) == strings.TrimSpace(b.Tagline) &&
-		strings.TrimSpace(a.LogoURL) == strings.TrimSpace(b.LogoURL)
+func sellerProfilesEqual(catalog schemas.ServiceCatalog, want schemas.StorefrontProfile) bool {
+	return strings.TrimSpace(catalog.DisplayName) == strings.TrimSpace(want.DisplayName) &&
+		strings.TrimSpace(catalog.Tagline) == strings.TrimSpace(want.Tagline) &&
+		strings.TrimSpace(catalog.LogoURL) == strings.TrimSpace(want.LogoURL)
 }
 
-func storefrontBaseURL(cfg *config.Config) (string, error) {
+func sellerBaseURL(cfg *config.Config) (string, error) {
 	st, err := tunnel.LoadTunnelState(cfg)
 	if err != nil {
 		return "", err
@@ -220,15 +224,15 @@ func storefrontBaseURL(cfg *config.Config) (string, error) {
 	return "http://obol.stack:8080", nil
 }
 
-func mustStorefrontBaseURL(cfg *config.Config) string {
-	baseURL, err := storefrontBaseURL(cfg)
+func mustSellerBaseURL(cfg *config.Config) string {
+	baseURL, err := sellerBaseURL(cfg)
 	if err != nil || baseURL == "" {
 		return "http://obol.stack:8080"
 	}
 	return baseURL
 }
 
-func printStorefrontProfile(u *ui.UI, profile schemas.StorefrontProfile) {
+func printSellerProfile(u *ui.UI, profile schemas.StorefrontProfile) {
 	u.Printf("  Display name: %s", profile.DisplayName)
 	u.Printf("  Tagline:      %s", profile.Tagline)
 	u.Printf("  Logo URL:     %s", profile.LogoURL)

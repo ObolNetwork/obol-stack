@@ -3,9 +3,33 @@
   "$id": "https://obol.org/schemas/service-catalog.schema.json",
   "title": "Obol Service Catalog",
   "description": "Public /api/services.json catalog served by x402 sellers.",
-  "type": "array",
-  "items": {
-    "$ref": "#/$defs/service"
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "displayName",
+    "tagline",
+    "logoUrl",
+    "services"
+  ],
+  "properties": {
+    "displayName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tagline": {
+      "type": "string",
+      "minLength": 1
+    },
+    "logoUrl": {
+      "type": "string",
+      "minLength": 1
+    },
+    "services": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/service"
+      }
+    }
   },
   "$defs": {
     "evmAddress": {
