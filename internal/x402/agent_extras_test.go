@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	x402types "github.com/x402-foundation/x402/go/types"
+	x402types "github.com/x402-foundation/x402/go/v2/types"
 )
 
 func TestMergeAgentExtras_Noop_NonAgentRule(t *testing.T) {

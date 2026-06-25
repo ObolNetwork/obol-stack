@@ -13,7 +13,7 @@ import (
 	"net/http"
 	"time"
 
-	x402types "github.com/x402-foundation/x402/go/types"
+	x402types "github.com/x402-foundation/x402/go/v2/types"
 )
 
 // ForwardAuthConfig configures the ForwardAuth x402 middleware.
