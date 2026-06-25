@@ -79,15 +79,21 @@ func tunnelCommand(cfg *config.Config) *cli.Command {
 						Name:  "overwrite-dns",
 						Usage: "Replace any existing A/AAAA/CNAME at the hostname (forwards --overwrite-dns to cloudflared)",
 					},
+					&cli.BoolFlag{
+						Name:  "reuse-cert",
+						Usage: "Reuse an existing ~/.cloudflared/cert.pem instead of the browser login (headless; cert must already be authenticated to this Cloudflare account)",
+					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return tunnel.Login(cfg, getUI(cmd), tunnel.LoginOptions{
 						Hostname:          cmd.String("hostname"),
 						TransportProtocol: cmd.String("transport-protocol"),
 						OverwriteDNS:      cmd.Bool("overwrite-dns"),
+						ReuseCert:         cmd.Bool("reuse-cert"),
 					})
 				},
 			},
+			tunnelHostnameCommand(cfg),
 			{
 				Name:  "restart",
 				Usage: "Restart the tunnel connector (quick tunnels get a new URL)",
@@ -98,9 +104,36 @@ func tunnelCommand(cfg *config.Config) *cli.Command {
 			},
 			{
 				Name:  "stop",
-				Usage: "Stop the tunnel (scale cloudflared to 0 replicas)",
+				Usage: "Pause the tunnel (scale cloudflared to 0; config preserved — use 'obol tunnel delete' to tear down)",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					return tunnel.Stop(cfg, getUI(cmd))
+				},
+			},
+			{
+				Name:    "delete",
+				Aliases: []string{"teardown"},
+				Usage:   "Tear down the persistent tunnel (deletes the Cloudflare tunnel + cluster state; reverts to a quick tunnel)",
+				Description: "Permanently removes the persistent tunnel created by 'obol tunnel setup':\n" +
+					"deletes the Cloudflare tunnel (local-managed, cert-scoped), removes the\n" +
+					"in-cluster connector resources and storefront, clears local state, and reverts\n" +
+					"the connector to a default quick tunnel. Unlike 'obol tunnel stop' (which only\n" +
+					"pauses the connector), this cannot be undone — re-run 'obol tunnel setup' to\n" +
+					"create a new one.\n\n" +
+					"DNS records and dashboard-managed tunnels live in Cloudflare (Obol holds no\n" +
+					"account-wide API token), so those steps are printed for you to finish.",
+				Flags: []cli.Flag{
+					&cli.BoolFlag{Name: "force", Aliases: []string{"f"}, Usage: "Skip the confirmation prompt"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					u := getUI(cmd)
+					result, err := tunnel.Delete(cfg, u, tunnel.DeleteOptions{Force: cmd.Bool("force")})
+					if err != nil {
+						return err
+					}
+					if u.IsJSON() {
+						return u.JSON(result)
+					}
+					return nil
 				},
 			},
 			{
@@ -115,6 +148,117 @@ func tunnelCommand(cfg *config.Config) *cli.Command {
 			},
 		},
 	}
+}
+
+// tunnelHostnameCommand manages multiple public hostnames on one tunnel:
+// "deploy one domain, then another". Each hostname serves the same x402-gated
+// service surface (offer HTTPRoutes are host-agnostic), so adding a second
+// hostname never takes down the first.
+func tunnelHostnameCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:    "hostname",
+		Aliases: []string{"hostnames", "domains"},
+		Usage:   "Add, list, and remove additional public hostnames on the tunnel",
+		Description: "A permanent tunnel can serve more than one public hostname at once. Set up the\n" +
+			"first with 'obol tunnel setup', then add a second (and Nth) here. Every hostname\n" +
+			"serves the same payment-gated services — adding one never disrupts the others.\n\n" +
+			"Local-managed tunnels (browser cert) are fully automated: Obol routes the DNS\n" +
+			"record, re-renders the connector ingress over all hostnames, and reloads it.\n" +
+			"Dashboard-managed (connector token) tunnels keep their ingress in Cloudflare, so\n" +
+			"Obol tracks the hostname, updates the storefront route, and prints the one\n" +
+			"dashboard step to finish.",
+		Commands: []*cli.Command{
+			{
+				Name:  "list",
+				Usage: "List every public hostname served by the tunnel",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					u := getUI(cmd)
+					result, err := tunnel.ListHostnames(cfg)
+					if err != nil {
+						return err
+					}
+					if u.IsJSON() {
+						return u.JSON(result)
+					}
+					printHostnameList(u, result)
+					return nil
+				},
+			},
+			{
+				Name:      "add",
+				Usage:     "Add another public hostname to the tunnel",
+				ArgsUsage: "<hostname>",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "hostname", Aliases: []string{"H"}, Usage: "Public hostname to add (or pass as a positional argument)"},
+					&cli.BoolFlag{Name: "overwrite-dns", Usage: "Local-managed only: replace any existing A/AAAA/CNAME at the hostname"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					u := getUI(cmd)
+					hostname := strings.TrimSpace(cmd.String("hostname"))
+					if hostname == "" {
+						hostname = strings.TrimSpace(cmd.Args().First())
+					}
+					result, err := tunnel.AddHostname(cfg, u, tunnel.AddHostnameOptions{
+						Hostname:     hostname,
+						OverwriteDNS: cmd.Bool("overwrite-dns"),
+					})
+					if err != nil {
+						return err
+					}
+					if u.IsJSON() {
+						return u.JSON(result)
+					}
+					return nil
+				},
+			},
+			{
+				Name:      "remove",
+				Aliases:   []string{"rm", "delete"},
+				Usage:     "Remove a public hostname from the tunnel (others keep serving)",
+				ArgsUsage: "<hostname>",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "hostname", Aliases: []string{"H"}, Usage: "Public hostname to remove (or pass as a positional argument)"},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					u := getUI(cmd)
+					hostname := strings.TrimSpace(cmd.String("hostname"))
+					if hostname == "" {
+						hostname = strings.TrimSpace(cmd.Args().First())
+					}
+					result, err := tunnel.RemoveHostname(cfg, u, tunnel.RemoveHostnameOptions{
+						Hostname: hostname,
+					})
+					if err != nil {
+						return err
+					}
+					if u.IsJSON() {
+						return u.JSON(result)
+					}
+					return nil
+				},
+			},
+		},
+	}
+}
+
+func printHostnameList(u *ui.UI, result *tunnel.HostnameListResult) {
+	u.Blank()
+	u.Bold("Tunnel Hostnames")
+	if len(result.Hostnames) == 0 {
+		u.Print("No permanent hostnames configured.")
+		u.Dim("Create one with: obol tunnel setup")
+		return
+	}
+	for _, h := range result.Hostnames {
+		label := h.URL
+		if h.Primary {
+			label += "  (primary)"
+		}
+		u.Print("- " + label)
+	}
+	u.Blank()
+	u.Dim("Add another: obol tunnel hostname add <subdomain>.<domain>")
+	u.Dim("Remove one:  obol tunnel hostname remove <hostname>")
 }
 
 func domainCommand(cfg *config.Config) *cli.Command {

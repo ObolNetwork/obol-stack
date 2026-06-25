@@ -457,7 +457,7 @@ func syncTunnelDependents(cfg *config.Config, u *ui.UI, tunnelURL string) {
 	if err := SyncTunnelConfigMap(cfg, tunnelURL); err != nil {
 		u.Dim("Could not sync tunnel URL to frontend ConfigMap: " + err.Error())
 	}
-	if err := CreateStorefront(cfg, tunnelURL); err != nil {
+	if err := CreateStorefront(cfg, storefrontHostnames(cfg, tunnelURL)...); err != nil {
 		u.Dim("Could not create storefront: " + err.Error())
 	}
 }
@@ -1035,7 +1035,7 @@ func EnsureTunnelForSell(cfg *config.Config, u *ui.UI) (string, error) {
 	}
 	// EnsureRunning already calls InjectBaseURL + SyncTunnelConfigMap.
 	// Create the storefront landing page for the tunnel hostname.
-	if err := CreateStorefront(cfg, tunnelURL); err != nil {
+	if err := CreateStorefront(cfg, storefrontHostnames(cfg, tunnelURL)...); err != nil {
 		u.Warnf("could not create storefront: %v", err)
 	}
 
@@ -1066,19 +1066,176 @@ func Stop(cfg *config.Config, u *ui.UI) error {
 	return nil
 }
 
+// DeleteOptions configures `obol tunnel delete`.
+type DeleteOptions struct {
+	// Force skips the interactive confirmation prompt.
+	Force bool
+}
+
+// DeleteResult is the JSON-serialisable result of Delete.
+type DeleteResult struct {
+	ManagementMode           string   `json:"management_mode"`
+	DeletedHostnames         []string `json:"deleted_hostnames"`
+	CloudflareTunnelDeleted  bool     `json:"cloudflare_tunnel_deleted"`
+	DashboardCleanupRequired bool     `json:"dashboard_cleanup_required"`
+}
+
+// Delete tears down the persistent tunnel completely and reverts the connector
+// to a default quick tunnel. It is the destructive counterpart to Stop (which
+// only pauses the connector). Where Obol holds the credential — a local-managed
+// (cert) tunnel — it deletes the Cloudflare tunnel directly. For a
+// dashboard-managed (connector token) tunnel Obol holds no account-wide API
+// token, so it cleans up the cluster side and prints the dashboard steps. DNS
+// CNAME records are never deleted (no broad token by design) and are left to the
+// operator with explicit instructions.
+func Delete(cfg *config.Config, u *ui.UI, opts DeleteOptions) (*DeleteResult, error) {
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return nil, errors.New("stack not running, use 'obol stack up' first")
+	}
+
+	st, err := loadTunnelState(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("load tunnel state: %w", err)
+	}
+	if st == nil || !st.IsPersistent() {
+		return nil, errors.New("no permanent tunnel to delete (the current tunnel is quick or none); use 'obol tunnel stop' to pause a quick tunnel")
+	}
+
+	management := st.Management()
+	hostnames := st.HostnameSet()
+
+	if !opts.Force && u.IsTTY() {
+		u.Blank()
+		u.Bold("This permanently tears down the persistent tunnel serving:")
+		for _, h := range hostnames {
+			u.Dim("  - https://" + h)
+		}
+		u.Dim("The stack reverts to a default quick tunnel (new temporary URL).")
+		if !u.Confirm("Delete this tunnel?", false) {
+			return nil, errors.New("aborted")
+		}
+	}
+
+	result := &DeleteResult{ManagementMode: management, DeletedHostnames: hostnames}
+
+	// 1. Delete the Cloudflare-side tunnel where Obol holds the credential.
+	switch management {
+	case tunnelManagementLocal:
+		if err := deleteLocalCloudflareTunnel(u, st.TunnelName, st.TunnelID); err != nil {
+			// Non-fatal: keep cleaning the cluster even if the cloudflared delete
+			// fails (e.g. the tunnel was already removed).
+			u.Warnf("could not delete the Cloudflare tunnel (continuing cleanup): %v", err)
+		} else {
+			result.CloudflareTunnelDeleted = true
+		}
+	case tunnelManagementRemote:
+		result.DashboardCleanupRequired = true
+	}
+
+	// 2. Remove in-cluster persistent resources + storefront + local token.
+	if err := deleteLocalManagedK8sResources(cfg, u, kubeconfigPath); err != nil {
+		u.Warnf("could not delete local-managed resources: %v", err)
+	}
+	if err := deleteRemoteManagedK8sResources(cfg, u, kubeconfigPath); err != nil {
+		u.Warnf("could not delete remote-managed resources: %v", err)
+	}
+	if err := deleteRemoteTunnelToken(cfg); err != nil {
+		u.Warnf("could not delete local tunnel token: %v", err)
+	}
+	if err := DeleteStorefront(cfg); err != nil {
+		u.Warnf("could not delete storefront: %v", err)
+	}
+
+	// 3. Clear local state and revert the connector to the default quick tunnel
+	//    (a persistent→quick mode change rolls the pods via helm upgrade).
+	if err := deleteTunnelState(cfg); err != nil {
+		u.Warnf("could not clear tunnel state: %v", err)
+	}
+	if err := applyManagementModeConfigMap(cfg, u, kubeconfigPath, tunnelManagementQuick, tunnelTransportAuto); err != nil {
+		u.Warnf("could not reset connector to quick mode: %v", err)
+	}
+	if err := helmUpgradeCloudflared(cfg, u, kubeconfigPath); err != nil {
+		u.Warnf("could not re-render cloudflared to quick mode: %v", err)
+	}
+
+	// 4. Tell the operator what Obol could not do without a broad credential.
+	u.Blank()
+	u.Success("Tunnel deleted — reverted to a default quick tunnel")
+	u.Dim("  'obol tunnel status' shows the new temporary URL; 'obol tunnel stop' disables public access.")
+	if management == tunnelManagementLocal {
+		u.Blank()
+		u.Dim("The Cloudflare tunnel was deleted. Its DNS CNAME record(s) still resolve —")
+		u.Dim("delete them in the Cloudflare dashboard (DNS → Records):")
+		for _, h := range hostnames {
+			u.Dim("  - " + h)
+		}
+	} else {
+		u.Blank()
+		u.Bold("Finish teardown in the Cloudflare dashboard")
+		u.Print("Obol holds no API token for a dashboard-managed tunnel, so delete it there:")
+		u.Print("  https://one.dash.cloudflare.com → Networks → Tunnels → delete the tunnel,")
+		u.Print("  then remove its Public Hostname(s) and DNS record(s).")
+	}
+
+	return result, nil
+}
+
+// deleteLocalCloudflareTunnel deletes the cert-scoped cloudflared tunnel. The -f
+// flag cleans up any active connections so the delete succeeds even while the
+// connector is still running.
+func deleteLocalCloudflareTunnel(u *ui.UI, tunnelName, tunnelID string) error {
+	cloudflaredPath, err := exec.LookPath("cloudflared")
+	if err != nil {
+		return errors.New("cloudflared not found in PATH")
+	}
+
+	ref := strings.TrimSpace(tunnelName)
+	if ref == "" {
+		ref = strings.TrimSpace(tunnelID) // cloudflared accepts the UUID as the tunnel ref
+	}
+	if ref == "" {
+		return errors.New("local tunnel has no name or id to delete")
+	}
+
+	u.Infof("Deleting Cloudflare tunnel %s...", ref)
+	if out, err := exec.Command(cloudflaredPath, "tunnel", "delete", "-f", ref).CombinedOutput(); err != nil {
+		return fmt.Errorf("cloudflared tunnel delete failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+
+	return nil
+}
+
 // storefrontNamespace is where the storefront landing page resources live.
 const storefrontNamespace = "traefik"
 
-// CreateStorefront creates (or updates) a simple HTML landing page served at
-// the tunnel hostname's root path. This uses the same busybox-httpd + ConfigMap
-// pattern as the .well-known registration in monetize.py.
-func CreateStorefront(cfg *config.Config, tunnelURL string) error {
-	parsed, err := url.Parse(tunnelURL)
-	if err != nil {
-		return fmt.Errorf("invalid tunnel URL: %w", err)
+// storefrontHostnames returns the hostnames the public storefront should be
+// published on: the full tracked set for a persistent tunnel, else the host
+// parsed from tunnelURL (quick tunnels). Empty entries are dropped.
+func storefrontHostnames(cfg *config.Config, tunnelURL string) []string {
+	if st, _ := loadTunnelState(cfg); st != nil && st.IsPersistent() {
+		if set := st.HostnameSet(); len(set) > 0 {
+			return set
+		}
 	}
+	if parsed, err := url.Parse(tunnelURL); err == nil {
+		if h := parsed.Hostname(); h != "" {
+			return []string{h}
+		}
+	}
+	return nil
+}
 
-	hostname := parsed.Hostname()
+// CreateStorefront creates (or updates) the public storefront landing page and
+// publishes it at the root path of EVERY supplied hostname. Each argument may be
+// a bare hostname or a full URL (scheme/path stripped); empty or duplicate
+// entries are dropped. The single HTTPRoute lists all hostnames, so a second
+// domain serves `/` without displacing the first.
+func CreateStorefront(cfg *config.Config, hostnames ...string) error {
+	hosts := normalizeHostnames(hostnames)
+	if len(hosts) == 0 {
+		return errors.New("CreateStorefront requires at least one hostname")
+	}
 
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
@@ -1174,7 +1331,7 @@ func CreateStorefront(cfg *config.Config, tunnelURL string) error {
 				"namespace": storefrontNamespace,
 			},
 			"spec": map[string]any{
-				"hostnames": []string{hostname},
+				"hostnames": hosts,
 				"parentRefs": []map[string]any{
 					{
 						"name":        "traefik-gateway",

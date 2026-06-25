@@ -56,7 +56,7 @@ func restoreLocalManagedResources(cfg *config.Config, u *ui.UI, kubeconfigPath s
 		return fmt.Errorf("read local cloudflared credentials %s: %w", credPath, err)
 	}
 
-	if err := applyLocalManagedK8sResources(cfg, u, kubeconfigPath, st.Hostname, st.TunnelID, cert, cred); err != nil {
+	if err := applyLocalManagedK8sResources(cfg, u, kubeconfigPath, st.HostnameSet(), st.TunnelID, cert, cred); err != nil {
 		return err
 	}
 	if err := deleteRemoteManagedK8sResources(cfg, u, kubeconfigPath); err != nil {
