@@ -64,19 +64,19 @@ type Controller struct {
 	httpRoutes           dynamic.NamespaceableResourceInterface
 	referenceGrants      dynamic.NamespaceableResourceInterface
 
-	offerInformer        cache.SharedIndexInformer
-	registrationInformer cache.SharedIndexInformer
-	identityInformer     cache.SharedIndexInformer
-	purchaseInformer     cache.SharedIndexInformer
-	agentInformer        cache.SharedIndexInformer
-	configMapInformer    cache.SharedIndexInformer
+	offerInformer             cache.SharedIndexInformer
+	registrationInformer      cache.SharedIndexInformer
+	identityInformer          cache.SharedIndexInformer
+	purchaseInformer          cache.SharedIndexInformer
+	agentInformer             cache.SharedIndexInformer
+	configMapInformer         cache.SharedIndexInformer
 	storefrontProfileInformer cache.SharedIndexInformer
-	offerQueue           workqueue.TypedRateLimitingInterface[string]
-	registrationQueue    workqueue.TypedRateLimitingInterface[string]
-	identityQueue        workqueue.TypedRateLimitingInterface[string]
-	purchaseQueue        workqueue.TypedRateLimitingInterface[string]
-	agentQueue           workqueue.TypedRateLimitingInterface[string]
-	catalogMu            sync.Mutex
+	offerQueue                workqueue.TypedRateLimitingInterface[string]
+	registrationQueue         workqueue.TypedRateLimitingInterface[string]
+	identityQueue             workqueue.TypedRateLimitingInterface[string]
+	purchaseQueue             workqueue.TypedRateLimitingInterface[string]
+	agentQueue                workqueue.TypedRateLimitingInterface[string]
+	catalogMu                 sync.Mutex
 
 	pendingAuths sync.Map // key: "ns/name" → []map[string]string
 
@@ -120,35 +120,35 @@ func New(cfg *rest.Config) (*Controller, error) {
 	storefrontProfileInformer := storefrontProfileFactory.ForResource(monetizeapi.ConfigMapGVR).Informer()
 
 	controller := &Controller{
-		kubeClient:           kubeClient,
-		dynClient:            client,
-		client:               client,
-		offers:               client.Resource(monetizeapi.ServiceOfferGVR),
-		registrationRequests: client.Resource(monetizeapi.RegistrationRequestGVR),
-		agentIdentities:      client.Resource(monetizeapi.AgentIdentityGVR),
-		agents:               client.Resource(monetizeapi.AgentGVR),
-		services:             client.Resource(monetizeapi.ServiceGVR),
-		configMaps:           client.Resource(monetizeapi.ConfigMapGVR),
-		deployments:          client.Resource(monetizeapi.DeploymentGVR),
-		middlewares:          client.Resource(monetizeapi.MiddlewareGVR),
-		httpRoutes:           client.Resource(monetizeapi.HTTPRouteGVR),
-		referenceGrants:      client.Resource(monetizeapi.ReferenceGrantGVR),
-		offerInformer:        offerInformer,
-		registrationInformer: registrationInformer,
-		identityInformer:     identityInformer,
-		purchaseInformer:     purchaseInformer,
-		agentInformer:        agentInformer,
+		kubeClient:                kubeClient,
+		dynClient:                 client,
+		client:                    client,
+		offers:                    client.Resource(monetizeapi.ServiceOfferGVR),
+		registrationRequests:      client.Resource(monetizeapi.RegistrationRequestGVR),
+		agentIdentities:           client.Resource(monetizeapi.AgentIdentityGVR),
+		agents:                    client.Resource(monetizeapi.AgentGVR),
+		services:                  client.Resource(monetizeapi.ServiceGVR),
+		configMaps:                client.Resource(monetizeapi.ConfigMapGVR),
+		deployments:               client.Resource(monetizeapi.DeploymentGVR),
+		middlewares:               client.Resource(monetizeapi.MiddlewareGVR),
+		httpRoutes:                client.Resource(monetizeapi.HTTPRouteGVR),
+		referenceGrants:           client.Resource(monetizeapi.ReferenceGrantGVR),
+		offerInformer:             offerInformer,
+		registrationInformer:      registrationInformer,
+		identityInformer:          identityInformer,
+		purchaseInformer:          purchaseInformer,
+		agentInformer:             agentInformer,
 		configMapInformer:         configMapInformer,
 		storefrontProfileInformer: storefrontProfileInformer,
 		offerQueue:                workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
-		registrationQueue:    workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
-		identityQueue:        workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
-		purchaseQueue:        workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
-		agentQueue:           workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
-		httpClient:           &http.Client{Timeout: 3 * time.Second},
-		registrationRPCBase:  getenvDefault("ERC8004_RPC_BASE", erc8004.DefaultRPCBase),
-		baseURLOverride:      strings.TrimRight(os.Getenv("AGENT_BASE_URL"), "/"),
-		defaultBaseURL:       "http://obol.stack:8080",
+		registrationQueue:         workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		identityQueue:             workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		purchaseQueue:             workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		agentQueue:                workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		httpClient:                &http.Client{Timeout: 3 * time.Second},
+		registrationRPCBase:       getenvDefault("ERC8004_RPC_BASE", erc8004.DefaultRPCBase),
+		baseURLOverride:           strings.TrimRight(os.Getenv("AGENT_BASE_URL"), "/"),
+		defaultBaseURL:            "http://obol.stack:8080",
 	}
 
 	offerInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{

@@ -1,5 +1,4 @@
 import type { Metadata, Viewport } from "next";
-import { headers } from "next/headers";
 import { DM_Sans } from "next/font/google";
 import type { Service } from "@/types";
 import {
@@ -7,6 +6,7 @@ import {
   fetchStorefront,
   isDefaultStorefrontLogo,
 } from "@/lib/catalog";
+import { resolveSiteUrl } from "@/lib/site-url";
 import "./globals.css";
 
 const dmSans = DM_Sans({
@@ -15,25 +15,6 @@ const dmSans = DM_Sans({
   weight: ["400", "500", "600", "700"],
   variable: "--font-dm-sans",
 });
-
-// Derive the public site URL from the incoming request so OG/Twitter scrapers
-// see the tunnel hostname they hit (rather than the in-cluster default). Falls
-// back to NEXT_PUBLIC_SITE_URL, then the local-dev default.
-async function resolveSiteUrl(): Promise<string> {
-  try {
-    const h = await headers();
-    const forwardedHost = h.get("x-forwarded-host") ?? h.get("host");
-    const forwardedProto =
-      h.get("x-forwarded-proto") ??
-      (forwardedHost?.includes("localhost") || forwardedHost === "obol.stack:8080"
-        ? "http"
-        : "https");
-    if (forwardedHost) return `${forwardedProto}://${forwardedHost}`;
-  } catch {
-    // headers() unavailable (e.g. build-time prerender) — fall through.
-  }
-  return process.env.NEXT_PUBLIC_SITE_URL ?? "http://obol.stack:8080";
-}
 
 const DEFAULT_TITLE_SUFFIX = "Buy agent services";
 

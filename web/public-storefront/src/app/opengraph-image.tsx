@@ -2,6 +2,7 @@ import { ImageResponse } from "next/og";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fetchStorefront, isDefaultStorefrontLogo } from "@/lib/catalog";
+import { resolvePublicUrl, resolveSiteUrl } from "@/lib/site-url";
 
 export const runtime = "nodejs";
 export const alt = "Obol Stack — buy agent services";
@@ -16,11 +17,17 @@ const BG_PANEL = "#111F22";
 const STROKE_GREEN = "#1D5249";
 
 export default async function OpengraphImage() {
-  const storefront = await fetchStorefront();
+  const [storefront, siteUrl] = await Promise.all([
+    fetchStorefront(),
+    resolveSiteUrl(),
+  ]);
   const wordmark = readFileSync(
     join(process.cwd(), "public", "obol-stack-logo.png"),
   );
   const wordmarkDataUrl = `data:image/png;base64,${wordmark.toString("base64")}`;
+  const customLogoSrc = isDefaultStorefrontLogo(storefront.logoUrl)
+    ? ""
+    : resolvePublicUrl(storefront.logoUrl, siteUrl);
 
   const Chip = ({ label }: { label: string }) => (
     <div
@@ -56,7 +63,7 @@ export default async function OpengraphImage() {
         }}
       >
         {/* Brand, top-left */}
-        {isDefaultStorefrontLogo(storefront.logoUrl) ? (
+        {customLogoSrc === "" ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={wordmarkDataUrl}
@@ -75,11 +82,16 @@ export default async function OpengraphImage() {
           >
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={storefront.logoUrl}
+              src={customLogoSrc}
               alt={storefront.displayName}
               width={72}
               height={72}
-              style={{ width: 72, height: 72, borderRadius: 16, objectFit: "cover" }}
+              style={{
+                width: 72,
+                height: 72,
+                borderRadius: 16,
+                objectFit: "cover",
+              }}
             />
             <div
               style={{
