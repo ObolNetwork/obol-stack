@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 
 	"github.com/prometheus/client_golang/prometheus"
-	x402types "github.com/x402-foundation/x402/go/types"
+	x402types "github.com/x402-foundation/x402/go/v2/types"
 )
 
 // Verifier is a ForwardAuth-compatible HTTP handler that enforces x402

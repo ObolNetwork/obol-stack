@@ -16,7 +16,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/enclave"
 	"github.com/ObolNetwork/obol-stack/internal/tee"
 	x402pkg "github.com/ObolNetwork/obol-stack/internal/x402"
-	x402types "github.com/x402-foundation/x402/go/types"
+	x402types "github.com/x402-foundation/x402/go/v2/types"
 )
 
 // GatewayConfig holds configuration for the x402 inference gateway.

@@ -7,7 +7,7 @@ package serviceoffercontroller
 // Two principles:
 //
 //  1. x402 components mirror the canonical Coinbase types/v2 wire format
-//     (github.com/x402-foundation/x402/go/types). Field names, optionality, and
+//     (github.com/x402-foundation/x402/go/v2/types). Field names, optionality, and
 //     X402Version=2 must stay in sync with that upstream — internal/x402
 //     re-exports the same structs and lockstep is enforced by 402 smoke
 //     tests, not by a generator. Update both together when the spec moves.

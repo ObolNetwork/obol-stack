@@ -1,6 +1,6 @@
 // Package x402mcp serves a local x402-paid MCP (Model Context Protocol) server.
 //
-// It wraps MCP tools with x402 payment using x402-foundation/x402/go/mcp and the
+// It wraps MCP tools with x402 payment using x402-foundation/x402/go/v2/mcp and the
 // official modelcontextprotocol/go-sdk, gated by an x402 facilitator. Buyers
 // (e.g. hermes-agent's pay_mcp plugin) settle in-band via the MCP request
 // _meta["x402/payment"] field, per specs/transports-v2/mcp.md. Verify ->
@@ -29,10 +29,10 @@ import (
 	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	x402 "github.com/x402-foundation/x402/go"
-	x402http "github.com/x402-foundation/x402/go/http"
-	mcp402 "github.com/x402-foundation/x402/go/mcp"
-	evmserver "github.com/x402-foundation/x402/go/mechanisms/evm/exact/server"
+	x402 "github.com/x402-foundation/x402/go/v2"
+	x402http "github.com/x402-foundation/x402/go/v2/http"
+	mcp402 "github.com/x402-foundation/x402/go/v2/mcp"
+	evmserver "github.com/x402-foundation/x402/go/v2/mechanisms/evm/exact/server"
 )
 
 // caip2 maps the CLI chain name to its CAIP-2 network id. Mirrors the EVM
