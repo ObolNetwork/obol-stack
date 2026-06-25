@@ -25,6 +25,14 @@ type LoginOptions struct {
 	// fails with "An A, AAAA, or CNAME record with that host already exists"
 	// (Cloudflare API error 1003).
 	OverwriteDNS bool
+
+	// ReuseCert skips the interactive `cloudflared tunnel login` browser step and
+	// reuses an existing ~/.cloudflared/cert.pem instead. Set it to provision
+	// headlessly (CI, or additional clusters on the same Cloudflare account) with
+	// a cert copied from a host already authenticated to the SAME account+zone.
+	// When set but no usable cert is present, Login errors rather than silently
+	// falling back to the browser, so the headless contract is explicit.
+	ReuseCert bool
 }
 
 // Login provisions a locally-managed tunnel using `cloudflared tunnel login` (browser auth),
@@ -64,15 +72,31 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 		return errors.New("cloudflared not found in PATH. Install it first (e.g. 'brew install cloudflared' on macOS)")
 	}
 
-	u.Info("Authenticating cloudflared (browser)...")
+	// --reuse-cert provisions headlessly by reusing an existing cloudflared origin
+	// cert instead of the browser. `cloudflared tunnel login` always opens a
+	// browser to fetch a fresh cert, but tunnel create/info/route/run only need
+	// the cert that login produced — so a cert.pem copied from another host on the
+	// SAME Cloudflare account+zone lets us stand up additional clusters without a
+	// browser. The `route dns` step below validates the cert's zone, so a
+	// wrong-account cert still fails loudly. We require the flag (not mere cert
+	// presence) so `obol tunnel login` keeps doing a fresh browser auth by
+	// default — a stale cert never silently bypasses login.
+	if opts.ReuseCert {
+		certPath := filepath.Join(defaultCloudflaredDir(), "cert.pem")
+		if info, statErr := os.Stat(certPath); statErr != nil || info.Size() == 0 {
+			return fmt.Errorf("--reuse-cert set but no usable cert at %s (missing or empty); omit --reuse-cert to authenticate via browser", certPath)
+		}
+		u.Infof("Reusing existing cloudflared cert at %s (skipping browser login)", certPath)
+	} else {
+		u.Info("Authenticating cloudflared (browser)...")
 
-	loginCmd := exec.Command(cloudflaredPath, "tunnel", "login")
-	loginCmd.Stdin = os.Stdin
-	loginCmd.Stdout = os.Stdout
-
-	loginCmd.Stderr = os.Stderr
-	if err := loginCmd.Run(); err != nil {
-		return fmt.Errorf("cloudflared tunnel login failed: %w", err)
+		loginCmd := exec.Command(cloudflaredPath, "tunnel", "login")
+		loginCmd.Stdin = os.Stdin
+		loginCmd.Stdout = os.Stdout
+		loginCmd.Stderr = os.Stderr
+		if err := loginCmd.Run(); err != nil {
+			return fmt.Errorf("cloudflared tunnel login failed: %w", err)
+		}
 	}
 
 	u.Infof("Creating tunnel: %s", tunnelName)
@@ -121,7 +145,14 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 		return err
 	}
 
-	if err := applyLocalManagedK8sResources(cfg, u, kubeconfigPath, hostname, tunnelID, cert, cred); err != nil {
+	// Preserve any additional hostnames already tracked for this local tunnel so a
+	// re-login doesn't silently drop them; the freshly-routed hostname is primary.
+	hostnames := []string{hostname}
+	if st != nil && st.Management() == tunnelManagementLocal && st.TunnelID == tunnelID {
+		hostnames = normalizeHostnames(append(hostnames, st.Hostnames...))
+	}
+
+	if err := applyLocalManagedK8sResources(cfg, u, kubeconfigPath, hostnames, tunnelID, cert, cred); err != nil {
 		return err
 	}
 	if err := deleteRemoteManagedK8sResources(cfg, u, kubeconfigPath); err != nil {
@@ -146,7 +177,8 @@ func Login(cfg *config.Config, u *ui.UI, opts LoginOptions) error {
 	st.ExposureMode = tunnelExposurePersistent
 	st.ManagementMode = tunnelManagementLocal
 	st.TransportProtocol = transportProtocol
-	st.Hostname = hostname
+	st.Hostname = hostnames[0]
+	st.Hostnames = hostnames
 	st.AccountID = ""
 	st.ZoneID = ""
 	st.TunnelID = tunnelID
@@ -252,7 +284,7 @@ func verifyRoutedHostname(routedOutput, requestedHostname string) error {
 	return nil
 }
 
-func applyLocalManagedK8sResources(cfg *config.Config, u *ui.UI, kubeconfigPath, hostname, tunnelID string, certPEM, credJSON []byte) error {
+func applyLocalManagedK8sResources(cfg *config.Config, u *ui.UI, kubeconfigPath string, hostnames []string, tunnelID string, certPEM, credJSON []byte) error {
 	// Secret: account certificate + tunnel credentials (locally-managed tunnel requires origincert).
 	secretYAML := buildLocalManagedSecretYAML(certPEM, credJSON)
 
@@ -261,7 +293,7 @@ func applyLocalManagedK8sResources(cfg *config.Config, u *ui.UI, kubeconfigPath,
 	}
 
 	// ConfigMap: config.yml + tunnel_id used for command arg expansion.
-	cfgYAML := buildLocalManagedConfigYAML(hostname, tunnelID)
+	cfgYAML := buildLocalManagedConfigYAML(hostnames, tunnelID)
 	if err := kubectlApply(cfg, u, kubeconfigPath, cfgYAML); err != nil {
 		return err
 	}
@@ -292,7 +324,23 @@ data:
 	return []byte(secret)
 }
 
-func buildLocalManagedConfigYAML(hostname, tunnelID string) []byte {
+// buildLocalManagedConfigYAML renders the cloudflared-local-config ConfigMap with
+// one ingress rule per public hostname (all routed to the same in-cluster Traefik
+// service), terminated by the mandatory catch-all http_status:404 rule. Adding or
+// removing a hostname re-renders over the full set, so a second domain never
+// displaces the first.
+func buildLocalManagedConfigYAML(hostnames []string, tunnelID string) []byte {
+	hostnames = normalizeHostnames(hostnames)
+
+	var ingress strings.Builder
+	for _, h := range hostnames {
+		ingress.WriteString("      - hostname: ")
+		ingress.WriteString(h)
+		ingress.WriteString("\n        service: http://traefik.traefik.svc.cluster.local:80\n")
+	}
+	// Mandatory catch-all: cloudflared rejects an ingress list without one.
+	ingress.WriteString("      - service: http_status:404\n")
+
 	cfg := fmt.Sprintf(`apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -305,12 +353,19 @@ data:
     credentials-file: /etc/cloudflared/credentials.json
 
     ingress:
-      - hostname: %s
-        service: http://traefik.traefik.svc.cluster.local:80
-      - service: http_status:404
-`, localManagedConfigMapName, tunnelNamespace, tunnelID, tunnelID, hostname)
+%s`, localManagedConfigMapName, tunnelNamespace, tunnelID, tunnelID, ingress.String())
 
 	return []byte(cfg)
+}
+
+// normalizeHostnames normalizes and de-duplicates a slice of hostnames,
+// preserving first-seen order (so the primary stays at index 0).
+func normalizeHostnames(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, h := range in {
+		out = appendHostname(out, h)
+	}
+	return out
 }
 
 func kubectlApply(cfg *config.Config, u *ui.UI, kubeconfigPath string, manifest []byte) error {

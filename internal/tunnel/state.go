@@ -42,6 +42,7 @@ type tunnelState struct {
 	ManagementMode    string    `json:"management_mode,omitempty"`
 	TransportProtocol string    `json:"transport_protocol,omitempty"`
 	Hostname          string    `json:"hostname,omitempty"`
+	Hostnames         []string  `json:"hostnames,omitempty"`
 	AccountID         string    `json:"account_id,omitempty"`
 	ZoneID            string    `json:"zone_id,omitempty"`
 	TunnelID          string    `json:"tunnel_id,omitempty"`
@@ -153,9 +154,55 @@ func normalizeTunnelState(st *tunnelState) *tunnelState {
 		clone.TransportProtocol = tunnelTransportAuto
 	}
 
+	reconcileHostnameSet(&clone)
+
 	clone.Mode = legacyTunnelMode(clone.ExposureMode)
 
 	return &clone
+}
+
+// reconcileHostnameSet keeps the scalar Hostname and the Hostnames slice
+// consistent: legacy state files (only Hostname) seed the slice; new state
+// mirrors Hostnames[0] back into Hostname. Every entry is normalized and
+// de-duplicated, preserving first-seen order so the primary (index 0) is stable.
+func reconcileHostnameSet(st *tunnelState) {
+	merged := make([]string, 0, len(st.Hostnames)+1)
+	merged = appendHostname(merged, st.Hostname)
+	for _, h := range st.Hostnames {
+		merged = appendHostname(merged, h)
+	}
+
+	st.Hostnames = merged
+	if len(merged) > 0 {
+		st.Hostname = merged[0]
+	} else {
+		st.Hostname = ""
+	}
+}
+
+// appendHostname normalizes h and appends it to dst unless it is empty or
+// already present (case-insensitive after normalization).
+func appendHostname(dst []string, h string) []string {
+	n := normalizeHostname(h)
+	if n == "" {
+		return dst
+	}
+	for _, existing := range dst {
+		if existing == n {
+			return dst
+		}
+	}
+	return append(dst, n)
+}
+
+// HostnameSet returns the full set of public hostnames served by the tunnel,
+// primary first. Returns nil for quick/dormant tunnels with no hostname.
+func (st *tunnelState) HostnameSet() []string {
+	normalized := normalizeTunnelState(st)
+	if normalized == nil {
+		return nil
+	}
+	return normalized.Hostnames
 }
 
 func legacyTunnelMode(exposureMode string) string {
@@ -232,6 +279,16 @@ func loadRemoteTunnelToken(cfg *config.Config) (string, error) {
 
 func deleteRemoteTunnelToken(cfg *config.Config) error {
 	if err := os.Remove(remoteTunnelTokenPath(cfg)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	return nil
+}
+
+// deleteTunnelState removes the persisted tunnel state file so the stack reverts
+// to "no persistent tunnel". A missing file is not an error (idempotent).
+func deleteTunnelState(cfg *config.Config) error {
+	if err := os.Remove(tunnelStatePath(cfg)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 
