@@ -444,18 +444,17 @@ func patternToPrefix(pattern string) string {
 	return strings.TrimSuffix(pattern, "*")
 }
 
-// mergeAgentExtras adds the agent fields from a RouteRule to the
-// requirement's Extra map so buyers probing a 402 see which model and
-// skills are powering the offer. No-op for non-agent rules.
+// mergeAgentExtras adds agent metadata from a RouteRule to the requirement's
+// Extra map so buyers probing a 402 can tell it's an agent. The underlying
+// model is intentionally NOT surfaced: an Obol Agent runs its own model and
+// the buyer never selects one, so the model id is an internal detail, not
+// buyer-facing info. No-op for non-agent rules.
 func mergeAgentExtras(req *x402types.PaymentRequirements, rule *RouteRule) {
-	if rule.AgentModel == "" && len(rule.AgentSkills) == 0 && rule.AgentRuntime == "" {
+	if len(rule.AgentSkills) == 0 && rule.AgentRuntime == "" {
 		return
 	}
 	if req.Extra == nil {
 		req.Extra = make(map[string]interface{})
-	}
-	if rule.AgentModel != "" {
-		req.Extra["agentModel"] = rule.AgentModel
 	}
 	if len(rule.AgentSkills) > 0 {
 		// Materialise as []any so JSON marshalling produces a proper array

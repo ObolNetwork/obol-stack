@@ -24,7 +24,7 @@ func TestMergeAgentExtras_Noop_NonAgentRule(t *testing.T) {
 	}
 }
 
-func TestMergeAgentExtras_AddsAllAgentFields(t *testing.T) {
+func TestMergeAgentExtras_AddsAgentFieldsButNotModel(t *testing.T) {
 	req := x402types.PaymentRequirements{Extra: map[string]any{}}
 	rule := &RouteRule{
 		AgentModel:   "qwen3.5:9b",
@@ -34,8 +34,8 @@ func TestMergeAgentExtras_AddsAllAgentFields(t *testing.T) {
 
 	mergeAgentExtras(&req, rule)
 
-	if got := req.Extra["agentModel"]; got != "qwen3.5:9b" {
-		t.Errorf("agentModel = %v, want qwen3.5:9b", got)
+	if _, ok := req.Extra["agentModel"]; ok {
+		t.Error("agentModel must not be surfaced — the underlying model is an internal detail, not buyer-facing")
 	}
 	if got := req.Extra["agentRuntime"]; got != "hermes" {
 		t.Errorf("agentRuntime = %v", got)
@@ -55,14 +55,17 @@ func TestMergeAgentExtras_InitialisesNilExtra(t *testing.T) {
 	// mergeAgentExtras must still cope with a nil map for callers that
 	// build PaymentRequirements directly (e.g. tests).
 	req := x402types.PaymentRequirements{}
-	rule := &RouteRule{AgentModel: "qwen3.5:9b"}
+	rule := &RouteRule{AgentRuntime: "hermes"}
 
 	mergeAgentExtras(&req, rule)
 
 	if req.Extra == nil {
 		t.Fatal("Extra not initialised")
 	}
-	if req.Extra["agentModel"] != "qwen3.5:9b" {
-		t.Errorf("agentModel missing: %+v", req.Extra)
+	if _, ok := req.Extra["agentModel"]; ok {
+		t.Error("agentModel must not be surfaced")
+	}
+	if req.Extra["agentRuntime"] != "hermes" {
+		t.Errorf("agentRuntime missing: %+v", req.Extra)
 	}
 }
