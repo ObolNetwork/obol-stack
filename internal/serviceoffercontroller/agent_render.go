@@ -94,12 +94,25 @@ func agentManifests(agent *monetizeapi.Agent, litellmKey, apiKey string) ([]*uns
 //
 // Sub-agent constraints: every Agent CR is a sub-agent-for-sale (the
 // master is deployed via `obol agent init`, not via ServiceOffer), so the
-// terminal/agent caps below apply unconditionally. The Cloudflare free
-// tunnel cuts off requests at 100s, so lifetime_seconds is bounded under
-// that. terminal.timeout must stay <= lifetime_seconds so no single
-// operation can outlive the session. max_turns and reasoning_effort cap
-// chattiness, and disabled_toolsets drops Hermes tool families that aren't
-// useful in a paid-service context (memory persistence, web search).
+// terminal/agent caps below apply unconditionally. Sold agents run behind a
+// named Cloudflare tunnel (no ~100s quick-tunnel idle cut), and a single paid
+// data call can legitimately be slow (an x402 payment round-trip plus a
+// first-party data query), so terminal.timeout/lifetime_seconds carry real
+// headroom rather than the old 80s/90s that timed out heavier queries.
+// terminal.timeout must stay <= lifetime_seconds so no single operation can
+// outlive the session. max_turns and reasoning_effort cap chattiness, and
+// disabled_toolsets drops Hermes tool families that aren't useful in a
+// paid-service context (memory persistence, web search).
+//
+// code_execution (the `execute_code` tool) is disabled too: it runs arbitrary
+// in-process Python whose subprocess/file calls bypass the terminal
+// DANGEROUS_PATTERNS gate, so Hermes requires a per-script approval that no
+// human can grant during an unattended paid turn — the tool just fails closed
+// and small models loop on it (observed: gemma4 retrying execute_code until
+// the turn dies). Skills that shell out (e.g. buy-x402, the hyperliquid
+// data skill) run their `python3 .../foo.py` via the `terminal` tool instead,
+// where a benign script auto-approves and genuinely dangerous commands stay
+// gated — granular, not a blanket --yolo bypass.
 func renderHermesConfig(model, litellmKey string) string {
 	return fmt.Sprintf(`model:
   default: %q
@@ -109,8 +122,8 @@ func renderHermesConfig(model, litellmKey string) string {
 terminal:
   backend: local
   cwd: /data/.hermes/workspace
-  timeout: 80
-  lifetime_seconds: 90
+  timeout: 170
+  lifetime_seconds: 180
   docker_mount_cwd_to_workspace: false
 agent:
   max_turns: 30
@@ -118,6 +131,7 @@ agent:
   disabled_toolsets:
     - memory
     - web
+    - code_execution
 skills:
   external_dirs:
     - /data/.hermes/obol-skills

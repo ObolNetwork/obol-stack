@@ -365,13 +365,16 @@ func TestRenderHermesConfig_HasModelAndSkillsDir(t *testing.T) {
 func TestRenderHermesConfig_SubAgentConstraints(t *testing.T) {
 	cfg := renderHermesConfig("qwen3.5:9b", "lit-key")
 	for _, must := range []string{
-		`timeout: 80`,
-		`lifetime_seconds: 90`,
+		`timeout: 170`,
+		`lifetime_seconds: 180`,
 		`max_turns: 30`,
 		`reasoning_effort: low`,
 		`disabled_toolsets:`,
 		`- memory`,
 		`- web`,
+		// execute_code is blocked in unattended gateway turns (needs a human
+		// approval no one can grant); skills must shell out via `terminal`.
+		`- code_execution`,
 	} {
 		if !strings.Contains(cfg, must) {
 			t.Errorf("hermes config missing sub-agent constraint %q\n---\n%s", must, cfg)
