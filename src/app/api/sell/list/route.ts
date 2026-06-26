@@ -82,21 +82,27 @@ export async function GET() {
       )
       .filter((offer): offer is ServiceOffer => offer !== null);
 
-    const enriched: ServiceOffer[] = offers.map(offer => {
-      const key = `${offer.namespace}/${offer.name}`;
+    // Usage counts are pass-through from Prometheus only. If a query failed or
+    // returned no series for this offer, the field stays null and the UI shows
+    // "—". We never invent 0 — a real zero only appears when Prom returns it.
+    const enrichUsage = (key: string) => {
       const charged = sales.get(key);
-      const chainBreakdown = perChain.get(key) ?? [];
       const r24 = reqs24h.get(key);
       const last = lastSettlements.get(key);
       return {
+        chargedRequests: charged === undefined ? null : charged,
+        chargedByChain: perChain.get(key) ?? [],
+        requests24h: r24 === undefined ? null : r24,
+        lastSettlementUnix: last === undefined ? null : last,
+      };
+    };
+
+    const enriched: ServiceOffer[] = offers.map(offer => {
+      const key = `${offer.namespace}/${offer.name}`;
+      return {
         ...offer,
         agentLink: linkOfferToAgent(offer, agents),
-        usage: {
-          chargedRequests: charged === undefined ? null : charged,
-          chargedByChain: chainBreakdown,
-          requests24h: r24 === undefined ? null : r24,
-          lastSettlementUnix: last === undefined ? null : last,
-        },
+        usage: enrichUsage(key),
       };
     });
 
@@ -106,19 +112,10 @@ export async function GET() {
     const pendingRaw = splitPendingOffers(liveOffers, catalogKeys);
     const pendingOffers: ServiceOffer[] = pendingRaw.map(offer => {
       const key = `${offer.namespace}/${offer.name}`;
-      const charged = sales.get(key);
-      const chainBreakdown = perChain.get(key) ?? [];
-      const r24 = reqs24h.get(key);
-      const last = lastSettlements.get(key);
       return {
         ...offer,
         agentLink: linkOfferToAgent(offer, agents),
-        usage: {
-          chargedRequests: charged === undefined ? null : charged,
-          chargedByChain: chainBreakdown,
-          requests24h: r24 === undefined ? null : r24,
-          lastSettlementUnix: last === undefined ? null : last,
-        },
+        usage: enrichUsage(key),
       };
     });
 

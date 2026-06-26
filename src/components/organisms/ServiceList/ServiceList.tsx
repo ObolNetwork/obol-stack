@@ -1,6 +1,7 @@
 'use client';
 
-import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
+import { useRouter } from 'next/navigation';
+import { Box, Flex, Text, Button, styled } from '@obolnetwork/obol-ui';
 import { Card } from '../../atoms/Card';
 import { Accordion } from '../../molecules/Accordion';
 import { CountBadge } from '../../atoms/CountBadge';
@@ -9,10 +10,17 @@ import { EmptyMessage } from '../../atoms/EmptyMessage';
 import { LoadingState } from '../../molecules/LoadingState';
 import { ErrorState } from '../../molecules/ErrorState';
 import { ServiceCard } from '../../molecules/ServiceCard';
-import { useServiceOffers } from '../../../hooks/useServiceOffers';
 import { useTunnelURL } from '../../../hooks/useAgents';
 import { offerAnchorId } from '@/lib/services/agent-listing';
 import type { ServiceOffer } from '@/types/sell';
+
+export interface ServiceListProps {
+  offers: ServiceOffer[];
+  pendingOffers: ServiceOffer[];
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+}
 
 const SubSection = styled(Box, {
   display: 'flex',
@@ -65,16 +73,38 @@ function partitionOffers(offers: ServiceOffer[]) {
   return { agentOffers, inferenceOffers, httpOffers };
 }
 
-export function ServiceList() {
-  const { offers, pendingOffers, loading, error, refetch } = useServiceOffers();
+export function ServiceList({
+  offers,
+  pendingOffers,
+  loading,
+  error,
+  onRefresh,
+}: ServiceListProps) {
+  const router = useRouter();
   const { tunnelURL } = useTunnelURL();
   const { agentOffers, inferenceOffers, httpOffers } = partitionOffers(offers);
   const totalCount = offers.length + pendingOffers.length;
 
   const headerContent = (
-    <Flex css={{ alignItems: 'center', gap: '$sm', paddingRight: '$xl' }}>
-      <SectionTitle>Obol Services</SectionTitle>
+    <Flex
+      css={{
+        alignItems: 'center',
+        gap: '$sm',
+        paddingRight: '$xl',
+        width: '100%',
+      }}
+    >
+      <SectionTitle>Paid services</SectionTitle>
       {!loading && totalCount > 0 && <CountBadge count={totalCount} />}
+      <Box css={{ marginLeft: 'auto' }}>
+        <Button
+          color="secondary"
+          onClick={() => router.push('/marketplace/listings')}
+          css={{ fontSize: '$2', height: 'auto', padding: '6px 12px' }}
+        >
+          Manage
+        </Button>
+      </Box>
     </Flex>
   );
 
@@ -86,12 +116,11 @@ export function ServiceList() {
             <LoadingState size="small" message="Loading services..." />
           )}
           {error && (
-            <ErrorState message="Failed to load services" onRetry={refetch} />
+            <ErrorState message="Failed to load services" onRetry={onRefresh} />
           )}
           {!loading && !error && totalCount === 0 && (
             <EmptyMessage>
-              No agent services for sale yet. Create a sub-agent, then hit{' '}
-              <strong>Sell</strong> on its card — or run{' '}
+              No paid services yet. Create an agent, then run{' '}
               <code>obol sell agent &lt;name&gt;</code> from Terminal.
             </EmptyMessage>
           )}
@@ -117,7 +146,7 @@ export function ServiceList() {
                       key={`pending-${offer.namespace}/${offer.name}`}
                       offer={offer}
                       tunnelURL={tunnelURL}
-                      onChanged={refetch}
+                      onChanged={onRefresh}
                       anchorId={offerAnchorId(offer.namespace, offer.name)}
                     />
                   ))}
@@ -126,7 +155,7 @@ export function ServiceList() {
 
               <SubSection>
                 <SubSectionHeader>
-                  <SubSectionTitle>Agent Services</SubSectionTitle>
+                  <SubSectionTitle>Paid agents</SubSectionTitle>
                   {agentOffers.length > 0 && (
                     <CountBadge count={agentOffers.length} />
                   )}
@@ -136,14 +165,14 @@ export function ServiceList() {
                   Live paid agent listings on your storefront (what buyers see).
                 </SubSectionDesc>
                 {agentOffers.length === 0 ? (
-                  <EmptyMessage>No live agent services yet.</EmptyMessage>
+                  <EmptyMessage>No live paid agents yet.</EmptyMessage>
                 ) : (
                   agentOffers.map(offer => (
                     <ServiceCard
                       key={`${offer.namespace}/${offer.name}`}
                       offer={offer}
                       tunnelURL={tunnelURL}
-                      onChanged={refetch}
+                      onChanged={onRefresh}
                       anchorId={offerAnchorId(offer.namespace, offer.name)}
                     />
                   ))
@@ -162,7 +191,7 @@ export function ServiceList() {
                       key={`${offer.namespace}/${offer.name}`}
                       offer={offer}
                       tunnelURL={tunnelURL}
-                      onChanged={refetch}
+                      onChanged={onRefresh}
                       anchorId={offerAnchorId(offer.namespace, offer.name)}
                     />
                   ))}
@@ -181,7 +210,7 @@ export function ServiceList() {
                       key={`${offer.namespace}/${offer.name}`}
                       offer={offer}
                       tunnelURL={tunnelURL}
-                      onChanged={refetch}
+                      onChanged={onRefresh}
                       anchorId={offerAnchorId(offer.namespace, offer.name)}
                     />
                   ))}

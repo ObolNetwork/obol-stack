@@ -31,15 +31,30 @@ resolve_kubectl() {
   return 1
 }
 
-# Resolve kubeconfig: NEXT_PUBLIC_KUBECONFIG → OBOL_CONFIG_DIR/kubeconfig.yaml → ~/.config/obol/kubeconfig.yaml
+# Resolve kubeconfig for host-side kubectl (port-forward only).
+#
+# Chain (first existing file wins):
+#   1. KUBECONFIG
+#   2. OBOL_CONFIG_DIR/kubeconfig.yaml
+#   3. NEXT_PUBLIC_KUBECONFIG (deprecated; dev scripts only)
+#   4. ~/.config/obol/kubeconfig.yaml
+#
+# Next.js API routes use src/lib/services/kube.ts instead — that path
+# stops at (2) and never reads NEXT_PUBLIC_KUBECONFIG. In-cluster pods
+# use the service account and skip this entirely.
 resolve_kubeconfig() {
-  if [ -n "${NEXT_PUBLIC_KUBECONFIG:-}" ] && [ -f "${NEXT_PUBLIC_KUBECONFIG}" ]; then
-    echo "${NEXT_PUBLIC_KUBECONFIG}"
+  if [ -n "${KUBECONFIG:-}" ] && [ -f "${KUBECONFIG}" ]; then
+    echo "${KUBECONFIG}"
     return
   fi
 
   if [ -n "${OBOL_CONFIG_DIR:-}" ] && [ -f "${OBOL_CONFIG_DIR}/kubeconfig.yaml" ]; then
     echo "${OBOL_CONFIG_DIR}/kubeconfig.yaml"
+    return
+  fi
+
+  if [ -n "${NEXT_PUBLIC_KUBECONFIG:-}" ] && [ -f "${NEXT_PUBLIC_KUBECONFIG}" ]; then
+    echo "${NEXT_PUBLIC_KUBECONFIG}"
     return
   fi
 

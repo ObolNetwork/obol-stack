@@ -171,7 +171,7 @@ export function AgentRegistrationCard() {
 
   const headerContent = (
     <Flex css={{ alignItems: 'center', gap: '$sm', flexWrap: 'wrap' }}>
-      <SectionTitle>Agent Registration</SectionTitle>
+      <SectionTitle>On-chain identity</SectionTitle>
       {!loading && publishedServices.length > 0 && (
         <Badge variant="neutral">{publishedServices.length} services</Badge>
       )}
@@ -183,12 +183,12 @@ export function AgentRegistrationCard() {
       <Accordion header={headerContent} defaultExpanded={true}>
         <Body>
           {loading && (
-            <LoadingState size="small" message="Loading registration..." />
+            <LoadingState size="small" message="Loading identity..." />
           )}
 
           {!loading && error && (
             <ErrorState
-              message={`Registration unavailable: ${error}`}
+              message={`On-chain identity unavailable: ${error}`}
               onRetry={refetch}
             />
           )}

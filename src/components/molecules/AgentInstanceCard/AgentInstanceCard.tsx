@@ -14,17 +14,16 @@ import { ChevronRightIcon } from '@radix-ui/react-icons';
 import { StatusPill } from '../../atoms/StatusIndicator';
 import { CopyButton } from '../../atoms/CopyButton/CopyButton';
 import { SellAgentModal } from '../SellAgentModal';
+import { WalletBalanceList } from '../WalletBalanceList';
 import {
   useAgentStatus,
   useAgentWalletMetadata,
   useTunnelURL,
 } from '../../../hooks/useAgents';
-import {
-  useWalletAssetBalances,
-  type AssetBalance,
-} from '../../../hooks/useWalletAssetBalances';
-import { explorerUrlFor } from '../../../lib/config/agent-balance-tokens';
+import { useWalletAssetBalances } from '../../../hooks/useWalletAssetBalances';
+import { sortBalances } from '@/lib/wallet/sort-balances';
 import type { AgentInstance } from '@/types/agent';
+import { truncateAddress } from '@/utils/address';
 
 function displayModelName(raw: string): string {
   return raw.replace(/^openai\//, '');
@@ -49,7 +48,7 @@ function displayInstanceName(instance: AgentInstance): string {
 }
 
 function runtimeLabel(instance: AgentInstance): string {
-  if (instance.isSubAgent) return 'Sub-agent';
+  if (instance.isSubAgent) return 'Agent';
   return instance.runtime === 'hermes' ? 'Hermes' : 'OpenClaw';
 }
 
@@ -81,6 +80,7 @@ function withCurrentIngressPort(rawUrl: string): string {
 interface AgentInstanceCardProps {
   instance: AgentInstance;
   onSelect?: (instance: AgentInstance) => void;
+  onRefresh?: () => void;
 }
 
 const CardContainer = styled(Box, {
@@ -148,61 +148,6 @@ const KeysBadge = styled(Text, {
   padding: '1px 5px',
   lineHeight: 1.4,
   whiteSpace: 'nowrap',
-});
-
-const BalancesList = styled(Flex, {
-  flexDirection: 'column',
-  gap: '$xxxs',
-  marginTop: '$xs',
-});
-
-const BalanceRow = styled(Flex, {
-  alignItems: 'center',
-  gap: '$xs',
-  fontSize: '$1',
-});
-
-const BalanceSymbol = styled(Text, {
-  fontSize: '11px',
-  fontWeight: '$semibold',
-  color: '$light',
-  fontFamily: 'monospace',
-  minWidth: '38px',
-});
-
-const BalanceAmount = styled(Text, {
-  fontSize: '$1',
-  color: '$light',
-  fontFamily: 'monospace',
-  flex: 1,
-});
-
-const ChainHint = styled(Text, {
-  fontSize: '10px',
-  color: '$body',
-  textTransform: 'lowercase',
-  whiteSpace: 'nowrap',
-});
-
-const ExplorerLink = styled('a', {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexShrink: 0,
-  width: 22,
-  height: 22,
-  borderRadius: '$2',
-  border: '1px solid $stroke',
-  background: 'transparent',
-  color: '$body',
-  cursor: 'pointer',
-  transition:
-    'color 150ms ease, border-color 150ms ease, background 150ms ease',
-  '&:hover': {
-    color: '$light',
-    borderColor: '$body',
-    background: '$bg05',
-  },
 });
 
 const ActionsRow = styled(Flex, {
@@ -328,31 +273,10 @@ const ListingLink = styled('a', {
   },
 });
 
-function truncateAddress(address: string): string {
-  if (address.length <= 10) return address;
-  return `${address.slice(0, 6)}...${address.slice(-4)}`;
-}
-
-function sortBalances(balances: AssetBalance[]): AssetBalance[] {
-  const symbolOrder: Record<string, number> = {
-    ETH: 0,
-    WETH: 1,
-    OBOL: 2,
-    USDC: 3,
-  };
-  return [...balances].sort((a, b) => {
-    if (a.chain.chainId !== b.chain.chainId) {
-      return a.chain.chainId - b.chain.chainId;
-    }
-    return (
-      (symbolOrder[a.token.symbol] ?? 99) - (symbolOrder[b.token.symbol] ?? 99)
-    );
-  });
-}
-
 export function AgentInstanceCard({
   instance,
   onSelect,
+  onRefresh,
 }: AgentInstanceCardProps) {
   const { status, loading } = useAgentStatus(instance);
   const { metadata } = useAgentWalletMetadata(instance);
@@ -450,36 +374,10 @@ export function AgentInstanceCard({
             )}
           </WalletHeaderRow>
 
-          {sortedBalances.length > 0 && (
-            <BalancesList>
-              {sortedBalances.map(b => {
-                const key = `${b.chain.chainId}-${b.token.symbol}`;
-                const url = explorerUrlFor(b.chain, b.token, primaryAddress);
-                return (
-                  <BalanceRow key={key}>
-                    <BalanceSymbol>{b.token.symbol}</BalanceSymbol>
-                    <BalanceAmount>{b.formatted}</BalanceAmount>
-                    <ChainHint>{b.chain.shortName}</ChainHint>
-                    {b.token.address && (
-                      <CopyButton
-                        text={b.token.address}
-                        title={`Copy ${b.token.symbol} contract`}
-                      />
-                    )}
-                    <ExplorerLink
-                      href={url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      title={`View on ${b.chain.chainName} explorer`}
-                      aria-label={`View ${b.token.symbol} on ${b.chain.chainName} explorer`}
-                    >
-                      <OpenInNew size="sm" />
-                    </ExplorerLink>
-                  </BalanceRow>
-                );
-              })}
-            </BalancesList>
-          )}
+          <WalletBalanceList
+            walletAddress={primaryAddress}
+            balances={sortedBalances}
+          />
         </>
       )}
 
@@ -573,6 +471,7 @@ export function AgentInstanceCard({
                 agentName={instance.id}
                 agentNamespace={instance.namespace}
                 defaultWallet={primaryAddress ?? undefined}
+                onListed={onRefresh}
                 trigger={
                   <SellButton type="button">
                     <svg
@@ -594,7 +493,10 @@ export function AgentInstanceCard({
                 }
               />
             ) : listing ? (
-              <ListingLink href={`#${listing.anchorId}`}>
+              <ListingLink
+                href={`#${listing.anchorId}`}
+                onClick={() => onRefresh?.()}
+              >
                 {listing.phase === 'setting_up'
                   ? 'Finish setup'
                   : 'View listing'}

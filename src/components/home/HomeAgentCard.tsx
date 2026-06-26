@@ -1,6 +1,5 @@
 'use client';
 
-import { useState } from 'react';
 import {
   Box,
   Flex,
@@ -12,13 +11,18 @@ import {
 } from '@obolnetwork/obol-ui';
 import { StatusPill } from '../atoms/StatusIndicator';
 import { Avatar } from '../atoms/Avatar';
+import { CopyButton } from '../atoms/CopyButton';
+import { WalletBalanceList } from '../molecules/WalletBalanceList';
 import {
   useAgentStatus,
   useTunnelURL,
   useAgentWalletMetadata,
 } from '../../hooks/useAgents';
 import { useWalletAssetBalances } from '../../hooks/useWalletAssetBalances';
+import { sortBalances } from '@/lib/wallet/sort-balances';
 import type { AgentInstance } from '@/types/agent';
+import { truncateAddress } from '@/utils/address';
+import { formatUptime } from '@/lib/utils/format-uptime';
 
 function displayInstanceName(instance: AgentInstance): string {
   if (instance.runtime === 'hermes' && instance.id === 'obol-agent')
@@ -30,14 +34,6 @@ function displayInstanceName(instance: AgentInstance): string {
 
 function runtimeLabel(instance: AgentInstance): string {
   return instance.runtime === 'hermes' ? 'Hermes' : 'OpenClaw';
-}
-
-function formatUptime(hours: number): string {
-  const days = Math.floor(hours / 24);
-  const remainingHours = hours % 24;
-  if (days > 0) return `${days}d ${remainingHours}h`;
-  if (remainingHours > 0) return `${remainingHours}h`;
-  return '0h';
 }
 
 function withCurrentIngressPort(rawUrl: string): string {
@@ -58,7 +54,6 @@ function withCurrentIngressPort(rawUrl: string): string {
   }
 }
 
-// Styled components
 const CardContainer = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
@@ -85,21 +80,33 @@ const RuntimeBadge = styled(Text, {
 
 const StatStrip = styled(Box, {
   display: 'grid',
-  gridTemplateColumns: '1fr 1fr 1fr',
+  gridTemplateColumns:
+    'minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 0.9fr) minmax(0, 0.9fr)',
   backgroundColor: '$bg01',
   border: '1px solid $stroke',
   borderRadius: '$2',
-  padding: '$xs 0',
+
+  '@media (max-width: 900px)': {
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+  },
 });
 
 const StatCell = styled(Box, {
-  padding: '0 $md',
+  display: 'flex',
+  flexDirection: 'column',
+  alignItems: 'flex-start',
+  gap: '$xxs',
+  padding: '$sm $md',
+  minWidth: 0,
 });
 
 const StatLabel = styled(Text, {
   fontSize: '$1',
+  fontWeight: '$medium',
   color: '$muted',
-  marginBottom: '$xxxs',
+  lineHeight: 1.2,
+  letterSpacing: '0.04em',
+  textTransform: 'uppercase',
 });
 
 const StatValue = styled(Text, {
@@ -107,37 +114,47 @@ const StatValue = styled(Text, {
   color: '$light',
   fontWeight: '$semibold',
   fontFamily: 'monospace',
+  lineHeight: 1.25,
+  width: '100%',
 });
 
 const StatSub = styled(Text, {
   fontSize: 10,
   color: '$muted',
-  marginTop: 2,
+  lineHeight: 1.3,
 });
 
-const ModelLabel = styled(Text, {
-  fontSize: '$1',
-  color: '$muted',
+const WalletInlineRow = styled(Flex, {
+  alignItems: 'center',
+  gap: '$xxs',
+  width: '100%',
+  minHeight: 22,
 });
 
-const ModelValue = styled(Text, {
-  fontSize: '$2',
-  color: '$light',
-  fontFamily: 'monospace',
+const KeysBadge = styled(Text, {
+  fontSize: 10,
+  fontWeight: '$semibold',
+  color: '$obolGreen',
+  backgroundColor: 'rgba(47, 228, 171, 0.08)',
+  border: '1px solid rgba(47, 228, 171, 0.25)',
+  borderRadius: '$1',
+  padding: '1px 5px',
+  lineHeight: 1.4,
   whiteSpace: 'nowrap',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
 });
 
 interface HomeAgentCardProps {
   instance: AgentInstance;
   uptimeHours: number;
+  /** Charged x402 requests in the last 24h for this agent's listings. */
+  chargedRequests24h: number;
   onChat?: (instance: AgentInstance) => void;
 }
 
 export function HomeAgentCard({
   instance,
   uptimeHours,
+  chargedRequests24h,
   onChat,
 }: HomeAgentCardProps) {
   const { status, loading } = useAgentStatus(instance);
@@ -146,6 +163,7 @@ export function HomeAgentCard({
 
   const primaryAddress = metadata?.addresses?.[0]?.address ?? null;
   const { balances } = useWalletAssetBalances(primaryAddress);
+  const sortedBalances = sortBalances(balances);
 
   const name = displayInstanceName(instance);
   const initial = name[0]?.toUpperCase() ?? '#';
@@ -171,13 +189,6 @@ export function HomeAgentCard({
 
   const statusLabel = loading ? 'Loading...' : status?.podStatus || 'Unknown';
 
-  // Pick the first balance for display
-  const primaryBalance =
-    balances.length > 0
-      ? `${balances[0].formatted} ${balances[0].token.symbol}`
-      : '\u2014';
-  const balanceSub = balances.length > 0 ? balances[0].chain.shortName : '';
-
   const modelDisplay = status?.model
     ? status.model.replace(/^openai\//, '')
     : '\u2014';
@@ -194,7 +205,6 @@ export function HomeAgentCard({
 
   return (
     <CardContainer>
-      {/* Top row */}
       <Flex css={{ alignItems: 'flex-start', gap: '$xs' }}>
         <Avatar alt={name} fallback={initial} />
         <Flex
@@ -224,17 +234,46 @@ export function HomeAgentCard({
         <StatusPill status={statusPillStatus} label={statusLabel} />
       </Flex>
 
-      {/* Stat strip */}
       <StatStrip>
-        <StatCell css={{ borderRight: '1px solid $stroke' }}>
-          <StatLabel>Balance</StatLabel>
-          <StatValue>{primaryBalance}</StatValue>
-          <StatSub>{balanceSub}</StatSub>
+        <StatCell>
+          <StatLabel>Wallet</StatLabel>
+          {primaryAddress ? (
+            <>
+              <WalletInlineRow>
+                <StatValue css={{ fontSize: '$2', flex: 1, width: 'auto' }}>
+                  {truncateAddress(primaryAddress)}
+                </StatValue>
+                <CopyButton text={primaryAddress} title="Copy address" />
+                {metadata && metadata.count > 1 && (
+                  <KeysBadge>+{metadata.count - 1} keys</KeysBadge>
+                )}
+              </WalletInlineRow>
+              <WalletBalanceList
+                walletAddress={primaryAddress}
+                balances={sortedBalances}
+                compact
+              />
+            </>
+          ) : (
+            <StatValue>{'\u2014'}</StatValue>
+          )}
         </StatCell>
-        <StatCell css={{ borderRight: '1px solid $stroke' }}>
-          <StatLabel>Requests &middot; 24h</StatLabel>
-          <StatValue>{'\u2014'}</StatValue>
-          <StatSub>LiteLLM</StatSub>
+        <StatCell>
+          <StatLabel>Primary model</StatLabel>
+          <StatValue
+            css={{
+              fontSize: '$2',
+              wordBreak: 'break-word',
+              whiteSpace: 'normal',
+            }}
+          >
+            {modelDisplay}
+          </StatValue>
+        </StatCell>
+        <StatCell>
+          <StatLabel>Charged requests &middot; 24h</StatLabel>
+          <StatValue>{chargedRequests24h.toLocaleString()}</StatValue>
+          <StatSub>this agent&apos;s listings</StatSub>
         </StatCell>
         <StatCell>
           <StatLabel>Uptime</StatLabel>
@@ -243,13 +282,6 @@ export function HomeAgentCard({
         </StatCell>
       </StatStrip>
 
-      {/* Primary model */}
-      <Flex css={{ flexDirection: 'column', gap: '$xxxs' }}>
-        <ModelLabel>Primary model</ModelLabel>
-        <ModelValue>{modelDisplay}</ModelValue>
-      </Flex>
-
-      {/* Actions */}
       <Flex css={{ alignItems: 'center', gap: '$xs' }}>
         <Button
           color="primary"

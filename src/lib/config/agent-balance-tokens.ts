@@ -78,6 +78,11 @@ export const AGENT_BALANCE_CHAINS: ChainBalanceConfig[] = [
         address: '0x036cbd53842c5426634e7929541ec2318f3dcf7e',
         decimals: 6,
       },
+      {
+        symbol: 'OBOL',
+        address: '0x0a09371a8b011d5110656ceBCc70603e53FD2c78',
+        decimals: 18,
+      },
     ],
   },
   {

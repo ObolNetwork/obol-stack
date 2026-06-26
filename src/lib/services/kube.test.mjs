@@ -6,6 +6,7 @@ import path from 'node:path';
 
 import {
   _resetSharedKubeConfigForTests,
+  resolveKubeconfigPath,
   sharedKubeConfig,
 } from './kube.ts';
 
@@ -33,6 +34,8 @@ users:
 describe('sharedKubeConfig', () => {
   const savedEnv = {
     KUBERNETES_SERVICE_HOST: process.env.KUBERNETES_SERVICE_HOST,
+    KUBECONFIG: process.env.KUBECONFIG,
+    OBOL_CONFIG_DIR: process.env.OBOL_CONFIG_DIR,
     NEXT_PUBLIC_KUBECONFIG: process.env.NEXT_PUBLIC_KUBECONFIG,
   };
   let kubeconfigPath;
@@ -43,7 +46,9 @@ describe('sharedKubeConfig', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kube-test-'));
     kubeconfigPath = path.join(dir, 'kubeconfig.yaml');
     fs.writeFileSync(kubeconfigPath, FAKE_KUBECONFIG_YAML, 'utf8');
-    process.env.NEXT_PUBLIC_KUBECONFIG = kubeconfigPath;
+    process.env.KUBECONFIG = kubeconfigPath;
+    delete process.env.OBOL_CONFIG_DIR;
+    delete process.env.NEXT_PUBLIC_KUBECONFIG;
   });
 
   afterEach(() => {
@@ -51,15 +56,17 @@ describe('sharedKubeConfig', () => {
     if (kubeconfigPath && fs.existsSync(kubeconfigPath)) {
       fs.rmSync(path.dirname(kubeconfigPath), { recursive: true, force: true });
     }
-    if (savedEnv.KUBERNETES_SERVICE_HOST === undefined) {
-      delete process.env.KUBERNETES_SERVICE_HOST;
-    } else {
-      process.env.KUBERNETES_SERVICE_HOST = savedEnv.KUBERNETES_SERVICE_HOST;
-    }
-    if (savedEnv.NEXT_PUBLIC_KUBECONFIG === undefined) {
-      delete process.env.NEXT_PUBLIC_KUBECONFIG;
-    } else {
-      process.env.NEXT_PUBLIC_KUBECONFIG = savedEnv.NEXT_PUBLIC_KUBECONFIG;
+    for (const key of [
+      'KUBERNETES_SERVICE_HOST',
+      'KUBECONFIG',
+      'OBOL_CONFIG_DIR',
+      'NEXT_PUBLIC_KUBECONFIG',
+    ]) {
+      if (savedEnv[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = savedEnv[key];
+      }
     }
   });
 
@@ -69,19 +76,20 @@ describe('sharedKubeConfig', () => {
     assert.strictEqual(a, b, 'expected identical singleton across calls');
   });
 
-  it('loads from the path in NEXT_PUBLIC_KUBECONFIG when not in cluster', () => {
+  it('loads from KUBECONFIG when not in cluster', () => {
     const kc = sharedKubeConfig();
     assert.equal(kc.getCurrentContext(), 'test');
+    assert.equal(resolveKubeconfigPath(), kubeconfigPath);
   });
 
-  it('throws when NEXT_PUBLIC_KUBECONFIG is unset and not in cluster', () => {
-    delete process.env.NEXT_PUBLIC_KUBECONFIG;
+  it('throws when KUBECONFIG is unset and not in cluster', () => {
+    delete process.env.KUBECONFIG;
     _resetSharedKubeConfigForTests();
-    assert.throws(() => sharedKubeConfig(), /NEXT_PUBLIC_KUBECONFIG/);
+    assert.throws(() => sharedKubeConfig(), /KUBECONFIG/);
   });
 
   it('throws when the kubeconfig path does not exist', () => {
-    process.env.NEXT_PUBLIC_KUBECONFIG = '/nonexistent/path/kubeconfig.yaml';
+    process.env.KUBECONFIG = '/nonexistent/path/kubeconfig.yaml';
     _resetSharedKubeConfigForTests();
     assert.throws(() => sharedKubeConfig(), /not found/);
   });
@@ -96,6 +104,7 @@ describe('sharedKubeConfig', () => {
     //   - or loadFromCluster() throws — but the error must NOT be our
     //     "file not found" message, proving we took the in-cluster branch.
     process.env.KUBERNETES_SERVICE_HOST = '10.0.0.1';
+    delete process.env.KUBECONFIG;
     process.env.NEXT_PUBLIC_KUBECONFIG = '/definitely/does/not/exist';
     _resetSharedKubeConfigForTests();
 
