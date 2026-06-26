@@ -357,6 +357,8 @@ OBOL_DEVELOPMENT=true ./obolup.sh
 
 Development mode uses `.workspace/` instead of XDG directories and runs `go run` on every `obol` invocation — no build step needed.
 
+**Already have a stack in `~/.config/obol`?** Copy `.envrc.local.example` → `.envrc.local` and `source` it so dev commands use that cluster (avoids a second k3d stack in `.workspace/config`). **Frontend in-cluster:** `FRONTEND_DIR=../obol-stack-front-end just dev-frontend-rebuild` → `http://obol.stack:8080` (see `CLAUDE.md` → Local frontend development).
+
 Networks are embedded at `internal/embed/networks/`. Each uses annotated Go templates that auto-generate CLI flags:
 
 ```yaml

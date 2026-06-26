@@ -238,7 +238,28 @@ k3d: 1 server, ports `80:80` + `8080:80` + `443:443` + `8443:443`, image `ranche
 
 Generated k3d registry config written to `$OBOL_CONFIG_DIR/registries.yaml`. Cache data under `~/.local/state/obol/registry-cache/` by default, or under `OBOL_REGISTRY_CACHE_DIR` when set.
 
-Local push target: `just dev-frontend` swaps layered diffs into cluster via `docker push localhost:54103/...` (deployment image `localhost:54103/...:dev`) — only changed layers transfer, vs. `k3d image import`'s full-tarball round-trip.
+Local push target: `just dev-frontend` builds `obol-stack-front-end`, pushes `localhost:54103/obol-stack-front-end:dev`, **imports into the active k3d cluster** (`k3d image import` — required because `imagePullPolicy: IfNotPresent` caches the `:dev` tag), and restarts the frontend pod. Use `just dev-frontend-rebuild` after code changes (forces `docker build --no-cache`). Reset: `just dev-frontend-reset`.
+
+### Local frontend development
+
+**Two ways to run the UI:**
+
+| Mode | URL | When |
+|------|-----|------|
+| In-cluster (recommended) | `http://obol.stack:8080` | Stable Prometheus/disk metrics; no port-forwards |
+| Host `pnpm run dev` | `http://obol.stack:3000` | Fast React HMR; needs kubeconfig + optional Prometheus/eRPC port-forwards (see frontend `.env.example`) |
+
+**Single cluster when dev-building from this repo** — copy `.envrc.local.example` → `.envrc.local` and `source` it (or `direnv allow`). This sets `OBOL_CONFIG_DIR=$HOME/.config/obol` so `obol kubectl` / `just dev-frontend` hit your real stack instead of spawning a second `.workspace` cluster.
+
+```bash
+cd obol-stack && source .envrc.local
+FRONTEND_DIR=../obol-stack-front-end just dev-frontend-rebuild   # after UI code changes
+open http://obol.stack:8080
+```
+
+**k3d vs `obol stack up`:** `k3d cluster start` only powers Docker containers + API. `obol stack up` deploys Helm infra, agents, tunnel replay, etc. Use k3d directly only for loadbalancer/port emergencies; otherwise `obol stack up`.
+
+**Stale frontend image symptoms:** build log shows all `CACHED` layers → use `dev-frontend-rebuild`; rollout succeeds but UI unchanged → `k3d image import` (now automatic in `just dev-frontend`).
 
 Caveats:
 - Pull-through caches don't help host `docker build` flows — `k3d image import` bypasses registries entirely. The local push target is what speeds up local-build redeploys.

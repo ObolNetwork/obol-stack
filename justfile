@@ -45,7 +45,7 @@ dev_image    := "localhost:54103/obol-stack-front-end:dev"
 # Build frontend from local source, push to local registry, and restart the pod
 dev-frontend: (_dev-frontend-build "false" "true")
 
-# Rebuild and hot-swap frontend (skip docker cache for faster iteration)
+# Rebuild and hot-swap frontend (forces docker --no-cache; use after code changes)
 dev-frontend-rebuild: (_dev-frontend-build "true" "false")
 
 # Internal: build the frontend dev image, push it, and roll out the deployment.
@@ -103,6 +103,21 @@ _dev-frontend-build no_cache set_image:
     docker build "${build_args[@]}" -t {{ dev_image }} {{ frontend_dir }}
     echo "→ Pushing {{ dev_image }} to local registry"
     docker push {{ dev_image }}
+
+    # k3s caches images by tag (imagePullPolicy: IfNotPresent). Pushing a new
+    # digest to :dev does not replace the node's copy — import forces the update.
+    cfg_dir="${OBOL_CONFIG_DIR:-}"
+    if [ -z "$cfg_dir" ] && [ "${OBOL_DEVELOPMENT:-}" = "true" ]; then
+        cfg_dir="{{ justfile_directory() }}/.workspace/config"
+    fi
+    if [ -z "$cfg_dir" ]; then
+        cfg_dir="${XDG_CONFIG_HOME:-$HOME/.config}/obol"
+    fi
+    stack_id="$(cat "$cfg_dir/.stack-id")"
+    cluster="obol-stack-${stack_id}"
+    echo "→ Importing {{ dev_image }} into ${cluster}"
+    k3d image import {{ dev_image }} -c "${cluster}"
+
     echo "→ Restarting frontend deployment"
     if [ "{{ set_image }}" = "true" ]; then
         obol kubectl set image deployment/obol-frontend-obol-app \
