@@ -127,6 +127,11 @@ func TestBuildSkillCatalogConfigMap(t *testing.T) {
 	if conf, _ := data["httpd.conf"].(string); !strings.Contains(conf, ".md:text/markdown") || !strings.Contains(conf, ".json:application/json") || !strings.Contains(conf, ".html:text/html") {
 		t.Errorf("httpd.conf missing required mime mappings: %q", conf)
 	}
+	// Text types must declare charset=utf-8 or UTF-8 content (em dashes,
+	// accented descriptions) renders as Latin-1 mojibake.
+	if conf, _ := data["httpd.conf"].(string); !strings.Contains(conf, ".md:text/markdown; charset=utf-8") || !strings.Contains(conf, ".html:text/html; charset=utf-8") {
+		t.Errorf("httpd.conf text types missing charset=utf-8: %q", conf)
+	}
 	// Managed-by label so the controller owns cleanup on uninstall.
 	lbls, _ := cm.Object["metadata"].(map[string]any)["labels"].(map[string]any)
 	if lbls["obol.org/managed-by"] != "serviceoffer-controller" {
