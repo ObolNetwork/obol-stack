@@ -54,8 +54,15 @@ func WithBazaar(extensions map[string]any, offerType, model string) map[string]a
 // gets the generic operator-defined JSON shape.
 func BuildBazaarExtension(offerType, model string) map[string]any {
 	switch normalizeOfferType(offerType) {
-	case "inference", "agent":
+	case "inference":
+		// The buyer selects the model (paid/<remote-model>), so the real id
+		// is buyer-facing and correct to advertise in the example.
 		return bazaarChatCompletions(model)
+	case "agent":
+		// An agent runs its own model and ignores the request `model` field,
+		// so the model id is an internal detail, not buyer-facing. Seed the
+		// chat example with the neutral placeholder rather than the real id.
+		return bazaarChatCompletions("")
 	default:
 		return bazaarGenericJSON()
 	}
