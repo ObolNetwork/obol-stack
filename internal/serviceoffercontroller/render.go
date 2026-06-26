@@ -1334,7 +1334,7 @@ func buildSkillMarkdown(offers []*monetizeapi.ServiceOffer, baseURL string, expl
 	lines = append(lines, "| Service | Type | Model | Pay with | Status | Endpoint |")
 	lines = append(lines, "|---------|------|-------|----------|--------|----------|")
 	for _, offer := range ready {
-		modelName := offer.Spec.Model.Name
+		modelName := catalogModelName(offer)
 		if modelName == "" {
 			modelName = "—"
 		}
@@ -1359,7 +1359,7 @@ func buildSkillMarkdown(offers []*monetizeapi.ServiceOffer, baseURL string, expl
 	}
 	lines = append(lines, "", "## Service Details", "")
 	for _, offer := range ready {
-		modelName := offer.Spec.Model.Name
+		modelName := catalogModelName(offer)
 		endpoint := baseURL + offer.EffectivePath()
 		if origin := offer.EffectiveOrigin(); origin != "" {
 			endpoint = origin
@@ -1449,22 +1449,18 @@ func skillMarkdownHowToPay(baseURL string) []string {
 	}
 }
 
-// catalogModelName resolves the model id a buyer should put in a paid
-// chat-completions body. type=agent offers leave spec.model empty by design
-// (the model lives on the linked Agent), so fall back to the controller's
-// resolved view. Shared by /api/services.json and the /skill.md worked
-// examples so both surfaces advertise the same id.
+// catalogModelName returns the model id to surface in catalog surfaces
+// (/api/services.json, /skill.md worked examples, buyprompts), or "" to omit
+// it. Agent offers run their own model and ignore the request `model` field,
+// so their id is an internal detail and is never surfaced — mirrors the 402
+// page / extra / bazaar model-strip in internal/x402 (and it goes stale the
+// moment the operator swaps the backing model). Inference (and other
+// model-bearing) offers keep their id, since there the buyer selects it.
 func catalogModelName(offer *monetizeapi.ServiceOffer) string {
-	if offer == nil {
+	if offer == nil || offer.IsAgent() {
 		return ""
 	}
-	if offer.Spec.Model.Name != "" {
-		return offer.Spec.Model.Name
-	}
-	if offer.Status.AgentResolution != nil {
-		return offer.Status.AgentResolution.Model
-	}
-	return ""
+	return offer.Spec.Model.Name
 }
 
 // skillMarkdownTryIt renders the per-offer "Try it" subsection: one curl that

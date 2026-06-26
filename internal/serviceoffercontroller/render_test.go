@@ -792,6 +792,56 @@ func TestBuildSkillMarkdown_DrainAdditiveDetail(t *testing.T) {
 	}
 }
 
+// TestBuildSkillMarkdown_AgentModelStripped locks in that agent offers
+// never surface their underlying model in the catalog (the agent runs its own
+// model and ignores the request `model` field — it's an internal detail), while
+// inference offers keep it (there the buyer selects the model). Mirrors the
+// 402 page / extra / bazaar model-strip in internal/x402.
+func TestBuildSkillMarkdown_AgentModelStripped(t *testing.T) {
+	readyCond := []monetizeapi.Condition{{Type: "Ready", Status: "True"}}
+	agentOffer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "analyst", Namespace: "agent-analyst"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type:  "agent",
+			Model: monetizeapi.ServiceOfferModel{Name: "gemma4-aeon-uncensored"},
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base-sepolia",
+				PayTo:   "0x1111111111111111111111111111111111111111",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.01"},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
+	}
+	inferenceOffer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "raw-llm", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type:  "inference",
+			Model: monetizeapi.ServiceOfferModel{Name: "qwen36-deep"},
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base-sepolia",
+				PayTo:   "0x2222222222222222222222222222222222222222",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
+	}
+
+	content := buildSkillMarkdown(
+		[]*monetizeapi.ServiceOffer{agentOffer, inferenceOffer},
+		"https://example.com",
+		nil,
+	)
+
+	// Agent: model never appears (table column is "—", no **Model** detail).
+	if strings.Contains(content, "gemma4-aeon-uncensored") {
+		t.Errorf("agent offer leaked its internal model into the catalog:\n%s", content)
+	}
+	// Inference: model is buyer-facing and must stay (table + detail bullet).
+	if !strings.Contains(content, "- **Model**: qwen36-deep") {
+		t.Errorf("inference offer dropped its (buyer-selectable) model bullet:\n%s", content)
+	}
+}
+
 func TestBuildStaticSiteHTTPRoute(t *testing.T) {
 	route := buildStaticSiteHTTPRoute()
 	if route.GetName() != staticSiteRouteName {
@@ -1001,7 +1051,7 @@ func TestBuildServiceCatalogJSON_Empty(t *testing.T) {
 	}
 }
 
-func TestBuildServiceCatalogJSON_AgentOfferUsesResolvedModel(t *testing.T) {
+func TestBuildServiceCatalogJSON_AgentOfferOmitsModel(t *testing.T) {
 	offer := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-quant", Namespace: "agent-demo-quant"},
 		Spec: monetizeapi.ServiceOfferSpec{
@@ -1043,8 +1093,11 @@ func TestBuildServiceCatalogJSON_AgentOfferUsesResolvedModel(t *testing.T) {
 	if svc.Type != "agent" {
 		t.Errorf("type = %q, want agent", svc.Type)
 	}
-	if svc.Model != "qwen3.5:9b" {
-		t.Errorf("model = %q, want qwen3.5:9b", svc.Model)
+	// Agent offers never surface their internal model — it's an operator
+	// detail (and goes stale on model swaps); the agent ignores the request
+	// `model` field anyway. Mirrors the 402/extra/bazaar model-strip.
+	if svc.Model != "" {
+		t.Errorf("model = %q, want \"\" (agent model is internal)", svc.Model)
 	}
 	if svc.Price != "10 OBOL/request" {
 		t.Errorf("price = %q, want 10 OBOL/request", svc.Price)
@@ -1849,8 +1902,8 @@ func TestBuildSkillMarkdown_TryIt(t *testing.T) {
 	if !strings.Contains(content, `"model": "qwen36-deep"`) {
 		t.Errorf("inference Try it missing real model id qwen36-deep:\n%s", content)
 	}
-	if !strings.Contains(content, `"model": "qwen3.5:9b"`) {
-		t.Errorf("agent Try it missing AgentResolution model qwen3.5:9b:\n%s", content)
+	if strings.Contains(content, "qwen3.5:9b") {
+		t.Errorf("agent Try it leaked the internal AgentResolution model:\n%s", content)
 	}
 	if !strings.Contains(content, "X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>") {
 		t.Errorf("Try it examples missing X-PAYMENT placeholder:\n%s", content)
