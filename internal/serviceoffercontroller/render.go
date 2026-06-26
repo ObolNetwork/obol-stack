@@ -270,7 +270,12 @@ func buildStaticSiteConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML st
 		"services.json": servicesJSON,
 		"openapi.json":  openAPIJSON,
 		"api.html":      apiDocsHTML,
-		"httpd.conf":    ".md:text/markdown\n.json:application/json\n.html:text/html\n.js:text/javascript\n",
+		// charset=utf-8 on the text types so UTF-8 content (em dashes in the
+		// catalog, accented operator descriptions, …) renders correctly
+		// instead of mojibake — busybox httpd otherwise sends a bare text/*
+		// type and clients fall back to Latin-1/CP1252. JSON is always UTF-8
+		// by spec (RFC 8259), so it carries no charset param.
+		"httpd.conf": ".md:text/markdown; charset=utf-8\n.json:application/json\n.html:text/html; charset=utf-8\n.js:text/javascript; charset=utf-8\n",
 	}
 	for _, f := range bundles {
 		data[f.Key] = f.Content
