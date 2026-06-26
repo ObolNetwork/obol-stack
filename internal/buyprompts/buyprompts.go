@@ -158,7 +158,10 @@ func modelOr(in Input, placeholder string) string {
 }
 
 func agentBlock(in Input) Block {
-	modelFlag := modelOr(in, "<model-id>")
+	// Deliberately no model anywhere: an Obol Agent runs its own pinned
+	// model, skills, and memory — the buyer never picks one, pay-agent takes
+	// no --model, and the agent ignores the chat-completions `model` field,
+	// so the wire example omits it too.
 	return Block{
 		CallShape: CallShape{
 			Method:    "POST",
@@ -171,8 +174,8 @@ func agentBlock(in Input) Block {
 				"Use the buy-x402 skill's `pay-agent` command to buy one round of work from this "+
 					"Obol Agent — it has its own skills, tools, and memory, not just a model. Edit the "+
 					"message, then run:\n\n"+
-					"pay-agent %s --model %q --message %q",
-				in.URL, modelFlag, task(in),
+					"pay-agent %s --message %q",
+				in.URL, task(in),
 			),
 			PromptGenericLLM: fmt.Sprintf(
 				"Help me call the Obol Agent at %s — it's an autonomous agent (tools + skills + memory), "+
@@ -187,7 +190,7 @@ func agentBlock(in Input) Block {
 				in.URL, task(in),
 			),
 		},
-		Example: ChatExample(in.URL, in.Model, in.TaskExample),
+		Example: ChatExample(in.URL, "", in.TaskExample),
 	}
 }
 

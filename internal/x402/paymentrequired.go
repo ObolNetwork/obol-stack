@@ -457,17 +457,15 @@ func inferenceCopy(url, siteURL string, d PaymentDisplay) typeCopy {
 // Other-AI-Agent prompt cards drive the action, and a chat-completions
 // example sits next to the raw x402 JSON in the Pay-manually card to
 // make the wire shape obvious to readers walking the spec by hand.
-func agentCopy(url, siteURL string, d PaymentDisplay) typeCopy {
-	// pay-agent requires a --model value, but an agent runs its own pinned
-	// model server-side and ignores the field, so we don't editorialize about
-	// which model the seller uses — buyprompts fills the required flag (the
-	// seller's model when known, a placeholder otherwise) and hands the buyer
-	// a command that runs as-is with a concrete example task they can edit.
+func agentCopy(url, siteURL string, _ PaymentDisplay) typeCopy {
+	// Deliberately no model: an Obol Agent runs its own pinned model, skills,
+	// and memory — the buyer never picks one, and the agent ignores the
+	// chat-completions `model` field. buyprompts' agent block omits the model
+	// from the pay-agent command and the wire example entirely.
 	block := buyprompts.Build(buyprompts.Input{
 		Type:    "agent",
 		URL:     url,
 		SiteURL: siteURL,
-		Model:   sanitizeDisplayToken(d.Model, ""),
 	})
 
 	return typeCopy{
