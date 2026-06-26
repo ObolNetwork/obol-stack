@@ -252,9 +252,10 @@ func TestHTMLAware_AgentShowsChatCompletionsInPayManually(t *testing.T) {
 	}
 	mustContain(t, body, "Pay manually (raw HTTP 402)")
 	mustContain(t, body, "Obol Agents accept OpenAI-style chat-completions bodies")
-	// Example chat-completions body (JSON snippet inside <pre>; html/template
-	// escapes the quotes).
-	mustContain(t, body, `&#34;model&#34;: &#34;qwen3.5:9b&#34;`)
+	// The agent runs its own model — the real id must never leak into the
+	// 402 page (neither the hand-written example nor the embedded bazaar
+	// JSON). The bazaar example carries a neutral placeholder instead.
+	mustNotContain(t, body, "qwen3.5:9b")
 	mustContain(t, body, `&#34;messages&#34;:`)
 
 	// Lede uses the operator-facing copy and links to docs.obol.org.
@@ -384,6 +385,13 @@ func mustContain(t *testing.T, haystack, needle string) {
 	t.Helper()
 	if !strings.Contains(haystack, needle) {
 		t.Errorf("body does not contain %q", needle)
+	}
+}
+
+func mustNotContain(t *testing.T, haystack, needle string) {
+	t.Helper()
+	if strings.Contains(haystack, needle) {
+		t.Errorf("body unexpectedly contains %q", needle)
 	}
 }
 
