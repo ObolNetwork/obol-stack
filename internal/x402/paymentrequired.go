@@ -414,13 +414,13 @@ func inferenceCopy(url, siteURL string, d PaymentDisplay) typeCopy {
 				"pre-authorizes the provider through your agent's wallet and registers the model as " +
 				"<code>paid/&lt;model&gt;</code> in your local LiteLLM gateway, so every agent in your stack " +
 				"can call it like any other OpenAI-compatible model."),
-		ShowPrimary:    true,
-		PrimaryTitle:   "Use this service for your Obol Agent's model",
-		PrimaryLede:    "Run this from your obol-stack host. The CLI walks `/api/services.json`, prompts for auto-refill + a request count, and pre-signs the authorizations from your master agent's wallet. Pass `--yes --count <N>` for non-interactive runs.",
-		PrimaryIsCode:  true,
-		PrimaryPayload: cmd,
-		PromptObol:     prompt,
-		PromptOther:    other,
+		ShowPrimary:         true,
+		PrimaryTitle:        "Use this service for your Obol Agent's model",
+		PrimaryLede:         "Run this from your obol-stack host. The CLI walks `/api/services.json`, prompts for auto-refill + a request count, and pre-signs the authorizations from your master agent's wallet. Pass `--yes --count <N>` for non-interactive runs.",
+		PrimaryIsCode:       true,
+		PrimaryPayload:      cmd,
+		PromptObol:          prompt,
+		PromptOther:         other,
 		ChatCompletionsNote: "Direct HTTP buyers use OpenAI-style chat-completions. A minimal paid request looks like:",
 		ChatCompletionsBody: fmt.Sprintf(`POST %s/v1/chat/completions
 Content-Type: application/json
@@ -441,40 +441,35 @@ X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
 // Other-AI-Agent prompt cards drive the action, and a chat-completions
 // example sits next to the raw x402 JSON in the Pay-manually card to
 // make the wire shape obvious to readers walking the spec by hand.
-func agentCopy(url, siteURL string, d PaymentDisplay) typeCopy {
-	model := sanitizeDisplayToken(d.Model, "")
-	modelClause := ""
-	modelLine := ""
-	if model != "" {
-		modelClause = fmt.Sprintf(`"model": "%s",`, model)
-		modelLine = " (running " + model + ")"
-	}
-
+func agentCopy(url, siteURL string, _ PaymentDisplay) typeCopy {
+	// Deliberately no model: an Obol Agent runs its own model, skills, and
+	// memory — the buyer never picks one. Surfacing the underlying model here
+	// is noise (and the chat-completions `model` field is ignored by the
+	// agent), so the example omits it entirely.
 	body := fmt.Sprintf(`POST %s
 Content-Type: application/json
 X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
 
 {
-  %s
   "messages": [
     {"role": "user", "content": "<your prompt to this agent goes here>"}
   ]
-}`, url, modelClause)
+}`, url)
 
-	modelFlag := sanitizeDisplayToken(d.Model, "<model-id>")
 	prompt := fmt.Sprintf(
-		"Use the buy-x402 skill's `pay-agent` command to buy one round of work from this Obol Agent%s. "+
-			"This is an *agent*, not a raw model — it has its own skills, tools, and memory. Example:\n\n"+
-			"pay-agent %s --model %s --message \"<your prompt to this agent goes here>\"",
-		modelLine, url, modelFlag,
+		"Use the buy-x402 skill's `pay-agent` command to buy one round of work from this Obol Agent. "+
+			"This is an *agent*, not a raw model — it has its own skills, tools, and memory (and picks "+
+			"its own model), so you only send it a prompt. Example:\n\n"+
+			"pay-agent %s --message \"<your prompt to this agent goes here>\"",
+		url,
 	)
 
 	other := fmt.Sprintf(
-		"Help me call the Obol Agent at %s%s — it's an autonomous agent (tools + skills + memory), "+
+		"Help me call the Obol Agent at %s — it's an autonomous agent (tools + skills + memory), "+
 			"not a raw LLM. It's gated by %s. POST OpenAI-style chat-completions JSON with a real "+
 			"prompt in `messages`, attach a signed EIP-3009/Permit2 authorization as `X-PAYMENT`, "+
 			"and report what the agent does.",
-		url, modelLine, x402GuideRef(siteURL),
+		url, x402GuideRef(siteURL),
 	)
 
 	return typeCopy{

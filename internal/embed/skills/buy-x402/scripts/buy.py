@@ -2372,7 +2372,7 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=Non
         sys.exit(1)
 
 
-def cmd_pay_agent(url, messages=None, model_id=None, network=None, timeout=None, body=None, token=None, payment_option=None):
+def cmd_pay_agent(url, messages=None, network=None, timeout=None, body=None, token=None, payment_option=None):
     """Single-shot paid streaming agent call: probe -> sign one auth -> SSE-stream.
 
     Sibling of `cmd_pay` for `type=agent` ServiceOffers. Differences from
@@ -2414,27 +2414,24 @@ def cmd_pay_agent(url, messages=None, model_id=None, network=None, timeout=None,
         # Force streaming on. cmd_pay handles non-streaming; cmd_pay_agent
         # exists precisely to stream.
         parsed_body["stream"] = True
-        if model_id and not parsed_body.get("model"):
-            parsed_body["model"] = model_id
     else:
         if not messages:
             print(
                 "Error: --message (or --data <json>) is required for `pay-agent`.\n"
-                "Example: pay-agent <url> --model qwen3.5:9b --message 'summarize the docs'",
+                "Example: pay-agent <url> --message 'summarize the docs'",
                 file=sys.stderr,
             )
             sys.exit(1)
-        if not model_id:
-            print("Error: --model is required when using --message.", file=sys.stderr)
-            sys.exit(1)
+        # type=agent ServiceOffers run their own model — there is nothing to
+        # select and the agent ignores any `model` field — so pay-agent sends
+        # only the prompt.
         parsed_body = {
-            "model": model_id,
             "messages": [{"role": "user", "content": messages}],
             "stream": True,
         }
 
     print(f"Probing {url} ...")
-    pricing = _probe_endpoint(url, model_id=model_id or "test", kind="inference")
+    pricing = _probe_endpoint(url, model_id="probe", kind="inference")
     if not pricing:
         print("Failed to get x402 pricing.", file=sys.stderr)
         sys.exit(1)
@@ -2708,7 +2705,7 @@ def usage():
     print("                                               Single-shot paid request (sign 1 auth, attach X-PAYMENT)")
     print("                                               Multi-currency offers: pick which asset/price to pay with")
     print("                                               --token/--network/--payment-option (probe to see options)")
-    print("  pay-agent <url> --model <id> [--message '<text>' | --data '<json>'] [--timeout <seconds>]")
+    print("  pay-agent <url> [--message '<text>' | --data '<json>'] [--timeout <seconds>]")
     print("       [--token <SYMBOL>] [--network <name>] [--payment-option <N>]")
     print("                                               Single-shot paid streaming agent call (POST /v1/chat/completions,")
     print("                                               stream: true). Each SSE event flushes to stdout so a calling")
@@ -2788,7 +2785,7 @@ if __name__ == "__main__":
         positional, opts = parse_flags(rest)
         if not positional:
             print(
-                "Usage: pay-agent <url> --model <id> [--message '<text>' | --data '<json>'] "
+                "Usage: pay-agent <url> [--message '<text>' | --data '<json>'] "
                 "[--network <name>] [--timeout <seconds>]",
                 file=sys.stderr,
             )
@@ -2805,7 +2802,6 @@ if __name__ == "__main__":
         cmd_pay_agent(
             positional[0],
             messages=opts.get("message"),
-            model_id=opts.get("model"),
             network=opts.get("network"),
             timeout=timeout,
             body=opts.get("data"),
