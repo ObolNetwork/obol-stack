@@ -706,6 +706,55 @@ func TestBuildSkillCatalogMarkdown_DrainAdditiveDetail(t *testing.T) {
 	}
 }
 
+// TestBuildSkillCatalogMarkdown_AgentModelStripped locks in that agent offers
+// never surface their underlying model in the catalog (the agent runs its own
+// model and ignores the request `model` field — it's an internal detail), while
+// inference offers keep it (there the buyer selects the model). Mirrors the
+// 402 page / extra / bazaar model-strip in internal/x402.
+func TestBuildSkillCatalogMarkdown_AgentModelStripped(t *testing.T) {
+	readyCond := []monetizeapi.Condition{{Type: "Ready", Status: "True"}}
+	agentOffer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "analyst", Namespace: "agent-analyst"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type:  "agent",
+			Model: monetizeapi.ServiceOfferModel{Name: "gemma4-aeon-uncensored"},
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base-sepolia",
+				PayTo:   "0x1111111111111111111111111111111111111111",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.01"},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
+	}
+	inferenceOffer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "raw-llm", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type:  "inference",
+			Model: monetizeapi.ServiceOfferModel{Name: "qwen36-deep"},
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base-sepolia",
+				PayTo:   "0x2222222222222222222222222222222222222222",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
+	}
+
+	content := buildSkillCatalogMarkdown(
+		[]*monetizeapi.ServiceOffer{agentOffer, inferenceOffer},
+		"https://example.com",
+	)
+
+	// Agent: model never appears (table column is "—", no **Model** detail).
+	if strings.Contains(content, "gemma4-aeon-uncensored") {
+		t.Errorf("agent offer leaked its internal model into the catalog:\n%s", content)
+	}
+	// Inference: model is buyer-facing and must stay (table + detail bullet).
+	if !strings.Contains(content, "- **Model**: qwen36-deep") {
+		t.Errorf("inference offer dropped its (buyer-selectable) model bullet:\n%s", content)
+	}
+}
+
 func TestBuildSkillCatalogHTTPRoute(t *testing.T) {
 	route := buildSkillCatalogHTTPRoute()
 	if route.GetName() != skillCatalogRouteName {

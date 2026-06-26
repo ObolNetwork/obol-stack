@@ -899,6 +899,18 @@ func offerPublishedForRegistration(offer *monetizeapi.ServiceOffer) bool {
 		isConditionTrue(offer.Status, "RoutePublished")
 }
 
+// catalogModelName returns the model id to surface in the catalog, or "" to
+// omit it. Agent offers run their own model and ignore the request `model`
+// field, so the id is an internal detail and is never surfaced — mirrors the
+// 402 page / extra / bazaar model-strip in internal/x402. Inference (and other
+// model-bearing) offers keep their id, since there the buyer selects it.
+func catalogModelName(offer *monetizeapi.ServiceOffer) string {
+	if offer.IsAgent() {
+		return ""
+	}
+	return offer.Spec.Model.Name
+}
+
 func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL string) string {
 	baseURL = strings.TrimRight(baseURL, "/")
 
@@ -955,7 +967,7 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 	lines = append(lines, "| Service | Type | Model | Pay with | Status | Endpoint |")
 	lines = append(lines, "|---------|------|-------|----------|--------|----------|")
 	for _, offer := range ready {
-		modelName := offer.Spec.Model.Name
+		modelName := catalogModelName(offer)
 		if modelName == "" {
 			modelName = "—"
 		}
@@ -977,7 +989,7 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 	}
 	lines = append(lines, "", "## Service Details", "")
 	for _, offer := range ready {
-		modelName := offer.Spec.Model.Name
+		modelName := catalogModelName(offer)
 		endpoint := baseURL + offer.EffectivePath()
 		lines = append(lines, fmt.Sprintf("### %s", offer.Name))
 		lines = append(lines, fmt.Sprintf("- **Endpoint**: `%s`", endpoint))
