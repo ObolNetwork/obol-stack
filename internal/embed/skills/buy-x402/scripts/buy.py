@@ -2667,9 +2667,10 @@ def cmd_pay_agent(url, messages=None, network=None, timeout=None, body=None, tok
         alias.
 
     `body` is an optional JSON-encoded request body. When omitted, `messages`
-    + `model_id` are required and a `{model, messages, stream:true}` body is
-    synthesized. When provided, the body is parsed and `"stream": true` is
-    forced onto whatever the caller passed.
+    is required and a `{messages, stream:true}` body is synthesized — NO `model`
+    field: a type=agent offer runs its own model and ignores any `model` sent.
+    When provided, the body is parsed and `"stream": true` is forced onto
+    whatever the caller passed.
     """
     if timeout is None or float(timeout) <= 0:
         timeout = 3600.0

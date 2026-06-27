@@ -170,7 +170,7 @@ python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py pay h
 # One-shot paid STREAMING agent call (SSE events flushed to stdout as they arrive)
 python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py pay-agent \
     https://seller.example.com/services/demo-quant \
-    --model qwen3.5:9b --message 'summarize the latest research on staking'
+    --message 'summarize the latest research on staking'
 
 # Pay-agent with a full OpenAI-compatible body (stream:true is forced on)
 python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py pay-agent \
