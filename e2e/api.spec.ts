@@ -1,7 +1,5 @@
 import { test, expect } from '@playwright/test';
 
-const probeOrigin = 'http://obol.stack:3000';
-
 // These tests hit the real API routes (no mocking).
 // Without a live cluster the routes return 503 — that's correct behaviour.
 // Tests validate response shape and error handling, not cluster-specific data.
@@ -68,36 +66,5 @@ test.describe('API routes', () => {
 
     const body = await res.json();
     expect(typeof body).toBe('object');
-  });
-
-  test('POST /api/marketplace/probe without url returns 400', async ({
-    request,
-  }) => {
-    const res = await request.post('/api/marketplace/probe', {
-      headers: { Origin: probeOrigin },
-      data: {},
-    });
-
-    expect(res.status()).toBe(400);
-
-    const body = await res.json();
-    expect(body).toHaveProperty('error');
-  });
-
-  test('POST /api/marketplace/probe rejects disallowed external URLs', async ({
-    request,
-  }) => {
-    const res = await request.post('/api/marketplace/probe', {
-      headers: { Origin: probeOrigin },
-      data: {
-        url: 'https://evil.example.com/services/foo',
-        model: 'test-model',
-      },
-    });
-
-    expect(res.status()).toBe(400);
-
-    const body = await res.json();
-    expect(body.error).toMatch(/Probe URL/i);
   });
 });

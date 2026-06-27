@@ -431,7 +431,7 @@ function MarketplaceCardImpl({ item, onDetails }: MarketplaceCardProps) {
 
         <ActionRow>
           <SecondaryBtn type="button" onClick={() => onDetails?.(item)}>
-            Probe
+            Details
           </SecondaryBtn>
           <Box css={{ flex: 1 }} />
           {skillUrl ? (
