@@ -40,8 +40,8 @@ import (
 //	    (agentcrd.HostNoBundledSkillsMarkerPath), so Hermes' installer/sync
 //	    skips seeding its ~80 bundled skills;
 //	(2) the rendered hermes-config ConfigMap in the agent's namespace carries
-//	    the capped knobs: lifetime_seconds: 90, max_turns: 30,
-//	    reasoning_effort: low, and disabled_toolsets {memory, web};
+//	    the capped knobs: lifetime_seconds: 180, max_turns: 30,
+//	    reasoning_effort: low, and disabled_toolsets {memory, web, code_execution};
 //	(3) a BEHAVIORAL signal that bundled skills were actually skipped — see
 //	    assertBundledSkillsSkippedInPod for why we assert pod filesystem state
 //	    rather than grep a log line.
@@ -233,7 +233,7 @@ func getHermesConfigYAML(t *testing.T, cfg *config.Config, ns string) string {
 func assertHermesConfigCaps(t *testing.T, cfgYAML string) {
 	t.Helper()
 	for _, want := range []string{
-		"lifetime_seconds: 90",
+		"lifetime_seconds: 180",
 		"max_turns: 30",
 		"reasoning_effort: low",
 		"disabled_toolsets:",

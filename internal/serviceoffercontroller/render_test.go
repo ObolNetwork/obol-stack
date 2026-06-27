@@ -932,7 +932,7 @@ func TestBuildServiceCatalogJSON_Empty(t *testing.T) {
 	}
 }
 
-func TestBuildServiceCatalogJSON_AgentOfferUsesResolvedModel(t *testing.T) {
+func TestBuildServiceCatalogJSON_AgentOfferOmitsInternalModel(t *testing.T) {
 	offer := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "demo-quant", Namespace: "agent-demo-quant"},
 		Spec: monetizeapi.ServiceOfferSpec{
@@ -977,8 +977,14 @@ func TestBuildServiceCatalogJSON_AgentOfferUsesResolvedModel(t *testing.T) {
 	if svc.Type != "agent" {
 		t.Errorf("type = %q, want agent", svc.Type)
 	}
-	if svc.Model != "qwen3.5:9b" {
-		t.Errorf("model = %q, want qwen3.5:9b", svc.Model)
+	// An agent runs its own model and ignores the request `model` field, so
+	// the id is an internal detail and must never be surfaced in the catalog
+	// (mirrors skill.md, the 402 page/extra, and the bazaar example).
+	if svc.Model != "" {
+		t.Errorf("model = %q, want empty (internal model must not leak for agent offers)", svc.Model)
+	}
+	if strings.Contains(jsonStr, "qwen3.5:9b") {
+		t.Errorf("internal model leaked into catalog JSON:\n%s", jsonStr)
 	}
 	if svc.Price != "10 OBOL/request" {
 		t.Errorf("price = %q, want 10 OBOL/request", svc.Price)

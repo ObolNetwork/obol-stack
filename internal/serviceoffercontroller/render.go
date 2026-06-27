@@ -1182,13 +1182,12 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 		if desc == "" {
 			desc = fmt.Sprintf("x402 payment-gated %s service", fallbackOfferType(offer))
 		}
-		// type=agent offers leave spec.model empty by design (the model
-		// lives on the linked Agent). Fall back to the controller's
-		// resolved view so the storefront can display it.
-		modelName := offer.Spec.Model.Name
-		if modelName == "" && offer.Status.AgentResolution != nil {
-			modelName = offer.Status.AgentResolution.Model
-		}
+		// Agent offers run their own model and ignore the request `model`
+		// field, so the id is an internal detail and is never surfaced in
+		// the catalog — mirrors skill.md, the 402 page / extra, and the
+		// bazaar example. Inference (and other model-bearing) offers keep
+		// their id, since there the buyer selects it.
+		modelName := catalogModelName(offer)
 
 		drainEndsAt := ""
 		if offer.IsDraining() {
