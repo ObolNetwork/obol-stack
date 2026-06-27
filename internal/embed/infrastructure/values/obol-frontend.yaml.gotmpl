@@ -46,8 +46,10 @@ image:
   pullPolicy: IfNotPresent
   # Digest-pinned: tag is informational, sha256 is authoritative. Eliminates
   # the mutable-tag attack surface called out by the v0.10.0-rc2 supply-chain
-  # review. Multi-arch index digest for v0.1.26 (linux/amd64 + linux/arm64).
-  tag: "v0.1.26@sha256:7a6109e43e3fd7461818f172b4c78fc0fb5a124a7c266cf68bd5bc08fff10858"
+  # review. TODO(v0.1.28-rc0): re-pin with the multi-arch index digest once the
+  # v0.1.28-rc0 image is published (front-end PR #417 merged + v0.1.28-rc0 tag
+  # pushed). This PR stays a DRAFT until the @sha256 digest is appended below.
+  tag: "v0.1.28-rc0" # DRAFT — append @sha256:<multi-arch index digest> before merge
 
 service:
   type: ClusterIP
