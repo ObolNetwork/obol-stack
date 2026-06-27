@@ -44,7 +44,7 @@ type TokenEntry struct {
 var tokenRegistry = map[string]map[string]TokenEntry{
 	"USDC": {
 		"base":             {Address: ChainBaseMainnet.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
-		"base-sepolia":     {Address: ChainBaseSepolia.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
+		"base-sepolia":     {Address: ChainBaseSepolia.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USDC", EIP712Version: "2"},
 		"ethereum":         {Address: ChainEthereumMainnet.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
 		"polygon":          {Address: ChainPolygonMainnet.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
 		"polygon-amoy":     {Address: ChainPolygonAmoy.USDCAddress, Symbol: "USDC", Decimals: 6, TransferMethod: "eip3009", EIP712Name: "USD Coin", EIP712Version: "2"},
