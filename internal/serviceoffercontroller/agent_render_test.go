@@ -345,7 +345,7 @@ func agentConfigChecksum(t *testing.T, agent *monetizeapi.Agent) string {
 }
 
 func TestRenderHermesConfig_HasModelAndSkillsDir(t *testing.T) {
-	cfg := renderHermesConfig("qwen3.5:9b", "lit-key")
+	cfg := renderHermesConfig("qwen3.5:9b", "lit-key", nil)
 	for _, must := range []string{
 		`default: "qwen3.5:9b"`,
 		`api_key: "lit-key"`,
@@ -363,7 +363,7 @@ func TestRenderHermesConfig_HasModelAndSkillsDir(t *testing.T) {
 // knobs so a single sale stays inside the 100s Cloudflare free-tunnel
 // window. If any of these drift it should fail loudly.
 func TestRenderHermesConfig_SubAgentConstraints(t *testing.T) {
-	cfg := renderHermesConfig("qwen3.5:9b", "lit-key")
+	cfg := renderHermesConfig("qwen3.5:9b", "lit-key", nil)
 	for _, must := range []string{
 		`timeout: 170`,
 		`lifetime_seconds: 180`,
@@ -389,6 +389,43 @@ func TestRenderHermesConfig_SubAgentConstraints(t *testing.T) {
 	lifetime := parseTerminalInt(t, cfg, "lifetime_seconds")
 	if timeout > lifetime {
 		t.Errorf("terminal.timeout (%d) must be <= lifetime_seconds (%d)\n---\n%s", timeout, lifetime, cfg)
+	}
+}
+
+// Per-agent mcp_servers render as a native Hermes MCP-server block. Empty -> no
+// section; a stdio server renders command/args/env, env values verbatim (so
+// ${VAR} placeholders survive for Hermes to interpolate from the pod env).
+func TestRenderHermesConfig_MCPServers(t *testing.T) {
+	if got := renderHermesConfig("m", "k", nil); strings.Contains(got, "mcp_servers:") {
+		t.Errorf("empty MCPServers must not emit mcp_servers:\n%s", got)
+	}
+	servers := []monetizeapi.AgentMCPServer{{
+		Name:    "hyperliquid",
+		Command: "/opt/hermes/.venv/bin/python3",
+		Args:    []string{"/data/.hermes/obol-skills/hyperliquid-intelligence/scripts/hl_mcp.py"},
+		Env: map[string]string{
+			"OBOL_SKILLS_DIR":     "/data/.hermes/obol-skills",
+			"REMOTE_SIGNER_TOKEN": "${REMOTE_SIGNER_TOKEN}",
+		},
+	}}
+	cfg := renderHermesConfig("m", "k", servers)
+	for _, must := range []string{
+		"mcp_servers:",
+		"  hyperliquid:",
+		`    command: "/opt/hermes/.venv/bin/python3"`,
+		"    args:",
+		`      - "/data/.hermes/obol-skills/hyperliquid-intelligence/scripts/hl_mcp.py"`,
+		"    env:",
+		`      OBOL_SKILLS_DIR: "/data/.hermes/obol-skills"`,
+		`      REMOTE_SIGNER_TOKEN: "${REMOTE_SIGNER_TOKEN}"`,
+	} {
+		if !strings.Contains(cfg, must) {
+			t.Errorf("mcp_servers render missing %q\n---\n%s", must, cfg)
+		}
+	}
+	// Env keys are sorted for deterministic output.
+	if strings.Index(cfg, "OBOL_SKILLS_DIR") > strings.Index(cfg, "REMOTE_SIGNER_TOKEN") {
+		t.Errorf("env keys not deterministically sorted\n%s", cfg)
 	}
 }
 

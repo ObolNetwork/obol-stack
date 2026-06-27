@@ -686,6 +686,13 @@ type AgentSpec struct {
 	// +kubebuilder:validation:MaxLength=4096
 	Objective string      `json:"objective,omitempty"`
 	Wallet    AgentWallet `json:"wallet,omitempty"`
+	// MCPServers registers native MCP servers in the agent's Hermes config
+	// (mcp_servers:). Hermes discovers each server's tools and exposes them as
+	// first-class tools — the harness serializes the args, so the model never
+	// hand-builds JSON-in-shell. Use a stdio server (command+args) for a local,
+	// payment-abstracting wrapper, or url for a remote one.
+	// +kubebuilder:validation:MaxItems=32
+	MCPServers []AgentMCPServer `json:"mcpServers,omitempty"`
 }
 
 type AgentWallet struct {
@@ -693,6 +700,33 @@ type AgentWallet struct {
 	// published in status.walletAddress.
 	// +kubebuilder:default=false
 	Create bool `json:"create,omitempty"`
+}
+
+// AgentMCPServer is one entry under Hermes' mcp_servers: config. stdio
+// (Command+Args) spawns a local MCP server; URL (+Transport "sse") connects to
+// a remote one. Env values may use ${VAR}, which Hermes interpolates from the
+// pod environment at load — keep raw secrets out of the CR (reference them as
+// ${REMOTE_SIGNER_TOKEN} etc.; Hermes filters the stdio subprocess env, so
+// anything the server needs must be listed here).
+type AgentMCPServer struct {
+	// Key under mcp_servers (e.g. "hyperliquid").
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9-]*$`
+	// +kubebuilder:validation:MaxLength=64
+	Name string `json:"name"`
+	// stdio transport: executable to spawn.
+	// +kubebuilder:validation:MaxLength=512
+	Command string `json:"command,omitempty"`
+	// stdio transport: arguments for Command.
+	// +kubebuilder:validation:MaxItems=64
+	Args []string `json:"args,omitempty"`
+	// http/sse transport: remote MCP server URL.
+	// +kubebuilder:validation:MaxLength=512
+	URL string `json:"url,omitempty"`
+	// Transport override ("sse"); default is Streamable HTTP for a url server.
+	// +kubebuilder:validation:MaxLength=16
+	Transport string `json:"transport,omitempty"`
+	// Environment for a stdio server. Values may use ${VAR} interpolation.
+	Env map[string]string `json:"env,omitempty"`
 }
 
 type AgentStatus struct {
@@ -765,8 +799,7 @@ type AgentIdentityList struct {
 	Items           []AgentIdentity `json:"items"`
 }
 
-type AgentIdentitySpec struct {
-}
+type AgentIdentitySpec struct{}
 
 type AgentIdentityStatus struct {
 	// Per-chain ERC-8004 registrations for this identity document.

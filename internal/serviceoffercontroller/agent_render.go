@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -71,7 +73,7 @@ func agentManifests(agent *monetizeapi.Agent, litellmKey, apiKey string) ([]*uns
 		return nil, fmt.Errorf("agentManifests: agent has no resolved model")
 	}
 
-	configYAML := renderHermesConfig(model, litellmKey)
+	configYAML := renderHermesConfig(model, litellmKey, agent.Spec.MCPServers)
 
 	out := []*unstructured.Unstructured{
 		buildAgentNamespace(agent.Namespace),
@@ -113,7 +115,7 @@ func agentManifests(agent *monetizeapi.Agent, litellmKey, apiKey string) ([]*uns
 // data skill) run their `python3 .../foo.py` via the `terminal` tool instead,
 // where a benign script auto-approves and genuinely dangerous commands stay
 // gated — granular, not a blanket --yolo bypass.
-func renderHermesConfig(model, litellmKey string) string {
+func renderHermesConfig(model, litellmKey string, mcpServers []monetizeapi.AgentMCPServer) string {
 	return fmt.Sprintf(`model:
   default: %q
   provider: custom
@@ -135,7 +137,56 @@ agent:
 skills:
   external_dirs:
     - /data/.hermes/obol-skills
-`, model, litellmKey)
+`, model, litellmKey) + renderMCPServersBlock(mcpServers)
+}
+
+// renderMCPServersBlock renders the optional `mcp_servers:` section from an
+// Agent's MCPServers. Hermes (tools/mcp_tool.py) connects to each server,
+// discovers its tools, and registers them as first-class tools — so the model
+// calls them with harness-serialized args instead of hand-built JSON-in-shell.
+// Empty -> "" (no section). Env values are emitted verbatim and may carry
+// ${VAR} placeholders that Hermes interpolates from the pod env at load (the
+// stdio subprocess env is otherwise filtered, so list everything the server
+// needs, e.g. ${REMOTE_SIGNER_TOKEN}). Keys are sorted for deterministic output.
+func renderMCPServersBlock(servers []monetizeapi.AgentMCPServer) string {
+	if len(servers) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("mcp_servers:\n")
+	for _, s := range servers {
+		if s.Name == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "  %s:\n", s.Name)
+		if s.Command != "" {
+			fmt.Fprintf(&b, "    command: %q\n", s.Command)
+		}
+		if len(s.Args) > 0 {
+			b.WriteString("    args:\n")
+			for _, a := range s.Args {
+				fmt.Fprintf(&b, "      - %q\n", a)
+			}
+		}
+		if s.URL != "" {
+			fmt.Fprintf(&b, "    url: %q\n", s.URL)
+		}
+		if s.Transport != "" {
+			fmt.Fprintf(&b, "    transport: %q\n", s.Transport)
+		}
+		if len(s.Env) > 0 {
+			b.WriteString("    env:\n")
+			keys := make([]string, 0, len(s.Env))
+			for k := range s.Env {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				fmt.Fprintf(&b, "      %s: %q\n", k, s.Env[k])
+			}
+		}
+	}
+	return b.String()
 }
 
 func buildAgentNamespace(ns string) *unstructured.Unstructured {

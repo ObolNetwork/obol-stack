@@ -64,6 +64,41 @@ spec:
             type: object
           spec:
             properties:
+              mcpServers:
+                description: |-
+                  MCPServers registers native MCP servers in the agent's Hermes
+                  config (mcp_servers:). Hermes discovers each server's tools and
+                  exposes them as first-class tools. stdio (command+args) for a
+                  local server, or url for a remote one.
+                items:
+                  properties:
+                    args:
+                      items:
+                        type: string
+                      maxItems: 64
+                      type: array
+                    command:
+                      maxLength: 512
+                      type: string
+                    env:
+                      additionalProperties:
+                        type: string
+                      type: object
+                    name:
+                      maxLength: 64
+                      pattern: ^[a-z0-9][a-z0-9-]*$
+                      type: string
+                    transport:
+                      maxLength: 16
+                      type: string
+                    url:
+                      maxLength: 512
+                      type: string
+                  required:
+                  - name
+                  type: object
+                maxItems: 32
+                type: array
               model:
                 description: |-
                   LiteLLM model name to pin. Empty = controller picks cluster
