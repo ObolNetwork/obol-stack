@@ -47,27 +47,52 @@ export async function GET() {
     // Node overview
     const system =
       systemMetrics.status === 'fulfilled' ? systemMetrics.value : null;
+    const metricsLive = Boolean(system?.live);
     const nodeOverview = {
-      diskUsage: system
-        ? {
-            value: Math.round(system.disk.used / 1024 ** 3),
-            total: Math.round(system.disk.total / 1024 ** 3),
-            percentage: Math.round(system.disk.percentage),
-            unit: 'GB',
-          }
-        : { value: 0, total: 0, percentage: 0, unit: 'GB' },
-      memoryUsage: system
-        ? {
-            value: Math.round(system.memory.used / 1024 ** 3),
-            total: Math.round(system.memory.total / 1024 ** 3),
-            percentage: Math.round(system.memory.percentage),
-            unit: 'GB',
-          }
-        : { value: 0, total: 0, percentage: 0, unit: 'GB' },
-      cpuLoad: { percentage: system ? Math.round(system.cpu.usage) : 0 },
+      diskUsage:
+        system && metricsLive && system.disk.paired
+          ? {
+              value: Math.round(system.disk.used / 1024 ** 3),
+              total: Math.round(system.disk.total / 1024 ** 3),
+              percentage: Math.round(system.disk.percentage),
+              unit: 'GB',
+            }
+          : {
+              value: 0,
+              total: 0,
+              percentage: 0,
+              unit: 'GB',
+              unavailable: true,
+            },
+      memoryUsage:
+        system && metricsLive && system.memory.queried
+          ? {
+              value: Math.round(system.memory.used / 1024 ** 3),
+              total: Math.round(system.memory.total / 1024 ** 3),
+              percentage: Math.round(system.memory.percentage),
+              unit: 'GB',
+            }
+          : {
+              value: 0,
+              total: 0,
+              percentage: 0,
+              unit: 'GB',
+              unavailable: true,
+            },
+      cpuLoad:
+        system && metricsLive && system.cpu.queried
+          ? { percentage: Math.round(system.cpu.usage * 10) / 10 }
+          : { percentage: 0, unavailable: true },
       uptime: {
-        hours: system ? Math.floor(system.uptime / 3600) : 0,
-        status: system ? 'online' : 'offline',
+        hours:
+          system && system.bootTimeAvailable
+            ? Math.floor(system.uptime / 3600)
+            : 0,
+        status: metricsLive ? 'online' : 'offline',
+        unavailable: !metricsLive,
+        bootUnknown: Boolean(
+          metricsLive && system && !system.bootTimeAvailable
+        ),
       },
     };
 
@@ -236,10 +261,27 @@ export async function GET() {
         localNodes: [],
         erpcData: null,
         nodeOverview: {
-          diskUsage: { value: 0, total: 0, percentage: 0, unit: 'GB' },
-          memoryUsage: { value: 0, total: 0, percentage: 0, unit: 'GB' },
-          cpuLoad: { percentage: 0 },
-          uptime: { hours: 0, status: 'offline' },
+          diskUsage: {
+            value: 0,
+            total: 0,
+            percentage: 0,
+            unit: 'GB',
+            unavailable: true,
+          },
+          memoryUsage: {
+            value: 0,
+            total: 0,
+            percentage: 0,
+            unit: 'GB',
+            unavailable: true,
+          },
+          cpuLoad: { percentage: 0, unavailable: true },
+          uptime: {
+            hours: 0,
+            status: 'offline',
+            unavailable: true,
+            bootUnknown: false,
+          },
         },
         ports: {
           p2p: { port: 30303, status: 'closed' },

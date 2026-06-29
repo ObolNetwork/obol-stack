@@ -119,6 +119,7 @@ export function useAgentWalletMetadata(instance: AgentInstance | null) {
 
   const runtime = instance?.runtime;
   const id = instance?.id;
+  const namespace = instance?.namespace;
 
   const fetchMetadata = useCallback(async () => {
     if (!runtime || !id) {
@@ -127,9 +128,9 @@ export function useAgentWalletMetadata(instance: AgentInstance | null) {
     }
 
     try {
-      const response = await fetch(
-        `/api/agents/wallet?runtime=${runtime}&id=${id}`
-      );
+      const params = new URLSearchParams({ runtime, id });
+      if (namespace) params.set('namespace', namespace);
+      const response = await fetch(`/api/agents/wallet?${params}`);
       if (response.ok) {
         const data = await response.json();
         setMetadata(data);
@@ -139,7 +140,7 @@ export function useAgentWalletMetadata(instance: AgentInstance | null) {
     } catch {
       setMetadata(null);
     }
-  }, [id, runtime]);
+  }, [id, namespace, runtime]);
 
   useEffect(() => {
     fetchMetadata();

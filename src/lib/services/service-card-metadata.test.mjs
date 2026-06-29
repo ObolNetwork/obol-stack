@@ -9,8 +9,8 @@ describe('ServiceCard metadata presentation', () => {
       'utf8'
     );
 
-    assert.match(source, /offer\.registration\?\.domains \?\? \[\]/);
-    assert.match(source, /Domain: \{domain\}/);
+    assert.match(source, /offer\.registration\?\.domains/);
+    assert.match(source, /ExpandableChipList/);
   });
 
   it('keeps service metadata text above the 10px legibility floor', async () => {
@@ -23,18 +23,15 @@ describe('ServiceCard metadata presentation', () => {
     assert.doesNotMatch(source, /opacity: 0\.5/);
   });
 
-  it('renders controller condition chips with hover metadata', async () => {
+  it('delegates readiness to ServiceReadinessRow', async () => {
     const source = await readFile(
       'src/components/molecules/ServiceCard/ServiceCard.tsx',
       'utf8'
     );
 
-    assert.match(source, /ModelReady/);
-    assert.match(source, /UpstreamHealthy/);
-    assert.match(source, /PaymentGateReady/);
-    assert.match(source, /RoutePublished/);
-    assert.match(source, /ConditionsRow/);
-    assert.match(source, /conditionTitle\(key, offer\.conditions\)/);
+    assert.match(source, /ServiceReadinessRow/);
+    assert.match(source, /MetricCell/);
+    assert.match(source, /Requests \(24h\)/);
   });
 
   it('pins the service status pill to the card header edge', async () => {

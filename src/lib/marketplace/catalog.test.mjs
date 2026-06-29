@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
-import { fetchCatalog, mapCatalog, IN_CLUSTER_CATALOG_URL } from './catalog.ts';
+import { fetchCatalog, mapCatalog, IN_CLUSTER_CATALOG_URL, unwrapCatalogEntries } from './catalog.ts';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -21,6 +21,18 @@ describe('mapCatalog', () => {
     assert.deepEqual(mapCatalog(null), []);
     assert.deepEqual(mapCatalog({}), []);
     assert.deepEqual(mapCatalog('nope'), []);
+  });
+
+  it('unwraps controller storefront envelope with services[]', async () => {
+    const raw = await loadRaw();
+    const envelope = {
+      displayName: 'Acme Labs',
+      tagline: 'Paid APIs.',
+      logoUrl: 'https://example.com/logo.png',
+      services: raw,
+    };
+    assert.equal(unwrapCatalogEntries(envelope).length, raw.length);
+    assert.equal(mapCatalog(envelope).length, mapCatalog(raw).length);
   });
 
   it('skips entries without name+namespace', () => {

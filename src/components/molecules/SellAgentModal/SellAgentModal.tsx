@@ -19,6 +19,7 @@ interface SellAgentModalProps {
   agentName: string;
   agentNamespace: string;
   defaultWallet?: string;
+  onListed?: () => void;
   trigger: React.ReactNode;
 }
 
@@ -85,6 +86,7 @@ export function SellAgentModal({
   agentName,
   agentNamespace,
   defaultWallet,
+  onListed,
   trigger,
 }: SellAgentModalProps) {
   const {
@@ -104,7 +106,7 @@ export function SellAgentModal({
     handleSubmit,
     onSubmit,
     handleClose,
-  } = useSellAgentModal(agentName, agentNamespace, defaultWallet);
+  } = useSellAgentModal(agentName, agentNamespace, defaultWallet, onListed);
 
   return (
     <ResponsiveDialog

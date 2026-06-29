@@ -1,6 +1,8 @@
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { HeroBand } from '../HeroBand';
 import { NodeOverview } from '../NodeOverview';
+import { NetworksSection } from '../NetworksSection/NetworksSection';
+import { ServiceList } from '../ServiceList';
 import { AgentRegistrationCard } from '../../molecules/AgentRegistrationCard';
 import { AgentRegistry } from '../AgentRegistry';
 import { Card } from '../../atoms/Card';
@@ -10,18 +12,16 @@ import { CountBadge } from '../../atoms/CountBadge';
 import { EmptyMessage } from '../../atoms/EmptyMessage';
 import { LoadingState } from '../../molecules/LoadingState';
 import { ErrorState } from '../../molecules/ErrorState';
-import { CopyButton } from '../../atoms/CopyButton';
 import { HomeAgentCard } from '../../home/HomeAgentCard';
-import { HomeListingsWidget } from '../../home/HomeListingsWidget';
-import { HomeNetworksWidget } from '../../home/HomeNetworksWidget';
+import { CreateAgentWorkflow } from '../../home/CreateAgentWorkflow';
 import { AgentInstanceCard } from '../../molecules/AgentInstanceCard/AgentInstanceCard';
 import { DashboardData } from '../../../types/dashboard';
 import { AgentChatSidebar } from '../../molecules/AgentChatSidebar';
-import { useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useMemo, useCallback } from 'react';
 import { useAnchorHash } from '../../../hooks/useAnchorHash';
 import { useAgentInstances } from '../../../hooks/useAgents';
-import { buildAgentNewCli } from '@/lib/sell/cli-commands';
+import { useServiceOffers } from '../../../hooks/useServiceOffers';
+import { sumChargedRequests24hForAgent } from '@/lib/services/service-usage';
 import type { AgentInstance } from '@/types/agent';
 
 interface DashboardContentProps {
@@ -64,13 +64,13 @@ const AgentGrid = styled(Box, {
   '@media (max-width: 768px)': { gridTemplateColumns: '1fr' },
 });
 
-const SubAgentsSection = styled(Box, {
+const AgentsSection = styled(Box, {
   marginTop: '$md',
   paddingTop: '$md',
   borderTop: '1px solid rgba(255, 255, 255, 0.08)',
 });
 
-const SubAgentsScroll = styled(Box, {
+const AgentsScroll = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
   gap: '$xs',
@@ -78,22 +78,6 @@ const SubAgentsScroll = styled(Box, {
   overflowY: 'auto',
   paddingTop: '$sm',
   paddingRight: '$xs',
-});
-
-const CreateAgentRow = styled(Flex, {
-  alignItems: 'center',
-  gap: '$xs',
-  padding: '$xs',
-  borderRadius: '$2',
-  border: '1px solid $stroke',
-  background: '$bg03',
-  marginTop: '$xs',
-});
-
-const CREATE_AGENT_EXAMPLE = buildAgentNewCli({
-  name: 'my-agent',
-  model: 'claude-sonnet-4-6',
-  skills: 'addresses,gas',
 });
 
 function partitionInstances(instances: AgentInstance[]) {
@@ -117,8 +101,36 @@ export function DashboardContent({
     error: instancesError,
     refetch,
   } = useAgentInstances();
+  const {
+    offers,
+    pendingOffers,
+    loading: offersLoading,
+    error: offersError,
+    refetch: refetchOffers,
+  } = useServiceOffers();
+  const refreshAgentsAndOffers = useCallback(() => {
+    refetch();
+    refetchOffers();
+  }, [refetch, refetchOffers]);
   const { primary, subAgents } = partitionInstances(instances);
-  const router = useRouter();
+
+  const legacyOrphanAgent = primary.find(
+    p => p.runtime === 'hermes' && p.id === 'obol-agent'
+  );
+
+  const chargedRequests24hByAgent = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const instance of primary) {
+      const key = `${instance.runtime}:${instance.id}`;
+      map.set(
+        key,
+        sumChargedRequests24hForAgent(offers, instance, {
+          receiveLegacyOrphans: instance === legacyOrphanAgent,
+        })
+      );
+    }
+    return map;
+  }, [offers, primary, legacyOrphanAgent]);
 
   const uptimeHours = data?.nodeOverview?.uptime?.hours ?? 0;
 
@@ -131,10 +143,10 @@ export function DashboardContent({
     setChatInstance(null);
   };
 
-  const subAgentsHeader = (
+  const agentsHeader = (
     <Flex css={{ alignItems: 'center', gap: '$sm', paddingRight: '$xl' }}>
       <Text css={{ fontSize: '$3', fontWeight: '$semibold', color: '$light' }}>
-        Sub-agents
+        Agents
       </Text>
       {subAgents.length > 0 && <CountBadge count={subAgents.length} />}
     </Flex>
@@ -150,7 +162,6 @@ export function DashboardContent({
 
           {data && <NodeOverview data={data.nodeOverview} ports={data.ports} />}
 
-          {/* AI Agent Instances — her grid design + sub-agents section */}
           <Card css={{ padding: '$lg' }}>
             <Flex
               css={{ alignItems: 'center', gap: '$sm', marginBottom: '$md' }}
@@ -174,7 +185,8 @@ export function DashboardContent({
               <EmptyMessage>
                 No agent instances found. Run <code>obol agent init</code> for
                 the default Hermes agent, or{' '}
-                <code>obol agent new &lt;name&gt;</code> for a sub-agent.
+                <code>obol agent new &lt;name&gt;</code> for an additional
+                agent.
               </EmptyMessage>
             )}
 
@@ -191,6 +203,11 @@ export function DashboardContent({
                     key={`${instance.runtime}:${instance.id}`}
                     instance={instance}
                     uptimeHours={uptimeHours}
+                    chargedRequests24h={
+                      chargedRequests24hByAgent.get(
+                        `${instance.runtime}:${instance.id}`
+                      ) ?? 0
+                    }
                     onChat={handleInstanceSelect}
                   />
                 ))}
@@ -198,64 +215,47 @@ export function DashboardContent({
             )}
 
             {!instancesLoading && !instancesError && subAgents.length > 0 && (
-              <SubAgentsSection>
-                <Accordion header={subAgentsHeader} defaultExpanded={false}>
-                  <SubAgentsScroll>
+              <AgentsSection>
+                <Accordion header={agentsHeader} defaultExpanded={false}>
+                  <AgentsScroll>
                     {subAgents.map(instance => (
                       <AgentInstanceCard
                         key={`${instance.runtime}:${instance.id}`}
                         instance={instance}
                         onSelect={handleInstanceSelect}
+                        onRefresh={refreshAgentsAndOffers}
                       />
                     ))}
-                  </SubAgentsScroll>
+                  </AgentsScroll>
                 </Accordion>
-              </SubAgentsSection>
+              </AgentsSection>
             )}
 
             {!instancesLoading && !instancesError && (
-              <SubAgentsSection>
-                <Text
-                  css={{
-                    fontSize: '$3',
-                    fontWeight: '$semibold',
-                    color: '$light',
-                  }}
-                >
-                  Create a sub-agent
-                </Text>
-                <CreateAgentRow>
-                  <code
-                    style={{
-                      flex: 1,
-                      fontSize: '12px',
-                      color: 'var(--colors-light)',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                    title={CREATE_AGENT_EXAMPLE}
-                  >
-                    {CREATE_AGENT_EXAMPLE}
-                  </code>
-                  <CopyButton
-                    text={CREATE_AGENT_EXAMPLE}
-                    title="Copy obol agent new"
-                  />
-                </CreateAgentRow>
-              </SubAgentsSection>
+              <AgentsSection>
+                <CreateAgentWorkflow />
+              </AgentsSection>
             )}
           </Card>
 
-          <AgentRegistrationCard />
-
-          <HomeListingsWidget
-            onManage={() => router.push('/marketplace/listings')}
+          <ServiceList
+            offers={offers}
+            pendingOffers={pendingOffers}
+            loading={offersLoading}
+            error={offersError}
+            onRefresh={refreshAgentsAndOffers}
           />
+
+          <AgentRegistrationCard />
 
           <AgentRegistry />
 
-          {data?.erpcData && <HomeNetworksWidget erpcData={data.erpcData} />}
+          {data && (data.localNodes.length > 0 || data.erpcData) && (
+            <NetworksSection
+              localNodes={data.localNodes}
+              erpcData={data.erpcData}
+            />
+          )}
         </SectionContainer>
       </MainSection>
 

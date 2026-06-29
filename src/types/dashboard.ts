@@ -125,19 +125,24 @@ export interface DashboardData {
       total: number;
       percentage: number;
       unit: string;
+      unavailable?: boolean;
     };
     memoryUsage: {
       value: number;
       total: number;
       percentage: number;
       unit: string;
+      unavailable?: boolean;
     };
     cpuLoad: {
       percentage: number;
+      unavailable?: boolean;
     };
     uptime: {
       hours: number;
       status: string;
+      unavailable?: boolean;
+      bootUnknown?: boolean;
     };
   };
   ports: {

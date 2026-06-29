@@ -8,6 +8,7 @@ import { Badge } from '../atoms/Badge';
 import { StatusPill } from '../atoms/StatusIndicator';
 import { Avatar } from '../atoms/Avatar';
 import { useServiceOffers } from '../../hooks/useServiceOffers';
+import { formatRelativeAgo } from '@/lib/services/service-usage';
 import type { ServiceOffer } from '@/types/sell';
 
 function deriveStatus(
@@ -81,7 +82,7 @@ export function HomeListingsWidget({ onManage }: HomeListingsWidgetProps) {
   return (
     <Card css={{ padding: '$lg' }}>
       <Flex css={{ alignItems: 'center', gap: '$xs', marginBottom: '$md' }}>
-        <SectionTitle>My Listings</SectionTitle>
+        <SectionTitle>Services</SectionTitle>
         <CountBadge count={myOffers.length} />
         <Box css={{ flex: 1 }} />
         <ManageButton onClick={onManage}>
@@ -179,6 +180,30 @@ export function HomeListingsWidget({ onManage }: HomeListingsWidgetProps) {
                       >
                         {offer.usage.requests24h.toLocaleString()} req &middot;
                         24h
+                      </Text>
+                    )}
+                    {offer.usage?.chargedRequests != null &&
+                      offer.usage.chargedRequests > 0 && (
+                        <Text
+                          css={{
+                            fontSize: '$1',
+                            color: '$muted',
+                            fontFamily: 'monospace',
+                          }}
+                        >
+                          {offer.usage.chargedRequests.toLocaleString()} charged
+                        </Text>
+                      )}
+                    {offer.usage?.lastSettlementUnix != null && (
+                      <Text
+                        css={{
+                          fontSize: '$1',
+                          color: '$muted',
+                          fontFamily: 'monospace',
+                        }}
+                      >
+                        last paid{' '}
+                        {formatRelativeAgo(offer.usage.lastSettlementUnix)}
                       </Text>
                     )}
                   </>

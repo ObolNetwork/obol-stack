@@ -5,17 +5,10 @@ import { StatusPill } from '../../atoms/StatusIndicator';
 import { useAgentInstances } from '../../../hooks/useAgents';
 import { useServiceOffers } from '../../../hooks/useServiceOffers';
 import type { DashboardData } from '../../../types/dashboard';
+import { formatUptime } from '@/lib/utils/format-uptime';
 
 interface HeroBandProps {
   data: DashboardData | null;
-}
-
-function formatUptime(hours: number): string {
-  const days = Math.floor(hours / 24);
-  const remainingHours = hours % 24;
-  if (days > 0) return `${days}d ${remainingHours}h`;
-  if (remainingHours > 0) return `${remainingHours}h`;
-  return '0h';
 }
 
 function displayInstanceName(instance: {

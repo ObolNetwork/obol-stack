@@ -77,7 +77,34 @@ export function buildSellAgentCli(p: SellAgentCliParams): string {
   ]);
 }
 
-/** Create a sub-agent before `obol sell agent`. */
+export interface AgentWorkflowStep {
+  label: string;
+  command: string;
+}
+
+export interface AgentCreateWorkflow {
+  steps: AgentWorkflowStep[];
+  copyText: string;
+}
+
+/**
+ * Minimal home-page workflow — flags are optional on `obol agent new` (prompted on TTY).
+ * Alternatives with flags: buildAgentNewCli / buildSellAgentCli for modals.
+ */
+export function buildAgentCreateWorkflowCli(
+  name = 'obol-agent'
+): AgentCreateWorkflow {
+  const steps: AgentWorkflowStep[] = [
+    { label: 'Create a new Agent', command: `obol agent new ${name}` },
+    { label: 'Sell the new Agent', command: `obol sell agent ${name}` },
+  ];
+  return {
+    steps,
+    copyText: steps.map(s => s.command).join('\n'),
+  };
+}
+
+/** Create a sub-agent before `obol sell agent` (modals / advanced flows). */
 export function buildAgentNewCli(p: AgentNewCliParams): string {
   const parts = [
     `obol agent new ${p.name} \\`,

@@ -55,3 +55,22 @@ export function isUrlReachableFromRuntime(url: string): boolean {
   }
   return !isClusterInternalUrl(url);
 }
+
+/**
+ * eRPC base URL for browser-side wallet balance reads.
+ * Local Next on :3000 must hit Traefik at :8080/rpc, not relative /rpc.
+ */
+export function clientErpcBaseUrl(): string {
+  const configured = process.env.NEXT_PUBLIC_ERPC_URL?.trim();
+  if (configured) return configured.replace(/\/$/, '');
+
+  if (typeof window !== 'undefined') {
+    const { hostname, port, protocol } = window.location;
+    if (hostname === 'obol.stack' || hostname.endsWith('.obol.stack')) {
+      const traefikPort = !port || port === '3000' ? '8080' : port;
+      return `${protocol}//${hostname}:${traefikPort}/rpc`;
+    }
+  }
+
+  return '/rpc';
+}

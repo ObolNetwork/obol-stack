@@ -4,16 +4,74 @@
 
 import { config } from '../config/environment.ts';
 import {
-  isClusterInternalUrl,
-  isUrlReachableFromRuntime,
-} from '../utils/cluster-url.ts';
+  FILESYSTEM_FSTYPE_EXCLUDES,
+  FILESYSTEM_MOUNTPOINT_QUERY,
+  parseFilesystemSamples,
+  pickRootFilesystemUsage,
+} from './filesystem-disk.ts';
+import { isUrlReachableFromRuntime } from '../utils/cluster-url.ts';
 
 const EMPTY_SYSTEM_METRICS = {
-  memory: { total: 0, used: 0, available: 0, percentage: 0 },
-  cpu: { usage: 0 },
-  disk: { total: 0, used: 0, available: 0, percentage: 0 },
+  live: false,
+  memory: {
+    total: 0,
+    used: 0,
+    available: 0,
+    percentage: 0,
+    queried: false,
+  },
+  cpu: { usage: 0, queried: false },
+  disk: { total: 0, used: 0, available: 0, percentage: 0, paired: false },
+  bootTimeAvailable: false,
   uptime: 0,
 };
+
+const PROM_QUERY_TIMEOUT_MS = 15_000;
+
+function errorCauseCode(error: unknown): string | undefined {
+  const seen = new Set<unknown>();
+  let current: unknown = error;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    if (typeof current === 'object' && current !== null && 'code' in current) {
+      const code = (current as { code?: unknown }).code;
+      if (typeof code === 'string') return code;
+    }
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return undefined;
+}
+
+function prometheusFailureHint(error: unknown): string {
+  if (
+    error instanceof Error &&
+    error.message === 'prometheus unreachable from local dev'
+  ) {
+    return 'unreachable from local dev (set NEXT_PUBLIC_PROMETHEUS_URL=http://localhost:9090)';
+  }
+  const code = errorCauseCode(error);
+  if (
+    code === 'ECONNRESET' ||
+    code === 'ECONNREFUSED' ||
+    code === 'ENOTFOUND'
+  ) {
+    return `Prometheus port-forward dropped (${code}) — restart pnpm run dev or run: kubectl port-forward -n monitoring svc/monitoring-kube-prometheus-prometheus 9090:9090`;
+  }
+  if (
+    error instanceof Error &&
+    (error.name === 'TimeoutError' ||
+      error.name === 'AbortError' ||
+      error.message.includes('aborted due to timeout'))
+  ) {
+    return 'Prometheus query timed out — port-forward may be wedged; restart pnpm run dev';
+  }
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function warnPrometheusFailure(label: string, error: unknown): void {
+  console.warn(`[Prometheus] ${label} failed: ${prometheusFailureHint(error)}`);
+}
 
 interface PrometheusResponse {
   status: string;
@@ -49,6 +107,7 @@ export class PrometheusClient {
       headers: {
         Accept: 'application/json',
       },
+      signal: AbortSignal.timeout(PROM_QUERY_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -86,7 +145,7 @@ export class PrometheusClient {
         result.set(`${ns}/${name}`, value);
       }
     } catch (error) {
-      console.warn('[Prometheus] chargedSales7dByOffer failed:', error);
+      warnPrometheusFailure('chargedSales7dByOffer', error);
     }
     return result;
   }
@@ -134,7 +193,7 @@ export class PrometheusClient {
         result.set(key, existing);
       }
     } catch (error) {
-      console.warn('[Prometheus] chargedSalesByOfferAndChain failed:', error);
+      warnPrometheusFailure('chargedSalesByOfferAndChain', error);
     }
     return result;
   }
@@ -160,7 +219,7 @@ export class PrometheusClient {
         result.set(`${ns}/${name}`, v);
       }
     } catch (error) {
-      console.warn('[Prometheus] chargedRequests24hByOffer failed:', error);
+      warnPrometheusFailure('chargedRequests24hByOffer', error);
     }
     return result;
   }
@@ -194,10 +253,7 @@ export class PrometheusClient {
         if (prev === undefined || v > prev) result.set(key, v);
       }
     } catch (error) {
-      console.warn(
-        '[Prometheus] lastPaymentSuccessByOfferChain failed:',
-        error
-      );
+      warnPrometheusFailure('lastPaymentSuccessByOfferChain', error);
     }
     return result;
   }
@@ -222,7 +278,7 @@ export class PrometheusClient {
         result.set(`${ns}/${name}`, v);
       }
     } catch (error) {
-      console.warn('[Prometheus] lastSettlementByOffer failed:', error);
+      warnPrometheusFailure('lastSettlementByOffer', error);
     }
     return result;
   }
@@ -236,101 +292,100 @@ export class PrometheusClient {
     }
 
     try {
-      // Get memory metrics
-      const memTotal = await this.query('node_memory_MemTotal_bytes');
-      const memAvailable = await this.query('node_memory_MemAvailable_bytes');
+      const fsFilter = `fstype!~"${FILESYSTEM_FSTYPE_EXCLUDES}",${FILESYSTEM_MOUNTPOINT_QUERY}`;
+      const settled = await Promise.allSettled([
+        this.query('node_memory_MemTotal_bytes'),
+        this.query('node_memory_MemAvailable_bytes'),
+        this.query('avg(rate(node_cpu_seconds_total{mode!="idle"}[5m]))'),
+        this.query(`node_filesystem_size_bytes{${fsFilter}}`),
+        this.query(`node_filesystem_avail_bytes{${fsFilter}}`),
+        this.query('node_boot_time_seconds'),
+      ]);
 
-      // Get CPU metrics (average CPU usage)
-      const cpuUsage = await this.query(
-        'avg(rate(node_cpu_seconds_total{mode!="idle"}[5m]))'
-      );
+      const firstValue = (index: number): string => {
+        const result = settled[index];
+        if (result.status !== 'fulfilled') {
+          warnPrometheusFailure(`getSystemMetrics[${index}]`, result.reason);
+          return '0';
+        }
+        return result.value.data.result[0]?.value?.[1] ?? '0';
+      };
 
-      // Disk metrics. We query the root filesystem instead of pinning a
-      // device name — on most Linux hosts the root device is nvme0n1pN or
-      // sdaN, not /dev/vda1 (which is a KVM/virtio name). Filtering by
-      // mountpoint="/" and excluding the pseudo-filesystems that
-      // node-exporter exposes (tmpfs/overlay/squashfs/...) gives us the
-      // real backing disk on baremetal, VMs, and container hosts alike.
-      // sum() collapses multiple results into one in case node-exporter
-      // returns per-fstype duplicates.
-      //
-      // Note: this.query() returns an empty result set rather than
-      // throwing when Prometheus matches no series, so try/catch is the
-      // wrong tool here. We detect "no data" by checking the result array
-      // length after the fact and fall back to a broader query.
-      const fsExcludes =
-        'tmpfs|overlay|squashfs|aufs|fuse.lxcfs|nsfs|devtmpfs|ramfs';
-      let diskTotal = await this.query(
-        `sum(node_filesystem_size_bytes{mountpoint="/",fstype!~"${fsExcludes}"})`
-      );
-      let diskAvailable = await this.query(
-        `sum(node_filesystem_avail_bytes{mountpoint="/",fstype!~"${fsExcludes}"})`
-      );
-
-      // Broader fallback: some node-exporter setups (k3s, containerized
-      // hosts) don't expose "/" but do expose the largest real filesystem
-      // somewhere else. Pick the largest filesystem by total bytes.
-      if (!diskTotal.data.result.length) {
-        diskTotal = await this.query(
-          `max(node_filesystem_size_bytes{fstype!~"${fsExcludes}"})`
+      const hasSeries = (index: number): boolean => {
+        const result = settled[index];
+        return (
+          result?.status === 'fulfilled' &&
+          (result.value.data.result?.length ?? 0) > 0
         );
-        diskAvailable = await this.query(
-          `max(node_filesystem_avail_bytes{fstype!~"${fsExcludes}"})`
-        );
-      }
+      };
 
-      if (!diskTotal.data.result.length) {
+      const queryOk = (index: number) => settled[index]?.status === 'fulfilled';
+
+      const diskTotalRes =
+        settled[3].status === 'fulfilled' ? settled[3].value : null;
+      const diskAvailRes =
+        settled[4].status === 'fulfilled' ? settled[4].value : null;
+
+      const diskUsage =
+        diskTotalRes && diskAvailRes
+          ? pickRootFilesystemUsage(
+              parseFilesystemSamples(diskTotalRes.data.result),
+              parseFilesystemSamples(diskAvailRes.data.result)
+            )
+          : null;
+      if (!diskUsage) {
         console.warn(
-          'Prometheus returned no disk metrics; node-exporter may not be scraping the host filesystem'
+          'Prometheus returned no paired disk metrics; node-exporter may not be scraping the host filesystem'
         );
       }
 
-      // Get uptime
-      const uptime = await this.query('node_boot_time_seconds');
-
-      const totalMemory = parseFloat(
-        memTotal.data.result[0]?.value?.[1] || '0'
-      );
-      const availableMemory = parseFloat(
-        memAvailable.data.result[0]?.value?.[1] || '0'
-      );
+      const totalMemory = parseFloat(firstValue(0));
+      const availableMemory = parseFloat(firstValue(1));
       const usedMemory = totalMemory - availableMemory;
 
-      const totalDisk = parseFloat(diskTotal.data.result[0]?.value?.[1] || '0');
-      const availableDisk = parseFloat(
-        diskAvailable.data.result[0]?.value?.[1] || '0'
-      );
-      const usedDisk = totalDisk - availableDisk;
+      const totalDisk = diskUsage?.total ?? 0;
+      const availableDisk = diskUsage?.available ?? 0;
+      const usedDisk = diskUsage?.used ?? 0;
 
-      const cpuPercent =
-        parseFloat(cpuUsage.data.result[0]?.value?.[1] || '0') * 100;
+      const cpuPercent = parseFloat(firstValue(2)) * 100;
 
-      const bootTime = parseFloat(uptime.data.result[0]?.value?.[1] || '0');
-      const uptimeSeconds = Date.now() / 1000 - bootTime;
+      const bootTime = parseFloat(firstValue(5));
+      const bootTimeAvailable = queryOk(5) && bootTime > 0;
+      const uptimeSeconds = bootTimeAvailable
+        ? Date.now() / 1000 - bootTime
+        : 0;
+
+      const live =
+        (queryOk(0) && totalMemory > 0) ||
+        hasSeries(2) ||
+        (queryOk(3) && queryOk(4) && diskUsage != null);
 
       return {
+        live,
         memory: {
           total: totalMemory,
           used: usedMemory,
           available: availableMemory,
           percentage: totalMemory > 0 ? (usedMemory / totalMemory) * 100 : 0,
+          queried: queryOk(0) && totalMemory > 0,
         },
         cpu: {
           usage: cpuPercent,
+          queried: hasSeries(2),
         },
         disk: {
           total: totalDisk,
           used: usedDisk,
           available: availableDisk,
-          percentage: totalDisk > 0 ? (usedDisk / totalDisk) * 100 : 0,
+          percentage: diskUsage?.percentage ?? 0,
+          paired: diskUsage != null,
         },
+        bootTimeAvailable,
         uptime: uptimeSeconds,
       };
     } catch (error) {
-      if (!isClusterInternalUrl(this.baseUrl)) {
-        console.error('Failed to fetch system metrics:', error);
-      }
-      throw error;
+      warnPrometheusFailure('getSystemMetrics', error);
+      return EMPTY_SYSTEM_METRICS;
     }
   }
 }

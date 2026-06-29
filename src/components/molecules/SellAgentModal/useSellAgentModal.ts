@@ -25,7 +25,8 @@ const SELL_CHAINS: ChainName[] = ['base-sepolia', 'base', 'mainnet'];
 export function useSellAgentModal(
   agentName: string,
   agentNamespace: string,
-  defaultWallet?: string
+  defaultWallet?: string,
+  onListed?: () => void
 ) {
   const [open, setOpen] = useState(false);
   const [submitState, setSubmitState] = useState<SubmitState>('idle');
@@ -157,6 +158,7 @@ export function useSellAgentModal(
           )
         );
         setSubmitState('success');
+        onListed?.();
       } catch (err: unknown) {
         setErrorMsg(
           err instanceof Error ? err.message : 'Failed to create ServiceOffer'
@@ -164,7 +166,7 @@ export function useSellAgentModal(
         setSubmitState('error');
       }
     },
-    [agentName, agentNamespace]
+    [agentName, agentNamespace, onListed]
   );
 
   const handleClose = useCallback(() => {

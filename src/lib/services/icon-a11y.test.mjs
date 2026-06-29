@@ -38,9 +38,9 @@ describe('icon-only control accessibility', () => {
     );
     assert.match(serviceCard, /aria-label="Open service in new tab"/);
 
-    const agentCard = await read(
-      'src/components/molecules/AgentInstanceCard/AgentInstanceCard.tsx'
+    const walletBalances = await read(
+      'src/components/molecules/WalletBalanceList/WalletBalanceList.tsx'
     );
-    assert.match(agentCard, /aria-label=\{`View \$\{b\.token\.symbol\}/);
+    assert.match(walletBalances, /aria-label=\{`View \$\{b\.token\.symbol\}/);
   });
 });

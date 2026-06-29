@@ -9,6 +9,7 @@ export async function GET(request: NextRequest) {
   if (csrfReject) return csrfReject;
 
   const id = request.nextUrl.searchParams.get('id');
+  const namespace = request.nextUrl.searchParams.get('namespace');
   const runtime = request.nextUrl.searchParams.get(
     'runtime'
   ) as AgentRuntime | null;
@@ -29,13 +30,15 @@ export async function GET(request: NextRequest) {
 
   try {
     const client = new AgentClient();
-    const instance: AgentInstance = {
-      id,
-      runtime,
-      namespace: `${runtime}-${id}`,
-      hostname: `${runtime}-${id}`,
-      status: 'unknown',
-    };
+    const instance: AgentInstance | null = namespace
+      ? client.resolveInstanceByNamespace(namespace)
+      : client.resolveInstance(runtime, id);
+    if (!instance) {
+      return NextResponse.json(
+        { error: `Instance '${id}' not found` },
+        { status: 404 }
+      );
+    }
 
     const metadata = await client.getWalletMetadata(instance);
     return NextResponse.json<WalletMetadata>(metadata);

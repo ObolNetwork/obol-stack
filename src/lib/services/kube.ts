@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 
 import { KubeConfig } from '@kubernetes/client-node';
 
@@ -15,12 +16,31 @@ import { KubeConfig } from '@kubernetes/client-node';
  * the lifetime of the Node process.
  *
  * In-cluster (KUBERNETES_SERVICE_HOST set): loads from the mounted
- * service account. Otherwise loads from the file path in
- * NEXT_PUBLIC_KUBECONFIG (matching the per-client behavior this
- * replaces — we intentionally don't fall back to loadFromDefault() so
- * local dev keeps failing loudly when the env var is missing).
+ * service account — no kubeconfig file needed.
+ *
+ * Local / host dev (no KUBERNETES_SERVICE_HOST): resolveKubeconfigPath()
+ * picks the first existing path in order:
+ *   1. KUBECONFIG
+ *   2. OBOL_CONFIG_DIR/kubeconfig.yaml
+ *
+ * This module does NOT read NEXT_PUBLIC_KUBECONFIG or ~/.config/obol/.
+ * Those fallbacks exist only in bash port-forward scripts (see
+ * scripts/port-forward-erpc.sh) for `pnpm dev` kubectl helpers — not
+ * used by Next.js API routes.
  */
 let _kc: KubeConfig | undefined;
+
+export function resolveKubeconfigPath(): string | undefined {
+  // Server-side chain only — see module doc for bash script differences.
+  const candidates = [
+    process.env.KUBECONFIG,
+    process.env.OBOL_CONFIG_DIR
+      ? path.join(process.env.OBOL_CONFIG_DIR, 'kubeconfig.yaml')
+      : undefined,
+  ].filter((p): p is string => Boolean(p && p.trim()));
+
+  return candidates[0];
+}
 
 export function sharedKubeConfig(): KubeConfig {
   if (_kc) return _kc;
@@ -28,11 +48,11 @@ export function sharedKubeConfig(): KubeConfig {
   if (process.env.KUBERNETES_SERVICE_HOST) {
     kc.loadFromCluster();
   } else {
-    const kubeconfigPath = process.env.NEXT_PUBLIC_KUBECONFIG;
+    const kubeconfigPath = resolveKubeconfigPath();
     if (!kubeconfigPath) {
       throw new Error(
-        'NEXT_PUBLIC_KUBECONFIG environment variable is required for local development. ' +
-          'Set it to the path of your kubeconfig file.'
+        'KUBECONFIG environment variable is required for local development. ' +
+          'Set it to your obol kubeconfig path (e.g. ~/.config/obol/kubeconfig.yaml).'
       );
     }
     if (!fs.existsSync(kubeconfigPath)) {

@@ -11,14 +11,18 @@ const RETRY_SURFACES = [
 ];
 
 describe('ErrorState retry wiring', () => {
-  it('passes hook refetch callbacks to retryable list error states', async () => {
+  it('passes retry callbacks to retryable list error states', async () => {
     for (const file of RETRY_SURFACES) {
       const source = await readFile(resolve(process.cwd(), file), 'utf8');
-      assert.match(source, /refetch/, `${file} should read a refetch callback`);
       assert.match(
         source,
-        /<ErrorState[\s\S]*onRetry=\{refetch\}/,
-        `${file} should pass refetch to ErrorState`
+        /(refetch|onRefresh)/,
+        `${file} should read a retry callback`
+      );
+      assert.match(
+        source,
+        /<ErrorState[\s\S]*onRetry=\{(refetch|onRefresh)\}/,
+        `${file} should pass retry callback to ErrorState`
       );
     }
   });

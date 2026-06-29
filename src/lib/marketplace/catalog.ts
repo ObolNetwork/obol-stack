@@ -121,7 +121,20 @@ export async function fetchRawCatalog(
     );
   }
   const body = (await res.json()) as unknown;
-  return Array.isArray(body) ? (body as RawCatalogEntry[]) : [];
+  return unwrapCatalogEntries(body);
+}
+
+/**
+ * Controller publishes either a bare `services[]` array (legacy) or an
+ * envelope `{ displayName, tagline, logoUrl, services: [...] }`.
+ */
+export function unwrapCatalogEntries(body: unknown): RawCatalogEntry[] {
+  if (Array.isArray(body)) return body as RawCatalogEntry[];
+  if (body && typeof body === 'object') {
+    const services = (body as { services?: unknown }).services;
+    if (Array.isArray(services)) return services as RawCatalogEntry[];
+  }
+  return [];
 }
 
 function isDefaultCatalogService(url: string): boolean {
@@ -173,8 +186,8 @@ function errorText(error: unknown): string {
  * cluster.
  */
 export function mapCatalog(raw: unknown): ServiceListItem[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
+  const entries = unwrapCatalogEntries(raw);
+  return entries
     .map(entry => mapEntry(entry as RawCatalogEntry))
     .filter((item): item is ServiceListItem => item !== null);
 }

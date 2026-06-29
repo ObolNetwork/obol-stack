@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  buildAgentCreateWorkflowCli,
   buildAgentNewCli,
   buildSellAgentCli,
   buildSellInferenceCli,
@@ -33,6 +34,14 @@ describe('sell cli-commands', () => {
       payTo: '0xdef',
     });
     assert.match(cmd, /^obol sell agent rc13-test/);
+  });
+
+  it('builds minimal agent create + sell workflow', () => {
+    const workflow = buildAgentCreateWorkflowCli('obol-agent');
+    assert.equal(workflow.steps.length, 2);
+    assert.equal(workflow.steps[0].command, 'obol agent new obol-agent');
+    assert.equal(workflow.steps[1].command, 'obol sell agent obol-agent');
+    assert.match(workflow.copyText, /obol agent new obol-agent/);
   });
 
   it('builds agent new with wallet', () => {

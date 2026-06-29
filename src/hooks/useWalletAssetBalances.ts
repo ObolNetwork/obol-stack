@@ -15,8 +15,8 @@ import {
   type BalanceToken,
   type ChainBalanceConfig,
 } from '../lib/config/agent-balance-tokens';
+import { erpcTransportUrlForChain } from '../lib/config/chain-rpc';
 
-const ERPC_URL = process.env.NEXT_PUBLIC_ERPC_URL ?? '/rpc';
 const POLL_MS = 60_000;
 const TIMEOUT_MS = 8000;
 
@@ -26,13 +26,6 @@ const CHAIN_BY_ID = {
   [baseSepolia.id]: baseSepolia,
   [hoodi.id]: hoodi,
 } as const;
-
-const TRANSPORT_URL: Record<number, string> = {
-  [mainnet.id]: `${ERPC_URL}/mainnet`,
-  [base.id]: `${ERPC_URL}/base`,
-  [baseSepolia.id]: `${ERPC_URL}/base-sepolia`,
-  [hoodi.id]: `${ERPC_URL}/hoodi`,
-};
 
 const MULTICALL3_ADDRESS =
   '0xcA11bde05977b3631167028862bE2a173976CA11' as const;
@@ -74,9 +67,12 @@ async function fetchChainBalances(
   const chain = CHAIN_BY_ID[config.chainId as keyof typeof CHAIN_BY_ID];
   if (!chain) return [];
 
+  const rpcUrl = erpcTransportUrlForChain(config.chainId);
+  if (!rpcUrl) return [];
+
   const client = createPublicClient({
     chain,
-    transport: http(TRANSPORT_URL[config.chainId], {
+    transport: http(rpcUrl, {
       timeout: TIMEOUT_MS,
       fetchOptions: { signal },
     }),

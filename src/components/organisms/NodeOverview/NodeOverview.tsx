@@ -6,6 +6,7 @@ import { PercentageChip } from '../../atoms/PercentageChip';
 import { ProgressBar } from '../../molecules/ProgressBar';
 import { NodeDisk, NodeMemory, NodeCpu, NodeUptime } from '@/icons';
 import { DashboardData } from '../../../types/dashboard';
+import { formatUptime } from '@/lib/utils/format-uptime';
 
 export interface NodeOverviewProps {
   data: DashboardData['nodeOverview'];
@@ -45,6 +46,7 @@ interface MetricCardProps {
   value: string;
   subtext: string;
   isExpanded: boolean;
+  showPercentageChip?: boolean;
 }
 
 const MetricCardContainer = styled(Box, {
@@ -127,6 +129,7 @@ const MetricCard: React.FC<MetricCardProps> = ({
   value,
   subtext,
   isExpanded,
+  showPercentageChip = true,
 }) => {
   return (
     <MetricCardContainer>
@@ -135,7 +138,9 @@ const MetricCard: React.FC<MetricCardProps> = ({
           <MetricIconContainer>{icon}</MetricIconContainer>
           <MetricLabel>{label}</MetricLabel>
         </MetricHeaderLeft>
-        {percentage !== undefined && <PercentageChip percentage={percentage} />}
+        {showPercentageChip && percentage !== undefined && (
+          <PercentageChip percentage={percentage} />
+        )}
       </MetricHeader>
       {isExpanded ? (
         <MetricContentContainer>
@@ -246,23 +251,38 @@ const PortStatus = styled(Text, {
   },
 });
 
-// Helper function to format uptime hours into readable format
-const formatUptime = (hours: number): string => {
-  const days = Math.floor(hours / 24);
-  const remainingHours = hours % 24;
-
-  if (days > 0) {
-    return `${days}d ${remainingHours}h`;
-  }
-  return `${remainingHours}h`;
-};
-
 export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
   // Use real API data directly
-  const diskPercentage = data.diskUsage.percentage;
-  const memoryPercentage = data.memoryUsage.percentage;
-  const cpuPercentage = data.cpuLoad.percentage;
-  const formattedUptime = formatUptime(data.uptime.hours);
+  const diskUnavailable = data.diskUsage.unavailable === true;
+  const diskPercentage = diskUnavailable ? 0 : data.diskUsage.percentage;
+  const diskValue = diskUnavailable ? '—' : `${data.diskUsage.value} GB`;
+  const diskSubtext = diskUnavailable
+    ? 'no disk data'
+    : `of ${data.diskUsage.total}GB`;
+  const memoryUnavailable = data.memoryUsage.unavailable === true;
+  const memoryPercentage = memoryUnavailable ? 0 : data.memoryUsage.percentage;
+  const memoryValue = memoryUnavailable ? '—' : `${data.memoryUsage.value} GB`;
+  const memorySubtext = memoryUnavailable
+    ? 'no memory data'
+    : `of ${data.memoryUsage.total}GB`;
+  const cpuUnavailable = data.cpuLoad.unavailable === true;
+  const cpuPercentage = cpuUnavailable ? 0 : data.cpuLoad.percentage;
+  const cpuLabel = cpuUnavailable
+    ? '—'
+    : cpuPercentage % 1 === 0
+      ? `${cpuPercentage}%`
+      : `${cpuPercentage.toFixed(1)}%`;
+  const uptimeUnavailable = data.uptime.unavailable === true;
+  const uptimeBootUnknown = data.uptime.bootUnknown === true;
+  const formattedUptime =
+    uptimeUnavailable || uptimeBootUnknown
+      ? '—'
+      : formatUptime(data.uptime.hours);
+  const uptimeSubtext = uptimeUnavailable
+    ? 'metrics unavailable'
+    : uptimeBootUnknown
+      ? 'boot time unavailable'
+      : 'continuous operation';
 
   // Port data for the ports section
   const portList = [
@@ -295,8 +315,9 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
           icon={<NodeDisk size="xs" color={theme.colors.light.value} />}
           label="DISK"
           percentage={diskPercentage}
-          value={`${data.diskUsage.value} GB`}
-          subtext={`of ${data.diskUsage.total}GB`}
+          value={diskValue}
+          subtext={diskSubtext}
+          showPercentageChip={!diskUnavailable}
           isExpanded={true}
         />
 
@@ -304,8 +325,9 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
           icon={<NodeMemory size="xs" color={theme.colors.light.value} />}
           label="MEMORY"
           percentage={memoryPercentage}
-          value={`${data.memoryUsage.value} GB`}
-          subtext={`of ${data.memoryUsage.total}GB`}
+          value={memoryValue}
+          subtext={memorySubtext}
+          showPercentageChip={!memoryUnavailable}
           isExpanded={true}
         />
 
@@ -313,8 +335,9 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
           icon={<NodeCpu size="xs" color={theme.colors.light.value} />}
           label="CPU"
           percentage={cpuPercentage}
-          value={`${cpuPercentage}%`}
-          subtext="load average"
+          value={cpuLabel}
+          subtext="5m avg utilization"
+          showPercentageChip={false}
           isExpanded={true}
         />
 
@@ -322,7 +345,7 @@ export const NodeOverview: React.FC<NodeOverviewProps> = ({ data, ports }) => {
           icon={<NodeUptime size="xs" color={theme.colors.light.value} />}
           label="UPTIME"
           value={formattedUptime}
-          subtext="continuous operation"
+          subtext={uptimeSubtext}
           isExpanded={true}
         />
       </MetricsGrid>
