@@ -1151,8 +1151,8 @@ func generateConfig(cfg *config.Config, primary string) ([]byte, error) {
 			"api_key":  litellmMasterKey(cfg),
 		},
 		"terminal": map[string]any{
-			"backend":                       "local",
-			"cwd":                           "/data/.hermes/workspace",
+			"backend": "local",
+			"cwd":     "/data/.hermes/workspace",
 			// pay-agent streams up to 1h; chat buys must not die at 180s.
 			"timeout":                       3600,
 			"lifetime_seconds":              3700,
@@ -1203,8 +1203,12 @@ func mergePreservedHermesConfigKeys(cfg *config.Config, id string, generated []b
 }
 
 func mergeCommandAllowlist(generated, existing []string) []string {
-	seen := make(map[string]struct{}, len(generated)+len(existing))
-	out := make([]string, 0, len(generated)+len(existing))
+	// No capacity hints: the command_allowlist is an operator config list of a
+	// handful of entries, so preallocation is noise — and summing the two
+	// lengths trips CodeQL's allocation-size-overflow heuristic (a false
+	// positive here, but not worth a standing dismissal). Grow on demand.
+	seen := make(map[string]struct{})
+	out := make([]string, 0)
 	for _, list := range [][]string{generated, existing} {
 		for _, entry := range list {
 			entry = strings.TrimSpace(entry)
