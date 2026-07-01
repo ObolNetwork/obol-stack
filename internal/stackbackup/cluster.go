@@ -30,6 +30,7 @@ var clusterDumps = []clusterDump{
 	{"litellm-secrets.json", []string{"get", "secret", "litellm-secrets", "-n", "llm", "-o", "json"}},
 	{"erpc-config.json", []string{"get", "configmap", "erpc-config", "-n", "erpc", "-o", "json"}},
 	{"x402-pricing.json", []string{"get", "configmap", "x402-pricing", "-n", "x402", "-o", "json"}},
+	{"storefront-profile.json", []string{"get", "configmap", "obol-storefront-profile", "-n", "x402", "-o", "json"}},
 }
 
 // applyOrder is the import-time apply sequence: Agent CRs first (agent-backed
@@ -42,6 +43,7 @@ var applyOrder = []string{
 	"litellm-secrets.json",
 	"erpc-config.json",
 	"x402-pricing.json",
+	"storefront-profile.json",
 	"serviceoffers.json",
 	"registrationrequests.json",
 }
