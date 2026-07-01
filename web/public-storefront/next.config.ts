@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const servicesURL =
-  process.env.SERVICES_URL ?? "http://obol-skill-md.x402.svc:8080";
+  process.env.SERVICES_URL ??
+  "http://obol-skill-md.x402.svc.cluster.local:8080";
 
 const nextConfig: NextConfig = {
   output: "standalone",

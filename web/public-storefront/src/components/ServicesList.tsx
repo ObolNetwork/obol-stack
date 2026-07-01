@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { fetchPublicCatalog } from "@/lib/catalog-client";
 import type { Service } from "@/types";
 import { ServiceCard } from "./ServiceCard";
 
@@ -11,20 +12,20 @@ export function ServicesList({ initial }: { initial: Service[] }) {
 
   useEffect(() => {
     let cancelled = false;
-    const tick = async () => {
+
+    async function syncCatalog() {
       try {
-        const res = await fetch("/api/services.json", { cache: "no-store" });
-        if (!res.ok) return;
-        const data = await res.json();
-        const fresh: Service[] = Array.isArray(data?.services)
-          ? data.services
-          : [];
+        const fresh = await fetchPublicCatalog();
         if (!cancelled) setServices(fresh);
       } catch {
-        // Network blip — keep existing list, retry next tick.
+        // Network blip — keep the current list, retry on the next interval.
       }
-    };
-    const id = setInterval(tick, REFRESH_INTERVAL_MS);
+    }
+
+    // Sync immediately on mount so a stale/empty SSR snapshot is corrected
+    // in the first render cycle, not after the first 10s refresh tick.
+    void syncCatalog();
+    const id = setInterval(syncCatalog, REFRESH_INTERVAL_MS);
     return () => {
       cancelled = true;
       clearInterval(id);
