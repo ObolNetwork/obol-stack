@@ -51,3 +51,9 @@ export interface Service {
   // weight orders services within a category; higher sorts earlier.
   weight?: number;
 }
+
+export interface StorefrontProfile {
+  displayName: string;
+  tagline: string;
+  logoUrl: string;
+}

@@ -16,6 +16,8 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/ObolNetwork/obol-stack/internal/storefront"
 	"github.com/ethereum/go-ethereum/common"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -62,18 +64,19 @@ type Controller struct {
 	httpRoutes           dynamic.NamespaceableResourceInterface
 	referenceGrants      dynamic.NamespaceableResourceInterface
 
-	offerInformer        cache.SharedIndexInformer
-	registrationInformer cache.SharedIndexInformer
-	identityInformer     cache.SharedIndexInformer
-	purchaseInformer     cache.SharedIndexInformer
-	agentInformer        cache.SharedIndexInformer
-	configMapInformer    cache.SharedIndexInformer
-	offerQueue           workqueue.TypedRateLimitingInterface[string]
-	registrationQueue    workqueue.TypedRateLimitingInterface[string]
-	identityQueue        workqueue.TypedRateLimitingInterface[string]
-	purchaseQueue        workqueue.TypedRateLimitingInterface[string]
-	agentQueue           workqueue.TypedRateLimitingInterface[string]
-	catalogMu            sync.Mutex
+	offerInformer             cache.SharedIndexInformer
+	registrationInformer      cache.SharedIndexInformer
+	identityInformer          cache.SharedIndexInformer
+	purchaseInformer          cache.SharedIndexInformer
+	agentInformer             cache.SharedIndexInformer
+	configMapInformer         cache.SharedIndexInformer
+	storefrontProfileInformer cache.SharedIndexInformer
+	offerQueue                workqueue.TypedRateLimitingInterface[string]
+	registrationQueue         workqueue.TypedRateLimitingInterface[string]
+	identityQueue             workqueue.TypedRateLimitingInterface[string]
+	purchaseQueue             workqueue.TypedRateLimitingInterface[string]
+	agentQueue                workqueue.TypedRateLimitingInterface[string]
+	catalogMu                 sync.Mutex
 
 	pendingAuths sync.Map // key: "ns/name" → []map[string]string
 
@@ -111,36 +114,41 @@ func New(cfg *rest.Config) (*Controller, error) {
 		options.FieldSelector = fields.OneTermEqualSelector("metadata.name", "obol-stack-config").String()
 	})
 	configMapInformer := configMapFactory.ForResource(monetizeapi.ConfigMapGVR).Informer()
+	storefrontProfileFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(client, 0, storefront.ProfileNamespace, func(options *metav1.ListOptions) {
+		options.FieldSelector = fields.OneTermEqualSelector("metadata.name", storefront.ProfileConfigMap).String()
+	})
+	storefrontProfileInformer := storefrontProfileFactory.ForResource(monetizeapi.ConfigMapGVR).Informer()
 
 	controller := &Controller{
-		kubeClient:           kubeClient,
-		dynClient:            client,
-		client:               client,
-		offers:               client.Resource(monetizeapi.ServiceOfferGVR),
-		registrationRequests: client.Resource(monetizeapi.RegistrationRequestGVR),
-		agentIdentities:      client.Resource(monetizeapi.AgentIdentityGVR),
-		agents:               client.Resource(monetizeapi.AgentGVR),
-		services:             client.Resource(monetizeapi.ServiceGVR),
-		configMaps:           client.Resource(monetizeapi.ConfigMapGVR),
-		deployments:          client.Resource(monetizeapi.DeploymentGVR),
-		middlewares:          client.Resource(monetizeapi.MiddlewareGVR),
-		httpRoutes:           client.Resource(monetizeapi.HTTPRouteGVR),
-		referenceGrants:      client.Resource(monetizeapi.ReferenceGrantGVR),
-		offerInformer:        offerInformer,
-		registrationInformer: registrationInformer,
-		identityInformer:     identityInformer,
-		purchaseInformer:     purchaseInformer,
-		agentInformer:        agentInformer,
-		configMapInformer:    configMapInformer,
-		offerQueue:           workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
-		registrationQueue:    workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
-		identityQueue:        workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
-		purchaseQueue:        workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
-		agentQueue:           workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
-		httpClient:           &http.Client{Timeout: 3 * time.Second},
-		registrationRPCBase:  getenvDefault("ERC8004_RPC_BASE", erc8004.DefaultRPCBase),
-		baseURLOverride:      strings.TrimRight(os.Getenv("AGENT_BASE_URL"), "/"),
-		defaultBaseURL:       "http://obol.stack:8080",
+		kubeClient:                kubeClient,
+		dynClient:                 client,
+		client:                    client,
+		offers:                    client.Resource(monetizeapi.ServiceOfferGVR),
+		registrationRequests:      client.Resource(monetizeapi.RegistrationRequestGVR),
+		agentIdentities:           client.Resource(monetizeapi.AgentIdentityGVR),
+		agents:                    client.Resource(monetizeapi.AgentGVR),
+		services:                  client.Resource(monetizeapi.ServiceGVR),
+		configMaps:                client.Resource(monetizeapi.ConfigMapGVR),
+		deployments:               client.Resource(monetizeapi.DeploymentGVR),
+		middlewares:               client.Resource(monetizeapi.MiddlewareGVR),
+		httpRoutes:                client.Resource(monetizeapi.HTTPRouteGVR),
+		referenceGrants:           client.Resource(monetizeapi.ReferenceGrantGVR),
+		offerInformer:             offerInformer,
+		registrationInformer:      registrationInformer,
+		identityInformer:          identityInformer,
+		purchaseInformer:          purchaseInformer,
+		agentInformer:             agentInformer,
+		configMapInformer:         configMapInformer,
+		storefrontProfileInformer: storefrontProfileInformer,
+		offerQueue:                workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		registrationQueue:         workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		identityQueue:             workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		purchaseQueue:             workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		agentQueue:                workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[string]()),
+		httpClient:                &http.Client{Timeout: 3 * time.Second},
+		registrationRPCBase:       getenvDefault("ERC8004_RPC_BASE", erc8004.DefaultRPCBase),
+		baseURLOverride:           strings.TrimRight(os.Getenv("AGENT_BASE_URL"), "/"),
+		defaultBaseURL:            "http://obol.stack:8080",
 	}
 
 	offerInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -201,6 +209,11 @@ func New(cfg *rest.Config) (*Controller, error) {
 		UpdateFunc: func(_, newObj any) { controller.enqueueDiscoveryRefresh(newObj) },
 		DeleteFunc: controller.enqueueDiscoveryRefresh,
 	})
+	storefrontProfileInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc:    controller.enqueueStorefrontProfileRefresh,
+		UpdateFunc: func(_, newObj any) { controller.enqueueStorefrontProfileRefresh(newObj) },
+		DeleteFunc: controller.enqueueStorefrontProfileRefresh,
+	})
 
 	return controller, nil
 }
@@ -218,6 +231,7 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 	go c.purchaseInformer.Run(ctx.Done())
 	go c.agentInformer.Run(ctx.Done())
 	go c.configMapInformer.Run(ctx.Done())
+	go c.storefrontProfileInformer.Run(ctx.Done())
 	if !cache.WaitForCacheSync(ctx.Done(),
 		c.offerInformer.HasSynced,
 		c.registrationInformer.HasSynced,
@@ -225,6 +239,7 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 		c.purchaseInformer.HasSynced,
 		c.agentInformer.HasSynced,
 		c.configMapInformer.HasSynced,
+		c.storefrontProfileInformer.HasSynced,
 	) {
 		return fmt.Errorf("wait for informer sync")
 	}
@@ -308,18 +323,48 @@ func (c *Controller) enqueueDiscoveryRefresh(obj any) {
 	if u == nil {
 		return
 	}
-	if u.GetNamespace() != "obol-frontend" || u.GetName() != "obol-stack-config" {
+	ns, name := u.GetNamespace(), u.GetName()
+	if ns == "obol-frontend" && name == "obol-stack-config" {
+		log.Printf("serviceoffer-controller: base URL change detected, refreshing offers and registration requests")
+		for _, item := range c.offerInformer.GetStore().List() {
+			c.enqueueOffer(item)
+		}
+		for _, item := range c.registrationInformer.GetStore().List() {
+			c.enqueueRegistration(item)
+		}
+		for _, item := range c.identityInformer.GetStore().List() {
+			c.enqueueIdentity(item)
+		}
+	}
+}
+
+func (c *Controller) enqueueStorefrontProfileRefresh(obj any) {
+	u := asUnstructured(obj)
+	if u == nil {
 		return
 	}
-	log.Printf("serviceoffer-controller: base URL change detected, refreshing offers and registration requests")
-	for _, item := range c.offerInformer.GetStore().List() {
-		c.enqueueOffer(item)
+	if u.GetNamespace() != storefront.ProfileNamespace || u.GetName() != storefront.ProfileConfigMap {
+		return
 	}
-	for _, item := range c.registrationInformer.GetStore().List() {
-		c.enqueueRegistration(item)
+	log.Printf("serviceoffer-controller: storefront profile change detected, refreshing skill catalog")
+	c.enqueueSkillCatalogRefresh()
+}
+
+func (c *Controller) enqueueSkillCatalogRefresh() {
+	items := c.offerInformer.GetStore().List()
+	if len(items) > 0 {
+		// Any single offer reconcile rebuilds the full catalog.
+		c.enqueueOffer(items[0])
+		return
 	}
-	for _, item := range c.identityInformer.GetStore().List() {
-		c.enqueueIdentity(item)
+	go c.refreshSkillCatalogAsync()
+}
+
+func (c *Controller) refreshSkillCatalogAsync() {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := c.reconcileSkillCatalog(ctx, nil); err != nil {
+		log.Printf("serviceoffer-controller: refresh skill catalog: %v", err)
 	}
 }
 
@@ -1116,6 +1161,24 @@ func (c *Controller) reconcileRegistrationTombstone(ctx context.Context, raw *un
 	return c.updateRegistrationStatus(ctx, raw, status)
 }
 
+func (c *Controller) loadStorefrontProfile(ctx context.Context) (*schemas.StorefrontProfile, error) {
+	cm, err := c.configMaps.Namespace(storefront.ProfileNamespace).Get(ctx, storefront.ProfileConfigMap, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	raw, found, err := unstructured.NestedString(cm.Object, "data", storefront.ProfileDataKey)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+	return storefront.ParseProfile(raw)
+}
+
 // reconcileSkillCatalog rebuilds the /skill.md ConfigMap/Deployment/Service/
 // HTTPRoute from the current set of Ready ServiceOffers. If `override` is
 // non-nil, that offer replaces (or is appended to) the informer-cached copy
@@ -1156,8 +1219,12 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 		offers = append(offers, override)
 	}
 
-	content := buildSkillCatalogMarkdown(offers, baseURL)
-	servicesJSON := buildServiceCatalogJSON(offers, baseURL)
+	storefrontProfile, err := c.loadStorefrontProfile(ctx)
+	if err != nil {
+		return err
+	}
+	content := buildSkillCatalogMarkdown(offers, baseURL, storefrontProfile)
+	servicesJSON := buildServiceCatalogJSON(offers, baseURL, storefrontProfile)
 	// buildOpenAPIDocument prefers the tunnel URL for the public `servers[0]`
 	// entry; baseURL is sourced from obol-stack-config.tunnelURL via
 	// registrationBaseURL, which is also what /skill.md and services.json

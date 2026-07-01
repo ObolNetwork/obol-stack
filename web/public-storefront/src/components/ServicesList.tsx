@@ -15,7 +15,10 @@ export function ServicesList({ initial }: { initial: Service[] }) {
       try {
         const res = await fetch("/api/services.json", { cache: "no-store" });
         if (!res.ok) return;
-        const fresh: Service[] = await res.json();
+        const data = await res.json();
+        const fresh: Service[] = Array.isArray(data?.services)
+          ? data.services
+          : [];
         if (!cancelled) setServices(fresh);
       } catch {
         // Network blip — keep existing list, retry next tick.

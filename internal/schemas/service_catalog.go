@@ -102,3 +102,19 @@ type ServiceCatalogEIP712Domain struct {
 	Name    string `json:"name"`
 	Version string `json:"version"`
 }
+
+// StorefrontProfile is operator-set seller branding merged into
+// /api/services.json by the controller.
+type StorefrontProfile struct {
+	DisplayName string `json:"displayName"`
+	Tagline     string `json:"tagline"`
+	LogoURL     string `json:"logoUrl"`
+}
+
+// ServiceCatalog is the public /api/services.json envelope.
+type ServiceCatalog struct {
+	DisplayName string                `json:"displayName"`
+	Tagline     string                `json:"tagline"`
+	LogoURL     string                `json:"logoUrl"`
+	Services    []ServiceCatalogEntry `json:"services"`
+}
