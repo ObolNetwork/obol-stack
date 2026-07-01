@@ -341,8 +341,7 @@ func printServiceDetail(u *ui.UI, e schemas.ServiceCatalogEntry, catalog schemas
 }
 
 // loadPublishedCatalog reads the controller-published /api/services.json feed
-// (the obol-skill-md ConfigMap). It tolerates a legacy bare-array catalog from
-// an older controller by wrapping it in an envelope with resolved defaults.
+// (the obol-skill-md ConfigMap) as the storefront envelope.
 func loadPublishedCatalog(cfg *config.Config) (schemas.ServiceCatalog, error) {
 	raw, err := kubectlOutput(cfg, "get", "configmap", "obol-skill-md",
 		"-n", storefront.ProfileNamespace, "-o", "jsonpath={.data.services\\.json}")
@@ -362,27 +361,11 @@ func loadPublishedCatalog(cfg *config.Config) (schemas.ServiceCatalog, error) {
 		}, nil
 	}
 
-	if strings.HasPrefix(raw, "{") {
-		var catalog schemas.ServiceCatalog
-		if err := json.Unmarshal([]byte(raw), &catalog); err != nil {
-			return schemas.ServiceCatalog{}, fmt.Errorf("parse published catalog: %w", err)
-		}
-		return catalog, nil
-	}
-
-	// Legacy controller: bare array of services. Wrap with resolved defaults.
-	var services []schemas.ServiceCatalogEntry
-	if err := json.Unmarshal([]byte(raw), &services); err != nil {
+	var catalog schemas.ServiceCatalog
+	if err := json.Unmarshal([]byte(raw), &catalog); err != nil {
 		return schemas.ServiceCatalog{}, fmt.Errorf("parse published catalog: %w", err)
 	}
-	profile, _ := loadSellerProfile(cfg)
-	resolved := storefront.ResolvePublished(&profile, mustSellerBaseURL(cfg))
-	return schemas.ServiceCatalog{
-		DisplayName: resolved.DisplayName,
-		Tagline:     resolved.Tagline,
-		LogoURL:     resolved.LogoURL,
-		Services:    services,
-	}, nil
+	return catalog, nil
 }
 
 func loadSellerProfile(cfg *config.Config) (schemas.StorefrontProfile, error) {
