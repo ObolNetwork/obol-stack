@@ -417,3 +417,58 @@ func mkdirInstance(t *testing.T, cfg *config.Config, id string) {
 		t.Fatalf("create Hermes instance %q: %v", id, err)
 	}
 }
+
+func TestGenerateConfig_IncludesPayAgentAllowlist(t *testing.T) {
+	raw, err := generateConfig(testConfig(t), "claude-sonnet-4-6")
+	if err != nil {
+		t.Fatalf("generateConfig: %v", err)
+	}
+	var cfg map[string]any
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+	allowlist, ok := cfg["command_allowlist"].([]any)
+	if !ok || len(allowlist) == 0 {
+		t.Fatalf("command_allowlist = %#v, want non-empty list", cfg["command_allowlist"])
+	}
+	if allowlist[0] != "tirith:lookalike_tld" {
+		t.Fatalf("command_allowlist[0] = %v, want tirith:lookalike_tld", allowlist[0])
+	}
+	term, ok := cfg["terminal"].(map[string]any)
+	if !ok {
+		t.Fatal("terminal config missing")
+	}
+	if term["timeout"] != 3600 {
+		t.Fatalf("terminal.timeout = %v, want 3600 for pay-agent", term["timeout"])
+	}
+}
+
+func TestMergePreservedHermesConfigKeys_UnionsAllowlist(t *testing.T) {
+	cfg := testConfig(t)
+	id := "obol-agent"
+	home := agentruntime.HomePath(cfg, agentruntime.Hermes, id)
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatalf("mkdir home: %v", err)
+	}
+	existing := []byte("command_allowlist:\n  - custom:rule\n")
+	if err := os.WriteFile(filepath.Join(home, "config.yaml"), existing, 0o600); err != nil {
+		t.Fatalf("write existing config: %v", err)
+	}
+	generated, err := generateConfig(cfg, "claude-sonnet-4-6")
+	if err != nil {
+		t.Fatalf("generateConfig: %v", err)
+	}
+	merged, err := mergePreservedHermesConfigKeys(cfg, id, generated)
+	if err != nil {
+		t.Fatalf("mergePreservedHermesConfigKeys: %v", err)
+	}
+	var out map[string]any
+	if err := yaml.Unmarshal(merged, &out); err != nil {
+		t.Fatalf("yaml.Unmarshal merged: %v", err)
+	}
+	got := stringSliceFromConfig(out["command_allowlist"])
+	want := []string{"tirith:lookalike_tld", "custom:rule"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("command_allowlist = %#v, want %#v", got, want)
+	}
+}
