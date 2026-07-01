@@ -695,6 +695,10 @@ func writeDeploymentFiles(cfg *config.Config, id, deploymentDir, agentBaseURL st
 	if err != nil {
 		return err
 	}
+	configData, err = mergePreservedHermesConfigKeys(cfg, id, configData)
+	if err != nil {
+		return err
+	}
 
 	if err := os.WriteFile(filepath.Join(deploymentDir, valuesFileName), []byte(generateValues(namespace, hostname, dashboardHost, agentBaseURL, token, primary, configData)), 0o600); err != nil {
 		return fmt.Errorf("failed to write %s: %w", valuesFileName, err)
@@ -1149,15 +1153,95 @@ func generateConfig(cfg *config.Config, primary string) ([]byte, error) {
 		"terminal": map[string]any{
 			"backend":                       "local",
 			"cwd":                           "/data/.hermes/workspace",
-			"timeout":                       180,
-			"lifetime_seconds":              300,
+			// pay-agent streams up to 1h; chat buys must not die at 180s.
+			"timeout":                       3600,
+			"lifetime_seconds":              3700,
 			"docker_mount_cwd_to_workspace": false,
 		},
+		// Tirith blocks .dev seller URLs in pay-agent shell commands unless
+		// explicitly allowed. Stack-managed buyers need this for tunnel hosts.
+		"command_allowlist": []string{"tirith:lookalike_tld"},
 		"skills": map[string]any{
 			"external_dirs": []string{"/data/.hermes/" + obolSkillsDirName},
 		},
 	}
 	return yaml.Marshal(payload)
+}
+
+// mergePreservedHermesConfigKeys carries operator-edited Hermes keys across
+// obol agent sync. generateConfig only knows stack-managed defaults; security
+// knobs like command_allowlist set via `hermes config` must survive re-render.
+func mergePreservedHermesConfigKeys(cfg *config.Config, id string, generated []byte) ([]byte, error) {
+	path := filepath.Join(agentruntime.HomePath(cfg, agentruntime.Hermes, id), "config.yaml")
+	existingData, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return generated, nil
+		}
+		return nil, fmt.Errorf("read existing Hermes config %s: %w", path, err)
+	}
+
+	var gen map[string]any
+	var exist map[string]any
+	if err := yaml.Unmarshal(generated, &gen); err != nil {
+		return nil, fmt.Errorf("parse generated Hermes config: %w", err)
+	}
+	if err := yaml.Unmarshal(existingData, &exist); err != nil {
+		return generated, nil
+	}
+
+	gen["command_allowlist"] = mergeCommandAllowlist(
+		stringSliceFromConfig(gen["command_allowlist"]),
+		stringSliceFromConfig(exist["command_allowlist"]),
+	)
+
+	out, err := yaml.Marshal(gen)
+	if err != nil {
+		return nil, fmt.Errorf("marshal merged Hermes config: %w", err)
+	}
+	return out, nil
+}
+
+func mergeCommandAllowlist(generated, existing []string) []string {
+	seen := make(map[string]struct{}, len(generated)+len(existing))
+	out := make([]string, 0, len(generated)+len(existing))
+	for _, list := range [][]string{generated, existing} {
+		for _, entry := range list {
+			entry = strings.TrimSpace(entry)
+			if entry == "" {
+				continue
+			}
+			if _, ok := seen[entry]; ok {
+				continue
+			}
+			seen[entry] = struct{}{}
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func stringSliceFromConfig(v any) []string {
+	switch t := v.(type) {
+	case []string:
+		return t
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, item := range t {
+			if s, ok := item.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, strings.TrimSpace(s))
+			}
+		}
+		return out
+	case string:
+		s := strings.TrimSpace(t)
+		if s == "" {
+			return nil
+		}
+		return []string{s}
+	default:
+		return nil
+	}
 }
 
 func currentAgentBaseURL(deploymentDir string) string {
