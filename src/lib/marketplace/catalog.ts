@@ -103,9 +103,9 @@ export async function fetchRawCatalog(
   try {
     res = await fetch(url, {
       headers: { accept: 'application/json' },
-      // Next.js fetch cache: 30s ISR window. Each route handler caps it
-      // lower if needed via its own revalidate export.
-      next: { revalidate: 30 },
+      // Catalog is rebuilt on every ServiceOffer reconcile — do not ISR-cache
+      // or new listings can stay invisible for up to 30s.
+      cache: 'no-store',
     });
   } catch (e) {
     if (isDefaultCatalogMissing(url, e)) return [];
