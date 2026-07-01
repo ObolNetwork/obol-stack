@@ -1,18 +1,18 @@
-# Local environment overrides (copy to .envrc.local)
-# This file is for local development customizations and is gitignored
+# Local environment overrides (copy to .envrc.local, then: source .envrc.local)
+# This file is gitignored. Use direnv (`direnv allow`) for auto-load in this repo.
 
-# Recommended when your stack lives in ~/.config/obol but you build obol from this repo:
-# export OBOL_CONFIG_DIR="${HOME}/.config/obol"
-# export OBOL_BIN_DIR="${PWD}/.workspace/bin"
-# PATH_add .workspace/bin
+# --- Recommended: dev-build obol CLI against your real stack (single cluster) ---
+# Without OBOL_CONFIG_DIR, OBOL_DEVELOPMENT=true alone uses .workspace/config and
+# creates a SECOND k3d cluster (new petname stack ID). Point at ~/.config/obol instead.
 #
-# Without OBOL_CONFIG_DIR, OBOL_DEVELOPMENT=true uses .workspace/config and may
-# create a second k3d cluster (separate stack ID from your real install).
+# export OBOL_DEVELOPMENT=true
+# export OBOL_CONFIG_DIR="${HOME}/.config/obol"
+# export OBOL_DATA_DIR="${HOME}/.local/share/obol"
+# export OBOL_STATE_DIR="${HOME}/.local/state/obol"
+# export OBOL_BIN_DIR="${PWD}/.workspace/bin"
+# if type PATH_add >/dev/null 2>&1; then PATH_add .workspace/bin; else export PATH="${PWD}/.workspace/bin:${PATH}"; fi
 
-# Example: Override development mode
-# export OBOL_DEVELOPMENT=false
-
-# Example: Override config directories
+# Example: custom paths
 # export OBOL_CONFIG_DIR=/custom/config/path
 # export OBOL_BIN_DIR=/custom/bin/path
 # export OBOL_STATE_DIR=/custom/state/path

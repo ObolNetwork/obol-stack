@@ -28,13 +28,20 @@ function optionLabel(opt: ServicePayment): string {
 // obol.org/llms.txt: /skill.md carries the full x402 payment flow and
 // /openapi.json the exact request shapes. Falls back to a generic x402
 // pointer if the endpoint origin can't be parsed.
-function docsRef(endpoint: string): string {
+function endpointOrigin(endpoint: string): string | null {
   try {
-    const origin = new URL(endpoint).origin;
-    return `Read ${origin}/skill.md for the x402 payment flow and ${origin}/openapi.json for the exact request shapes.`;
+    return new URL(endpoint).origin;
   } catch {
+    return null;
+  }
+}
+
+function docsRef(endpoint: string): string {
+  const origin = endpointOrigin(endpoint);
+  if (!origin) {
     return "See https://www.x402.org for how x402 micropayments work.";
   }
+  return `Read ${origin}/skill.md for the x402 payment flow and ${origin}/openapi.json for the exact request shapes.`;
 }
 
 const typeColors: Record<string, string> = {
@@ -194,6 +201,28 @@ export function ServiceCard({ service }: { service: Service }) {
             {service.endpoint}
           </a>
         </div>
+        {kind === "http" && endpointOrigin(service.endpoint) ? (
+          <div className="col-span-2">
+            <span className="text-text-muted">API docs</span>
+            <a
+              href={`${endpointOrigin(service.endpoint)}/api`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-obol-green hover:underline"
+            >
+              Swagger UI ↗
+            </a>
+            <span className="text-text-muted text-xs mx-1">·</span>
+            <a
+              href={`${endpointOrigin(service.endpoint)}/openapi.json`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-obol-green hover:underline"
+            >
+              openapi.json ↗
+            </a>
+          </div>
+        ) : null}
       </div>
 
       <button
@@ -317,9 +346,8 @@ function TabBar({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
 
 // BuyViaObolAgent branches on service.type so the prompt matches what
 // the buy-x402 skill actually does for that shape (`pay` for http,
-// `pay` against chat-completions for agents, `obol buy inference` CLI
-// for inference). Mirrors inferenceCopy/agentCopy/httpCopy in
-// internal/x402/paymentrequired.go.
+// `pay-agent` for agents, `obol buy inference` CLI for inference).
+// Mirrors inferenceCopy/agentCopy/httpCopy in internal/x402/paymentrequired.go.
 function BuyViaObolAgent({
   service,
   opt,

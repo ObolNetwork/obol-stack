@@ -55,19 +55,19 @@ fi
 # Pinned dependency versions
 # Update these versions to upgrade dependencies across all installations
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
-readonly KUBECTL_VERSION="1.36.1"
+readonly KUBECTL_VERSION="1.36.2"
 # renovate: datasource=github-releases depName=helm/helm
-readonly HELM_VERSION="3.21.0"
+readonly HELM_VERSION="3.21.2"
 # renovate: datasource=github-releases depName=k3d-io/k3d
-readonly K3D_VERSION="5.8.3"
+readonly K3D_VERSION="5.9.0"
 # renovate: datasource=github-releases depName=helmfile/helmfile
-readonly HELMFILE_VERSION="1.5.2"
+readonly HELMFILE_VERSION="1.6.0"
 # renovate: datasource=github-releases depName=derailed/k9s
-readonly K9S_VERSION="0.50.18"
+readonly K9S_VERSION="0.51.0"
 # renovate: datasource=github-releases depName=databus23/helm-diff
-readonly HELM_DIFF_VERSION="3.15.7"
+readonly HELM_DIFF_VERSION="3.15.10"
 # renovate: datasource=github-releases depName=ollama/ollama
-readonly OLLAMA_VERSION="0.24.0"
+readonly OLLAMA_VERSION="0.31.1"
 # Must match internal/openclaw/OPENCLAW_VERSION (without "v" prefix).
 # Tested by TestOpenClawVersionConsistency.
 readonly OPENCLAW_VERSION="2026.4.21"
