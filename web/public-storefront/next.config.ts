@@ -5,8 +5,8 @@ const servicesURL =
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  // Local dev has no Traefik in front — proxy catalog JSON through Next so the
-  // client-side refresh in ServicesList hits the cluster via SERVICES_URL.
+  // Local dev has no Traefik in front — proxy catalog JSON through Next so SSR
+  // and client refresh in ServicesList hit the cluster via SERVICES_URL.
   async rewrites() {
     return [
       {

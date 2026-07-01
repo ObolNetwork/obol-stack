@@ -1271,7 +1271,9 @@ func CreateStorefront(cfg *config.Config, hostnames ...string) error {
 									{"containerPort": 3000, "name": "http"},
 								},
 								"env": []map[string]string{
-									{"name": "SERVICES_URL", "value": "http://obol-skill-md.x402.svc:8080"},
+									{"name": "SERVICES_URL", "value": "http://obol-skill-md.x402.svc.cluster.local:8080"},
+									// Bind on all interfaces so in-pod probes and SSR self-fetches work.
+									{"name": "HOSTNAME", "value": "0.0.0.0"},
 								},
 								// Next.js SSR `/` cold renders can take >1s (the
 								// implicit livenessProbe timeoutSeconds default).

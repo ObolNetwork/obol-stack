@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { fetchPublicCatalog } from "@/lib/catalog-client";
 import type { Service } from "@/types";
 import { ServiceCard } from "./ServiceCard";
 
@@ -11,20 +12,18 @@ export function ServicesList({ initial }: { initial: Service[] }) {
 
   useEffect(() => {
     let cancelled = false;
-    const tick = async () => {
+
+    async function syncCatalog() {
       try {
-        const res = await fetch("/api/services.json", { cache: "no-store" });
-        if (!res.ok) return;
-        const data = await res.json();
-        const fresh: Service[] = Array.isArray(data?.services)
-          ? data.services
-          : [];
+        const fresh = await fetchPublicCatalog();
         if (!cancelled) setServices(fresh);
       } catch {
-        // Network blip — keep existing list, retry next tick.
+        // Network blip — keep SSR snapshot, retry on next interval.
       }
-    };
-    const id = setInterval(tick, REFRESH_INTERVAL_MS);
+    }
+
+    void syncCatalog();
+    const id = setInterval(syncCatalog, REFRESH_INTERVAL_MS);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -48,11 +47,6 @@ export function ServicesList({ initial }: { initial: Service[] }) {
     );
   }
 
-  // Group into storefront sections by category. Demo is just another
-  // category — no special-casing. Services arrive pre-sorted by the catalog
-  // (weight desc, then name), so iterating in order and emitting categories
-  // as first encountered makes the section order follow weight too
-  // (uncategorized services render under "Services").
   const sections = groupByCategory(services);
 
   return (
