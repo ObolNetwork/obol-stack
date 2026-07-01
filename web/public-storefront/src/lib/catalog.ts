@@ -1,10 +1,17 @@
+import { unstable_noStore as noStore } from "next/cache";
 import { cache } from "react";
 import type { Service, StorefrontProfile } from "@/types";
 
+// SSR fetches the catalog straight from the in-cluster upstream. That returns
+// byte-identical JSON to the public /api/services.json (obol-skill-md serves
+// the already-merged envelope; Traefik just routes to it), but without a WAN
+// hairpin back through the tunnel — so the storefront's own render never
+// depends on the tunnel being healthy. FQDN over the short .svc form to avoid
+// search-domain resolution flakiness on cold DNS.
 const SERVICES_URL =
-  process.env.SERVICES_URL ?? "http://obol-skill-md.x402.svc:8080";
+  process.env.SERVICES_URL ?? "http://obol-skill-md.x402.svc.cluster.local:8080";
 
-const CATALOG_FETCH_TIMEOUT_MS = 5_000;
+const CATALOG_FETCH_TIMEOUT_MS = 8_000;
 
 async function fetchCatalog(path: string): Promise<Response> {
   return fetch(`${SERVICES_URL}${path}`, {
@@ -35,8 +42,15 @@ export interface ServiceCatalogDocument extends StorefrontProfile {
 }
 
 function parseCatalogDocument(data: unknown): ServiceCatalogDocument {
-  if (!data || typeof data !== "object" || Array.isArray(data)) {
+  if (!data || typeof data !== "object") {
     return { ...DEFAULT_STOREFRONT, services: [] };
+  }
+  // Accept the legacy bare-array catalog as well as the envelope. Older
+  // serviceoffer-controller images publish /api/services.json as a bare
+  // services[] array; rejecting it here dropped every service on those
+  // clusters (not just a stale render).
+  if (Array.isArray(data)) {
+    return { ...DEFAULT_STOREFRONT, services: data as Service[] };
   }
   const doc = data as Partial<ServiceCatalogDocument>;
   return {
@@ -49,6 +63,9 @@ function parseCatalogDocument(data: unknown): ServiceCatalogDocument {
 
 export const fetchCatalogDocument = cache(
   async (): Promise<ServiceCatalogDocument> => {
+    // Opt out of Next's fetch cache so a hit doesn't pin a stale (or empty,
+    // cold-start) catalog for the request-memoized lifetime.
+    noStore();
     try {
       const res = await fetchCatalog("/api/services.json");
       if (!res.ok) return { ...DEFAULT_STOREFRONT, services: [] };
