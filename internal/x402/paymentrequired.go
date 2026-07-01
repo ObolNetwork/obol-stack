@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"html/template"
 	"math/big"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
@@ -35,6 +36,13 @@ func sanitizeDisplayToken(s, placeholder string) string {
 	}
 	return s
 }
+
+// defaultAgentTaskExample is the concrete sample task baked into the
+// agent-type copy so a buyer can paste the pay-agent command (or the
+// chat-completions body) and have it run as-is, then edit the message.
+// Mirrors AGENT_TASK_PLACEHOLDER in the storefront's ServiceCard.tsx so the
+// public storefront and the 402 page hand out the same example.
+const defaultAgentTaskExample = "Summarise the README and list the top 3 risks."
 
 //go:embed templates/payment_required.html
 var paymentRequiredHTMLSrc string
@@ -157,16 +165,42 @@ func prefersHTML(accept string) bool {
 // incoming request. Mirrors buildResourceURL but keeps just the origin so
 // rendered HTML can reference sibling routes (storefront, OG image) on the
 // same tunnel host the scraper or browser is currently hitting.
+//
+// Scheme resolution defaults to https and only downgrades to http for the
+// hosts the stack serves locally over plain HTTP (obol.stack, loopback,
+// *.localhost/*.local). This matters because the public 402 page is served
+// over the Cloudflare tunnel, which terminates TLS at the edge and forwards
+// plaintext to cloudflared -> Traefik -> verifier: the X-Forwarded-Proto we
+// observe on the ForwardAuth hop is "http", so keying off it alone rendered
+// http:// tunnel links (broken/mixed-content in the copy-paste prompts and
+// OG/asset URLs). An explicit https signal (direct TLS or X-Forwarded-Proto:
+// https) still forces https for any host.
 func resolveSiteURL(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
-		scheme = "https"
-	}
 	host := r.Host
 	if forwarded := r.Header.Get("X-Forwarded-Host"); forwarded != "" {
 		host = forwarded
 	}
+	scheme := "https"
+	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "https" && isLocalHost(host) {
+		scheme = "http"
+	}
 	return scheme + "://" + host
+}
+
+// isLocalHost reports whether host (optionally with :port) is one the stack
+// serves locally over plain HTTP: obol.stack, loopback, or a developer
+// *.localhost/*.local name. Any other host is treated as a public tunnel
+// hostname (https).
+func isLocalHost(host string) bool {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.ToLower(strings.Trim(strings.TrimSuffix(host, "."), "[]"))
+	switch host {
+	case "obol.stack", "localhost", "127.0.0.1", "::1", "0.0.0.0":
+		return true
+	}
+	return strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local")
 }
 
 // sendPaymentRequiredHTML writes a 402 status with an HTML body that includes
@@ -414,13 +448,13 @@ func inferenceCopy(url, siteURL string, d PaymentDisplay) typeCopy {
 				"pre-authorizes the provider through your agent's wallet and registers the model as " +
 				"<code>paid/&lt;model&gt;</code> in your local LiteLLM gateway, so every agent in your stack " +
 				"can call it like any other OpenAI-compatible model."),
-		ShowPrimary:    true,
-		PrimaryTitle:   "Use this service for your Obol Agent's model",
-		PrimaryLede:    "Run this from your obol-stack host. The CLI walks `/api/services.json`, prompts for auto-refill + a request count, and pre-signs the authorizations from your master agent's wallet. Pass `--yes --count <N>` for non-interactive runs.",
-		PrimaryIsCode:  true,
-		PrimaryPayload: cmd,
-		PromptObol:     prompt,
-		PromptOther:    other,
+		ShowPrimary:         true,
+		PrimaryTitle:        "Use this service for your Obol Agent's model",
+		PrimaryLede:         "Run this from your obol-stack host. The CLI walks `/api/services.json`, prompts for auto-refill + a request count, and pre-signs the authorizations from your master agent's wallet. Pass `--yes --count <N>` for non-interactive runs.",
+		PrimaryIsCode:       true,
+		PrimaryPayload:      cmd,
+		PromptObol:          prompt,
+		PromptOther:         other,
 		ChatCompletionsNote: "Direct HTTP buyers use OpenAI-style chat-completions. A minimal paid request looks like:",
 		ChatCompletionsBody: fmt.Sprintf(`POST %s/v1/chat/completions
 Content-Type: application/json
@@ -444,10 +478,8 @@ X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
 func agentCopy(url, siteURL string, d PaymentDisplay) typeCopy {
 	model := sanitizeDisplayToken(d.Model, "")
 	modelClause := ""
-	modelLine := ""
 	if model != "" {
 		modelClause = fmt.Sprintf(`"model": "%s",`, model)
-		modelLine = " (running " + model + ")"
 	}
 
 	body := fmt.Sprintf(`POST %s
@@ -457,24 +489,30 @@ X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
 {
   %s
   "messages": [
-    {"role": "user", "content": "<your prompt to this agent goes here>"}
+    {"role": "user", "content": %q}
   ]
-}`, url, modelClause)
+}`, url, modelClause, defaultAgentTaskExample)
 
+	// pay-agent requires a --model value, but an agent runs its own pinned
+	// model server-side and ignores the field, so we don't editorialize about
+	// which model the seller uses — we just fill the required flag (the
+	// seller's model when known, a placeholder otherwise) and hand the buyer a
+	// command that runs as-is with a concrete example task they can edit.
 	modelFlag := sanitizeDisplayToken(d.Model, "<model-id>")
 	prompt := fmt.Sprintf(
-		"Use the buy-x402 skill's `pay-agent` command to buy one round of work from this Obol Agent%s. "+
-			"This is an *agent*, not a raw model — it has its own skills, tools, and memory. Example:\n\n"+
-			"pay-agent %s --model %s --message \"<your prompt to this agent goes here>\"",
-		modelLine, url, modelFlag,
+		"Use the buy-x402 skill's `pay-agent` command to buy one round of work from this "+
+			"Obol Agent — it has its own skills, tools, and memory, not just a model. Edit the "+
+			"message, then run:\n\n"+
+			"pay-agent %s --model %q --message %q",
+		url, modelFlag, defaultAgentTaskExample,
 	)
 
 	other := fmt.Sprintf(
-		"Help me call the Obol Agent at %s%s — it's an autonomous agent (tools + skills + memory), "+
-			"not a raw LLM. It's gated by %s. POST OpenAI-style chat-completions JSON with a real "+
-			"prompt in `messages`, attach a signed EIP-3009/Permit2 authorization as `X-PAYMENT`, "+
-			"and report what the agent does.",
-		url, modelLine, x402GuideRef(siteURL),
+		"Help me call the Obol Agent at %s — it's an autonomous agent (tools + skills + memory), "+
+			"not a raw LLM. It's gated by %s. POST OpenAI-style chat-completions JSON with this user "+
+			"message in `messages`: {\"role\":\"user\",\"content\":%q}. Attach a signed "+
+			"EIP-3009/Permit2 authorization as `X-PAYMENT`, and report what the agent does.",
+		url, x402GuideRef(siteURL), defaultAgentTaskExample,
 	)
 
 	return typeCopy{
