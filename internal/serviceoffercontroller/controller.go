@@ -1219,11 +1219,11 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 		offers = append(offers, override)
 	}
 
-	content := buildSkillCatalogMarkdown(offers, baseURL)
 	storefrontProfile, err := c.loadStorefrontProfile(ctx)
 	if err != nil {
 		return err
 	}
+	content := buildSkillCatalogMarkdown(offers, baseURL, storefrontProfile)
 	servicesJSON := buildServiceCatalogJSON(offers, baseURL, storefrontProfile)
 	// buildOpenAPIDocument prefers the tunnel URL for the public `servers[0]`
 	// entry; baseURL is sourced from obol-stack-config.tunnelURL via

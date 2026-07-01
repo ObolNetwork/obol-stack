@@ -638,7 +638,7 @@ func TestBuildSkillCatalogMarkdown(t *testing.T) {
 		},
 	}
 
-	content := buildSkillCatalogMarkdown([]*monetizeapi.ServiceOffer{readyOffer, notReadyOffer}, "https://example.com")
+	content := buildSkillCatalogMarkdown([]*monetizeapi.ServiceOffer{readyOffer, notReadyOffer}, "https://example.com", nil)
 
 	if !strings.Contains(content, "# Obol Stack Service Catalog") {
 		t.Fatalf("catalog missing title:\n%s", content)
@@ -695,6 +695,7 @@ func TestBuildSkillCatalogMarkdown_DrainAdditiveDetail(t *testing.T) {
 	content := buildSkillCatalogMarkdown(
 		[]*monetizeapi.ServiceOffer{activeOffer, drainingOffer},
 		"https://example.com",
+		nil,
 	)
 
 	if strings.Contains(content, "- **Available**:") {

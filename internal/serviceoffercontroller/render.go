@@ -900,8 +900,9 @@ func offerPublishedForRegistration(offer *monetizeapi.ServiceOffer) bool {
 		isConditionTrue(offer.Status, "RoutePublished")
 }
 
-func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL string) string {
+func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL string, explicit *schemas.StorefrontProfile) string {
 	baseURL = strings.TrimRight(baseURL, "/")
+	profile := storefront.ResolvePublished(explicit, baseURL)
 
 	// Same operationally-ready filter as buildServiceCatalogJSON — keep the
 	// two surfaces consistent. An offer that's usable for x402 payments
@@ -934,7 +935,7 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 	})
 
 	lines := []string{
-		"# Obol Stack Service Catalog",
+		fmt.Sprintf("# %s Service Catalog", profile.DisplayName),
 		"",
 		fmt.Sprintf("> Generated from %d ready ServiceOffer(s). Every service below is gated by [x402](https://www.x402.org) micropayments — no API key, no signup, no subscription.", len(ready)),
 		"",
