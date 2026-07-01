@@ -444,8 +444,10 @@ function BuyViaOtherAgent({
     const model = service.model || "the advertised model";
     prompt = `${docsRef(service.endpoint)} I want to use the remote LLM at ${service.endpoint} (model ${model}) as a paid OpenAI-compatible chat-completions endpoint. Pre-sign a budget of EIP-3009 or Permit2 authorisations and POST chat-completions bodies with the X-PAYMENT header attached.`;
   } else if (kind === "agent") {
-    const modelLine = service.model ? ` (running ${service.model})` : "";
-    prompt = `${docsRef(service.endpoint)} Help me call the Obol Agent at ${service.endpoint}${modelLine} — it's an autonomous agent (tools + skills + memory), not a raw LLM. POST OpenAI-style chat-completions JSON with this user message in \`messages\`: {"role":"user","content":${quoteAgentTask(agentTask)}}. Attach a signed EIP-3009 or Permit2 authorisation as \`X-PAYMENT\`, and report what the agent does.`;
+    // An agent runs its own pinned model server-side and ignores the request's
+    // model field, so we don't tell the buyer which model it uses — the request
+    // shape is what matters.
+    prompt = `${docsRef(service.endpoint)} Help me call the Obol Agent at ${service.endpoint} — it's an autonomous agent (tools + skills + memory), not a raw LLM. POST OpenAI-style chat-completions JSON with this user message in \`messages\`: {"role":"user","content":${quoteAgentTask(agentTask)}}. Attach a signed EIP-3009 or Permit2 authorisation as \`X-PAYMENT\`, and report what the agent does.`;
   } else {
     prompt = `I want to purchase a service offered by an Obol Agent at ${service.endpoint} for ${opt.price} on ${opt.network}. Please install the run-obol-stack skill from https://github.com/ObolNetwork/skills, ask me for permission to set up the obol stack, and use the buy-x402 skill to make the purchase on my behalf.`;
   }

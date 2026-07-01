@@ -372,6 +372,12 @@ func TestRenderHermesConfig_SubAgentConstraints(t *testing.T) {
 		`disabled_toolsets:`,
 		`- memory`,
 		`- web`,
+		// Paid sub-agents are served headless with no interactive channel for
+		// the buyer to answer an approval prompt, so the dangerous-command /
+		// execute_code gate must be off (HARDLINE floor still applies). Quoted
+		// so YAML keeps it the string "off", not boolean false.
+		`approvals:`,
+		`mode: "off"`,
 	} {
 		if !strings.Contains(cfg, must) {
 			t.Errorf("hermes config missing sub-agent constraint %q\n---\n%s", must, cfg)
