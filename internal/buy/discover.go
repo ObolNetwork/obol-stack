@@ -205,17 +205,9 @@ func FetchServiceCatalog(ctx context.Context, sellerURL string) ([]CatalogEntry,
 		return nil, fmt.Errorf("read catalog body: %w", err)
 	}
 
-	// Preferred: the /api/services.json envelope {displayName,...,services:[]}.
-	// Backward compatibility: sellers on the pre-envelope format publish a bare
-	// array of services. Fall back to that shape so a current buyer can still
-	// purchase from an older seller.
 	var catalog schemas.ServiceCatalog
 	if err := json.Unmarshal(body, &catalog); err != nil {
-		var services []CatalogEntry
-		if arrErr := json.Unmarshal(body, &services); arrErr != nil {
-			return nil, fmt.Errorf("parse catalog JSON: %w", err)
-		}
-		return services, nil
+		return nil, fmt.Errorf("parse catalog JSON: %w", err)
 	}
 	return catalog.Services, nil
 }
