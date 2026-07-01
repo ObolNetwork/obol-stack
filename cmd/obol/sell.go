@@ -45,7 +45,25 @@ import (
 func sellCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "sell",
-		Usage: "Sell access to services via x402 micropayments",
+		Usage: "Sell access to agents and services using digital payments",
+		Description: `Sell access to agents and services using digital payments (x402).
+
+Commands split into two scopes:
+
+  The storefront (the whole shop)
+    info        Preview the storefront and everything on sale, as buyers see it
+    info set    Set the storefront's branding (name, tagline, logo)
+    register    Publish the seller's identity to a distribution channel (ERC-8004)
+    identity    Manage the durable on-chain identity record
+    list        List every offer (raw)
+    resume      Re-publish all offers (e.g. after a restart)
+
+  A single service (one item on the shelf)
+    inference | http | agent | mcp | demo   Put a service up for sale
+    status      Operator health and conditions for an offer
+    update      Change an offer's price or payout wallet in place
+    stop        Stop selling an offer without deleting it
+    delete      Stop selling an offer and remove it`,
 		Commands: []*cli.Command{
 			sellInferenceCommand(cfg),
 			sellHTTPCommand(cfg),
@@ -2626,7 +2644,7 @@ Examples:
 func sellStopCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "stop",
-		Usage:     "Drain a ServiceOffer gracefully (advertises wind-down via discovery, then tears down the route)",
+		Usage:     "Stop selling a service without deleting it",
 		ArgsUsage: "<name>",
 		Description: `Marks a ServiceOffer as draining. While draining:
   - The offer stays in /skill.md and /.well-known/agent-registration.json
@@ -2871,7 +2889,7 @@ Examples:
 func sellDeleteCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "delete",
-		Usage:     "Delete the sale of a service entirely and deactivate its ERC-8004 agent registration",
+		Usage:     "Stop selling a service and remove it (also deactivates any registrations)",
 		ArgsUsage: "<name>",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -3051,8 +3069,13 @@ Reloads the payment verifier when configuration is changed.`,
 func sellRegisterCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "register",
-		Usage: "Register a service on the ERC-8004 Agent Registry",
-		Description: `Registers an AgentIdentity on the ERC-8004 Agent Registry for one chain.
+		Usage: "Publish the seller's identity to a distribution channel (ERC-8004)",
+		Description: `Publishes the seller's agent identity to a distribution channel so buyers can
+discover it. Today the only channel is the ERC-8004 Agent Registry (on-chain);
+more channels may follow, so this command is framed around "where do I
+advertise" rather than a single registry.
+
+Registers an AgentIdentity on the ERC-8004 Agent Registry for one chain.
 The on-chain register tx is signed and broadcast by the Hermes remote-signer
 and pays gas from the agent's wallet — make sure it has a small balance on
 the target chain (~$0.20–$0.50 of native gas typically suffices).
