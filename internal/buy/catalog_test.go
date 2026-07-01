@@ -55,9 +55,9 @@ func TestEndpointPath(t *testing.T) {
 		"/services/aeon/chat/completions":         "/services/aeon",
 		"https://x.example/services/aeon":         "/services/aeon",
 		"https://x.example/services/aeon/v1/chat": "/services/aeon", // trailing chat is not stripped fully but path still picks aeon
-		"":                                        "",
-		"/":                                       "",
-		"/something-else":                         "",
+		"":                "",
+		"/":               "",
+		"/something-else": "",
 	}
 	for in, want := range cases {
 		got := endpointPath(in)
@@ -123,6 +123,31 @@ func TestFetchServiceCatalog(t *testing.T) {
 	}
 	if got[0].Name != "aeon" {
 		t.Fatalf("entry[0].Name = %q, want %q", got[0].Name, "aeon")
+	}
+}
+
+// A current buyer must still read a pre-envelope seller that publishes a bare
+// JSON array of services (backward compatibility).
+func TestFetchServiceCatalog_LegacyBareArray(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/services.json" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]CatalogEntry{
+			{Name: "aeon", Type: "inference", Model: "aeon7", Endpoint: "/services/aeon/v1/chat/completions"},
+		})
+	}))
+	defer srv.Close()
+
+	got, err := FetchServiceCatalog(context.Background(), srv.URL+"/services/aeon")
+	if err != nil {
+		t.Fatalf("FetchServiceCatalog (legacy array): %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "aeon" {
+		t.Fatalf("got %+v, want one entry named aeon", got)
 	}
 }
 
