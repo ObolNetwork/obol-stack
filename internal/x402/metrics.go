@@ -16,6 +16,19 @@ type verifierMetrics struct {
 	paymentFailed      *prometheus.CounterVec
 	chargedRequests    *prometheus.CounterVec
 	lastPaymentSuccess *prometheus.GaugeVec
+
+	// paymentFailureReasons splits paymentFailed by WHY (payment_invalid,
+	// facilitator_unreachable, settlement_failed, ...). paymentFailed alone
+	// says the funnel leaks; the reason label says where to fix it — the
+	// difference between "first-try success is 20%" and knowing which stage
+	// eats the other 80%.
+	paymentFailureReasons *prometheus.CounterVec
+
+	// upstreamFailedAfterVerify counts paid requests whose payment verified
+	// but whose upstream then returned an error (no settlement happens on
+	// this path). High values mean buyers are being bounced by the seller's
+	// own service, not by payments.
+	upstreamFailedAfterVerify *prometheus.CounterVec
 }
 
 func newVerifierMetrics() *verifierMetrics {
@@ -63,6 +76,20 @@ func newVerifierMetrics() *verifierMetrics {
 			},
 			[]string{"offer_namespace", "offer_name", "chain", "asset_symbol"},
 		),
+		paymentFailureReasons: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "obol_x402_verifier_payment_failure_reasons_total",
+				Help: "Payment-flow failures split by machine-readable reason (payment_invalid, facilitator_unreachable, settlement_failed, ...).",
+			},
+			[]string{"offer_namespace", "offer_name", "chain", "asset_symbol", "reason"},
+		),
+		upstreamFailedAfterVerify: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "obol_x402_verifier_upstream_failed_after_verify_total",
+				Help: "Paid requests whose x402 payment verified but whose upstream returned an error (not settled).",
+			},
+			[]string{"offer_namespace", "offer_name", "chain", "asset_symbol"},
+		),
 	}
 
 	m.registry.MustRegister(
@@ -72,6 +99,8 @@ func newVerifierMetrics() *verifierMetrics {
 		m.paymentFailed,
 		m.chargedRequests,
 		m.lastPaymentSuccess,
+		m.paymentFailureReasons,
+		m.upstreamFailedAfterVerify,
 	)
 
 	return m
@@ -104,6 +133,10 @@ func (m *verifierMetrics) pruneSeriesNotIn(keep map[string]struct{}) {
 		m.paymentFailed,
 		m.chargedRequests,
 		m.lastPaymentSuccess,
+		// Partial match on the four shared labels also prunes the
+		// reason-labelled series.
+		m.paymentFailureReasons,
+		m.upstreamFailedAfterVerify,
 	}
 
 	gathered, err := m.registry.Gather()

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ObolNetwork/obol-stack/internal/buyprompts"
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
@@ -984,6 +985,13 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 		lines = append(lines, fmt.Sprintf("### %s", offer.Name))
 		lines = append(lines, fmt.Sprintf("- **Endpoint**: `%s`", endpoint))
 		lines = append(lines, fmt.Sprintf("- **Call**: %s", offerCallHint(offer, endpoint)))
+		if anchor := openAPIDocsAnchorForOffer(offer); anchor != "" {
+			lines = append(lines, fmt.Sprintf(
+				"- **API docs**: [%s%s](%s%s) — schema path `%s` in [openapi.json](%s/openapi.json)",
+				baseURL, anchor, baseURL, anchor,
+				openAPIPrimaryPathForOffer(offer), baseURL,
+			))
+		}
 		lines = append(lines, fmt.Sprintf("- **Type**: %s", fallbackOfferType(offer)))
 		if modelName != "" {
 			lines = append(lines, fmt.Sprintf("- **Model**: %s", modelName))
@@ -1227,6 +1235,22 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string,
 		// Full multi-currency view (always >= 1 entry; payments[0] mirrors the
 		// flat fields above). The storefront renders one pay-row per option.
 		svc.Payments = buildCatalogPayments(offer)
+
+		// Canonical buyer instructions — generated once here and rendered
+		// verbatim by the storefront (and any other consumer) so how-to-buy
+		// copy cannot drift between surfaces. The 402 paywall page builds
+		// its prompt cards from the same buyprompts package.
+		buy := buyprompts.Build(buyprompts.Input{
+			Type:         fallbackOfferType(offer),
+			URL:          svc.Endpoint,
+			SiteURL:      baseURL,
+			Model:        modelName,
+			PriceDisplay: svc.Price,
+			NetworkLabel: offer.Spec.Payment.Network,
+		})
+		svc.Buy = &buy
+		svc.OpenAPIPath = openAPIPrimaryPathForOffer(offer)
+		svc.DocsPath = openAPIDocsAnchorForOffer(offer)
 
 		services = append(services, svc)
 	}

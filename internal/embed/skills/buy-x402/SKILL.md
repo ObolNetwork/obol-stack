@@ -1,12 +1,24 @@
 ---
 name: buy-x402
-description: "Buy from any x402-gated endpoint. Two flows: `pay` for one-shot HTTP services (single authorization, no sidecar), and `buy` for long-running paid inference (pre-authorized batch via PurchaseRequest, exposed as `paid/<remote-model>`). Supports USDC (EIP-3009) and OBOL (Permit2). Zero signer access at runtime — spending is capped by design and nothing moves on-chain until a voucher is spent."
+description: "Buy from any x402-gated endpoint. Start with `go <url>` — it probes, detects the offer type, and runs the right flow. Expert flows underneath: `pay` for one-shot HTTP services (single authorization, no sidecar), `pay-agent` for one-shot streaming agent calls, and `buy` for long-running paid inference (pre-authorized batch via PurchaseRequest, exposed as `paid/<remote-model>`). Supports USDC (EIP-3009) and OBOL (Permit2). Zero signer access at runtime — spending is capped by design and nothing moves on-chain until a voucher is spent."
 metadata: { "openclaw": { "emoji": "\ud83d\uded2", "requires": { "bins": ["python3"] } } }
 ---
 
 # Buy x402
 
-Purchase access to remote x402-gated services. There are two flows, picked by usage shape:
+Purchase access to remote x402-gated services.
+
+**Not sure which command? Use `go`.** It probes the URL, reads the 402 to detect what's being sold, and dispatches with the right path, method, streaming mode, and timeout:
+
+```bash
+# Agent or chat-inference offer — one paid round of work, streamed:
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py go <url> --message 'your task'
+
+# Plain HTTP offer — one paid request:
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py go <url>
+```
+
+`go` never creates persistent state; for a pre-authorized inference pool it points you at `buy`. The expert flows underneath, picked by usage shape:
 
 - **`pay <url>`** — single-shot. Probe the URL, sign **one** payment authorization, attach `X-PAYMENT`, send the request, return the response. Stateless. Use for `type:http` services and any one-off purchase. Max loss = price of one request. Settlement normally lands only after the request succeeds — but a facilitator can submit the settle tx on-chain and *then* fail the request. When that happens the failure report prints `⚠️ SETTLEMENT MAY HAVE COMPLETED ON-CHAIN` with the tx hash: verify with `balance --chain <X>` before retrying (mechanism: docs/observability.md, "Verify settlement against the chain"). Applies to `pay-agent` too.
 - **`pay-agent <url> --model <id>`** — single-shot paid **streaming** agent call. Same payment shape as `pay` (one auth, X-PAYMENT, max-loss = price), but POSTs to `<url>/v1/chat/completions` with `stream: true` and forwards every SSE event verbatim to stdout as it arrives. Use this for `type:agent` ServiceOffers when the calling agent wants to consume the response *itself* (memory, tool-call traces, partial results) instead of routing it through LiteLLM as a paid alias. Default HTTP read timeout is **1 hour** — agent calls can legitimately run for many minutes; override with `--timeout <seconds>`.
@@ -15,7 +27,9 @@ Purchase access to remote x402-gated services. There are two flows, picked by us
 
 Both flows auto-detect the token + transfer method from the seller's 402 response. Currently supported: **USDC via EIP-3009** (Base Sepolia, Base Mainnet, Ethereum Mainnet) and **OBOL via Permit2** (Ethereum Mainnet).
 
-**Multi-currency offers (pick what you pay with).** A seller can advertise several payment options (e.g. *1 USDC on Base* OR *10 OBOL on Ethereum*) in the 402 `accepts[]` array. `probe` lists them all. For `pay`, `pay-agent`, and `buy`, choose one with `--token <SYMBOL>` (e.g. `--token OBOL`), `--network <chain>`, and/or `--payment-option <N>` (the 1-based index from `probe`). With a single option the choice is automatic; with several and no selector, the command errors and lists the options (or, on a TTY, prompts). `--token`/`--network` also act as a guard — if the filter matches no advertised option, it aborts rather than paying the wrong asset.
+**Multi-currency offers (pick what you pay with).** A seller can advertise several payment options (e.g. *1 USDC on Base* OR *10 OBOL on Ethereum*) in the 402 `accepts[]` array. `probe` lists them all. For `go`, `pay`, `pay-agent`, and `buy`, choose one with `--token <SYMBOL>` (e.g. `--token OBOL`), `--network <chain>`, and/or `--payment-option <N>` (the 1-based index from `probe`). With a single option the choice is automatic. With several and no selector: a TTY prompts; non-interactive runs **auto-select the first option the wallet can afford** (announced loudly, with the full option list, before any signing). `--token`/`--network` also act as a guard — if the filter matches no advertised option, it aborts rather than paying the wrong asset.
+
+**Money amounts (`--budget`, `--cost-cap`).** Both accept atomic units (`1500000`), token units (`1.5`), or token units with a symbol (`'1.5 USDC'`, `'$1.50'`). Anything with a decimal point, symbol, or `$` is treated as token units and scaled by the asset's decimals; the parsed interpretation is echoed before signing. A symbol that contradicts the asset being paid with aborts.
 
 **Auth expiry (`OBOL_X402_AUTH_TTL` / `--auth-ttl`).** A pre-signed pool is spent over time, so each auth carries a *spendability* deadline — distinct from the per-request settle window (`maxTimeoutSeconds`). One knob controls **both** payment methods (Permit2 `deadline` and ERC-3009 `validBefore`): default **30 days (1 month)**; pass a number of seconds (floored at 600s = the verifier's default settle window, so an auth cannot expire between request acceptance and settlement); or pass **`never`** (also `0`/`none`) for a non-expiring pool (mapped to the uint sentinel `4294967295`, ~year 2106, which both contracts accept). Set per-buy with `--auth-ttl <seconds|never>` or globally via the `OBOL_X402_AUTH_TTL` env. A too-short value silently expires the pool minutes after buy.
 
@@ -85,10 +99,13 @@ This is one tx, ~46k gas, valid forever (unless the user later revokes). EIP-300
   storefront publishes machine-readable metadata at
   `<base>/api/services.json` with full asset, EIP-712 signing domain,
   transfer method, and atomic-unit price for every offered service.
-- **`pay` timeout defaults to ~100 s.** This is the Cloudflare free-tier
-  tunnel cap — longer requests get killed by the edge before our client
-  ever sees a response. Reasoning models, long generations, or large
-  batches need `--timeout <seconds>` set explicitly, and the seller's own
+- **`pay` timeout defaults: ~100 s for http, 600 s for inference.** The
+  100 s http default matches the Cloudflare free-tier tunnel cap — longer
+  requests get killed by the edge before our client ever sees a response.
+  Non-streaming inference gets 600 s, but streaming (`go` / `pay-agent`)
+  is the safer shape for slow models: a client-side kill on a non-streamed
+  paid call risks paying for a response that was still coming, and a blind
+  retry double-pays. `--timeout <seconds>` overrides; the seller's own
   upstream/edge limit still applies.
 - **Avoid `/` in remote model identifiers.** LiteLLM's `paid/*` wildcard
   route only matches a single segment; a remote `vendor/model` would
@@ -100,6 +117,7 @@ This is one tx, ~46k gas, valid forever (unless the user later revokes). EIP-300
 
 ## When to Use
 
+- Any one-off purchase where you'd have to guess the offer type — `go` (probes, classifies, dispatches)
 - Probing an endpoint to check pricing before buying — `probe`
 - One-shot paid HTTP request (e.g. `demo-hello`, sponsored API endpoints) — `pay`
 - One-shot paid streaming agent call where the calling agent wants to consume the response itself — `pay-agent`
@@ -119,6 +137,11 @@ This is one tx, ~46k gas, valid forever (unless the user later revokes). EIP-300
 ## Quick Start
 
 ```bash
+# One command for any one-off purchase: probe, classify, pay.
+# Agent / chat offers stream the paid response; HTTP offers do a single paid request.
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py go https://seller.example.com/services/demo-quant --message 'summarize the latest research on staking'
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py go https://seller.example.com/services/demo-hello
+
 # Probe an inference endpoint to see its pricing (default --type inference)
 python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions
 
@@ -185,14 +208,15 @@ python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py maint
 
 | Command | Description |
 |---------|-------------|
+| `go <url> [--message <text>] [--data <json>] [--method GET\|POST]` | Probe, detect offer type (agent / chat inference / http), dispatch to the right flow |
 | `probe <url> [--model <id>] [--type http\|inference\|agent] [--method GET\|POST]` | Send request without payment, parse 402 response for pricing |
 | `pay <url> [--type http\|inference] [--method GET\|POST] [--data <body>]` | Single-shot paid request: sign 1 auth, attach X-PAYMENT, send |
 | `pay-agent <url> --model <id> [--message <text> \| --data <json>] [--timeout <s>]` | Single-shot paid streaming agent call: SSE events flush to stdout as they arrive (default timeout 1h) |
-| `buy <name> --endpoint <url> --model <id> [--budget N] [--count N]` | Pre-sign auths, create/update `PurchaseRequest`, expose `paid/<model>` |
+| `buy <name> --endpoint <url> --model <id> [--budget <amount>] [--count N]` | Pre-sign auths, create/update `PurchaseRequest`, expose `paid/<model>`. `--budget` takes atomic units or token units (`'1.5 USDC'`) |
 | `buy <name> --endpoint <url> --model <id> --set-default [--auto-refill]` | As above, then set `paid/<model>` as the agent's own primary model in-pod (no restart, no host CLI) |
 | `process <name> \| --all` | Reconcile `autoRefill` policies against live `x402-buyer` status |
 | `list` | List purchased providers + remaining auth counts |
-| `status <name>` | Check sidecar pod status + remaining auths |
+| `status <name>` | Check sidecar pod status + remaining auths + auth-expiry countdown |
 | `balance [--chain <network>]` | Check agent's USDC balance via eRPC |
 
 ## Surfaces

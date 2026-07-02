@@ -159,6 +159,83 @@ func TestForwardAuth_ValidPayment_VerifyOnly(t *testing.T) {
 	}
 }
 
+// TestForwardAuth_ValidPayment_PaymentSignatureHeader_V2 pins the x402 v2 wire
+// fix: our 402 challenge advertises x402Version 2, so spec-compliant v2 buyers
+// (agentcash, poncho, coinbase SDK >= v2) attach the payment under the
+// PAYMENT-SIGNATURE header, not the legacy X-PAYMENT. Before the fix the verifier
+// only read X-PAYMENT, so a v2 payment was silently ignored and re-challenged —
+// no verify, no settle, no log. This asserts the v2 header is now honored.
+func TestForwardAuth_ValidPayment_PaymentSignatureHeader_V2(t *testing.T) {
+	var verifyCalled, settleCalled atomic.Int32
+	fac := mockFacilitatorV1(true, true, &verifyCalled, &settleCalled)
+	defer fac.Close()
+
+	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL: fac.URL,
+		VerifyOnly:     true,
+	}, testRequirements())
+
+	var innerCalled bool
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		innerCalled = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req.Header.Set("PAYMENT-SIGNATURE", validPaymentHeader()) // v2 header, no X-PAYMENT
+	rec := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d (v2 PAYMENT-SIGNATURE must be accepted)", rec.Code, http.StatusOK)
+	}
+	if !innerCalled {
+		t.Error("inner handler was not called for a valid v2 PAYMENT-SIGNATURE payment")
+	}
+	if verifyCalled.Load() != 1 {
+		t.Errorf("verify called %d times, want 1 (v2 header should reach the facilitator)", verifyCalled.Load())
+	}
+}
+
+// TestForwardAuth_SettleOnSuccess_PaymentSignatureHeader_V2 asserts a v2 payment
+// settles end-to-end and that the settlement receipt is mirrored onto BOTH the
+// legacy X-PAYMENT-RESPONSE and the v2 PAYMENT-RESPONSE header so either wire
+// version can read it.
+func TestForwardAuth_SettleOnSuccess_PaymentSignatureHeader_V2(t *testing.T) {
+	var verifyCalled, settleCalled atomic.Int32
+	fac := mockFacilitatorV1(true, true, &verifyCalled, &settleCalled)
+	defer fac.Close()
+
+	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL: fac.URL,
+		VerifyOnly:     false,
+	}, testRequirements())
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"result":"ok"}`))
+	})
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req.Header.Set("PAYMENT-SIGNATURE", validPaymentHeader())
+	rec := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if settleCalled.Load() != 1 {
+		t.Errorf("settle called %d times, want 1", settleCalled.Load())
+	}
+	// Both receipt headers must be present for cross-version clients.
+	if rec.Header().Get("X-PAYMENT-RESPONSE") == "" {
+		t.Error("X-PAYMENT-RESPONSE header not set after settlement")
+	}
+	if rec.Header().Get("PAYMENT-RESPONSE") == "" {
+		t.Error("PAYMENT-RESPONSE (v2) header not set after settlement")
+	}
+}
+
 func TestForwardAuth_InvalidPayment_Returns402(t *testing.T) {
 	var verifyCalled, settleCalled atomic.Int32
 	fac := mockFacilitatorV1(false, true, &verifyCalled, &settleCalled)
@@ -183,6 +260,189 @@ func TestForwardAuth_InvalidPayment_Returns402(t *testing.T) {
 	}
 	if verifyCalled.Load() != 1 {
 		t.Errorf("verify called %d times, want 1", verifyCalled.Load())
+	}
+}
+
+// TestForwardAuth_MalformedPaymentHeader_StructuredJSON pins the structured
+// error contract on the 400 path: an agent that mangles the base64 must get a
+// machine-readable reason and a corrective hint, not an opaque text line.
+func TestForwardAuth_MalformedPaymentHeader_StructuredJSON(t *testing.T) {
+	var verifyCalled, settleCalled atomic.Int32
+	fac := mockFacilitatorV1(true, true, &verifyCalled, &settleCalled)
+	defer fac.Close()
+
+	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL: fac.URL,
+		VerifyOnly:     true,
+	}, testRequirements())
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("inner handler should not be called with a malformed header")
+	})
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req.Header.Set("X-PAYMENT", "%%%not-base64%%%")
+	rec := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", ct)
+	}
+	var body paymentErrorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v (body %q)", err, rec.Body.String())
+	}
+	if body.Error != "Invalid payment header" {
+		t.Errorf("error = %q, want the stable legacy phrase", body.Error)
+	}
+	if body.Reason != "invalid_payment_header" {
+		t.Errorf("reason = %q, want invalid_payment_header", body.Reason)
+	}
+	if body.Hint == "" {
+		t.Error("hint must tell the buyer what to do next")
+	}
+	if body.Retriable {
+		t.Error("a malformed header is not retriable as-is")
+	}
+}
+
+// TestForwardAuth_InvalidPayment_402CarriesFailureDetail pins the enriched
+// re-issued challenge: when the facilitator rejects a payment, the 402 body
+// must say why (error field) and carry a machine-readable copy in
+// extensions.paymentFailure — the buyer already has the requirements; the
+// rejection reason is the only new information that makes the retry succeed.
+func TestForwardAuth_InvalidPayment_402CarriesFailureDetail(t *testing.T) {
+	var verifyCalled, settleCalled atomic.Int32
+	fac := mockFacilitatorV1(false, true, &verifyCalled, &settleCalled)
+	defer fac.Close()
+
+	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL: fac.URL,
+		VerifyOnly:     true,
+	}, testRequirements())
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("inner handler should not be called for invalid payment")
+	})
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req.Header.Set("X-PAYMENT", validPaymentHeader())
+	rec := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusPaymentRequired {
+		t.Fatalf("status = %d, want 402", rec.Code)
+	}
+	var parsed x402types.PaymentRequired
+	if err := json.Unmarshal(rec.Body.Bytes(), &parsed); err != nil {
+		t.Fatalf("402 body is not PaymentRequired JSON: %v", err)
+	}
+	if !strings.Contains(parsed.Error, "test_invalid") {
+		t.Errorf("402 error = %q, must include the facilitator's invalidReason", parsed.Error)
+	}
+	failure, ok := parsed.Extensions["paymentFailure"].(map[string]any)
+	if !ok {
+		t.Fatalf("extensions.paymentFailure missing: %#v", parsed.Extensions)
+	}
+	if failure["reason"] != "payment_invalid" {
+		t.Errorf("paymentFailure.reason = %v, want payment_invalid", failure["reason"])
+	}
+	if len(parsed.Accepts) == 0 {
+		t.Error("the re-issued challenge must still carry accepts[] so the buyer can re-sign")
+	}
+}
+
+// TestForwardAuth_SignatureRejection_HintsEIP712Domain pins the targeted
+// signature hint: when the facilitator rejection mentions "signature", the
+// seller must state the EIP-712 domain the buyer should have signed —
+// wrong-domain signing is the top silent killer for external buyers and the
+// seller is the only party that knows the right answer.
+func TestForwardAuth_SignatureRejection_HintsEIP712Domain(t *testing.T) {
+	fac := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(facilitatorVerifyResponse{
+			IsValid:        false,
+			InvalidReason:  "invalid_exact_evm_payload_signature",
+			InvalidMessage: "FiatTokenV2: invalid signature",
+		})
+	}))
+	defer fac.Close()
+
+	reqs := testRequirements()
+	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL: fac.URL,
+		VerifyOnly:     true,
+	}, reqs)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("inner handler should not be called")
+	})
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req.Header.Set("X-PAYMENT", validPaymentHeader())
+	rec := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusPaymentRequired {
+		t.Fatalf("status = %d, want 402", rec.Code)
+	}
+	var parsed x402types.PaymentRequired
+	if err := json.Unmarshal(rec.Body.Bytes(), &parsed); err != nil {
+		t.Fatalf("402 body is not PaymentRequired JSON: %v", err)
+	}
+	failure, ok := parsed.Extensions["paymentFailure"].(map[string]any)
+	if !ok {
+		t.Fatalf("extensions.paymentFailure missing: %#v", parsed.Extensions)
+	}
+	hint, _ := failure["hint"].(string)
+	if !strings.Contains(hint, "EIP-712") {
+		t.Errorf("hint = %q, must name the EIP-712 domain to sign", hint)
+	}
+	if wantName, _ := reqs[0].Extra["name"].(string); wantName != "" && !strings.Contains(hint, wantName) {
+		t.Errorf("hint = %q, must include the domain name %q", hint, wantName)
+	}
+}
+
+// TestForwardAuth_FacilitatorDown_StructuredRetriable503 pins the transient
+// path: facilitator unreachable must produce a retriable JSON 503 so buying
+// agents retry the identical request instead of re-signing (the auth was not
+// consumed).
+func TestForwardAuth_FacilitatorDown_StructuredRetriable503(t *testing.T) {
+	fac := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	fac.Close() // deliberately down
+
+	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL: fac.URL,
+		VerifyOnly:     true,
+	}, testRequirements())
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("inner handler should not be called")
+	})
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req.Header.Set("X-PAYMENT", validPaymentHeader())
+	rec := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	var body paymentErrorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v (body %q)", err, rec.Body.String())
+	}
+	if body.Error != "Payment verification failed" {
+		t.Errorf("error = %q, want the stable legacy phrase (flows/lib.sh greps for it)", body.Error)
+	}
+	if body.Reason != "facilitator_unreachable" {
+		t.Errorf("reason = %q, want facilitator_unreachable", body.Reason)
+	}
+	if !body.Retriable {
+		t.Error("facilitator-down must be marked retriable")
 	}
 }
 
