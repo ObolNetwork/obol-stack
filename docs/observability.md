@@ -386,7 +386,17 @@ contributors: if you write a guarded division, the epsilon is `1e-9`.
 
 - `internal/x402/metrics.go` — verifier metric definitions
   (`obol_x402_verifier_requests_total`, `_payment_required_total`,
-  `_payment_verified_total`, `_payment_failed_total`, `_charged_requests_total`).
+  `_payment_verified_total`, `_payment_failed_total`, `_charged_requests_total`,
+  `_payment_failure_reasons_total`, `_upstream_failed_after_verify_total`).
+  `_payment_failure_reasons_total` facets failures by a bounded `reason`
+  label (`invalid_payment_header`, `no_matching_requirement`,
+  `facilitator_unreachable`, `payment_invalid`, `settlement_failed`,
+  `settlement_rejected` — the set enumerated in
+  `internal/x402/forwardauth.go`), turning "the buy funnel leaks" into
+  "this stage eats the buyers". `_upstream_failed_after_verify_total`
+  counts paid requests bounced by the seller's own upstream after the
+  payment verified (never settled) — a seller-side problem, not a
+  payment-flow one.
 - `internal/x402/verifier.go` — `prometheusLabels()` controls the verifier
   label set; this is the canonical place to add a new bounded label.
 - `internal/x402/buyer/metrics.go` — buyer-side counters

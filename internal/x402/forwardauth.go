@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	x402types "github.com/x402-foundation/x402/go/v2/types"
@@ -54,6 +55,12 @@ type ForwardAuthConfig struct {
 	// in a multi-accept offer (OBOL vs USDC, mainnet vs Base, …). No-op when
 	// the offer advertises a single option.
 	OnPaymentMatched func(x402types.PaymentRequirements)
+
+	// OnPaymentFailure, if non-nil, is invoked once per payment-flow failure
+	// with the machine-readable reason (the same string written into the
+	// response body / extensions.paymentFailure). Lets the caller attribute
+	// funnel-leak metrics per failure stage.
+	OnPaymentFailure func(reason string)
 
 	// SettlesInProcess marks the in-process seller-gateway path (HandleProxy /
 	// obol sell inference) where VerifyOnly=false is correct BY DESIGN — the
@@ -99,6 +106,79 @@ var (
 	facilitatorSettleTimeout = 60 * time.Second
 )
 
+// paymentErrorBody is the structured JSON body written on terminal
+// payment-flow failures (malformed header, facilitator unreachable,
+// settlement error). Buying agents retry blind when a failure is an opaque
+// plain-text line; giving them a machine-readable reason plus a
+// next-action hint converts a dead retry loop into a self-correcting one.
+// The `error` field keeps the exact legacy phrases ("Invalid payment
+// header", "Payment verification failed", "Payment settlement failed") so
+// existing greps and log matchers keep working.
+type paymentErrorBody struct {
+	Error     string `json:"error"`
+	Reason    string `json:"reason"`
+	Detail    string `json:"detail,omitempty"`
+	Hint      string `json:"hint,omitempty"`
+	Retriable bool   `json:"retriable"`
+}
+
+// writePaymentError emits a structured JSON error. Headers already set on w
+// (e.g. X-PAYMENT-RESPONSE with a settle tx hash) are preserved.
+func writePaymentError(w http.ResponseWriter, status int, body paymentErrorBody) {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		http.Error(w, body.Error, status)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write(payload)
+	_, _ = w.Write([]byte("\n"))
+}
+
+// paymentFailure carries the facilitator's rejection detail from the
+// middleware to the 402 renderer. The x402 contract on an invalid payment is
+// to re-issue the full PaymentRequired challenge (so the buyer can re-probe
+// and re-sign); without this the facilitator's invalidReason was logged
+// server-side and the buyer saw only the generic challenge — no way to tell
+// a wrong-domain signature from an expired auth.
+type paymentFailure struct {
+	Reason string // machine-readable, e.g. "payment_invalid", "settlement_rejected"
+	Detail string // facilitator invalidReason/invalidMessage or errorReason
+	Hint   string // buyer's next action
+}
+
+type paymentFailureCtxKey struct{}
+
+func withPaymentFailure(r *http.Request, f paymentFailure) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), paymentFailureCtxKey{}, f))
+}
+
+func paymentFailureFrom(r *http.Request) (paymentFailure, bool) {
+	f, ok := r.Context().Value(paymentFailureCtxKey{}).(paymentFailure)
+	return f, ok
+}
+
+// signatureFailureHint returns a targeted hint when the facilitator rejection
+// looks like a signature problem. The #1 silent killer for external buyers is
+// signing the wrong EIP-712 domain for the asset; the seller is the only
+// party that knows the right answer, so say it in the response instead of
+// making the buyer guess.
+func signatureFailureHint(detail string, req x402types.PaymentRequirements) string {
+	if !strings.Contains(strings.ToLower(detail), "signature") {
+		return ""
+	}
+	name, _ := req.Extra["name"].(string)
+	version, _ := req.Extra["version"].(string)
+	if name == "" && version == "" {
+		return "signature rejected — re-sign using the EIP-712 domain advertised in accepts[].extra for this asset"
+	}
+	return fmt.Sprintf(
+		"signature rejected — sign the EIP-712 domain advertised in accepts[].extra (name=%q version=%q) for asset %s on %s",
+		name, version, req.Asset, req.Network,
+	)
+}
+
 // NewForwardAuthMiddleware creates an x402 payment-gating middleware compatible
 // with the v1 wire format. It checks the X-PAYMENT header, verifies the payment
 // with the facilitator, and optionally settles after a successful downstream
@@ -125,6 +205,10 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 	if send == nil {
 		send = sendPaymentRequiredJSON
 	}
+	reportFailure := cfg.OnPaymentFailure
+	if reportFailure == nil {
+		reportFailure = func(string) {}
+	}
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -138,7 +222,12 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 			payloadBytes, err := base64.StdEncoding.DecodeString(paymentHeader)
 			if err != nil {
 				log.Printf("x402: invalid X-PAYMENT base64: %v", err)
-				http.Error(w, "Invalid payment header", http.StatusBadRequest)
+				reportFailure("invalid_payment_header")
+				writePaymentError(w, http.StatusBadRequest, paymentErrorBody{
+					Error:  "Invalid payment header",
+					Reason: "invalid_payment_header",
+					Hint:   "X-PAYMENT must be the base64-encoded x402 PaymentPayload JSON — re-encode and retry the identical request",
+				})
 				return
 			}
 
@@ -146,13 +235,23 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 			var payload x402types.PaymentPayload
 			if err := json.Unmarshal(payloadBytes, &payload); err != nil {
 				log.Printf("x402: invalid payment JSON: %v", err)
-				http.Error(w, "Invalid payment header", http.StatusBadRequest)
+				reportFailure("invalid_payment_header")
+				writePaymentError(w, http.StatusBadRequest, paymentErrorBody{
+					Error:  "Invalid payment header",
+					Reason: "invalid_payment_header",
+					Hint:   "X-PAYMENT decoded but is not valid PaymentPayload JSON — re-fetch the 402 requirements and re-sign",
+				})
 				return
 			}
 
 			matchedReq, found := findMatchingRequirementV1(payload, requirements)
 			if !found {
-				send(w, r, requirements, cfg.Extensions)
+				reportFailure("no_matching_requirement")
+				send(w, withPaymentFailure(r, paymentFailure{
+					Reason: "no_matching_requirement",
+					Detail: fmt.Sprintf("payment offered scheme=%q network=%q, which matches none of the accepts[] entries", payload.Accepted.Scheme, payload.Accepted.Network),
+					Hint:   "sign against one accepts[] entry verbatim — scheme and network must match exactly",
+				}), requirements, cfg.Extensions)
 				return
 			}
 			if cfg.OnPaymentMatched != nil {
@@ -163,13 +262,26 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 			verifyResp, err := facilitatorVerify(r.Context(), verifyClient, cfg.FacilitatorURL, payloadBytes, matchedReq)
 			if err != nil {
 				log.Printf("x402: facilitator verify error: %v", err)
-				http.Error(w, "Payment verification failed", http.StatusServiceUnavailable)
+				reportFailure("facilitator_unreachable")
+				writePaymentError(w, http.StatusServiceUnavailable, paymentErrorBody{
+					Error:     "Payment verification failed",
+					Reason:    "facilitator_unreachable",
+					Hint:      "transient facilitator error — retry the identical request in a few seconds; the payment authorization was not consumed",
+					Retriable: true,
+				})
 				return
 			}
 
 			if !verifyResp.IsValid {
 				log.Printf("x402: payment invalid: %s", verifyResp.InvalidReason)
-				send(w, r, requirements, cfg.Extensions)
+				detail := strings.TrimSpace(strings.TrimSpace(verifyResp.InvalidReason) + " " + strings.TrimSpace(verifyResp.InvalidMessage))
+				hint := signatureFailureHint(detail, matchedReq)
+				reportFailure("payment_invalid")
+				send(w, withPaymentFailure(r, paymentFailure{
+					Reason: "payment_invalid",
+					Detail: detail,
+					Hint:   hint,
+				}), requirements, cfg.Extensions)
 				return
 			}
 
@@ -193,19 +305,37 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 						// before erroring so the buyer (or operator) can
 						// reconcile against the chain. The header has to land
 						// before http.Error commits the status code.
+						settledOnChain := false
 						if settleResp != nil && settleResp.Transaction != "" {
+							settledOnChain = true
 							settleJSON, _ := json.Marshal(settleResp)
 							w.Header().Set("X-PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString(settleJSON))
 							log.Printf("x402: facilitator returned tx %s with the error — verify on-chain (network=%s payer=%s)",
 								settleResp.Transaction, settleResp.Network, settleResp.Payer)
 						}
-						http.Error(w, "Payment settlement failed", http.StatusServiceUnavailable)
+						reportFailure("settlement_failed")
+						hint := "transient facilitator error — retry the same request in a few seconds"
+						if settledOnChain {
+							hint = "the settle tx in X-PAYMENT-RESPONSE may have landed on-chain — verify against the chain before retrying, or you may pay twice"
+						}
+						writePaymentError(w, http.StatusServiceUnavailable, paymentErrorBody{
+							Error:     "Payment settlement failed",
+							Reason:    "settlement_failed",
+							Hint:      hint,
+							Retriable: !settledOnChain,
+						})
 						return false
 					}
 
 					if !settleResp.Success {
 						log.Printf("x402: settlement unsuccessful: %s", settleResp.ErrorReason)
-						send(w, r, requirements, cfg.Extensions)
+						reportFailure("settlement_rejected")
+						detail := strings.TrimSpace(strings.TrimSpace(settleResp.ErrorReason) + " " + strings.TrimSpace(settleResp.ErrorMessage))
+						send(w, withPaymentFailure(r, paymentFailure{
+							Reason: "settlement_rejected",
+							Detail: detail,
+							Hint:   signatureFailureHint(detail, matchedReq),
+						}), requirements, cfg.Extensions)
 						return false
 					}
 
@@ -248,9 +378,39 @@ func sendPaymentRequiredJSON(w http.ResponseWriter, r *http.Request, requirement
 // block (serviceName/iconUrl — see specs/extensions/bazaar.md, soft-drop
 // rules apply facilitator-side).
 func buildPaymentRequired(r *http.Request, requirements []x402types.PaymentRequirements, extensions map[string]any) x402types.PaymentRequired {
+	errMsg := "Payment required for this resource"
+
+	// When the middleware rejected an attempted payment, say WHY in the
+	// re-issued challenge. The buyer already holds these requirements; the
+	// only new information that helps them succeed on the retry is the
+	// rejection reason and the corrective hint. A machine-readable copy
+	// rides in extensions.paymentFailure for agents.
+	if failure, ok := paymentFailureFrom(r); ok {
+		errMsg = "Payment invalid"
+		if failure.Detail != "" {
+			errMsg += ": " + failure.Detail
+		}
+		if failure.Hint != "" {
+			errMsg += " — " + failure.Hint
+		}
+		failureExt := map[string]any{"reason": failure.Reason}
+		if failure.Detail != "" {
+			failureExt["detail"] = failure.Detail
+		}
+		if failure.Hint != "" {
+			failureExt["hint"] = failure.Hint
+		}
+		merged := make(map[string]any, len(extensions)+1)
+		for k, v := range extensions {
+			merged[k] = v
+		}
+		merged["paymentFailure"] = failureExt
+		extensions = merged
+	}
+
 	return x402types.PaymentRequired{
 		X402Version: 2,
-		Error:       "Payment required for this resource",
+		Error:       errMsg,
 		Resource: &x402types.ResourceInfo{
 			URL:         buildResourceURL(r),
 			Description: "Payment required for " + r.URL.Path,
