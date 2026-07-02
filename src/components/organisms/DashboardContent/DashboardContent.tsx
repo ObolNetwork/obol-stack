@@ -21,6 +21,7 @@ import { useState, useCallback } from 'react';
 import { useAnchorHash } from '../../../hooks/useAnchorHash';
 import { useAgentInstances } from '../../../hooks/useAgents';
 import { useServiceOffers } from '../../../hooks/useServiceOffers';
+import { sumChargedRequests24hForAgent } from '@/lib/services/service-usage';
 import type { AgentInstance } from '@/types/agent';
 
 interface DashboardContentProps {
@@ -70,13 +71,73 @@ const AgentsSection = styled(Box, {
 });
 
 const AgentsScroll = styled(Box, {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '$xs',
-  maxHeight: 'min(360px, 50vh)',
-  overflowY: 'auto',
+  overflowX: 'hidden',
   paddingTop: '$sm',
   paddingRight: '$xs',
+
+  // Mint scrollbar (mirrors the design's .ai-subagent-scroll). Only visible
+  // once the list actually scrolls (see the `scroll` variant below).
+  scrollbarWidth: 'thin',
+  scrollbarColor: 'rgba(47, 228, 171, 0.32) transparent',
+  '&::-webkit-scrollbar': { width: 9 },
+  '&::-webkit-scrollbar-track': {
+    background: 'transparent',
+    margin: '4px 0',
+  },
+  '&::-webkit-scrollbar-thumb': {
+    background:
+      'linear-gradient(180deg, rgba(47, 228, 171, 0.40), rgba(47, 228, 171, 0.22))',
+    borderRadius: 999,
+    border: '2px solid transparent',
+    backgroundClip: 'padding-box',
+  },
+  '&::-webkit-scrollbar-thumb:hover': {
+    background:
+      'linear-gradient(180deg, rgba(47, 228, 171, 0.62), rgba(47, 228, 171, 0.40))',
+    backgroundClip: 'padding-box',
+  },
+
+  variants: {
+    // Cap height + scroll only past 2 sub-agents; 1–2 expand freely.
+    scroll: {
+      true: { maxHeight: 'min(620px, 60vh)', overflowY: 'auto' },
+    },
+  },
+});
+
+// Tree connector tying sub-agents back to the primary block, per the design:
+// a mint trunk down the left with a short branch stub into each card.
+const SubAgentTree = styled(Box, {
+  position: 'relative',
+  paddingLeft: 28,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '$sm',
+});
+
+const Trunk = styled(Box, {
+  position: 'absolute',
+  left: 9,
+  top: 0,
+  bottom: 24,
+  width: 2,
+  background:
+    'linear-gradient(180deg, rgba(47,228,171,0.45), rgba(47,228,171,0.12))',
+  borderRadius: 2,
+});
+
+const BranchItem = styled(Box, {
+  position: 'relative',
+  '&::before': {
+    content: '""',
+    position: 'absolute',
+    left: -19,
+    top: 32,
+    width: 19,
+    height: 2,
+    background: 'rgba(47,228,171,0.35)',
+    borderRadius: 2,
+  },
 });
 
 function partitionInstances(instances: AgentInstance[]) {
@@ -146,7 +207,7 @@ export function DashboardContent({
             <Flex
               css={{ alignItems: 'center', gap: '$sm', marginBottom: '$md' }}
             >
-              <SectionTitle>Agents</SectionTitle>
+              <SectionTitle>AI Agent Instances</SectionTitle>
               {!instancesLoading && instances.length > 0 && (
                 <CountBadge count={instances.length} />
               )}
@@ -183,6 +244,11 @@ export function DashboardContent({
                     key={`${instance.runtime}:${instance.id}`}
                     instance={instance}
                     uptimeHours={uptimeHours}
+                    requests24h={sumChargedRequests24hForAgent(
+                      offers,
+                      instance,
+                      { receiveLegacyOrphans: primary.length === 1 }
+                    )}
                     onChat={handleInstanceSelect}
                   />
                 ))}
@@ -192,15 +258,19 @@ export function DashboardContent({
             {!instancesLoading && !instancesError && subAgents.length > 0 && (
               <AgentsSection>
                 <Accordion header={agentsHeader} defaultExpanded={true}>
-                  <AgentsScroll>
-                    {subAgents.map(instance => (
-                      <AgentInstanceCard
-                        key={`${instance.runtime}:${instance.id}`}
-                        instance={instance}
-                        onSelect={handleInstanceSelect}
-                        onRefresh={refreshAgentsAndOffers}
-                      />
-                    ))}
+                  <AgentsScroll scroll={subAgents.length > 2}>
+                    <SubAgentTree>
+                      <Trunk aria-hidden="true" />
+                      {subAgents.map(instance => (
+                        <BranchItem key={`${instance.runtime}:${instance.id}`}>
+                          <AgentInstanceCard
+                            instance={instance}
+                            onSelect={handleInstanceSelect}
+                            onRefresh={refreshAgentsAndOffers}
+                          />
+                        </BranchItem>
+                      ))}
+                    </SubAgentTree>
                   </AgentsScroll>
                 </Accordion>
               </AgentsSection>

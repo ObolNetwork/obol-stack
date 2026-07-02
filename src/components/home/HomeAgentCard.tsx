@@ -2,7 +2,6 @@
 
 import { Box, Flex, Text, Link, styled, OpenInNew } from '@obolnetwork/obol-ui';
 import { Button } from '@/components/atoms/Button';
-import { Card } from '../atoms/Card';
 import { tones } from '../../lib/ui/tones';
 import { StatusPill } from '../atoms/StatusIndicator';
 import { Avatar } from '../atoms/Avatar';
@@ -49,78 +48,83 @@ function withCurrentIngressPort(rawUrl: string): string {
   }
 }
 
-// Tier 2 card chrome comes from the Card atom (`nested`); only the internal
-// flex layout and hover affordance are defined here.
-const cardLayoutCss = {
-  display: 'flex',
+// Dominant "primary agent" chrome — mint-tinted gradient wash + faint
+// hexapod-style glow, per the New Agent Instances design. Sub-agents are
+// rendered separately (AgentInstanceCard) and are deliberately leaner.
+const PrimaryCard = styled(Box, {
+  position: 'relative',
+  overflow: 'hidden',
+  background:
+    'linear-gradient(180deg, rgba(47,228,171,0.05) 0%, rgba(47,228,171,0) 120px), $bg03',
+  border: '1px solid rgba(47,228,171,0.22)',
+  borderRadius: '$4',
+  padding: '$xl',
+});
+
+const Glow = styled(Box, {
+  position: 'absolute',
+  top: -80,
+  left: -60,
+  width: 260,
+  height: 260,
+  background:
+    'radial-gradient(circle, rgba(47,228,171,0.10) 0%, rgba(47,228,171,0) 70%)',
+  pointerEvents: 'none',
+});
+
+const Inner = styled(Flex, {
+  position: 'relative',
   flexDirection: 'column',
-  gap: '$sm',
-  transition: 'border-color 200ms ease',
-  '&:hover': { borderColor: '$body' },
-} as const;
+  gap: '$md',
+});
 
 const RuntimeBadge = styled(Text, {
   fontSize: 10,
   fontWeight: '$semibold',
-  color: '$body',
-  backgroundColor: tones.neutral.bg,
-  border: `1px solid ${tones.neutral.border}`,
+  color: '$obolGreen',
+  backgroundColor: tones.success.bg,
+  border: `1px solid ${tones.success.border}`,
   borderRadius: '$1',
   padding: '2px 6px',
   lineHeight: 1.2,
   textTransform: 'uppercase',
-});
-
-const StatStrip = styled(Box, {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 0.9fr)',
-  backgroundColor: '$bg01',
-  border: '1px solid $stroke',
-  borderRadius: '$2',
-
-  '@media (max-width: 900px)': {
-    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
-  },
-});
-
-const StatCell = styled(Box, {
-  display: 'flex',
-  flexDirection: 'column',
-  alignItems: 'flex-start',
-  gap: '$xxs',
-  padding: '$sm $md',
-  minWidth: 0,
-});
-
-const StatLabel = styled(Text, {
-  fontSize: '$1',
-  fontWeight: '$medium',
-  color: '$muted',
-  lineHeight: 1.2,
   letterSpacing: '0.04em',
-  textTransform: 'uppercase',
+  whiteSpace: 'nowrap',
 });
 
-const StatValue = styled(Text, {
-  fontSize: '$3',
-  color: '$light',
-  fontWeight: '$semibold',
-  fontFamily: 'monospace',
-  lineHeight: 1.25,
-  width: '100%',
-});
-
-const StatSub = styled(Text, {
+const PrimaryBadge = styled(Text, {
   fontSize: 10,
-  color: '$muted',
-  lineHeight: 1.3,
+  fontWeight: '$semibold',
+  color: '$obolGreen',
+  backgroundColor: 'rgba(47,228,171,0.08)',
+  border: '1px solid rgba(47,228,171,0.28)',
+  borderRadius: '$1',
+  padding: '2px 6px',
+  lineHeight: 1.2,
+  textTransform: 'uppercase',
+  letterSpacing: '0.04em',
+  whiteSpace: 'nowrap',
 });
 
-const WalletInlineRow = styled(Flex, {
+const HostRow = styled(Flex, {
   alignItems: 'center',
-  gap: '$xxs',
-  width: '100%',
-  minHeight: 22,
+  gap: '$xs',
+  marginTop: 5,
+  flexWrap: 'wrap',
+});
+
+const MonoText = styled(Text, {
+  fontSize: '$2',
+  color: '$body',
+  fontFamily: 'monospace',
+});
+
+const Dot = styled(Box, {
+  width: 3,
+  height: 3,
+  borderRadius: '$pill',
+  backgroundColor: '$muted',
+  flexShrink: 0,
 });
 
 const KeysBadge = styled(Text, {
@@ -135,15 +139,60 @@ const KeysBadge = styled(Text, {
   whiteSpace: 'nowrap',
 });
 
+const StatStrip = styled(Box, {
+  display: 'grid',
+  gridTemplateColumns: 'minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 0.8fr)',
+  backgroundColor: '$bg01',
+  border: '1px solid $stroke',
+  borderRadius: '$2',
+  '@media (max-width: 900px)': {
+    gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+  },
+});
+
+const StatCell = styled(Box, {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '$xxs',
+  padding: '$md $lg',
+  minWidth: 0,
+  borderRight: '1px solid $stroke',
+  '&:last-child': { borderRight: 'none' },
+});
+
+const StatLabel = styled(Text, {
+  fontSize: '$1',
+  color: '$muted',
+  lineHeight: 1.2,
+});
+
+const StatValue = styled(Text, {
+  fontSize: '$5',
+  color: '$light',
+  fontWeight: '$semibold',
+  fontFamily: 'monospace',
+  fontVariantNumeric: 'tabular-nums',
+  lineHeight: 1.25,
+});
+
+const StatSub = styled(Text, {
+  fontSize: 10,
+  color: '$muted',
+  lineHeight: 1.3,
+});
+
 interface HomeAgentCardProps {
   instance: AgentInstance;
   uptimeHours: number;
+  /** Charged requests in the last 24h for this agent (from ServiceOffer usage). */
+  requests24h?: number | null;
   onChat?: (instance: AgentInstance) => void;
 }
 
 export function HomeAgentCard({
   instance,
   uptimeHours,
+  requests24h,
   onChat,
 }: HomeAgentCardProps) {
   const { status, loading } = useAgentStatus(instance);
@@ -180,7 +229,9 @@ export function HomeAgentCard({
 
   const modelDisplay = status?.model
     ? status.model.replace(/^openai\//, '')
-    : '\u2014';
+    : '—';
+
+  const hasRequests = typeof requests24h === 'number' && requests24h > 0;
 
   const dashboardBaseUrl =
     instance.runtime === 'openclaw'
@@ -193,105 +244,125 @@ export function HomeAgentCard({
     : null;
 
   return (
-    <Card nested css={cardLayoutCss}>
-      <Flex css={{ alignItems: 'flex-start', gap: '$xs' }}>
-        <Avatar alt={name} fallback={initial} />
-        <Flex
-          css={{ flex: 1, minWidth: 0, flexDirection: 'column', gap: '$xxxs' }}
-        >
-          <Flex css={{ alignItems: 'center', gap: '$xxs' }}>
-            <Text
-              css={{ fontSize: '$5', fontWeight: '$semibold', color: '$light' }}
-            >
-              {name}
-            </Text>
-            <RuntimeBadge>{runtimeLabel(instance)}</RuntimeBadge>
-          </Flex>
-          <Text
-            css={{
-              fontSize: '$1',
-              color: '$body',
-              fontFamily: 'monospace',
-              whiteSpace: 'nowrap',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-            }}
-          >
-            {instance.hostname}
-          </Text>
+    <PrimaryCard>
+      <Glow aria-hidden="true" />
+      <Inner>
+        {/* Identity row */}
+        <Flex css={{ alignItems: 'flex-start', gap: '$sm' }}>
+          <Avatar alt={name} fallback={initial} size={40} />
+          <Box css={{ flex: 1, minWidth: 0 }}>
+            <Flex css={{ alignItems: 'center', gap: '$xxs', flexWrap: 'wrap' }}>
+              <Text
+                css={{ fontSize: '$6', fontWeight: '$bold', color: '$light' }}
+              >
+                {name}
+              </Text>
+              <RuntimeBadge>{runtimeLabel(instance)}</RuntimeBadge>
+              <PrimaryBadge>Primary</PrimaryBadge>
+            </Flex>
+            <HostRow>
+              <MonoText
+                css={{
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  maxWidth: '100%',
+                }}
+              >
+                {instance.hostname}
+              </MonoText>
+              {primaryAddress && (
+                <>
+                  <Dot />
+                  <Flex css={{ alignItems: 'center', gap: '$xxs' }}>
+                    <MonoText>{truncateAddress(primaryAddress)}</MonoText>
+                    <CopyButton
+                      text={primaryAddress}
+                      title="Copy wallet address"
+                    />
+                    {metadata && metadata.count > 1 && (
+                      <KeysBadge>+{metadata.count - 1} keys</KeysBadge>
+                    )}
+                  </Flex>
+                </>
+              )}
+            </HostRow>
+          </Box>
+          <StatusPill status={statusPillStatus} label={statusLabel} />
         </Flex>
-        <StatusPill status={statusPillStatus} label={statusLabel} />
-      </Flex>
 
-      <StatStrip>
-        <StatCell>
-          <StatLabel>Wallet</StatLabel>
-          {primaryAddress ? (
-            <>
-              <WalletInlineRow>
-                <StatValue css={{ fontSize: '$2', flex: 1, width: 'auto' }}>
-                  {truncateAddress(primaryAddress)}
-                </StatValue>
-                <CopyButton text={primaryAddress} title="Copy address" />
-                {metadata && metadata.count > 1 && (
-                  <KeysBadge>+{metadata.count - 1} keys</KeysBadge>
-                )}
-              </WalletInlineRow>
+        {/* Metric strip */}
+        <StatStrip>
+          <StatCell>
+            <StatLabel>Balance</StatLabel>
+            {primaryAddress && sortedBalances.length > 0 ? (
               <WalletBalanceList
                 walletAddress={primaryAddress}
                 balances={sortedBalances}
                 compact
               />
-            </>
-          ) : (
-            <StatValue>{'\u2014'}</StatValue>
-          )}
-        </StatCell>
-        <StatCell>
-          <StatLabel>Primary model</StatLabel>
-          <StatValue
-            css={{
-              fontSize: '$2',
-              wordBreak: 'break-word',
-              whiteSpace: 'normal',
-            }}
-          >
-            {modelDisplay}
-          </StatValue>
-        </StatCell>
-        <StatCell>
-          <StatLabel>Uptime</StatLabel>
-          <StatValue>{formatUptime(uptimeHours)}</StatValue>
-          <StatSub>continuous</StatSub>
-        </StatCell>
-      </StatStrip>
+            ) : (
+              <StatValue>{'—'}</StatValue>
+            )}
+          </StatCell>
+          <StatCell>
+            <StatLabel>Requests · 24h</StatLabel>
+            <StatValue>
+              {hasRequests ? requests24h!.toLocaleString() : '—'}
+            </StatValue>
+            <StatSub>{hasRequests ? 'charged' : 'no charged calls'}</StatSub>
+          </StatCell>
+          <StatCell>
+            <StatLabel>Uptime</StatLabel>
+            <StatValue>{formatUptime(uptimeHours)}</StatValue>
+            <StatSub>continuous</StatSub>
+          </StatCell>
+        </StatStrip>
 
-      <Flex css={{ alignItems: 'center', gap: '$xs' }}>
-        <Button
-          variant="primary"
-          size="sm"
-          disabled={displayStatus !== 'running'}
-          onClick={() => onChat?.(instance)}
-        >
-          Chat
-        </Button>
-        {dashboardUrl && (
-          <Link
-            href={dashboardUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            css={{
-              fontSize: '$2',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: '$xxxs',
-            }}
-          >
-            Dashboard <OpenInNew size="sm" />
-          </Link>
-        )}
-        <Box css={{ flex: 1 }} />
-      </Flex>
-    </Card>
+        {/* Primary model + actions */}
+        <Flex css={{ alignItems: 'flex-end', gap: '$lg', flexWrap: 'wrap' }}>
+          <Box css={{ display: 'flex', flexDirection: 'column', gap: '$xxs' }}>
+            <StatLabel>Primary model</StatLabel>
+            <Text
+              css={{
+                fontSize: '$3',
+                color: '$light',
+                fontFamily: 'monospace',
+                wordBreak: 'break-word',
+              }}
+            >
+              {modelDisplay}
+            </Text>
+          </Box>
+          <Box css={{ flex: 1 }} />
+          <Flex css={{ alignItems: 'center', gap: '$md' }}>
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={displayStatus !== 'running'}
+              onClick={() => onChat?.(instance)}
+            >
+              Chat
+            </Button>
+            {dashboardUrl && (
+              <Link
+                href={dashboardUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                css={{
+                  fontSize: '$3',
+                  fontWeight: '$semibold',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '$xxxs',
+                }}
+              >
+                Dashboard <OpenInNew size="sm" />
+              </Link>
+            )}
+          </Flex>
+        </Flex>
+      </Inner>
+    </PrimaryCard>
   );
 }

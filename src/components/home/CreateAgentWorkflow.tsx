@@ -40,6 +40,9 @@ const CommandCode = styled('code', {
 
 const EXAMPLE_AGENT = 'obol-agent';
 const WORKFLOW = buildAgentCreateWorkflowCli(EXAMPLE_AGENT);
+// The design shows a single copy-paste box — the create command. Selling is
+// surfaced per-agent via the "Sell access" CTA, so drop the extra sell step.
+const CREATE_STEP = WORKFLOW.steps[0];
 
 interface CreateAgentWorkflowProps {
   /** Section title — home page copy uses operator-facing labels. */
@@ -71,19 +74,19 @@ export function CreateAgentWorkflow({
     <WorkflowContainer>
       <WorkflowHeader>
         <SectionTitle level={2}>{title}</SectionTitle>
-        <CopyButton text={WORKFLOW.copyText} title="Copy both commands" />
       </WorkflowHeader>
       <PurposeCopy>Create a new agent to sell its services.</PurposeCopy>
       <WorkflowBlock>
-        {WORKFLOW.steps.map(step => (
-          <CommandBlock key={step.label}>
-            <CommandLabel>{step.label}</CommandLabel>
-            <CommandLine>
-              <CommandCode>{step.command}</CommandCode>
-              <CopyButton text={step.command} title={`Copy ${step.command}`} />
-            </CommandLine>
-          </CommandBlock>
-        ))}
+        <CommandBlock>
+          <CommandLabel>{CREATE_STEP.label}</CommandLabel>
+          <CommandLine>
+            <CommandCode>{CREATE_STEP.command}</CommandCode>
+            <CopyButton
+              text={CREATE_STEP.command}
+              title={`Copy ${CREATE_STEP.command}`}
+            />
+          </CommandLine>
+        </CommandBlock>
       </WorkflowBlock>
     </WorkflowContainer>
   );

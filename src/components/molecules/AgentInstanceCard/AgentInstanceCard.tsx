@@ -1,29 +1,18 @@
 'use client';
 
 import { useState } from 'react';
-import {
-  Box,
-  Flex,
-  Text,
-  Button,
-  Link,
-  styled,
-  OpenInNew,
-} from '@obolnetwork/obol-ui';
+import { Box, Flex, Text, styled, OpenInNew } from '@obolnetwork/obol-ui';
 import { ChevronRightIcon } from '@radix-ui/react-icons';
 import { Button as BaseButton } from '@/components/atoms/Button';
 import { tones } from '@/lib/ui/tones';
 import { StatusPill } from '../../atoms/StatusIndicator';
 import { CopyButton } from '../../atoms/CopyButton/CopyButton';
+import { Identicon } from '@/components/marketplace/Identicon';
 import { SellAgentModal } from '../SellAgentModal';
-import { WalletBalanceList } from '../WalletBalanceList';
 import {
   useAgentStatus,
   useAgentWalletMetadata,
-  useTunnelURL,
 } from '../../../hooks/useAgents';
-import { useWalletAssetBalances } from '../../../hooks/useWalletAssetBalances';
-import { sortBalances } from '@/lib/wallet/sort-balances';
 import type { AgentInstance } from '@/types/agent';
 import { truncateAddress } from '@/utils/address';
 
@@ -50,33 +39,7 @@ function displayInstanceName(instance: AgentInstance): string {
 }
 
 function runtimeLabel(instance: AgentInstance): string {
-  if (instance.isSubAgent) return 'Agent';
   return instance.runtime === 'hermes' ? 'Hermes' : 'OpenClaw';
-}
-
-function withCurrentIngressPort(rawUrl: string): string {
-  if (typeof window === 'undefined') {
-    return rawUrl;
-  }
-
-  try {
-    const target = new URL(rawUrl);
-    const current = new URL(window.location.href);
-
-    if (
-      target.hostname.endsWith('.obol.stack') &&
-      current.hostname.endsWith('obol.stack')
-    ) {
-      target.protocol = current.protocol;
-      if (!target.port && current.port) {
-        target.port = current.port;
-      }
-    }
-
-    return target.toString().replace(/\/$/, '');
-  } catch {
-    return rawUrl;
-  }
 }
 
 interface AgentInstanceCardProps {
@@ -86,7 +49,7 @@ interface AgentInstanceCardProps {
 }
 
 const CardContainer = styled(Box, {
-  padding: '$sm $md',
+  padding: '$md $lg',
   borderRadius: '$2',
   backgroundColor: '$bg03',
   border: '1px solid $stroke',
@@ -97,10 +60,10 @@ const CardContainer = styled(Box, {
   },
 });
 
-const TopRow = styled(Flex, {
+const HeaderRow = styled(Flex, {
   alignItems: 'center',
-  justifyContent: 'space-between',
-  marginBottom: '$md',
+  gap: '$xs',
+  flexWrap: 'wrap',
 });
 
 const InstanceName = styled(Text, {
@@ -116,54 +79,35 @@ const RuntimeBadge = styled(Text, {
   backgroundColor: tones.neutral.bg,
   border: `1px solid ${tones.neutral.border}`,
   borderRadius: '4px',
-  padding: '1px 5px',
-  lineHeight: 1.4,
+  padding: '2px 6px',
+  lineHeight: 1.2,
   whiteSpace: 'nowrap',
   textTransform: 'uppercase',
+  letterSpacing: '0.04em',
+
+  variants: {
+    tone: {
+      violet: {
+        color: '#B49BF0',
+        backgroundColor: 'rgba(145,103,228,0.12)',
+        border: '1px solid rgba(145,103,228,0.34)',
+      },
+    },
+  },
 });
 
-const WalletHeaderRow = styled(Flex, {
+// Row that carries the Model Details toggle and the Sell CTA; indented to
+// align under the identicon + name column, matching the design.
+const ControlRow = styled(Flex, {
   alignItems: 'center',
-  gap: '$xxxs',
-  flexWrap: 'wrap',
-  marginTop: '$xs',
-});
-
-const WalletLabel = styled(Text, {
-  fontSize: '$1',
-  color: '$body',
-});
-
-const WalletAddressText = styled(Text, {
-  fontSize: '$1',
-  color: '$light',
-  fontFamily: 'monospace',
-});
-
-const KeysBadge = styled(Text, {
-  fontSize: '10px',
-  fontWeight: '$semibold',
-  color: '$obolGreen',
-  backgroundColor: tones.success.bg,
-  border: `1px solid ${tones.success.border}`,
-  borderRadius: '4px',
-  padding: '1px 5px',
-  lineHeight: 1.4,
-  whiteSpace: 'nowrap',
-});
-
-const ActionsRow = styled(Flex, {
-  paddingTop: '$md',
-  alignItems: 'center',
-  gap: '$xs',
+  gap: '$sm',
+  marginTop: '$md',
+  paddingLeft: 38,
   flexWrap: 'wrap',
 });
 
-// Bare Button plus chevron rotation; zero horizontal padding keeps the
-// toggle flush with the card's text column.
 const DetailsToggle = styled(BaseButton, {
   gap: '$xxxs',
-  marginTop: '$md',
   paddingLeft: 0,
   paddingRight: 0,
 
@@ -181,74 +125,81 @@ const DetailsToggle = styled(BaseButton, {
 });
 
 const DetailsBlock = styled(Box, {
-  marginTop: '$xs',
-  paddingTop: '$xs',
-  borderTop: '1px dashed $stroke',
+  marginTop: '$sm',
+  paddingLeft: 38,
+  display: 'flex',
+  flexDirection: 'column',
+  gap: '$xs',
 });
 
 const DetailRow = styled(Flex, {
   alignItems: 'center',
-  gap: '$xxxs',
-  marginTop: '$xxs',
+  gap: '$xxs',
   flexWrap: 'wrap',
 });
 
 const DetailLabel = styled(Text, {
-  fontSize: '$1',
-  color: '$body',
+  fontSize: '$2',
+  color: '$muted',
 });
 
 const DetailValue = styled(Text, {
-  fontSize: '$1',
+  fontSize: '$2',
   color: '$light',
   fontFamily: 'monospace',
 });
 
-const SellDivider = styled(Box, {
-  height: '1px',
-  backgroundColor: '$stroke',
-  marginTop: '$md',
-});
-
-const SellCtaRow = styled(Flex, {
-  paddingTop: '$md',
+// Success-toned pill CTA for opening the sell flow. Styled as a plain button
+// (not the Button atom) so its green fill can't be overridden by the atom's
+// variant styles — kept visually identical to the ListingLink below.
+const SellButton = styled('button', {
+  display: 'inline-flex',
   alignItems: 'center',
-  justifyContent: 'space-between',
-});
-
-const SellLabel = styled(Text, {
+  gap: '$xxs',
+  height: 30,
+  paddingLeft: '$sm',
+  paddingRight: '$sm',
+  borderRadius: '$pill',
+  border: '1px solid rgba(47,228,171,0.42)',
+  background: 'rgba(47,228,171,0.12)',
+  color: '$obolGreen',
+  fontFamily: '$body',
   fontSize: '$2',
-  color: '$body',
-  lineHeight: 1.4,
+  fontWeight: '$semibold',
+  lineHeight: 1,
+  whiteSpace: 'nowrap',
+  cursor: 'pointer',
+  transition: 'background-color 150ms ease, border-color 150ms ease',
+
+  '&:hover': { background: 'rgba(47,228,171,0.18)' },
+  '&:focus-visible': { outline: '2px solid $obolGreen', outlineOffset: 2 },
+  '&:disabled': { opacity: 0.5, cursor: 'not-allowed' },
 });
 
-// Success-toned pill CTA. Kept pill-shaped (not rectangular) so it stays
-// visually paired with the ListingLink anchor beside it.
-const SellButton = styled(BaseButton, {
-  background: tones.success.bg,
-  borderColor: tones.success.border,
-  color: tones.success.text,
-
-  '&:hover:not(:disabled)': {
-    background: tones.success.bg,
-    borderColor: tones.success.text,
-    color: tones.success.text,
-  },
+// Prominent storefront callout — shown only for listed agents.
+const StorefrontFooter = styled(Flex, {
+  alignItems: 'center',
+  gap: '$sm',
+  marginTop: '$md',
+  padding: '12px 16px',
+  borderRadius: '$2',
+  background: 'rgba(47,228,171,0.06)',
+  border: '1px solid rgba(47,228,171,0.22)',
+  flexWrap: 'wrap',
 });
 
-// Anchor twin of SellButton — mirrors the Button atom's sm/pill metrics.
 const ListingLink = styled('a', {
   display: 'inline-flex',
   alignItems: 'center',
   gap: '$xxs',
-  height: 28,
-  paddingLeft: '$xs',
-  paddingRight: '$xs',
+  height: 30,
+  paddingLeft: '$sm',
+  paddingRight: '$sm',
   borderRadius: '$pill',
-  border: `1px solid ${tones.success.border}`,
-  background: tones.success.bg,
-  color: tones.success.text,
-  fontSize: '$1',
+  border: '1px solid rgba(47,228,171,0.42)',
+  background: 'rgba(47,228,171,0.12)',
+  color: '$obolGreen',
+  fontSize: '$2',
   fontWeight: '$semibold',
   lineHeight: 1,
   textDecoration: 'none',
@@ -257,7 +208,7 @@ const ListingLink = styled('a', {
   transition: 'background-color 150ms ease, border-color 150ms ease',
 
   '&:hover': {
-    borderColor: tones.success.text,
+    background: 'rgba(47,228,171,0.18)',
   },
 
   '&:focus-visible': {
@@ -266,18 +217,43 @@ const ListingLink = styled('a', {
   },
 });
 
+const StoreIcon = () => (
+  <svg
+    width="16"
+    height="16"
+    viewBox="0 0 16 16"
+    fill="none"
+    aria-hidden="true"
+  >
+    <path
+      d="M2.5 6.2 3.4 3h9.2l.9 3.2"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M2.5 6.2v.3a1.7 1.7 0 0 0 3.4 0 1.7 1.7 0 0 0 3.4 0 1.7 1.7 0 0 0 3.4 0v-.3"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinejoin="round"
+    />
+    <path
+      d="M3.4 8.4V13h9.2V8.4"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 export function AgentInstanceCard({
   instance,
-  onSelect,
   onRefresh,
 }: AgentInstanceCardProps) {
   const { status, loading } = useAgentStatus(instance);
   const { metadata } = useAgentWalletMetadata(instance);
-  const { tunnelURL } = useTunnelURL();
 
   const primaryAddress = metadata?.addresses?.[0]?.address ?? null;
-  const { balances } = useWalletAssetBalances(primaryAddress);
-  const sortedBalances = sortBalances(balances);
 
   const [detailsOpen, setDetailsOpen] = useState(false);
 
@@ -291,29 +267,12 @@ export function AgentInstanceCard({
           ? 'error'
           : 'unknown';
 
-  const dashboardBaseUrl = instance.isSubAgent
-    ? null
-    : instance.runtime === 'openclaw'
-      ? tunnelURL
-        ? tunnelURL
-        : `http://${instance.hostname}`
-      : instance.dashboardHostname
-        ? `http://${instance.dashboardHostname}`
-        : null;
-
-  const dashboardUrl = dashboardBaseUrl
-    ? withCurrentIngressPort(dashboardBaseUrl)
-    : null;
-
-  const canSell =
-    instance.isSubAgent === true &&
-    !instance.listing &&
-    displayStatus === 'running';
+  const canSell = !instance.listing && displayStatus === 'running';
 
   const listing = instance.listing;
   const listingChipLabel =
     listing?.phase === 'live'
-      ? 'On sale'
+      ? 'Listed'
       : listing?.phase === 'draining'
         ? 'Draining'
         : listing
@@ -329,93 +288,79 @@ export function AgentInstanceCard({
           : 'unsynced';
 
   const provider = status?.model ? inferProvider(status.model) : null;
+  const identiconSeed = primaryAddress ?? `${instance.runtime}:${instance.id}`;
 
   return (
     <CardContainer id={`agent-${instance.runtime}-${instance.id}`}>
-      <TopRow>
-        <Flex css={{ alignItems: 'center', gap: '$xs', flexWrap: 'wrap' }}>
-          <InstanceName>{displayInstanceName(instance)}</InstanceName>
-          <RuntimeBadge>{runtimeLabel(instance)}</RuntimeBadge>
-        </Flex>
-        <StatusPill
-          status={
-            displayStatus === 'running'
-              ? 'synced'
-              : displayStatus === 'pending'
-                ? 'syncing'
-                : displayStatus === 'error'
-                  ? 'error'
-                  : 'unsynced'
-          }
-          label={loading ? 'Loading...' : status?.podStatus || 'Unknown'}
-        />
-        {listingChipLabel ? (
-          <StatusPill status={listingChipStatus} label={listingChipLabel} />
-        ) : null}
-      </TopRow>
-
-      {primaryAddress && (
-        <>
-          <WalletHeaderRow>
-            <WalletLabel>Wallet:</WalletLabel>
-            <WalletAddressText>
-              {truncateAddress(primaryAddress)}
-            </WalletAddressText>
-            <CopyButton text={primaryAddress} title="Copy address" />
-            {metadata && metadata.count > 1 && (
-              <KeysBadge>+{metadata.count - 1} keys</KeysBadge>
-            )}
-          </WalletHeaderRow>
-
-          <WalletBalanceList
-            walletAddress={primaryAddress}
-            balances={sortedBalances}
+      <HeaderRow>
+        <Identicon seed={identiconSeed} size={26} rounded={6} />
+        <InstanceName>{displayInstanceName(instance)}</InstanceName>
+        <RuntimeBadge
+          tone={instance.runtime === 'openclaw' ? 'violet' : undefined}
+        >
+          {runtimeLabel(instance)}
+        </RuntimeBadge>
+        <Box css={{ flex: 1 }} />
+        <Flex css={{ alignItems: 'center', gap: '$xxs' }}>
+          <StatusPill
+            status={
+              displayStatus === 'running'
+                ? 'synced'
+                : displayStatus === 'pending'
+                  ? 'syncing'
+                  : displayStatus === 'error'
+                    ? 'error'
+                    : 'unsynced'
+            }
+            label={loading ? 'Loading...' : status?.podStatus || 'Unknown'}
           />
-        </>
-      )}
-
-      {/* Sub-agents without a dashboard have no actions — skip the row so
-          its padding doesn't leave a dead gap above Model Details. */}
-      {(!instance.isSubAgent || dashboardUrl) && (
-        <ActionsRow>
-          {!instance.isSubAgent ? (
-            <Button
-              disabled={displayStatus !== 'running'}
-              color="primary"
-              onClick={() => onSelect?.(instance)}
-              css={{ fontSize: '$3', height: '$sm' }}
-            >
-              Chat
-            </Button>
+          {listingChipLabel ? (
+            <StatusPill status={listingChipStatus} label={listingChipLabel} />
           ) : null}
+        </Flex>
+      </HeaderRow>
 
-          {dashboardUrl ? (
-            <Link
-              href={dashboardUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              css={{
-                fontSize: '13px',
-              }}
-            >
-              Dashboard
-              <OpenInNew size="sm" />
-            </Link>
-          ) : null}
-        </ActionsRow>
-      )}
-
-      <DetailsToggle
-        type="button"
-        variant="bare"
-        size="sm"
-        onClick={() => setDetailsOpen(o => !o)}
-        expanded={detailsOpen}
-        aria-expanded={detailsOpen}
-      >
-        <ChevronRightIcon width={14} height={14} />
-        Model Details
-      </DetailsToggle>
+      <ControlRow>
+        <DetailsToggle
+          type="button"
+          variant="bare"
+          size="sm"
+          onClick={() => setDetailsOpen(o => !o)}
+          expanded={detailsOpen}
+          aria-expanded={detailsOpen}
+        >
+          <ChevronRightIcon width={14} height={14} />
+          Model Details
+        </DetailsToggle>
+        <Box css={{ flex: 1 }} />
+        {canSell && (
+          <SellAgentModal
+            agentName={instance.id}
+            agentNamespace={instance.namespace}
+            defaultWallet={primaryAddress ?? undefined}
+            onListed={onRefresh}
+            trigger={
+              <SellButton type="button">
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <circle cx="12" cy="12" r="10" />
+                  <line x1="12" y1="8" x2="12" y2="16" />
+                  <line x1="8" y1="12" x2="16" y2="12" />
+                </svg>
+                Sell access
+              </SellButton>
+            }
+          />
+        )}
+      </ControlRow>
 
       {detailsOpen && (
         <DetailsBlock>
@@ -427,106 +372,68 @@ export function AgentInstanceCard({
           {!loading && status?.model && (
             <DetailRow>
               <DetailLabel>Model:</DetailLabel>
-              <DetailValue>{displayModelName(status.model)}</DetailValue>
+              <DetailValue>
+                {provider ? `${provider} · ` : ''}
+                {displayModelName(status.model)}
+              </DetailValue>
             </DetailRow>
           )}
 
-          {!loading && status && (
+          {primaryAddress && (
             <DetailRow>
-              <DetailLabel>Provider:</DetailLabel>
-              <DetailValue>
-                {instance.isSubAgent
-                  ? status.model && status.model !== 'unknown'
-                    ? `${provider ?? 'Custom'} · ${displayModelName(status.model)}`
-                    : loading
-                      ? 'Loading...'
-                      : 'Cluster-internal (no public API check)'
-                  : status.apiConnected === undefined
-                    ? 'Checking...'
-                    : status.apiConnected
-                      ? `${provider ?? 'Unknown'} · connected`
-                      : `${provider ?? 'Unknown'} · unreachable${
-                          status.apiError ? ` — ${status.apiError}` : ''
-                        }`}
-              </DetailValue>
+              <DetailLabel>Wallet:</DetailLabel>
+              <DetailValue>{truncateAddress(primaryAddress)}</DetailValue>
+              <CopyButton text={primaryAddress} title="Copy address" />
+              {metadata && metadata.count > 1 && (
+                <DetailLabel>+{metadata.count - 1} keys</DetailLabel>
+              )}
             </DetailRow>
           )}
         </DetailsBlock>
       )}
 
-      {instance.isSubAgent ? (
-        <>
-          <SellDivider />
-          <SellCtaRow>
-            <SellLabel>
-              {listing
-                ? listing.phase === 'setting_up'
-                  ? 'Going on sale…'
-                  : 'On sale'
-                : 'Sell this agent'}
-            </SellLabel>
-            {canSell ? (
-              <SellAgentModal
-                agentName={instance.id}
-                agentNamespace={instance.namespace}
-                defaultWallet={primaryAddress ?? undefined}
-                onListed={onRefresh}
-                trigger={
-                  <SellButton type="button" variant="ghost" size="sm" pill>
-                    <svg
-                      width="14"
-                      height="14"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <circle cx="12" cy="12" r="10" />
-                      <line x1="12" y1="8" x2="12" y2="16" />
-                      <line x1="8" y1="12" x2="16" y2="12" />
-                    </svg>
-                    Sell
-                  </SellButton>
-                }
-              />
-            ) : listing ? (
-              listing.phase !== 'setting_up' && listing.endpoint ? (
-                // Live sale: open the actual x402-gated storefront URL.
-                <ListingLink
-                  href={listing.endpoint}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  View on storefront
-                  <OpenInNew size="sm" />
-                </ListingLink>
-              ) : (
-                <ListingLink
-                  href={`#${listing.anchorId}`}
-                  onClick={() => onRefresh?.()}
-                >
-                  {listing.phase === 'setting_up'
-                    ? 'Finish setup'
-                    : 'View on storefront'}
-                </ListingLink>
-              )
-            ) : (
-              <SellButton
-                type="button"
-                variant="ghost"
-                size="sm"
-                pill
-                disabled
-                title="Agent must be running"
-              >
-                Sell
-              </SellButton>
-            )}
-          </SellCtaRow>
-        </>
-      ) : null}
+      {listing && (
+        <StorefrontFooter>
+          <Box css={{ color: '$obolGreen', display: 'inline-flex' }}>
+            <StoreIcon />
+          </Box>
+          <Box css={{ minWidth: 0 }}>
+            <Text
+              css={{ fontSize: '$2', fontWeight: '$semibold', color: '$light' }}
+            >
+              {listing.phase === 'live'
+                ? 'Listed on storefront'
+                : listing.phase === 'draining'
+                  ? 'Draining listing'
+                  : 'Going on sale…'}
+            </Text>
+            <Text css={{ fontSize: '$1', color: '$muted', marginTop: 1 }}>
+              {listing.phase === 'live'
+                ? 'Public · earning from calls'
+                : listing.phase === 'draining'
+                  ? 'Winding down'
+                  : 'Finishing setup'}
+            </Text>
+          </Box>
+          <Box css={{ flex: 1 }} />
+          {listing.phase !== 'setting_up' && listing.endpoint ? (
+            <ListingLink
+              href={listing.endpoint}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              View listing <OpenInNew size="sm" />
+            </ListingLink>
+          ) : (
+            <ListingLink
+              href={`#${listing.anchorId}`}
+              onClick={() => onRefresh?.()}
+            >
+              {listing.phase === 'setting_up' ? 'Finish setup' : 'View listing'}
+            </ListingLink>
+          )}
+        </StorefrontFooter>
+      )}
     </CardContainer>
   );
 }
