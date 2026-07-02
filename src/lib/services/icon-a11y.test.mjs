@@ -20,7 +20,8 @@ describe('icon-only control accessibility', () => {
       'src/components/molecules/OpenClawChatSidebar/OpenClawChatSidebar.tsx',
     ]) {
       const source = await read(file);
-      assert.match(source, /styled\('button'/);
+      // Close controls are real <button>s via the canonical Button atom.
+      assert.match(source, /from '@\/components\/atoms\/Button'/);
       assert.match(source, /aria-label="Close chat"/);
     }
   });

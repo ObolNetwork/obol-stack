@@ -2,6 +2,7 @@
 
 import { styled } from '@obolnetwork/obol-ui';
 
+import { Button } from '@/components/atoms/Button';
 import type { MarketplaceView } from '@/lib/marketplace/types';
 
 // Versioned key (vercel-react-best-practices: client-localstorage-schema).
@@ -19,37 +20,32 @@ const Group = styled('div', {
   alignItems: 'center',
   gap: 2,
   padding: 3,
-  borderRadius: '$2',
+  borderRadius: '$pill',
   border: '1px solid $stroke',
   background: '$bg03',
   width: 'max-content',
   flexShrink: 0,
 });
 
-const ToggleButton = styled('button', {
-  width: 30,
-  height: 30,
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  borderRadius: '$1',
-  border: '1px solid transparent',
-  background: 'transparent',
-  color: '$body',
-  cursor: 'pointer',
-  transition: 'background 120ms, color 120ms, border-color 120ms',
-  padding: 0,
-
-  '&:hover': { color: '$light' },
-
+// View toggle chip — Button atom (bare/sm/pill/iconOnly) with a
+// selected state.
+const ToggleButton = styled(Button, {
   variants: {
     active: {
       true: {
         background: '$obolMidGreen',
         borderColor: '$obolGreen',
         color: '$obolGreen',
+        '&:hover:not(:disabled)': { color: '$obolGreen' },
       },
     },
+  },
+
+  defaultVariants: {
+    variant: 'bare',
+    size: 'sm',
+    pill: true,
+    iconOnly: true,
   },
 });
 

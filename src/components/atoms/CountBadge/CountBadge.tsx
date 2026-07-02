@@ -1,5 +1,6 @@
 import React from 'react';
 import { Box, styled } from '@obolnetwork/obol-ui';
+import { tones } from '../../../lib/ui/tones';
 
 export interface CountBadgeProps {
   count?: number;
@@ -15,8 +16,8 @@ const BadgeRoot = styled(Box, {
   height: '22px',
   padding: '0 7px',
   borderRadius: '$2',
-  border: '1px solid rgba(47, 228, 171, 0.25)',
-  backgroundColor: 'rgba(47, 228, 171, 0.08)',
+  border: `1px solid ${tones.success.border}`,
+  backgroundColor: tones.success.bg,
   color: '$obolGreen',
   fontSize: '$1',
   fontWeight: '$semibold',

@@ -10,8 +10,8 @@ export interface LocalNodeStatusProps {
 }
 
 const CardBox = styled(Box, {
-  borderRadius: '$3',
-  background: '$bg04',
+  borderRadius: '$2',
+  background: '$bg03',
   border: '1px solid $stroke',
   overflow: 'hidden',
 });

@@ -9,6 +9,8 @@ import {
   styled,
   ResponsiveDialog,
 } from '@obolnetwork/obol-ui';
+import { Button as BaseButton } from '@/components/atoms/Button';
+import { tones } from '@/lib/ui/tones';
 import { SectionTitle } from '../../atoms/SectionTitle';
 import { ChainSelector } from '../../atoms/ChainSelector';
 import { SellFlowSteps } from '../SellFlowSteps';
@@ -48,21 +50,18 @@ const InlineFields = styled(Flex, {
   '& > *': { flex: 1 },
 });
 
-const TokenToggle = styled('button', {
-  borderRadius: '$pill',
-  border: '1px solid $stroke',
-  background: '$bg03',
-  color: '$body',
-  fontSize: '$1',
-  fontWeight: '$medium',
-  padding: '$xxxs $sm',
-  cursor: 'pointer',
+const TokenToggle = styled(BaseButton, {
   variants: {
     active: {
       true: {
-        background: 'rgba(47, 228, 171, 0.1)',
-        borderColor: 'rgba(47, 228, 171, 0.35)',
-        color: '$obolGreen',
+        background: tones.success.bg,
+        borderColor: tones.success.border,
+        color: tones.success.text,
+        '&:hover:not(:disabled)': {
+          background: tones.success.bg,
+          borderColor: tones.success.border,
+          color: tones.success.text,
+        },
       },
     },
   },
@@ -151,7 +150,7 @@ export function SellInferenceModal({
             />
 
             <FieldGroup>
-              <FieldLabel>Listing name</FieldLabel>
+              <FieldLabel>Service name</FieldLabel>
               <TextField
                 placeholder="my-inference"
                 autoFocus
@@ -190,6 +189,9 @@ export function SellInferenceModal({
                     <TokenToggle
                       key={token}
                       type="button"
+                      variant="secondary"
+                      size="sm"
+                      pill
                       active={tokenValue === token}
                       onClick={() => selectPaymentToken(token)}
                     >
@@ -236,7 +238,9 @@ export function SellInferenceModal({
               type="submit"
               disabled={!isValid || submitState === 'submitting'}
             >
-              {submitState === 'submitting' ? 'Creating…' : 'Create listing'}
+              {submitState === 'submitting'
+                ? 'Putting on sale…'
+                : 'Put on sale'}
             </Button>
           </ModalFooter>
         </form>

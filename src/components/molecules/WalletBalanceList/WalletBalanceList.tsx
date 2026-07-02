@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Flex, Text, styled, OpenInNew } from '@obolnetwork/obol-ui';
+import { Button } from '@/components/atoms/Button';
 import { CopyButton } from '../../atoms/CopyButton';
 import type { AssetBalance } from '../../../hooks/useWalletAssetBalances';
 import { explorerUrlFor } from '@/lib/config/agent-balance-tokens';
@@ -75,16 +76,16 @@ const ChainHint = styled(Text, {
   marginLeft: 'auto',
 });
 
-const ExpandChip = styled('button', {
-  fontSize: '$1',
+// Bare Button in the dense balance row; zero horizontal padding preserves
+// the inline text rhythm between token pairs.
+const ExpandChip = styled(Button, {
+  paddingLeft: 0,
+  paddingRight: 0,
   color: '$obolGreen',
-  background: 'transparent',
-  border: 'none',
-  padding: 0,
-  cursor: 'pointer',
-  fontFamily: 'inherit',
-  whiteSpace: 'nowrap',
-  '&:hover': { textDecoration: 'underline' },
+  '&:hover:not(:disabled)': {
+    color: '$obolGreen',
+    textDecoration: 'underline',
+  },
 });
 
 const BalanceSymbol = styled(Text, {
@@ -153,6 +154,8 @@ function CompactNetworkBalances({
       {hidden > 0 && (
         <ExpandChip
           type="button"
+          variant="bare"
+          size="sm"
           aria-expanded={expanded}
           onClick={() => setExpanded(true)}
         >
@@ -162,6 +165,8 @@ function CompactNetworkBalances({
       {expanded && balances.length > TOKEN_INLINE_LIMIT && (
         <ExpandChip
           type="button"
+          variant="bare"
+          size="sm"
           aria-expanded={expanded}
           onClick={() => setExpanded(false)}
         >
@@ -170,21 +175,21 @@ function CompactNetworkBalances({
       )}
       <ChainHint>{chainLabel}</ChainHint>
       {!expanded &&
-        balances
-          .slice(0, 1)
-          .filter(b => b.token.address)
-          .map(b => (
-            <ExplorerLink
-              key={`${b.chain.chainId}-explorer`}
-              href={explorerUrlFor(b.chain, b.token, walletAddress)}
-              target="_blank"
-              rel="noopener noreferrer"
-              title={`View on ${b.chain.chainName} explorer`}
-              aria-label={`View wallet on ${b.chain.chainName} explorer`}
-            >
-              <OpenInNew size="sm" />
-            </ExplorerLink>
-          ))}
+        // Every chain group links out to its explorer. Native assets (no
+        // contract address, e.g. mainnet ETH) fall back to the wallet's
+        // /address/ page via explorerUrlFor.
+        balances.slice(0, 1).map(b => (
+          <ExplorerLink
+            key={`${b.chain.chainId}-explorer`}
+            href={explorerUrlFor(b.chain, b.token, walletAddress)}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`View on ${b.chain.chainName} explorer`}
+            aria-label={`View wallet on ${b.chain.chainName} explorer`}
+          >
+            <OpenInNew size="sm" />
+          </ExplorerLink>
+        ))}
     </NetworkRow>
   );
 }

@@ -151,17 +151,6 @@ export function ServiceReadinessRow({ offer }: ServiceReadinessRowProps) {
           );
         })}
       </Track>
-      <Text
-        css={{
-          fontSize: '$1',
-          color: '$body',
-          opacity: 0.65,
-          fontFamily: 'monospace',
-          flexShrink: 0,
-        }}
-      >
-        {offer.namespace}/{offer.name}
-      </Text>
     </Row>
   );
 }

@@ -5,9 +5,11 @@ import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { ExternalLinkIcon } from '@radix-ui/react-icons';
 
 import { Badge } from '@/components/atoms/Badge';
+import { Button } from '@/components/atoms/Button';
 import { ChainIcon } from '@/components/atoms/ChainIcon';
 import { CopyButton } from '@/components/atoms/CopyButton';
 import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
+import { tones } from '@/lib/ui/tones';
 import type { ServiceListItem } from '@/lib/marketplace/types';
 import type { ChainName } from '@/types/dashboard';
 import type { ServiceOfferType } from '@/types/sell';
@@ -140,19 +142,19 @@ const StatusPillBox = styled('div', {
   variants: {
     tone: {
       live: {
-        background: 'rgba(47, 228, 171, 0.13)',
-        borderColor: 'rgba(47, 228, 171, 0.22)',
-        color: '$obolGreen',
+        background: tones.success.bg,
+        borderColor: tones.success.border,
+        color: tones.success.text,
       },
       pending: {
-        background: 'rgba(250, 186, 90, 0.13)',
-        borderColor: 'rgba(250, 186, 90, 0.24)',
-        color: '$obolGold',
+        background: tones.warning.bg,
+        borderColor: tones.warning.border,
+        color: tones.warning.text,
       },
       degraded: {
-        background: 'rgba(221, 96, 60, 0.13)',
-        borderColor: 'rgba(221, 96, 60, 0.24)',
-        color: '$test',
+        background: tones.danger.bg,
+        borderColor: tones.danger.border,
+        color: tones.danger.text,
       },
     },
   },
@@ -195,19 +197,6 @@ const ActionRow = styled(Flex, {
   alignItems: 'center',
   gap: '$xs',
   marginTop: 'auto',
-});
-
-const SecondaryBtn = styled('button', {
-  height: 30,
-  padding: '0 $xs',
-  borderRadius: '$pill',
-  border: '1px solid $stroke',
-  background: '$bg03',
-  color: '$light',
-  fontSize: '$1',
-  cursor: 'pointer',
-  transition: 'background 120ms, border-color 120ms',
-  '&:hover': { background: '$bg04', borderColor: '$bg05' },
 });
 
 const SkillLink = styled('a', {
@@ -430,9 +419,14 @@ function MarketplaceCardImpl({ item, onDetails }: MarketplaceCardProps) {
         ) : null}
 
         <ActionRow>
-          <SecondaryBtn type="button" onClick={() => onDetails?.(item)}>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => onDetails?.(item)}
+          >
             Details
-          </SecondaryBtn>
+          </Button>
           <Box css={{ flex: 1 }} />
           {skillUrl ? (
             <SkillLink

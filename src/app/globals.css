@@ -24,3 +24,14 @@ a {
 * {
   box-sizing: border-box;
 }
+
+/*
+ * obol-ui 1.1.19 does not define a `stroke` color token, yet the app uses
+ * `1px solid $stroke` on nearly every card and button. An undefined
+ * var(--colors-stroke) makes border-color fall back to currentColor, so
+ * border colors silently varied with each component's text color. Defining
+ * it once here gives every border the same subtle stroke.
+ */
+:root {
+  --colors-stroke: #243d42;
+}

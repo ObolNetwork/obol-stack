@@ -1,4 +1,5 @@
-import { Flex, Text, styled } from '@obolnetwork/obol-ui';
+import { Flex, Text } from '@obolnetwork/obol-ui';
+import { Button } from '@/components/atoms/Button';
 
 export interface PaginationProps {
   page: number;
@@ -7,32 +8,6 @@ export interface PaginationProps {
   onNext: () => void;
   disabled?: boolean;
 }
-
-const PageButton = styled('button', {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  width: 28,
-  height: 28,
-  borderRadius: '$2',
-  border: '1px solid $stroke',
-  background: '$bg03',
-  color: '$body',
-  fontSize: '$1',
-  cursor: 'pointer',
-  transition: 'all 0.15s ease',
-
-  '&:hover:not(:disabled)': {
-    background: '$bg04',
-    color: '$light',
-    borderColor: '$bg05',
-  },
-
-  '&:disabled': {
-    opacity: 0.3,
-    cursor: 'not-allowed',
-  },
-});
 
 export function Pagination({
   page,
@@ -52,9 +27,17 @@ export function Pagination({
         paddingTop: '$sm',
       }}
     >
-      <PageButton onClick={onPrev} disabled={disabled || page <= 1}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        iconOnly
+        aria-label="Previous page"
+        onClick={onPrev}
+        disabled={disabled || page <= 1}
+      >
         &#8592;
-      </PageButton>
+      </Button>
       <Text
         css={{
           fontSize: '$1',
@@ -65,9 +48,17 @@ export function Pagination({
       >
         {page} / {totalPages}
       </Text>
-      <PageButton onClick={onNext} disabled={disabled || page >= totalPages}>
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        iconOnly
+        aria-label="Next page"
+        onClick={onNext}
+        disabled={disabled || page >= totalPages}
+      >
         &#8594;
-      </PageButton>
+      </Button>
     </Flex>
   );
 }

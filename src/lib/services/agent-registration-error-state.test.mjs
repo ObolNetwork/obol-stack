@@ -32,14 +32,24 @@ describe('agent registration error state', () => {
     );
   });
 
-  it('does not render no-registration copy when registration fetch failed', async () => {
+  it('does not render empty-state copy when registration fetch failed', async () => {
     const source = await readFile(
       'src/components/molecules/AgentRegistrationCard/AgentRegistrationCard.tsx',
       'utf8'
     );
 
     assert.match(source, /<ErrorState/);
+    assert.match(source, /Registrations unavailable/);
     assert.match(source, /!loading && error/);
-    assert.match(source, /!loading && !error && !registration/);
+    // Empty state is gated on !error, so a failed fetch never shows it.
+    assert.match(
+      source,
+      /!loading && !error && publishedServices\.length === 0/
+    );
+    // Detail blocks render only for a real registration with services.
+    assert.match(
+      source,
+      /!loading\s*&&[\s\S]*!error\s*&&[\s\S]*registration\s*&&[\s\S]*publishedServices\.length > 0/
+    );
   });
 });

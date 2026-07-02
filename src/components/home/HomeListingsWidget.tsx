@@ -1,6 +1,7 @@
 'use client';
 
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
+import { Button } from '@/components/atoms/Button';
 import { Card } from '../atoms/Card';
 import { SectionTitle } from '../atoms/SectionTitle';
 import { CountBadge } from '../atoms/CountBadge';
@@ -49,26 +50,6 @@ const ListingRow = styled(Box, {
   borderRadius: '$2',
 });
 
-const ManageButton = styled('button', {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: '$xxxs',
-  padding: '6px 12px',
-  borderRadius: '$pill',
-  border: '1px solid $stroke',
-  backgroundColor: '$bg03',
-  color: '$light',
-  fontSize: '$2',
-  fontWeight: '$medium',
-  fontFamily: 'inherit',
-  cursor: 'pointer',
-  transition: 'background 120ms, border-color 120ms',
-  '&:hover': {
-    backgroundColor: '$bg04',
-    borderColor: 'rgba(255,255,255,0.12)',
-  },
-});
-
 interface HomeListingsWidgetProps {
   onManage?: () => void;
 }
@@ -85,7 +66,7 @@ export function HomeListingsWidget({ onManage }: HomeListingsWidgetProps) {
         <SectionTitle>Services</SectionTitle>
         <CountBadge count={myOffers.length} />
         <Box css={{ flex: 1 }} />
-        <ManageButton onClick={onManage}>
+        <Button variant="secondary" size="sm" onClick={onManage}>
           Manage
           <svg width="12" height="12" viewBox="0 0 16 16" fill="none">
             <path
@@ -96,7 +77,7 @@ export function HomeListingsWidget({ onManage }: HomeListingsWidgetProps) {
               strokeLinejoin="round"
             />
           </svg>
-        </ManageButton>
+        </Button>
       </Flex>
 
       <Flex css={{ flexDirection: 'column', gap: '$xs' }}>
@@ -191,7 +172,8 @@ export function HomeListingsWidget({ onManage }: HomeListingsWidgetProps) {
                             fontFamily: 'monospace',
                           }}
                         >
-                          {offer.usage.chargedRequests.toLocaleString()} charged
+                          {offer.usage.chargedRequests.toLocaleString()}{' '}
+                          {offer.usage.chargedRequests === 1 ? 'sale' : 'sales'}
                         </Text>
                       )}
                     {offer.usage?.lastSettlementUnix != null && (
@@ -202,7 +184,7 @@ export function HomeListingsWidget({ onManage }: HomeListingsWidgetProps) {
                           fontFamily: 'monospace',
                         }}
                       >
-                        last paid{' '}
+                        last sale{' '}
                         {formatRelativeAgo(offer.usage.lastSettlementUnix)}
                       </Text>
                     )}

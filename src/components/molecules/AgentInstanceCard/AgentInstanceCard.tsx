@@ -11,6 +11,8 @@ import {
   OpenInNew,
 } from '@obolnetwork/obol-ui';
 import { ChevronRightIcon } from '@radix-ui/react-icons';
+import { Button as BaseButton } from '@/components/atoms/Button';
+import { tones } from '@/lib/ui/tones';
 import { StatusPill } from '../../atoms/StatusIndicator';
 import { CopyButton } from '../../atoms/CopyButton/CopyButton';
 import { SellAgentModal } from '../SellAgentModal';
@@ -39,7 +41,7 @@ function inferProvider(modelName: string): string {
 
 function displayInstanceName(instance: AgentInstance): string {
   if (instance.runtime === 'hermes' && instance.id === 'obol-agent') {
-    return 'Obol Agent';
+    return 'Stack agent';
   }
   if (instance.runtime === 'openclaw' && instance.id === 'default') {
     return 'OpenClaw';
@@ -111,8 +113,8 @@ const RuntimeBadge = styled(Text, {
   fontSize: '10px',
   fontWeight: '$semibold',
   color: '$body',
-  backgroundColor: 'rgba(255, 255, 255, 0.05)',
-  border: '1px solid rgba(255, 255, 255, 0.12)',
+  backgroundColor: tones.neutral.bg,
+  border: `1px solid ${tones.neutral.border}`,
   borderRadius: '4px',
   padding: '1px 5px',
   lineHeight: 1.4,
@@ -142,8 +144,8 @@ const KeysBadge = styled(Text, {
   fontSize: '10px',
   fontWeight: '$semibold',
   color: '$obolGreen',
-  backgroundColor: 'rgba(47, 228, 171, 0.08)',
-  border: '1px solid rgba(47, 228, 171, 0.25)',
+  backgroundColor: tones.success.bg,
+  border: `1px solid ${tones.success.border}`,
   borderRadius: '4px',
   padding: '1px 5px',
   lineHeight: 1.4,
@@ -157,19 +159,13 @@ const ActionsRow = styled(Flex, {
   flexWrap: 'wrap',
 });
 
-const DetailsToggle = styled('button', {
-  display: 'inline-flex',
-  alignItems: 'center',
+// Bare Button plus chevron rotation; zero horizontal padding keeps the
+// toggle flush with the card's text column.
+const DetailsToggle = styled(BaseButton, {
   gap: '$xxxs',
   marginTop: '$md',
-  padding: 0,
-  background: 'transparent',
-  border: 'none',
-  color: '$body',
-  fontSize: '$1',
-  cursor: 'pointer',
-  transition: 'color 150ms ease',
-  '&:hover': { color: '$light' },
+  paddingLeft: 0,
+  paddingRight: 0,
 
   '& svg': {
     transition: 'transform 150ms ease',
@@ -226,50 +222,47 @@ const SellLabel = styled(Text, {
   lineHeight: 1.4,
 });
 
-const SellButton = styled('button', {
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: '6px',
-  padding: '$xxxs $sm',
-  borderRadius: '$pill',
-  border: '1px solid rgba(47, 228, 171, 0.3)',
-  background: 'rgba(47, 228, 171, 0.08)',
-  color: '#2FE4AB',
-  fontSize: '$2',
-  fontWeight: '$semibold',
-  cursor: 'pointer',
-  transition: 'all 0.15s ease',
-  whiteSpace: 'nowrap',
+// Success-toned pill CTA. Kept pill-shaped (not rectangular) so it stays
+// visually paired with the ListingLink anchor beside it.
+const SellButton = styled(BaseButton, {
+  background: tones.success.bg,
+  borderColor: tones.success.border,
+  color: tones.success.text,
 
-  '&:hover': {
-    background: 'rgba(47, 228, 171, 0.15)',
-    borderColor: 'rgba(47, 228, 171, 0.5)',
-  },
-
-  '&:disabled': {
-    opacity: 0.45,
-    cursor: 'not-allowed',
+  '&:hover:not(:disabled)': {
+    background: tones.success.bg,
+    borderColor: tones.success.text,
+    color: tones.success.text,
   },
 });
 
+// Anchor twin of SellButton — mirrors the Button atom's sm/pill metrics.
 const ListingLink = styled('a', {
   display: 'inline-flex',
   alignItems: 'center',
-  gap: '6px',
-  padding: '$xxxs $sm',
+  gap: '$xxs',
+  height: 28,
+  paddingLeft: '$xs',
+  paddingRight: '$xs',
   borderRadius: '$pill',
-  border: '1px solid rgba(47, 228, 171, 0.3)',
-  background: 'rgba(47, 228, 171, 0.08)',
-  color: '#2FE4AB',
-  fontSize: '$2',
+  border: `1px solid ${tones.success.border}`,
+  background: tones.success.bg,
+  color: tones.success.text,
+  fontSize: '$1',
   fontWeight: '$semibold',
+  lineHeight: 1,
   textDecoration: 'none',
   cursor: 'pointer',
   whiteSpace: 'nowrap',
+  transition: 'background-color 150ms ease, border-color 150ms ease',
 
   '&:hover': {
-    background: 'rgba(47, 228, 171, 0.15)',
-    borderColor: 'rgba(47, 228, 171, 0.5)',
+    borderColor: tones.success.text,
+  },
+
+  '&:focus-visible': {
+    outline: '2px solid $obolGreen',
+    outlineOffset: 2,
   },
 });
 
@@ -320,7 +313,7 @@ export function AgentInstanceCard({
   const listing = instance.listing;
   const listingChipLabel =
     listing?.phase === 'live'
-      ? 'Listed'
+      ? 'On sale'
       : listing?.phase === 'draining'
         ? 'Draining'
         : listing
@@ -381,35 +374,41 @@ export function AgentInstanceCard({
         </>
       )}
 
-      <ActionsRow>
-        {!instance.isSubAgent ? (
-          <Button
-            disabled={displayStatus !== 'running'}
-            color="primary"
-            onClick={() => onSelect?.(instance)}
-            css={{ fontSize: '$3', height: '$sm' }}
-          >
-            Chat
-          </Button>
-        ) : null}
+      {/* Sub-agents without a dashboard have no actions — skip the row so
+          its padding doesn't leave a dead gap above Model Details. */}
+      {(!instance.isSubAgent || dashboardUrl) && (
+        <ActionsRow>
+          {!instance.isSubAgent ? (
+            <Button
+              disabled={displayStatus !== 'running'}
+              color="primary"
+              onClick={() => onSelect?.(instance)}
+              css={{ fontSize: '$3', height: '$sm' }}
+            >
+              Chat
+            </Button>
+          ) : null}
 
-        {dashboardUrl ? (
-          <Link
-            href={dashboardUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            css={{
-              fontSize: '13px',
-            }}
-          >
-            Dashboard
-            <OpenInNew size="sm" />
-          </Link>
-        ) : null}
-      </ActionsRow>
+          {dashboardUrl ? (
+            <Link
+              href={dashboardUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              css={{
+                fontSize: '13px',
+              }}
+            >
+              Dashboard
+              <OpenInNew size="sm" />
+            </Link>
+          ) : null}
+        </ActionsRow>
+      )}
 
       <DetailsToggle
         type="button"
+        variant="bare"
+        size="sm"
         onClick={() => setDetailsOpen(o => !o)}
         expanded={detailsOpen}
         aria-expanded={detailsOpen}
@@ -462,9 +461,9 @@ export function AgentInstanceCard({
             <SellLabel>
               {listing
                 ? listing.phase === 'setting_up'
-                  ? 'Listing in progress'
-                  : 'Listed on storefront'
-                : 'Monetize this agent'}
+                  ? 'Going on sale…'
+                  : 'On sale'
+                : 'Sell this agent'}
             </SellLabel>
             {canSell ? (
               <SellAgentModal
@@ -473,7 +472,7 @@ export function AgentInstanceCard({
                 defaultWallet={primaryAddress ?? undefined}
                 onListed={onRefresh}
                 trigger={
-                  <SellButton type="button">
+                  <SellButton type="button" variant="ghost" size="sm" pill>
                     <svg
                       width="14"
                       height="14"
@@ -493,16 +492,35 @@ export function AgentInstanceCard({
                 }
               />
             ) : listing ? (
-              <ListingLink
-                href={`#${listing.anchorId}`}
-                onClick={() => onRefresh?.()}
-              >
-                {listing.phase === 'setting_up'
-                  ? 'Finish setup'
-                  : 'View listing'}
-              </ListingLink>
+              listing.phase !== 'setting_up' && listing.endpoint ? (
+                // Live sale: open the actual x402-gated storefront URL.
+                <ListingLink
+                  href={listing.endpoint}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  View on storefront
+                  <OpenInNew size="sm" />
+                </ListingLink>
+              ) : (
+                <ListingLink
+                  href={`#${listing.anchorId}`}
+                  onClick={() => onRefresh?.()}
+                >
+                  {listing.phase === 'setting_up'
+                    ? 'Finish setup'
+                    : 'View on storefront'}
+                </ListingLink>
+              )
             ) : (
-              <SellButton type="button" disabled title="Agent must be running">
+              <SellButton
+                type="button"
+                variant="ghost"
+                size="sm"
+                pill
+                disabled
+                title="Agent must be running"
+              >
                 Sell
               </SellButton>
             )}

@@ -1,6 +1,7 @@
 'use client';
 
 import { Flex, styled } from '@obolnetwork/obol-ui';
+import { Button } from '@/components/atoms/Button';
 
 export type TopNavId = 'home' | 'marketplace' | 'agents';
 
@@ -24,45 +25,12 @@ const Nav = styled('nav', {
   gap: '$xxxs',
 });
 
-const NavItem = styled('button', {
-  position: 'relative',
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: '$xxxs',
-  padding: '$xs $sm',
-  border: 'none',
-  background: 'transparent',
-  color: '$body',
-  fontFamily: '$fonts$body',
-  fontSize: '$3',
-  fontWeight: '$medium',
-  lineHeight: '$base',
-  borderRadius: '$2',
-  cursor: 'pointer',
-  textDecoration: 'none',
-  transition: 'color 150ms ease',
-
-  '&:hover': { color: '$light' },
-  '&:focus-visible': {
-    outline: '2px solid $obolGreen',
-    outlineOffset: 2,
-  },
-
+const NavItem = styled(Button, {
   variants: {
     active: {
       true: {
+        background: '$bg03',
         color: '$light',
-        fontWeight: '$semibold',
-        '&::after': {
-          content: '""',
-          position: 'absolute',
-          left: '$sm',
-          right: '$sm',
-          bottom: -1,
-          height: 2,
-          background: '$obolGreen',
-          borderRadius: 999,
-        },
       },
     },
   },
@@ -95,6 +63,9 @@ export function TopNav({ active = 'home', onSelect }: TopNavProps) {
             <NavItem
               key={item.id}
               type="button"
+              variant="bare"
+              size="md"
+              pill
               active={isActive}
               aria-current={isActive ? 'page' : undefined}
               onClick={() => onSelect?.(item.id)}

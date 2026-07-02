@@ -2,7 +2,9 @@
 
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { useWalletClient } from 'wagmi';
+import { tones } from '../../../lib/ui/tones';
 import { ChainIcon, CardAppType, CardAppId } from '../../atoms/AppIcon';
+import { Badge } from '../../atoms/Badge';
 import { StatusPill } from '../../atoms/StatusIndicator';
 import { CopyButton } from '../../atoms/CopyButton';
 import { AddNetworkButton } from '../../molecules/AddNetworkButton';
@@ -26,7 +28,7 @@ import {
 // ── Network card ──────────────────────────────────────────────────────────────
 
 const NetworkCardWrapper = styled(Box, {
-  borderRadius: '$3',
+  borderRadius: '$2',
   background: '$bg03',
   border: '1px solid $stroke',
   overflow: 'hidden',
@@ -78,8 +80,8 @@ const TestnetChip = styled(Text, {
   fontSize: '10px',
   fontWeight: '$semibold',
   color: '$body',
-  backgroundColor: 'rgba(255, 255, 255, 0.05)',
-  border: '1px solid rgba(255, 255, 255, 0.18)',
+  backgroundColor: tones.neutral.bg,
+  border: `1px solid ${tones.neutral.border}`,
   borderRadius: '4px',
   padding: '1px 6px',
   lineHeight: 1.4,
@@ -87,6 +89,18 @@ const TestnetChip = styled(Text, {
   letterSpacing: '0.05em',
   whiteSpace: 'nowrap',
 });
+
+// Sizing overrides so the local/remote source Badge sits flush with TestnetChip.
+const sourceChipCss = {
+  fontSize: '10px',
+  fontWeight: '$semibold',
+  borderRadius: '4px',
+  padding: '1px 6px',
+  lineHeight: 1.4,
+  textTransform: 'uppercase',
+  letterSpacing: '0.05em',
+  whiteSpace: 'nowrap',
+} as const;
 
 // ── Upstream cards ───────────────────────────────────────────────────────────
 
@@ -139,6 +153,8 @@ export function ErpcStatus({
   const erpcUpstreams = upstreams ?? [];
   const localUpstreams = localNodes ?? [];
   const totalUpstreams = erpcUpstreams.length + localUpstreams.length;
+  // Local nodes are the primary serving path; remote upstreams are fallback.
+  const hasLocalNode = localUpstreams.length > 0;
 
   return (
     <NetworkCardWrapper>
@@ -148,8 +164,37 @@ export function ErpcStatus({
           <Flex css={{ flexDirection: 'column', gap: '$xxxs', width: 'auto' }}>
             <CardAppType>RPC</CardAppType>
             <Flex css={{ alignItems: 'center', gap: '$xs', width: 'auto' }}>
-              <CardAppId>{aliasDisplay(network.alias)}</CardAppId>
+              <CardAppId css={hasLocalNode ? undefined : { color: '$body' }}>
+                {aliasDisplay(network.alias)}
+              </CardAppId>
               {isTestnet && <TestnetChip>Testnet</TestnetChip>}
+              {hasLocalNode ? (
+                <Box title="Backed by a locally-synced node">
+                  <Badge
+                    variant="green"
+                    css={{
+                      ...sourceChipCss,
+                      border: `1px solid ${tones.success.border}`,
+                    }}
+                  >
+                    Local
+                  </Badge>
+                </Box>
+              ) : (
+                <Box title="Served by remote upstreams only">
+                  <Badge
+                    variant="neutral"
+                    css={{
+                      ...sourceChipCss,
+                      color: '$muted',
+                      backgroundColor: tones.neutral.bg,
+                      border: `1px solid ${tones.neutral.border}`,
+                    }}
+                  >
+                    Remote
+                  </Badge>
+                </Box>
+              )}
             </Flex>
           </Flex>
         </Flex>
@@ -191,11 +236,12 @@ export function ErpcStatus({
             }
           >
             <UpstreamsGrid>
-              {erpcUpstreams.map(upstream => (
-                <RemoteNodeStatus key={upstream.id} upstream={upstream} />
-              ))}
+              {/* Local nodes first — they are the primary serving path. */}
               {localUpstreams.map(node => (
                 <LocalNodeStatus key={node.appId} appData={node} />
+              ))}
+              {erpcUpstreams.map(upstream => (
+                <RemoteNodeStatus key={upstream.id} upstream={upstream} />
               ))}
             </UpstreamsGrid>
           </Accordion>

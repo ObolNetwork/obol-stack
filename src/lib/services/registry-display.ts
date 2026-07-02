@@ -79,6 +79,87 @@ export function registryHealthBadge(
   };
 }
 
+/** Names that carry no signal: bare addresses, hashes, or "Agent #123" fillers. */
+const TRIVIAL_NAME = /^(0x[0-9a-f]{4,}|agent\s*#?\d*)$/i;
+
+function looksLikeEndpointUrl(endpoint: string | undefined): boolean {
+  if (!endpoint) return false;
+  try {
+    const url = new URL(endpoint);
+    return (
+      (url.protocol === 'https:' || url.protocol === 'http:') &&
+      url.hostname.includes('.')
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Heuristic quality score for an 8004scan registry agent. Higher is better.
+ *
+ * Signals: non-trivial name, real description, supported protocols, x402,
+ * reachable-looking service endpoints, tools/skills, verification, health,
+ * image, and 8004scan's own total_score / star_count.
+ */
+export function registryAgentQualityScore(agent: Agent8004): number {
+  let score = 0;
+
+  const name = agent.name?.trim() ?? '';
+  if (name && !TRIVIAL_NAME.test(name)) score += 3;
+
+  if ((agent.description?.trim().length ?? 0) > 20) score += 3;
+
+  score += Math.min(agent.supported_protocols?.length ?? 0, 4);
+
+  if (agent.x402_supported) score += 2;
+
+  const services = Object.values(agent.services ?? {});
+  const endpointCount = services.filter(service =>
+    looksLikeEndpointUrl(service?.endpoint)
+  ).length;
+  score += Math.min(endpointCount, 3) * 2;
+
+  const toolCount = services.reduce(
+    (count, service) => count + (service?.tools?.length ?? 0),
+    0
+  );
+  score += Math.min(toolCount, 5);
+
+  if (agent.is_verified) score += 3;
+
+  const health = agent.health_status?.trim().toLowerCase() ?? '';
+  if (['healthy', 'live', 'online', 'synced'].includes(health)) score += 2;
+
+  if (agent.image_url?.trim()) score += 1;
+
+  if (Number.isFinite(agent.total_score) && agent.total_score > 0) {
+    score += Math.min(Math.floor(agent.total_score / 10), 5);
+  }
+  if (Number.isFinite(agent.star_count) && agent.star_count > 0) {
+    score += Math.min(agent.star_count, 5);
+  }
+
+  return score;
+}
+
+/**
+ * Sort agents by quality score, descending. Stable: agents with equal scores
+ * keep their original (API) relative order. Returns a new array.
+ */
+export function rankRegistryAgents<T extends Agent8004>(
+  agents: readonly T[]
+): T[] {
+  return agents
+    .map((agent, index) => ({
+      agent,
+      index,
+      score: registryAgentQualityScore(agent),
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map(entry => entry.agent);
+}
+
 export function registryCapabilityBadges(
   agent: Agent8004,
   limit = 12

@@ -2,6 +2,7 @@
 
 import { Box, Flex, Text, Link, styled } from '@obolnetwork/obol-ui';
 import { OpenInNew } from '@obolnetwork/obol-ui';
+import { tones } from '../../../lib/ui/tones';
 import { Card } from '../../atoms/Card';
 import { Badge } from '../../atoms/Badge';
 import { Avatar } from '../../atoms/Avatar';
@@ -105,8 +106,8 @@ const ChipRow = styled(Flex, {
 const MetaChip = styled(Text, {
   fontSize: '10px',
   color: '$body',
-  backgroundColor: 'rgba(255, 255, 255, 0.04)',
-  border: '1px solid rgba(255, 255, 255, 0.08)',
+  backgroundColor: tones.neutral.bg,
+  border: `1px solid ${tones.neutral.border}`,
   borderRadius: '4px',
   padding: '1px 6px',
   lineHeight: 1.4,
@@ -126,9 +127,9 @@ const ServiceGrid = styled(Box, {
 });
 
 const ServiceCard = styled(Box, {
-  border: '1px solid rgba(255, 255, 255, 0.1)',
+  border: '1px solid $stroke',
   borderRadius: '$2',
-  background: 'rgba(255, 255, 255, 0.03)',
+  background: '$bg03',
   padding: '$sm',
   display: 'flex',
   flexDirection: 'column',
@@ -170,12 +171,17 @@ export function AgentRegistrationCard() {
   );
 
   const headerContent = (
-    <Flex css={{ alignItems: 'center', gap: '$sm', flexWrap: 'wrap' }}>
-      <SectionTitle>On-chain identity</SectionTitle>
-      {!loading && publishedServices.length > 0 && (
-        <Badge variant="neutral">{publishedServices.length} services</Badge>
-      )}
-    </Flex>
+    <Box>
+      <Flex css={{ alignItems: 'center', gap: '$sm', flexWrap: 'wrap' }}>
+        <SectionTitle>Registrations</SectionTitle>
+        {!loading && publishedServices.length > 0 && (
+          <Badge variant="neutral">{publishedServices.length} services</Badge>
+        )}
+      </Flex>
+      <Text css={{ fontSize: '$1', color: '$muted', marginTop: 2 }}>
+        Where this stack&apos;s agents are advertised for discovery.
+      </Text>
+    </Box>
   );
 
   return (
@@ -183,170 +189,162 @@ export function AgentRegistrationCard() {
       <Accordion header={headerContent} defaultExpanded={true}>
         <Body>
           {loading && (
-            <LoadingState size="small" message="Loading identity..." />
+            <LoadingState size="small" message="Loading registrations..." />
           )}
 
           {!loading && error && (
             <ErrorState
-              message={`On-chain identity unavailable: ${error}`}
+              message={`Registrations unavailable: ${error}`}
               onRetry={refetch}
             />
           )}
 
-          {!loading && !error && !registration && (
+          {!loading && !error && publishedServices.length === 0 && (
             <NotPublished>
-              No registration published yet. Registration is enabled by default;
-              re-run <code>obol sell http …</code> without{' '}
-              <code>--no-register</code> to publish one.
-              <Flex css={{ marginTop: '$xs' }}>
-                <Link
-                  href={rawRegistrationUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  css={{ fontSize: '$1' }}
-                >
-                  Open registration JSON
-                  <OpenInNew size="sm" />
-                </Link>
-              </Flex>
+              No registrations yet. Run <code>obol sell register</code> to list
+              your agents on the Ethereum Agent Registry.
             </NotPublished>
           )}
 
-          {!loading && registration && (
-            <>
-              <TopRow>
-                <Avatar
-                  src={registration.image}
-                  alt={registration.name}
-                  fallback={registration.name?.[0]?.toUpperCase() ?? 'A'}
-                />
-                <Box>
-                  <AgentName>{registration.name}</AgentName>
-                  <IdentitySummary>
-                    On-chain registration document — {publishedServices.length}{' '}
-                    paid route
-                    {publishedServices.length === 1 ? '' : 's'} published below.
-                  </IdentitySummary>
-                </Box>
-                <MetaRow>
-                  {registration.x402Support && (
-                    <Badge variant="green">x402</Badge>
-                  )}
-                  {registration.active ? (
-                    <Badge variant="green">active</Badge>
-                  ) : (
-                    <Badge variant="neutral">inactive</Badge>
-                  )}
-                  {(registration.supportedTrust ?? []).map(t => (
-                    <Badge key={t} variant="yellow">
-                      {t}
-                    </Badge>
-                  ))}
-                </MetaRow>
-              </TopRow>
-
-              {registration.description && (
-                <Description>{registration.description}</Description>
-              )}
-
-              {publishedServices.length > 0 && (
-                <DetailBlock>
-                  <DetailTitle>Published services</DetailTitle>
-                  <ServiceGrid>
-                    {publishedServices.map(service => (
-                      <ServiceCard key={service.endpoint}>
-                        <ServiceName>{service.name}</ServiceName>
-                        {service.skills.length > 0 && (
-                          <ChipRow>
-                            {service.skills.map(skill => (
-                              <MetaChip key={`${service.name}-${skill}`}>
-                                {skill}
-                              </MetaChip>
-                            ))}
-                          </ChipRow>
-                        )}
-                        <EndpointLink
-                          href={service.endpoint}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          {service.endpoint}
-                          <OpenInNew size="sm" />
-                        </EndpointLink>
-                      </ServiceCard>
+          {!loading &&
+            !error &&
+            registration &&
+            publishedServices.length > 0 && (
+              <>
+                <TopRow>
+                  <Avatar
+                    src={registration.image}
+                    alt={registration.name}
+                    fallback={registration.name?.[0]?.toUpperCase() ?? 'A'}
+                  />
+                  <Box>
+                    <AgentName>{registration.name}</AgentName>
+                    <IdentitySummary>
+                      On-chain registration document —{' '}
+                      {publishedServices.length} service
+                      {publishedServices.length === 1 ? '' : 's'} published
+                      below.
+                    </IdentitySummary>
+                  </Box>
+                  <MetaRow>
+                    {registration.x402Support && (
+                      <Badge variant="green">x402</Badge>
+                    )}
+                    {registration.active ? (
+                      <Badge variant="green">active</Badge>
+                    ) : (
+                      <Badge variant="neutral">inactive</Badge>
+                    )}
+                    {(registration.supportedTrust ?? []).map(t => (
+                      <Badge key={t} variant="yellow">
+                        {t}
+                      </Badge>
                     ))}
-                  </ServiceGrid>
-                </DetailBlock>
-              )}
+                  </MetaRow>
+                </TopRow>
 
-              {registrationEntries.length > 0 && (
-                <DetailBlock>
-                  <DetailTitle>On-chain identity</DetailTitle>
-                  {registrationEntries.map((entry, index) => {
-                    const label = agentRegistrationLabel(entry);
-                    const explorerUrl = agentRegistrationExplorerUrl(entry);
-                    return (
-                      <IdentityRow
-                        key={`${entry.agentRegistry}-${entry.agentId}-${index}`}
-                      >
-                        {explorerUrl ? (
-                          <IdentityLink
-                            href={explorerUrl}
+                {registration.description && (
+                  <Description>{registration.description}</Description>
+                )}
+
+                {publishedServices.length > 0 && (
+                  <DetailBlock>
+                    <DetailTitle>Published services</DetailTitle>
+                    <ServiceGrid>
+                      {publishedServices.map(service => (
+                        <ServiceCard key={service.endpoint}>
+                          <ServiceName>{service.name}</ServiceName>
+                          {service.skills.length > 0 && (
+                            <ChipRow>
+                              {service.skills.map(skill => (
+                                <MetaChip key={`${service.name}-${skill}`}>
+                                  {skill}
+                                </MetaChip>
+                              ))}
+                            </ChipRow>
+                          )}
+                          <EndpointLink
+                            href={service.endpoint}
                             target="_blank"
                             rel="noopener noreferrer"
                           >
-                            {label}
+                            {service.endpoint}
                             <OpenInNew size="sm" />
-                          </IdentityLink>
-                        ) : (
-                          <IdentityText>{label}</IdentityText>
-                        )}
-                        <RegistryText>{entry.agentRegistry}</RegistryText>
-                      </IdentityRow>
-                    );
-                  })}
-                </DetailBlock>
-              )}
+                          </EndpointLink>
+                        </ServiceCard>
+                      ))}
+                    </ServiceGrid>
+                  </DetailBlock>
+                )}
 
-              {topLevelMetadata.length > 0 && (
-                <DetailBlock>
-                  <DetailTitle>Metadata</DetailTitle>
-                  <ChipRow>
-                    {topLevelMetadata.map(([key, value]) => (
-                      <MetaChip key={key}>
-                        {key}={value}
-                      </MetaChip>
-                    ))}
-                  </ChipRow>
-                </DetailBlock>
-              )}
+                {registrationEntries.length > 0 && (
+                  <DetailBlock>
+                    <DetailTitle>On-chain registrations</DetailTitle>
+                    {registrationEntries.map((entry, index) => {
+                      const label = agentRegistrationLabel(entry);
+                      const explorerUrl = agentRegistrationExplorerUrl(entry);
+                      return (
+                        <IdentityRow
+                          key={`${entry.agentRegistry}-${entry.agentId}-${index}`}
+                        >
+                          {explorerUrl ? (
+                            <IdentityLink
+                              href={explorerUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              {label}
+                              <OpenInNew size="sm" />
+                            </IdentityLink>
+                          ) : (
+                            <IdentityText>{label}</IdentityText>
+                          )}
+                          <RegistryText>{entry.agentRegistry}</RegistryText>
+                        </IdentityRow>
+                      );
+                    })}
+                  </DetailBlock>
+                )}
 
-              {provenanceEntries.length > 0 && (
-                <DetailBlock>
-                  <DetailTitle>Provenance</DetailTitle>
-                  <ChipRow>
-                    {provenanceEntries.map(([key, value]) => (
-                      <MetaChip key={key}>
-                        {key}={value}
-                      </MetaChip>
-                    ))}
-                  </ChipRow>
-                </DetailBlock>
-              )}
+                {topLevelMetadata.length > 0 && (
+                  <DetailBlock>
+                    <DetailTitle>Metadata</DetailTitle>
+                    <ChipRow>
+                      {topLevelMetadata.map(([key, value]) => (
+                        <MetaChip key={key}>
+                          {key}={value}
+                        </MetaChip>
+                      ))}
+                    </ChipRow>
+                  </DetailBlock>
+                )}
 
-              <Flex css={{ marginTop: '$xs' }}>
-                <Link
-                  href={rawRegistrationUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  css={{ fontSize: '$1' }}
-                >
-                  View raw registration JSON
-                  <OpenInNew size="sm" />
-                </Link>
-              </Flex>
-            </>
-          )}
+                {provenanceEntries.length > 0 && (
+                  <DetailBlock>
+                    <DetailTitle>Provenance</DetailTitle>
+                    <ChipRow>
+                      {provenanceEntries.map(([key, value]) => (
+                        <MetaChip key={key}>
+                          {key}={value}
+                        </MetaChip>
+                      ))}
+                    </ChipRow>
+                  </DetailBlock>
+                )}
+
+                <Flex css={{ marginTop: '$xs' }}>
+                  <Link
+                    href={rawRegistrationUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    css={{ fontSize: '$1' }}
+                  >
+                    View raw registration JSON
+                    <OpenInNew size="sm" />
+                  </Link>
+                </Flex>
+              </>
+            )}
         </Body>
       </Accordion>
     </Card>

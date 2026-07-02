@@ -1,14 +1,9 @@
 'use client';
 
-import {
-  Box,
-  Flex,
-  Text,
-  Button,
-  Link,
-  styled,
-  OpenInNew,
-} from '@obolnetwork/obol-ui';
+import { Box, Flex, Text, Link, styled, OpenInNew } from '@obolnetwork/obol-ui';
+import { Button } from '@/components/atoms/Button';
+import { Card } from '../atoms/Card';
+import { tones } from '../../lib/ui/tones';
 import { StatusPill } from '../atoms/StatusIndicator';
 import { Avatar } from '../atoms/Avatar';
 import { CopyButton } from '../atoms/CopyButton';
@@ -26,7 +21,7 @@ import { formatUptime } from '@/lib/utils/format-uptime';
 
 function displayInstanceName(instance: AgentInstance): string {
   if (instance.runtime === 'hermes' && instance.id === 'obol-agent')
-    return 'Obol Agent';
+    return 'Stack agent';
   if (instance.runtime === 'openclaw' && instance.id === 'default')
     return 'OpenClaw';
   return instance.id;
@@ -54,24 +49,22 @@ function withCurrentIngressPort(rawUrl: string): string {
   }
 }
 
-const CardContainer = styled(Box, {
+// Tier 2 card chrome comes from the Card atom (`nested`); only the internal
+// flex layout and hover affordance are defined here.
+const cardLayoutCss = {
   display: 'flex',
   flexDirection: 'column',
   gap: '$sm',
-  padding: '$md',
-  borderRadius: '$2',
-  backgroundColor: '$bg03',
-  border: '1px solid $stroke',
   transition: 'border-color 200ms ease',
   '&:hover': { borderColor: '$body' },
-});
+} as const;
 
 const RuntimeBadge = styled(Text, {
   fontSize: 10,
   fontWeight: '$semibold',
   color: '$body',
-  backgroundColor: 'rgba(255,255,255,0.05)',
-  border: '1px solid rgba(255,255,255,0.12)',
+  backgroundColor: tones.neutral.bg,
+  border: `1px solid ${tones.neutral.border}`,
   borderRadius: '$1',
   padding: '2px 6px',
   lineHeight: 1.2,
@@ -80,8 +73,7 @@ const RuntimeBadge = styled(Text, {
 
 const StatStrip = styled(Box, {
   display: 'grid',
-  gridTemplateColumns:
-    'minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 0.9fr) minmax(0, 0.9fr)',
+  gridTemplateColumns: 'minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 0.9fr)',
   backgroundColor: '$bg01',
   border: '1px solid $stroke',
   borderRadius: '$2',
@@ -135,8 +127,8 @@ const KeysBadge = styled(Text, {
   fontSize: 10,
   fontWeight: '$semibold',
   color: '$obolGreen',
-  backgroundColor: 'rgba(47, 228, 171, 0.08)',
-  border: '1px solid rgba(47, 228, 171, 0.25)',
+  backgroundColor: tones.success.bg,
+  border: `1px solid ${tones.success.border}`,
   borderRadius: '$1',
   padding: '1px 5px',
   lineHeight: 1.4,
@@ -146,15 +138,12 @@ const KeysBadge = styled(Text, {
 interface HomeAgentCardProps {
   instance: AgentInstance;
   uptimeHours: number;
-  /** Charged x402 requests in the last 24h for this agent's listings. */
-  chargedRequests24h: number;
   onChat?: (instance: AgentInstance) => void;
 }
 
 export function HomeAgentCard({
   instance,
   uptimeHours,
-  chargedRequests24h,
   onChat,
 }: HomeAgentCardProps) {
   const { status, loading } = useAgentStatus(instance);
@@ -204,7 +193,7 @@ export function HomeAgentCard({
     : null;
 
   return (
-    <CardContainer>
+    <Card nested css={cardLayoutCss}>
       <Flex css={{ alignItems: 'flex-start', gap: '$xs' }}>
         <Avatar alt={name} fallback={initial} />
         <Flex
@@ -271,11 +260,6 @@ export function HomeAgentCard({
           </StatValue>
         </StatCell>
         <StatCell>
-          <StatLabel>Charged requests &middot; 24h</StatLabel>
-          <StatValue>{chargedRequests24h.toLocaleString()}</StatValue>
-          <StatSub>this agent&apos;s listings</StatSub>
-        </StatCell>
-        <StatCell>
           <StatLabel>Uptime</StatLabel>
           <StatValue>{formatUptime(uptimeHours)}</StatValue>
           <StatSub>continuous</StatSub>
@@ -284,10 +268,10 @@ export function HomeAgentCard({
 
       <Flex css={{ alignItems: 'center', gap: '$xs' }}>
         <Button
-          color="primary"
+          variant="primary"
+          size="sm"
           disabled={displayStatus !== 'running'}
           onClick={() => onChat?.(instance)}
-          css={{ fontSize: '$2', height: 'auto', padding: '6px 12px' }}
         >
           Chat
         </Button>
@@ -308,6 +292,6 @@ export function HomeAgentCard({
         )}
         <Box css={{ flex: 1 }} />
       </Flex>
-    </CardContainer>
+    </Card>
   );
 }

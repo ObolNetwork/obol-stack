@@ -1,5 +1,7 @@
 import { styled } from '@obolnetwork/obol-ui';
 import { ChainName } from '../../../types/dashboard';
+import { Button } from '@/components/atoms/Button';
+import { tones } from '../../../lib/ui/tones';
 
 export type ChainOption = ChainName;
 
@@ -27,45 +29,16 @@ const Container = styled('div', {
   gap: '$xs',
 });
 
-const Option = styled('button', {
-  borderRadius: '$pill',
-  border: 'none',
-  background: 'transparent',
-  color: '$muted',
-  fontSize: '$1',
-  fontWeight: '$medium',
-  padding: '$xxxs $xs',
-  cursor: 'pointer',
-  transition: 'all 0.15s ease',
-  lineHeight: 1,
-  whiteSpace: 'nowrap',
-
+const Option = styled(Button, {
   variants: {
     active: {
       true: {
-        background: 'rgba(98, 126, 234, 0.2)',
-        color: '#8fa3f0',
-        border: '1px solid rgba(98, 126, 234, 0.35)',
-      },
-      false: {
-        background: '$bg03',
-        border: '1px solid $stroke',
-        color: '$body',
-        '&:hover': {
-          background: '$bg04',
-          borderColor: '$bg05',
-          color: '$light',
-        },
-      },
-    },
-    unavailable: {
-      true: {
-        cursor: 'not-allowed',
-        opacity: 0.45,
-        '&:hover': {
-          background: '$bg03',
-          borderColor: '$stroke',
-          color: '$body',
+        background: tones.success.bg,
+        borderColor: tones.success.border,
+        color: tones.success.text,
+        '&:hover:not(:disabled)': {
+          color: tones.success.text,
+          borderColor: tones.success.border,
         },
       },
     },
@@ -96,8 +69,10 @@ export function ChainSelector({
           <Option
             key={chain.value}
             type="button"
+            variant="ghost"
+            size="sm"
+            pill
             active={value === chain.value}
-            unavailable={disabled}
             disabled={disabled}
             title={disabled ? disabledReason : undefined}
             onClick={() => handleClick(chain.value)}

@@ -32,6 +32,11 @@ const AccordionHeader = styled('button', {
   cursor: 'pointer',
   transition: 'all 0.2s ease',
 
+  '&:focus-visible': {
+    outline: '2px solid $obolGreen',
+    outlineOffset: 2,
+  },
+
   '&:disabled': {
     cursor: 'not-allowed',
     opacity: 0.6,
