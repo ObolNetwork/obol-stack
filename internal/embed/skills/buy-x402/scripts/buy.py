@@ -32,6 +32,7 @@ import base64
 import http.client
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -281,6 +282,58 @@ def _format_amount(amount, asset, extra=None):
     return f"{raw} {units_label} ({scaled_str} {symbol})"
 
 
+def _parse_money_amount(value, asset, extra=None):
+    """Parse a human or atomic money amount into atomic units (int).
+
+    Accepted forms:
+      - bare integer            → atomic units, unchanged ("1500000")
+      - decimal                 → token units scaled by the asset's decimals ("1.5")
+      - decimal + symbol / "$"  → token units ("1.5 USDC", "1.5USDC", "$1.50")
+
+    Weak buyers reliably pass dollars where micro-units are expected; treating
+    any decimal point / symbol / $ as token units and echoing the
+    interpretation at the call site turns that from a silent 1,000,000x
+    budgeting error into a non-event. Raises ValueError with a corrective
+    message on anything unparseable, or on a symbol that contradicts the
+    asset being paid with.
+    """
+    raw = str(value).strip()
+    if not raw:
+        raise ValueError("empty amount")
+
+    symbol, decimals, _ = _asset_display_meta(asset, extra)
+
+    text = raw
+    if text.startswith("$"):
+        text = text[1:].strip()
+    # Trailing token symbol, with or without a space ("1.5 USDC", "1.5USDC").
+    m = re.match(r"^([0-9][0-9_,]*(?:\.[0-9]+)?)\s*([A-Za-z]{2,10})?$", text)
+    if not m:
+        raise ValueError(
+            f"could not parse amount {raw!r} — pass atomic units (e.g. 1500000), "
+            f"token units (e.g. 1.5), or token units with symbol (e.g. '1.5 {symbol}')"
+        )
+    number, sym = m.group(1).replace(",", "").replace("_", ""), m.group(2)
+    if sym and symbol not in (None, "asset") and sym.upper() != symbol.upper():
+        raise ValueError(
+            f"amount {raw!r} names {sym.upper()} but this payment settles in {symbol} — "
+            f"restate the amount in {symbol}"
+        )
+
+    human_units = raw.startswith("$") or sym is not None or "." in number
+    if not human_units:
+        return int(number)
+    if decimals is None:
+        raise ValueError(
+            f"cannot scale {raw!r}: unknown decimals for asset {asset} — pass atomic units instead"
+        )
+    whole, _, frac = number.partition(".")
+    frac = (frac or "").ljust(decimals, "0")
+    if len(frac) > decimals:
+        raise ValueError(f"amount {raw!r} has more precision than {symbol}'s {decimals} decimals")
+    return int(whole or "0") * (10 ** decimals) + int(frac or "0")
+
+
 # ---------------------------------------------------------------------------
 # Buyer sidecar status helpers
 # ---------------------------------------------------------------------------
@@ -408,21 +461,25 @@ def _default_refill_threshold(count):
     return max(1, count // DEFAULT_REFILL_THRESHOLD_DIVISOR)
 
 
-def _resolve_auto_refill(opts, desired_count, existing_policy=None):
+def _resolve_auto_refill(opts, desired_count, existing_policy=None, asset=None, asset_extra=None):
     existing_policy = existing_policy or {}
     auto_refill = _parse_boolish(opts.get("auto_refill"), "--auto-refill")
     threshold = _parse_positive_int(opts.get("refill_threshold"), "--refill-threshold", minimum=0)
     refill_count = _parse_positive_int(opts.get("refill_count"), "--refill-count", minimum=1)
-    # --cost-cap is a per-unit price ceiling (atomic units) the refill loop
-    # checks against the seller's current quote before re-signing. It does
-    # NOT bound the initial buy — the initial buy's protection is --budget.
+    # --cost-cap is a per-unit price ceiling the refill loop checks against
+    # the seller's current quote before re-signing. It does NOT bound the
+    # initial buy — the initial buy's protection is --budget. Accepts atomic
+    # units or human token units ("0.002 USDC") when asset context is known.
     cost_cap_raw = opts.get("cost_cap")
     cost_cap = None
     if cost_cap_raw is not None:
         try:
-            cost_cap = int(str(cost_cap_raw))
-        except (TypeError, ValueError):
-            raise ValueError(f"--cost-cap must be an integer atomic-units value, got {cost_cap_raw!r}")
+            if asset is not None:
+                cost_cap = _parse_money_amount(cost_cap_raw, asset, asset_extra)
+            else:
+                cost_cap = int(str(cost_cap_raw))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"--cost-cap: {exc}")
         if cost_cap <= 0:
             raise ValueError("--cost-cap must be > 0")
 
@@ -616,6 +673,30 @@ def _expired_in_active_pool(spec, live_status):
         pool = spec.get("preSignedAuths") or []
     _, expired = _count_valid_auths(pool)
     return expired
+
+
+def _pool_expiry_horizon(spec, live_status, now=None):
+    """Earliest on-chain deadline among still-valid auths in the active pool.
+
+    Returns a unix timestamp, or None when no auth carries a future deadline.
+    Pools expire silently otherwise — the first symptom is a failed spend
+    weeks later — so `status` surfaces a countdown."""
+    if now is None:
+        now = int(time.time())
+    try:
+        pool = _active_auth_pool(spec.get("preSignedAuths"), live_status)
+    except ValueError:
+        pool = spec.get("preSignedAuths") or []
+    if not pool:
+        # Sidecar unreachable / reporting zero: the countdown is informational,
+        # so fall back to the full declared pool rather than staying silent.
+        pool = spec.get("preSignedAuths") or []
+    deadlines = []
+    for a in pool or []:
+        deadline = _auth_deadline(a)
+        if deadline is not None and deadline > now:
+            deadlines.append(deadline)
+    return min(deadlines) if deadlines else None
 
 
 def _build_active_auth_pool(existing_auths, live_status, new_auths):
@@ -1441,12 +1522,15 @@ def _reconcile_purchase_autorefill(pr, live_status, signer_address):
 # Probe
 # ---------------------------------------------------------------------------
 
-def _probe_endpoint(endpoint_url, model_id="test", kind="inference", method=None):
+def _probe_endpoint(endpoint_url, model_id="test", kind="inference", method=None, quiet=False):
     """Probe an endpoint for x402 pricing. Returns parsed 402 body or None.
 
     kind="inference" appends /v1/chat/completions and POSTs a chat-completions
     body (the inference contract). kind="http" sends the URL as-is using `method`
     (default GET) with no body — appropriate for `type:http` ServiceOffers.
+
+    quiet=True suppresses the failure prints — used by `go`, which probes two
+    URL shapes and only wants noise from the attempt that mattered.
     """
     if kind == "http":
         url = endpoint_url.rstrip("/")
@@ -1472,25 +1556,29 @@ def _probe_endpoint(endpoint_url, model_id="test", kind="inference", method=None
     except urllib.error.HTTPError as e:
         if e.code != 402:
             body = e.read().decode() if e.fp else ""
-            print(f"Unexpected HTTP {e.code} (expected 402).", file=sys.stderr)
-            if body:
-                print(f"Body: {body[:500]}", file=sys.stderr)
+            if not quiet:
+                print(f"Unexpected HTTP {e.code} (expected 402).", file=sys.stderr)
+                if body:
+                    print(f"Body: {body[:500]}", file=sys.stderr)
             return None
 
         body = e.read().decode()
         try:
             pricing = json.loads(body)
         except json.JSONDecodeError:
-            print(f"402 response is not valid JSON: {body[:200]}", file=sys.stderr)
+            if not quiet:
+                print(f"402 response is not valid JSON: {body[:200]}", file=sys.stderr)
             return None
 
         if not pricing.get("accepts"):
-            print("402 response has no 'accepts' array.", file=sys.stderr)
+            if not quiet:
+                print("402 response has no 'accepts' array.", file=sys.stderr)
             return None
 
         return pricing
     except urllib.error.URLError as e:
-        print(f"Connection error: {e.reason}", file=sys.stderr)
+        if not quiet:
+            print(f"Connection error: {e.reason}", file=sys.stderr)
         return None
 
 
@@ -1592,10 +1680,55 @@ def _select_payment(accepts, token=None, network=None, index=None):
                 return accepts[int(ans) - 1]
             print("  Enter a number from the list.")
 
-    print(f"Error: this service accepts {len(accepts)} payment options — choose one with "
-          f"--token <SYMBOL>, --network <chain>, or --payment-option <N>:", file=sys.stderr)
-    _print_options(accepts, sys.stderr)
-    sys.exit(1)
+    return _auto_select_payment(accepts)
+
+
+def _auto_select_payment(accepts):
+    """Non-interactive default for multi-currency offers: pick the first
+    option the wallet can actually afford instead of erroring out.
+
+    Hard-erroring here forced every non-TTY buyer (i.e. every agent) to
+    re-run with a selector flag — a guaranteed extra round-trip that weak
+    models often fumble. The options are alternatives by design, so paying
+    with any affordable one is correct; the choice is announced loudly and
+    every selector flag still overrides. Balance lookups are best-effort:
+    if the wallet or RPC is unreachable we fall back to option 1 and let the
+    downstream pre-flight checks produce the precise error.
+    """
+    chosen_idx = None
+    note = "balance check unavailable — defaulting to option 1"
+    try:
+        signer = _get_signer_address()
+    except Exception:
+        signer = None
+    if signer:
+        for i, acc in enumerate(accepts):
+            try:
+                chain = _normalize_chain_name(acc.get("network"))
+                asset = acc.get("asset") or _canonical_usdc(chain)
+                if not asset:
+                    continue
+                amount = int(acc.get("amount", acc.get("maxAmountRequired", "0")))
+                balance = int(_get_usdc_balance(signer, asset, chain))
+                if balance >= amount:
+                    chosen_idx = i
+                    note = "first option this wallet can afford"
+                    break
+            except Exception:
+                continue
+        if chosen_idx is None and note.startswith("balance check unavailable"):
+            note = "no option is affordable with the current balances — defaulting to option 1; fund the wallet or pick another option"
+    if chosen_idx is None:
+        chosen_idx = 0
+
+    acc = accepts[chosen_idx]
+    amount = acc.get("amount", acc.get("maxAmountRequired", "?"))
+    price = _format_amount(amount, acc.get("asset"), acc.get("extra")) if amount != "?" else "?"
+    print(f"This service accepts {len(accepts)} payment options; auto-selected "
+          f"[{chosen_idx + 1}] {price} on {_option_chain(acc)} ({note}).")
+    print("  Override with --token <SYMBOL>, --network <chain>, or --payment-option <N>:")
+    _print_options(accepts, sys.stdout)
+    return acc
 
 
 def cmd_probe(endpoint_url, model_id=None, kind="inference", method=None):
@@ -1715,7 +1848,15 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
     print(f"  {symbol} balance: {_format_amount(balance, usdc_addr, extra)}")
 
     # 4. Calculate count.
-    budget_val = int(budget) if budget else int(DEFAULT_BUDGET)
+    if budget:
+        try:
+            budget_val = _parse_money_amount(budget, usdc_addr, extra)
+        except ValueError as exc:
+            print(f"Error: --budget {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"  Budget: {_format_amount(budget_val, usdc_addr, extra)}")
+    else:
+        budget_val = int(DEFAULT_BUDGET)
     price_int = int(price)
     if count:
         n = min(int(count), MAX_AUTH_COUNT)
@@ -1824,7 +1965,7 @@ def cmd_buy(name, endpoint, model_id, budget=None, count=None, opts=None):
             sys.exit(1)
         n = len(auths)
     try:
-        auto_refill = _resolve_auto_refill(opts, n, (existing or {}).get("spec", {}).get("autoRefill"))
+        auto_refill = _resolve_auto_refill(opts, n, (existing or {}).get("spec", {}).get("autoRefill"), asset=usdc_addr, asset_extra=extra)
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(1)
@@ -2190,6 +2331,16 @@ def cmd_status(name):
     if expired:
         print(f"  WARNING: {expired} of {remaining_display} remaining auth(s) are EXPIRED and unusable; "
               f"run `buy {name} ...` to top up with fresh authorizations")
+    horizon = _pool_expiry_horizon(spec, live_status)
+    if horizon is not None:
+        secs_left = horizon - int(time.time())
+        days_left = secs_left // 86400
+        when = time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(horizon))
+        if days_left >= 1:
+            print(f"Earliest auth expiry: {when} (in {days_left} day(s))")
+        else:
+            print(f"  WARNING: auths start expiring at {when} (in {secs_left // 3600}h) — "
+                  f"top up soon with `buy {name} ...`")
     print(f"Auths spent:     {live_status.get('spent', status.get('spent', 0))}")
     print()
 
@@ -2259,7 +2410,15 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=Non
     upstream/edge limit.
     """
     if timeout is None or float(timeout) <= 0:
-        timeout = 100.0
+        # http: ~100s matches Cloudflare's quick-tunnel cap — longer requests
+        # die at the edge before the client would time out anyway.
+        # inference: model latency routinely exceeds 100s; a client-side kill
+        # at 100s risks paying for a response that was still coming (and a
+        # blind retry then double-pays). Streaming via `pay-agent`/`go` is
+        # still the safer shape for slow models.
+        timeout = 600.0 if kind == "inference" else 100.0
+        if kind == "inference":
+            print("Note: non-streaming inference call, timeout 600s — prefer `go`/`pay-agent` (streaming) for slow models.")
     else:
         timeout = float(timeout)
     method = (method or "GET").upper()
@@ -2668,6 +2827,112 @@ def cmd_maintain():
 
 
 # ---------------------------------------------------------------------------
+# Go (auto-dispatch front door)
+# ---------------------------------------------------------------------------
+
+def _offer_shape(pricing):
+    """Classify a 402 pricing doc into ('agent'|'chat'|'http', model_id).
+
+    Every wrong pre-flight decision (pay vs pay-agent, path shape, streaming,
+    timeout) is derivable from the 402 itself: agent offers advertise
+    accepts[].extra.agentModel/agentRuntime, chat-completions offers advertise
+    a messages-shaped body in the bazaar extension. `go` uses this to make
+    those decisions for the caller.
+    """
+    accepts = pricing.get("accepts") or []
+    extra = (accepts[0].get("extra") or {}) if accepts else {}
+    if extra.get("agentModel") or extra.get("agentRuntime") or extra.get("agentSkills"):
+        return "agent", extra.get("agentModel") or ""
+    ext = pricing.get("extensions") or {}
+    bazaar_info = (ext.get("bazaar") or {}).get("info") or {}
+    body = (bazaar_info.get("input") or {}).get("body") or {}
+    if "messages" in body:
+        return "chat", body.get("model") or ""
+    return "http", ""
+
+
+def cmd_go(url, opts):
+    """One-command paid call: probe, classify, dispatch to the right flow.
+
+    - agent / chat-completions offer + --message  → streaming pay-agent flow
+    - agent / chat-completions offer, no --message → explain + exact next command
+    - plain http offer                            → single-shot pay flow
+    All pay/pay-agent selector flags (--token/--network/--payment-option,
+    --timeout, --data, --method) pass through.
+    """
+    timeout = opts.get("timeout")
+    if timeout is not None:
+        try:
+            timeout = float(timeout)
+        except ValueError:
+            print(f"Error: --timeout must be a number of seconds, got '{timeout}'", file=sys.stderr)
+            sys.exit(1)
+
+    print(f"Probing {url} ...")
+    # Try the URL exactly as given first (correct for http offers and for
+    # cluster offers, which gate every sub-path); fall back to the
+    # chat-completions probe shape for standalone inference gateways that
+    # only gate /v1/chat/completions.
+    pricing = _probe_endpoint(url, kind="http", method="GET", quiet=True)
+    if not pricing:
+        pricing = _probe_endpoint(url, kind="inference", quiet=True)
+    if not pricing:
+        # Re-run the primary probe loudly so the caller sees the real error.
+        pricing = _probe_endpoint(url, kind="http", method="GET")
+        if not pricing:
+            print("Failed to get x402 pricing. Check the URL is the service base "
+                  "(e.g. https://seller.example.com/services/<name>) and reachable.", file=sys.stderr)
+            sys.exit(1)
+
+    shape, model = _offer_shape(pricing)
+    message = opts.get("message")
+    data = opts.get("data")
+
+    if shape in ("agent", "chat"):
+        label = "Obol Agent" if shape == "agent" else "chat-completions (inference)"
+        print(f"Detected {label} offer" + (f" (model {model})" if model else "") + " → streaming paid call.")
+        if not message and not data:
+            accepts = pricing.get("accepts") or []
+            if accepts:
+                print("Payment options:")
+                _print_options(accepts, sys.stdout)
+            print()
+            print("This endpoint sells one round of chat work — include the prompt to buy:")
+            print(f"  go {url} --message 'your task here'")
+            if shape == "chat":
+                print("For a persistent pre-authorized pool (repeat inference), use:")
+                print(f"  buy <name> --endpoint {url} --model {model or '<model-id>'}")
+            return
+        cmd_pay_agent(
+            url,
+            messages=message,
+            model_id=opts.get("model") or model or "auto",
+            network=opts.get("network"),
+            timeout=timeout,
+            body=data,
+            token=opts.get("token"),
+            payment_option=opts.get("payment_option"),
+        )
+        return
+
+    print("Detected plain HTTP offer → single-shot paid request.")
+    if message and not data:
+        print("Note: --message is for chat/agent offers; this HTTP offer gets a "
+              "plain request. Pass --data '<json>' to send a body.", file=sys.stderr)
+    method = opts.get("method") or ("POST" if data else "GET")
+    cmd_pay(
+        url,
+        method=method,
+        data=data,
+        kind="http",
+        network=opts.get("network"),
+        timeout=timeout,
+        token=opts.get("token"),
+        payment_option=opts.get("payment_option"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
 
@@ -2700,34 +2965,41 @@ def parse_flags(args):
 def usage():
     print("Usage: python3 scripts/buy.py <command> [args]")
     print()
-    print("Commands:")
+    print("Start here:")
+    print("  go <url> [--message '<text>']                One-command paid call: probes the endpoint, detects the")
+    print("                                               offer type (agent / chat inference / plain HTTP), and runs")
+    print("                                               the right flow with sane path, streaming, and timeout.")
+    print("                                               Chat/agent offers need --message; HTTP offers take")
+    print("                                               [--data '<json>'] [--method GET|POST].")
+    print("                                               Also accepts --token/--network/--payment-option/--timeout.")
+    print()
+    print("Expert commands (what `go` dispatches to):")
     print("  probe <endpoint-url> [--model <id>] [--type http|inference|agent] [--method GET|POST]")
-    print("                                               Probe x402 pricing (default --type inference)")
+    print("                                               Probe x402 pricing without paying (default --type inference)")
     print("  pay <url> [--type http|inference] [--method GET|POST] [--data '<body>'] [--timeout <seconds>]")
     print("       [--token <SYMBOL>] [--network <name>] [--payment-option <N>]")
     print("                                               Single-shot paid request (sign 1 auth, attach X-PAYMENT)")
-    print("                                               Multi-currency offers: pick which asset/price to pay with")
-    print("                                               --token/--network/--payment-option (probe to see options)")
     print("  pay-agent <url> --model <id> [--message '<text>' | --data '<json>'] [--timeout <seconds>]")
     print("       [--token <SYMBOL>] [--network <name>] [--payment-option <N>]")
     print("                                               Single-shot paid streaming agent call (POST /v1/chat/completions,")
-    print("                                               stream: true). Each SSE event flushes to stdout so a calling")
-    print("                                               agent can re-emit the stream to its own user. Default timeout 1h.")
-    print("  buy <name> --endpoint <url> --model <id>     Pre-sign + configure paid/<model>")
-    print("       [--budget <micro-units>] [--count <N>]")
+    print("                                               stream: true). Each SSE event flushes to stdout. Default timeout 1h.")
+    print("  buy <name> --endpoint <url> --model <id>     Pre-sign a batch + configure paid/<model> (persistent inference)")
+    print("       [--budget <amount>] [--count <N>]")
     print("       [--token <SYMBOL>] [--network <name>] [--payment-option <N>]   pick the asset/price on multi-currency offers")
     print("       [--auto-refill[=true|false]] [--refill-threshold <N>]")
-    print("       [--refill-count <N>] [--cost-cap <atomic-units>]")
+    print("       [--refill-count <N>] [--cost-cap <amount>]")
     print("       [--auth-ttl <seconds|never>] [--set-default]")
+    print("       --budget       atomic units (1500000) or token units ('1.5', '1.5 USDC', '$1.50')")
     print("       --auth-ttl     pool expiry: seconds, or 'never' (default 30d/1mo); env OBOL_X402_AUTH_TTL")
-    print("       --cost-cap     per-unit price ceiling (atomic units) for auto-refill — refills above this are skipped")
+    print("       --cost-cap     per-unit price ceiling for auto-refill (same formats as --budget)")
     print("       --set-default  inference only: adopt paid/<model> as the agent's primary model")
-    print("  list                                         List purchased providers")
-    print("  status <name>                                Check sidecar + auths")
+    print("  list [--json]                                List purchased providers")
+    print("  status <name>                                Check sidecar + auths (incl. expiry countdown)")
     print("  process <name> | --all                       Reconcile auto-refill policies")
-    print("  balance [--chain <network>]                  Check USDC balance")
-    print("  refill|remove                                Present for compatibility; not available in controller mode")
-    print("  maintain                                     Deprecated alias for process --all")
+    print("  balance [--chain <network>]                  Check wallet token balances")
+    print()
+    print("Multi-currency offers auto-select the first affordable payment option when")
+    print("no --token/--network/--payment-option is given (choice is printed).")
 
 
 if __name__ == "__main__":
@@ -2740,7 +3012,18 @@ if __name__ == "__main__":
     cmd = args[0]
     rest = args[1:]
 
-    if cmd == "probe":
+    if cmd == "go":
+        positional, opts = parse_flags(rest)
+        if not positional:
+            print("Usage: go <url> [--message '<text>'] [--data '<json>'] [--method GET|POST] "
+                  "[--token <SYMBOL>] [--network <name>] [--payment-option <N>] [--timeout <seconds>]",
+                  file=sys.stderr)
+            sys.exit(1)
+        if opts.get("auth_ttl") is not None:
+            os.environ["OBOL_X402_AUTH_TTL"] = str(opts["auth_ttl"])
+        cmd_go(positional[0], opts)
+
+    elif cmd == "probe":
         positional, opts = parse_flags(rest)
         if not positional:
             print("Usage: probe <endpoint-url> [--model <id>] [--type http|inference|agent]", file=sys.stderr)
