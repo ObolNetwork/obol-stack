@@ -13,7 +13,7 @@ import type { ServiceOffer } from '@/types/sell';
 import { ServicesSubNav } from './ServicesSubNav';
 import { NewListingDialog } from './NewListingDialog';
 import {
-  Card,
+  ServicesPanel,
   CountChip,
   Mono,
   SectionHeader,
@@ -187,7 +187,7 @@ export function MyListingsPage() {
 
       <EarningsStrip rollup={rollup} />
 
-      <Card>
+      <ServicesPanel>
         <SectionHeader>
           <SectionTitle>Active listings</SectionTitle>
           <CountChip>{myOffers.length}</CountChip>
@@ -248,7 +248,7 @@ export function MyListingsPage() {
             <ListMoreHint onOpen={() => setDialogOpen(true)} />
           </>
         )}
-      </Card>
+      </ServicesPanel>
 
       <NewListingDialog
         open={dialogOpen}

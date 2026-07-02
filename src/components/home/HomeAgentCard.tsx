@@ -1,7 +1,7 @@
 'use client';
 
 import { Box, Flex, Text, Link, styled, OpenInNew } from '@obolnetwork/obol-ui';
-import { Button } from '../atoms/Button';
+import { Button } from '@/components/atoms/Button';
 import { Card } from '../atoms/Card';
 import { tones } from '../../lib/ui/tones';
 import { StatusPill } from '../atoms/StatusIndicator';

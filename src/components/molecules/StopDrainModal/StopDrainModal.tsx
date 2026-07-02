@@ -8,7 +8,7 @@ import {
   styled,
   ResponsiveDialog,
 } from '@obolnetwork/obol-ui';
-import { Button } from '../../atoms/Button';
+import { Button } from '@/components/atoms/Button';
 import { SectionTitle } from '../../atoms/SectionTitle';
 import { tones } from '@/lib/ui/tones';
 

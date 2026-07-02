@@ -1,7 +1,7 @@
 'use client';
 
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
-import { Button } from '../atoms/Button';
+import { Button } from '@/components/atoms/Button';
 import { Card } from '../atoms/Card';
 import { SectionTitle } from '../atoms/SectionTitle';
 import { CountBadge } from '../atoms/CountBadge';

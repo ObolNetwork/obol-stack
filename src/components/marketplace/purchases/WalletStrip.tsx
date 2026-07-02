@@ -10,7 +10,7 @@ import { useWalletAssetBalances } from '@/hooks/useWalletAssetBalances';
 
 import { Identicon } from '../Identicon';
 import {
-  Card,
+  ServicesPanel,
   FieldLabel,
   Mono,
   StripCell,
@@ -71,7 +71,7 @@ export function WalletStrip({ address, agentCount }: WalletStripProps) {
   };
 
   return (
-    <Card css={{ padding: '$md' }}>
+    <ServicesPanel css={{ padding: '$md' }}>
       <StripGrid>
         <StripCell first>
           <FieldLabel>
@@ -143,6 +143,6 @@ export function WalletStrip({ address, agentCount }: WalletStripProps) {
           </Mono>
         </StripCell>
       </StripGrid>
-    </Card>
+    </ServicesPanel>
   );
 }

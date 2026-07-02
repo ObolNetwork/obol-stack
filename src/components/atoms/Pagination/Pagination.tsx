@@ -1,5 +1,5 @@
 import { Flex, Text } from '@obolnetwork/obol-ui';
-import { Button } from '../Button/Button';
+import { Button } from '@/components/atoms/Button';
 
 export interface PaginationProps {
   page: number;

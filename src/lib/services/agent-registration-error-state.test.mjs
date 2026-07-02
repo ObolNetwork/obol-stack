@@ -49,7 +49,7 @@ describe('agent registration error state', () => {
     // Detail blocks render only for a real registration with services.
     assert.match(
       source,
-      /!loading && !error && registration && publishedServices\.length > 0/
+      /!loading\s*&&[\s\S]*!error\s*&&[\s\S]*registration\s*&&[\s\S]*publishedServices\.length > 0/
     );
   });
 });

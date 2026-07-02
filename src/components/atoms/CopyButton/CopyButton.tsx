@@ -3,7 +3,7 @@
 import React, { useState, MouseEvent } from 'react';
 import { theme } from '@obolnetwork/obol-ui';
 import { CopyIcon, CheckIcon } from '@radix-ui/react-icons';
-import { Button } from '../Button/Button';
+import { Button } from '@/components/atoms/Button';
 
 export interface CopyButtonProps {
   text: string;

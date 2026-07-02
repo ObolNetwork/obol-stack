@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { Box, Text, theme } from '@obolnetwork/obol-ui';
-import { Button } from '../../atoms/Button';
+import { Button } from '@/components/atoms/Button';
 import { LowConnection } from '@/icons';
 
 export interface ErrorStateProps {

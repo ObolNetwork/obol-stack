@@ -1,7 +1,7 @@
 'use client';
 
 import { Flex, styled } from '@obolnetwork/obol-ui';
-import { Button } from '../../atoms/Button/Button';
+import { Button } from '@/components/atoms/Button';
 
 export type TopNavId = 'home' | 'marketplace' | 'agents';
 

@@ -1,6 +1,6 @@
 import { styled } from '@obolnetwork/obol-ui';
 import { ChainName } from '../../../types/dashboard';
-import { Button } from '../Button/Button';
+import { Button } from '@/components/atoms/Button';
 import { tones } from '../../../lib/ui/tones';
 
 export type ChainOption = ChainName;

@@ -6,7 +6,7 @@ import { ChainIcon } from '@/components/atoms/ChainIcon';
 import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
 
 import {
-  Card,
+  ServicesPanel,
   FieldLabel,
   Mono,
   StripCell,
@@ -53,7 +53,7 @@ export function formatAgo(d: Date): string {
 
 export function EarningsStrip({ rollup }: { rollup: EarningsRollup }) {
   return (
-    <Card css={{ padding: '$md' }}>
+    <ServicesPanel css={{ padding: '$md' }}>
       <StripGrid>
         <StripCell first>
           <FieldLabel>Earned · last 7d</FieldLabel>
@@ -125,6 +125,6 @@ export function EarningsStrip({ rollup }: { rollup: EarningsRollup }) {
           </Mono>
         </StripCell>
       </StripGrid>
-    </Card>
+    </ServicesPanel>
   );
 }

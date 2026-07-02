@@ -11,7 +11,8 @@ import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
  * `gridTemplateColumns` via the `css` prop at the call site.
  */
 
-export const Card = styled(Box, {
+/** Marketplace section container — not atoms/Card (dashboard accordion sections). */
+export const ServicesPanel = styled(Box, {
   background: '$bg02',
   border: '1px solid $stroke',
   borderRadius: '$2',

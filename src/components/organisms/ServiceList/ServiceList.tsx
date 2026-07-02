@@ -2,7 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
-import { Button } from '../../atoms/Button';
+import { Button } from '@/components/atoms/Button';
 import { Card } from '../../atoms/Card';
 import { Accordion } from '../../molecules/Accordion';
 import { CountBadge } from '../../atoms/CountBadge';

@@ -13,7 +13,7 @@ import type { PurchaseListResponse, PurchaseRequest } from '@/types/purchase';
 import { ServicesSubNav } from './ServicesSubNav';
 import { NewListingDialog } from './NewListingDialog';
 import {
-  Card,
+  ServicesPanel,
   CountChip,
   Mono,
   SectionHeader,
@@ -92,7 +92,7 @@ export function MyPurchasesPage() {
         agentCount={operator.agents.length}
       />
 
-      <Card>
+      <ServicesPanel>
         <SectionHeader>
           <SectionTitle>Active purchases</SectionTitle>
           <CountChip>{myPurchases.length}</CountChip>
@@ -164,7 +164,7 @@ export function MyPurchasesPage() {
             </Box>
           </>
         )}
-      </Card>
+      </ServicesPanel>
 
       <NewListingDialog
         open={dialogOpen}
