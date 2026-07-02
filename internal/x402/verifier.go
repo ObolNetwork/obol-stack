@@ -276,7 +276,10 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		},
 	}, mr.requirements)
 
-	hadPayment := r.Header.Get("X-PAYMENT") != ""
+	// A payment can arrive under either wire header: X-PAYMENT (v1) or
+	// PAYMENT-SIGNATURE (v2). Gate the funnel metrics on both, else every
+	// successful v2 payment (the cohort #689 unblocked) goes unmetered.
+	hadPayment := r.Header.Get("X-PAYMENT") != "" || r.Header.Get("PAYMENT-SIGNATURE") != ""
 	tracker := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	middleware(proxy).ServeHTTP(tracker, r)
 
