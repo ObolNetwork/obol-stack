@@ -1,23 +1,22 @@
 package serviceoffercontroller
 
 // scalarBundleVersion is the pinned NPM version of @scalar/api-reference
-// served from jsdelivr. Renovate keeps this current; bumps land as
-// reviewable PRs so the bundled JS payload never drifts silently.
-const scalarBundleVersion = "1.34.0"
+// served from jsdelivr. Renovate tracks it via the scalar_html.go custom
+// manager in renovate.json; bumps land as reviewable PRs so the bundled JS
+// payload never drifts silently. After a bump, refresh the SRI hash below
+// with scripts/update-scalar-sri.sh (the renovate PR body links it too).
+// renovate: datasource=npm depName=@scalar/api-reference
+const scalarBundleVersion = "1.62.1"
 
 // scalarBundleSRI is the Subresource Integrity hash for the pinned bundle.
 // The /api page is served over the public tunnel, so the third-party Scalar
 // JS it pulls from jsdelivr must be integrity-checked: without this the
 // browser executes whatever the CDN returns, unverified. Re-derive on every
-// version bump (Renovate touches scalarBundleVersion above) by running:
-//
-//	curl -sL https://cdn.jsdelivr.net/npm/@scalar/api-reference@<version> \
-//	  | openssl dgst -sha384 -binary | base64
-//
-// and prefixing the result with `sha384-`. The hash is taken over the exact
+// version bump by running scripts/update-scalar-sri.sh (fetches the pinned
+// bundle and rewrites this constant). The hash is taken over the exact
 // (jsdelivr-minified) bytes that the pinned URL serves; it must be refreshed
 // in lockstep with scalarBundleVersion or the browser will block the script.
-const scalarBundleSRI = "sha384-tNJHhVh8smfB4VJcBxQf3Q0Soj15UqqyVJ6Q6OTwqGVEyxy57gfDLo7DGcSclH7I"
+const scalarBundleSRI = "sha384-PbtNjho0PH2QGB1/2Su//W99xhKoSNGumXARK4KrO/4daQHPSI4029R1KQtXcaw5"
 
 // scalarHTML returns the static HTML shell served at /api. It loads the
 // pinned @scalar/api-reference bundle from jsdelivr, points it at the

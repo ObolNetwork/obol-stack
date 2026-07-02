@@ -201,6 +201,57 @@ func TestBuildOpenAPIDocument_InferenceOffer(t *testing.T) {
 // multi-currency x-payment-info contract: `price` stays the primary option
 // (for single-price indexers), and `accepts[]` lists every option with its
 // currency and CAIP-2 network so indexers can surface the cheapest.
+// TestBuildOpenAPIDocument_AcceptsCarrySigningMetadata pins that every
+// x-payment-info advertises accepts[] (single-payment offers included) with
+// the full signing recipe — payTo, CAIP-2 network, atomic amount, and the
+// asset's EIP-712 domain — so an OpenAPI-only client can construct a valid
+// X-PAYMENT without a second fetch of /api/services.json.
+func TestBuildOpenAPIDocument_AcceptsCarrySigningMetadata(t *testing.T) {
+	offer := readyOfferWithSpec("solo", "svc", monetizeapi.ServiceOfferSpec{
+		Type:     "inference",
+		Model:    monetizeapi.ServiceOfferModel{Name: "m1"},
+		Upstream: monetizeapi.ServiceOfferUpstream{Service: "up", Port: 8000},
+		Payment: monetizeapi.ServiceOfferPayment{
+			Network: "base-sepolia",
+			PayTo:   "0x2222222222222222222222222222222222222222",
+			Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+		},
+	})
+
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, "https://tunnel.example"))
+	op := dig(t, doc, "paths", "/services/solo/v1/chat/completions", "post")
+	info, _ := op.(map[string]any)["x-payment-info"].(map[string]any)
+	if info == nil {
+		t.Fatalf("x-payment-info missing")
+	}
+
+	accepts, ok := info["accepts"].([]any)
+	if !ok || len(accepts) != 1 {
+		t.Fatalf("accepts = %#v, want exactly 1 entry for a single-payment offer", info["accepts"])
+	}
+	entry := accepts[0].(map[string]any)
+	if entry["payTo"] != "0x2222222222222222222222222222222222222222" {
+		t.Errorf("payTo = %v", entry["payTo"])
+	}
+	if entry["network"] != "eip155:84532" {
+		t.Errorf("network = %v, want CAIP-2 eip155:84532", entry["network"])
+	}
+	if entry["amountAtomicUnits"] != "1000" {
+		t.Errorf("amountAtomicUnits = %v, want 1000 (0.001 USDC)", entry["amountAtomicUnits"])
+	}
+	asset, ok := entry["asset"].(map[string]any)
+	if !ok {
+		t.Fatalf("asset missing: %#v", entry)
+	}
+	domain, ok := asset["eip712Domain"].(map[string]any)
+	if !ok {
+		t.Fatalf("asset.eip712Domain missing: %#v (wrong-domain signing is the top silent buyer killer)", asset)
+	}
+	if domain["name"] == "" || domain["version"] == "" {
+		t.Errorf("eip712Domain incomplete: %#v", domain)
+	}
+}
+
 func TestBuildOpenAPIDocument_MultiPaymentAdvertisesAllOptions(t *testing.T) {
 	offer := readyOfferWithSpec("dual", "llm", monetizeapi.ServiceOfferSpec{
 		Type: "inference",

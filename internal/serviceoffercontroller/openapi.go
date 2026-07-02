@@ -184,6 +184,35 @@ func buildOpenAPIPaths(offers []*monetizeapi.ServiceOffer) map[string]any {
 	return paths
 }
 
+// openAPIPrimaryPathForOffer returns the offer's key in the OpenAPI document's
+// `paths` object (e.g. "/services/foo/v1/chat/completions"). Published on the
+// catalog entry as `openapiPath` so consumers can jump from /api/services.json
+// straight to the offer's request/response schema.
+func openAPIPrimaryPathForOffer(offer *monetizeapi.ServiceOffer) string {
+	if offer == nil {
+		return ""
+	}
+	if offer.IsInference() || offer.IsAgent() {
+		return joinOpenAPIPath(offer.EffectivePath(), "/v1/chat/completions")
+	}
+	return joinOpenAPIPath(offer.EffectivePath(), "")
+}
+
+// openAPIDocsAnchorForOffer returns the site-relative Scalar deep link for
+// this offer's operation, e.g.
+// "/api#tag/agent/POST/services/foo/v1/chat/completions". Scalar's default
+// hash routing is "#tag/<first-tag>/<METHOD><path>"; centralising the format
+// here (published as the catalog entry's `docsPath`) means consumers link
+// docs without hardcoding a renderer-version-specific anchor scheme.
+func openAPIDocsAnchorForOffer(offer *monetizeapi.ServiceOffer) string {
+	path := openAPIPrimaryPathForOffer(offer)
+	if path == "" {
+		return ""
+	}
+	// Every operation emitted today is a POST (see openAPIPathsForOffer).
+	return "/api#tag/" + fallbackOfferType(offer) + "/POST" + path
+}
+
 // openAPIPathsForOffer returns the set of {path → pathItem} entries this
 // offer contributes. Phase 1 uses pure type-based heuristics:
 //
@@ -360,27 +389,66 @@ func offerPaymentInfoExtension(offer *monetizeapi.ServiceOffer) map[string]any {
 		"protocols": []any{map[string]any{"x402": map[string]any{}}},
 	}
 
-	// For multi-currency offers, advertise every accepted option so indexers
-	// can surface the cheapest / a buyer's preferred chain. Each entry carries
-	// the same {mode,currency,amount} shape as `price`, plus the CAIP-2 chain.
-	// Omitted for single-payment offers — `price` already says everything.
-	if len(payments) > 1 {
-		accepts := make([]any, 0, len(payments))
-		for i := range payments {
-			entry := paymentInfoPrice(payments[i])
-			if net := strings.TrimSpace(payments[i].Network); net != "" {
-				if caip, _ := caip2ForNetwork(net); caip != "" {
-					entry["network"] = caip
-				} else {
-					entry["network"] = net
-				}
-			}
-			accepts = append(accepts, entry)
-		}
-		info["accepts"] = accepts
+	// Advertise every accepted option (single-payment offers included) with
+	// full signing metadata: an OpenAPI-only client should be able to
+	// construct a valid X-PAYMENT from this document alone, without a second
+	// fetch of /api/services.json or a probe round-trip.
+	accepts := make([]any, 0, len(payments))
+	for i := range payments {
+		accepts = append(accepts, paymentInfoAccept(payments[i]))
 	}
+	info["accepts"] = accepts
 
 	return info
+}
+
+// paymentInfoAccept renders one payment option with everything a signer
+// needs: {mode,currency,amount} (x402scan price shape) plus the CAIP-2
+// network, recipient, atomic amount, and asset metadata including the
+// EIP-712 signing domain. Mirrors the /api/services.json payments[] entries
+// so OpenAPI-only consumers aren't second-class.
+func paymentInfoAccept(p monetizeapi.ServiceOfferPayment) map[string]any {
+	entry := paymentInfoPrice(p)
+	if net := strings.TrimSpace(p.Network); net != "" {
+		if caip, _ := caip2ForNetwork(net); caip != "" {
+			entry["network"] = caip
+		} else {
+			entry["network"] = net
+		}
+	}
+	if payTo := strings.TrimSpace(p.PayTo); payTo != "" {
+		entry["payTo"] = payTo
+	}
+	asset := paymentAssetJSON(p)
+	if asset == nil {
+		return entry
+	}
+	assetMap := map[string]any{}
+	if asset.Address != "" {
+		assetMap["address"] = asset.Address
+	}
+	if asset.Symbol != "" {
+		assetMap["symbol"] = asset.Symbol
+	}
+	if asset.Decimals != 0 {
+		assetMap["decimals"] = asset.Decimals
+	}
+	if asset.TransferMethod != "" {
+		assetMap["transferMethod"] = asset.TransferMethod
+	}
+	if asset.EIP712Domain != nil {
+		assetMap["eip712Domain"] = map[string]any{
+			"name":    asset.EIP712Domain.Name,
+			"version": asset.EIP712Domain.Version,
+		}
+	}
+	if len(assetMap) > 0 {
+		entry["asset"] = assetMap
+	}
+	if raw, _ := paymentPriceRawAndUnit(p); raw != "" && catalogAssetHasKnownDecimals(asset) {
+		entry["amountAtomicUnits"] = decimalToAtomicString(raw, int(asset.Decimals))
+	}
+	return entry
 }
 
 // paymentInfoPrice renders one payment option as an x402scan-style price
