@@ -2,6 +2,7 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
+import { Button } from '@/components/atoms/Button';
 import { Close } from '@/icons';
 import { useAgentChat } from '../../../hooks/useAgentChat';
 import { useAgentStatus } from '../../../hooks/useAgents';
@@ -82,23 +83,6 @@ const RuntimeLabel = styled(Text, {
   letterSpacing: '0.08em',
 });
 
-const CloseButton = styled('button', {
-  width: '$lg',
-  height: '$lg',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: 0,
-  border: 'none',
-  background: 'transparent',
-  cursor: 'pointer',
-  color: '#b8c5c7',
-  transition: 'color 0.2s ease',
-  '&:hover': {
-    color: '#ffffff',
-  },
-});
-
 const MessagesContainer = styled(Box, {
   flex: 1,
   overflowY: 'auto',
@@ -177,31 +161,9 @@ const ChatInput = styled('textarea', {
   },
 });
 
-const SendButton = styled('button', {
-  padding: '8px 16px',
-  backgroundColor: '#2FE4AB',
-  color: '#091011',
-  border: 'none',
-  borderRadius: '8px',
-  fontFamily: 'DM Sans',
-  fontSize: '14px',
-  fontWeight: 600,
-  cursor: 'pointer',
-  transition: 'opacity 0.2s ease',
-
-  '&:hover': {
-    opacity: 0.9,
-  },
-
-  '&:disabled': {
-    opacity: 0.5,
-    cursor: 'not-allowed',
-  },
-});
-
 function displayInstanceName(instance: AgentInstance): string {
   if (instance.runtime === 'hermes' && instance.id === 'obol-agent') {
-    return 'Obol Agent';
+    return 'Stack agent';
   }
   if (instance.runtime === 'openclaw' && instance.id === 'default') {
     return 'OpenClaw';
@@ -322,13 +284,16 @@ export function AgentChatSidebar({
           </Flex>
           {instance && <RuntimeLabel>{runtimeLabel(instance)}</RuntimeLabel>}
         </Flex>
-        <CloseButton
+        <Button
           type="button"
+          variant="bare"
+          size="sm"
+          iconOnly
           aria-label="Close chat"
           onClick={handleClose}
         >
           <Close size="s" />
-        </CloseButton>
+        </Button>
       </HeaderContainer>
 
       <MessagesContainer>
@@ -372,12 +337,15 @@ export function AgentChatSidebar({
           rows={1}
           disabled={!instance}
         />
-        <SendButton
+        <Button
+          type="button"
+          variant="primary"
+          size="md"
           onClick={handleSend}
           disabled={isLoading || !input.trim() || !instance}
         >
           Send
-        </SendButton>
+        </Button>
       </InputContainer>
     </SidebarOverlay>
   );

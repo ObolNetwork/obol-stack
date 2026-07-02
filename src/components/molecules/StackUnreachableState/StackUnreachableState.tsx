@@ -2,6 +2,7 @@
 
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { ExclamationTriangleIcon } from '@radix-ui/react-icons';
+import { Button } from '@/components/atoms/Button';
 
 export interface StackUnreachableStateProps {
   /** Optional detail line (e.g. raw error message) shown below the help. */
@@ -18,7 +19,7 @@ const Card = styled(Box, {
   alignItems: 'flex-start',
   gap: '$xs',
   padding: '$lg',
-  borderRadius: '$2',
+  borderRadius: '$4',
   border: '1px solid $stroke',
   background: '$bg02',
   color: '$light',
@@ -59,20 +60,6 @@ const Detail = styled(Text, {
   wordBreak: 'break-word',
 });
 
-const RetryBtn = styled('button', {
-  marginTop: '$xs',
-  height: 32,
-  padding: '0 $md',
-  borderRadius: '$2',
-  border: '1px solid $stroke',
-  background: 'transparent',
-  color: '$light',
-  fontSize: '$1',
-  cursor: 'pointer',
-  transition: 'border-color 0.15s ease',
-  '&:hover': { borderColor: '$obolGreen', color: '$obolGreen' },
-});
-
 /**
  * Single shared "the cluster you're talking to isn't answering" surface.
  * Used by the marketplace pages and the dashboard so the user sees one
@@ -100,9 +87,15 @@ export function StackUnreachableState({
       )}
       {detail ? <Detail>{detail}</Detail> : null}
       {onRetry ? (
-        <RetryBtn type="button" onClick={onRetry}>
+        <Button
+          type="button"
+          variant="secondary"
+          size="md"
+          css={{ marginTop: '$xs' }}
+          onClick={onRetry}
+        >
           Retry
-        </RetryBtn>
+        </Button>
       ) : null}
     </Card>
   );

@@ -3,6 +3,8 @@ import { describe, it } from 'node:test';
 
 import {
   chainIdForRegistryFilter,
+  rankRegistryAgents,
+  registryAgentQualityScore,
   registryCapabilityBadges,
   registryChainBadges,
   registryChainLabel,
@@ -70,6 +72,91 @@ describe('registry display helpers', () => {
       variant: 'red',
     });
     assert.equal(registryHealthBadge(null), null);
+  });
+
+  it('ranks registry agents by quality signals, descending', () => {
+    // Rich profile: real name, long description, protocol, x402, two
+    // endpoints, tools, verified, healthy, 8004scan score + stars.
+    const rich = {
+      ...BASE_AGENT,
+      token_id: '1',
+      name: 'Portfolio Analyst',
+      description:
+        'Full-featured research agent with a genuinely useful description.',
+    };
+    // Mid profile: real name + description and one endpoint, no other signals.
+    const mid = {
+      ...BASE_AGENT,
+      token_id: '2',
+      name: 'Mid Agent',
+      description: 'A real description over twenty characters long.',
+      x402_supported: false,
+      supported_protocols: [],
+      services: { web: { endpoint: 'https://mid.example.test' } },
+      total_score: 0,
+      star_count: 0,
+      is_verified: false,
+      health_status: null,
+    };
+    // Bare profiles: trivial names (address / "Agent #n"), no metadata.
+    const bareAddress = {
+      ...mid,
+      token_id: '3',
+      name: '0xdeadbeef',
+      description: '',
+      services: null,
+    };
+    const bareFiller = {
+      ...bareAddress,
+      token_id: '4',
+      name: 'Agent #4',
+    };
+
+    assert.ok(
+      registryAgentQualityScore(rich) > registryAgentQualityScore(mid)
+    );
+    assert.ok(
+      registryAgentQualityScore(mid) > registryAgentQualityScore(bareAddress)
+    );
+    assert.equal(registryAgentQualityScore(bareAddress), 0);
+    assert.equal(registryAgentQualityScore(bareFiller), 0);
+
+    const ranked = rankRegistryAgents([bareAddress, mid, bareFiller, rich]);
+    assert.deepEqual(
+      ranked.map(a => a.token_id),
+      // Stable sort: the two zero-score agents keep API order (3 before 4).
+      ['1', '2', '3', '4']
+    );
+  });
+
+  it('rank is stable for ties and does not mutate the input array', () => {
+    const tieA = {
+      ...BASE_AGENT,
+      token_id: '10',
+      name: 'Agent #10',
+      description: '',
+      services: null,
+      x402_supported: false,
+      supported_protocols: [],
+      total_score: 0,
+      star_count: 0,
+      is_verified: false,
+      health_status: null,
+    };
+    const tieB = { ...tieA, token_id: '11', name: 'Agent #11' };
+
+    const input = [tieB, tieA];
+    const ranked = rankRegistryAgents(input);
+
+    assert.notEqual(ranked, input);
+    assert.deepEqual(
+      input.map(a => a.token_id),
+      ['11', '10']
+    );
+    assert.deepEqual(
+      ranked.map(a => a.token_id),
+      ['11', '10']
+    );
   });
 
   it('surfaces categories, tags, and tools with dedupe and overflow', () => {

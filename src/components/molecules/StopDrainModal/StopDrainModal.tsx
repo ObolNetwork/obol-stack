@@ -5,11 +5,12 @@ import {
   Box,
   Flex,
   Text,
-  Button,
   styled,
   ResponsiveDialog,
 } from '@obolnetwork/obol-ui';
+import { Button } from '../../atoms/Button';
 import { SectionTitle } from '../../atoms/SectionTitle';
+import { tones } from '@/lib/ui/tones';
 
 interface StopDrainModalProps {
   trigger: ReactNode;
@@ -17,6 +18,11 @@ interface StopDrainModalProps {
   namespace: string;
   onDrained?: (result: { drainEndsAt: string; grace: string }) => void;
 }
+
+const ModalContent = styled(Box, {
+  maxWidth: 440,
+  width: '100%',
+});
 
 const ModalBody = styled(Box, {
   padding: '$lg',
@@ -35,17 +41,45 @@ const ModalFooter = styled(Flex, {
 
 const ErrorMessage = styled(Text, {
   fontSize: '$2',
-  color: '$test',
+  color: tones.danger.text,
   padding: '$xxs $xs',
-  backgroundColor: 'rgba(255, 107, 107, 0.08)',
+  backgroundColor: tones.danger.bg,
   borderRadius: '$2',
-  border: '1px solid rgba(255, 107, 107, 0.15)',
+  border: `1px solid ${tones.danger.border}`,
 });
 
 const ResourceLine = styled(Text, {
   fontSize: '$1',
   color: '$muted',
   fontFamily: 'monospace',
+});
+
+const HintBlock = styled(Text, {
+  fontSize: '$1',
+  color: '$body',
+  lineHeight: 1.5,
+  padding: '$xxs $xs',
+  backgroundColor: 'rgba(255, 255, 255, 0.03)',
+  border: '1px solid $stroke',
+  borderRadius: '$2',
+});
+
+const Mono = styled('code', {
+  fontFamily: 'monospace',
+  color: '$light',
+});
+
+// Destructive primary: danger-toned confirm for taking a service off sale.
+const ConfirmButton = styled(Button, {
+  background: tones.danger.bg,
+  borderColor: tones.danger.border,
+  color: tones.danger.text,
+
+  '&:hover:not(:disabled)': {
+    background: tones.danger.bg,
+    borderColor: tones.danger.text,
+    color: tones.danger.text,
+  },
 });
 
 type SubmitState = 'idle' | 'submitting' | 'error';
@@ -98,53 +132,65 @@ export function StopDrainModal({
       open={open}
       setOpen={setOpen}
       triggerElement={trigger as any}
+      // The library dialog is fixed at 559x660 on desktop; shrink to content.
+      css={{ '@bp2': { width: '90vw', maxWidth: 480, height: 'auto' } }}
     >
-      <Flex css={{ paddingLeft: '$xs' }}>
-        <SectionTitle>Stop &amp; drain</SectionTitle>
-      </Flex>
+      <ModalContent>
+        <Flex css={{ paddingLeft: '$xs' }}>
+          <SectionTitle>Stop selling</SectionTitle>
+        </Flex>
 
-      <ModalBody>
-        <Text css={{ fontSize: '$2', color: '$body', lineHeight: 1.5 }}>
-          Stop and drain{' '}
-          <Text
-            as="span"
-            css={{ color: '$obolGreen', fontFamily: 'monospace' }}
-          >
-            {name}
+        <ModalBody>
+          <Text css={{ fontSize: '$2', color: '$body', lineHeight: 1.5 }}>
+            Take{' '}
+            <Text
+              as="span"
+              css={{
+                display: 'inline',
+                color: '$obolGreen',
+                fontFamily: 'monospace',
+              }}
+            >
+              {name}
+            </Text>{' '}
+            off your storefront? New buyers stop immediately. Anyone with an
+            in-flight payment gets a grace window to finish. Your agent keeps
+            running — nothing is deleted.
           </Text>
-          ? The listing is removed from public discovery immediately. Buyers
-          with in-flight payments can finish during the drain window, then the
-          route is torn down while the ServiceOffer record is retained for
-          status and audit history.
-        </Text>
 
-        <ResourceLine>
-          {namespace}/{name}
-        </ResourceLine>
+          <ResourceLine>
+            {namespace}/{name}
+          </ResourceLine>
 
-        {submitState === 'error' && errorMsg && (
-          <ErrorMessage>{errorMsg}</ErrorMessage>
-        )}
-      </ModalBody>
+          <HintBlock>
+            You can put it back on sale any time with{' '}
+            <Mono>obol sell agent</Mono> — or remove it fully with{' '}
+            <Mono>obol sell delete</Mono>.
+          </HintBlock>
 
-      <ModalFooter>
-        <Button
-          color="secondary"
-          type="button"
-          onClick={close}
-          disabled={submitState === 'submitting'}
-        >
-          Cancel
-        </Button>
-        <Button
-          color="primary"
-          type="button"
-          onClick={submit}
-          disabled={submitState === 'submitting'}
-        >
-          {submitState === 'submitting' ? 'Draining…' : 'Stop & drain'}
-        </Button>
-      </ModalFooter>
+          {submitState === 'error' && errorMsg && (
+            <ErrorMessage>{errorMsg}</ErrorMessage>
+          )}
+        </ModalBody>
+
+        <ModalFooter>
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={close}
+            disabled={submitState === 'submitting'}
+          >
+            Cancel
+          </Button>
+          <ConfirmButton
+            type="button"
+            onClick={submit}
+            disabled={submitState === 'submitting'}
+          >
+            {submitState === 'submitting' ? 'Stopping…' : 'Stop selling'}
+          </ConfirmButton>
+        </ModalFooter>
+      </ModalContent>
     </ResponsiveDialog>
   );
 }

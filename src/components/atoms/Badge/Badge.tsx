@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, styled } from '@obolnetwork/obol-ui';
 import { CSS } from '@obolnetwork/obol-ui/dist/stitches.config';
+import { tones } from '../../../lib/ui/tones';
 
 export type BadgeVariant =
   | 'neutral'
@@ -35,19 +36,20 @@ const StyledBadge = styled(Box, {
         color: '$body',
       },
       green: {
-        backgroundColor: '#2FE4AB15',
+        backgroundColor: tones.success.bg,
         color: '$obolGreen',
       },
+      // No semantic tone for purple — protocol/type chips keep their own hue.
       purple: {
         backgroundColor: '#6366F115',
         color: '$coordinateHover',
       },
       yellow: {
-        backgroundColor: '#F59E0B15',
+        backgroundColor: tones.warning.bg,
         color: '$obolGold',
       },
       red: {
-        backgroundColor: '#FF6B6B18',
+        backgroundColor: tones.danger.bg,
         color: '$test',
       },
       code: {

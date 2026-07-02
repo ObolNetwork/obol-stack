@@ -2,6 +2,7 @@
 
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { CopyButton } from '../atoms/CopyButton';
+import { SectionTitle } from '../atoms/SectionTitle';
 import { buildAgentCreateWorkflowCli } from '@/lib/sell/cli-commands';
 
 const WorkflowBlock = styled(Box, {
@@ -51,19 +52,28 @@ const WorkflowHeader = styled(Flex, {
   gap: '$sm',
 });
 
+// Matches the AccordionContainer inset of the sibling "Sub-agents"
+// subsection so both level-2 headers align inside the section card.
+const WorkflowContainer = styled(Box, {
+  padding: '$lg',
+});
+
+const PurposeCopy = styled(Text, {
+  fontSize: '$2',
+  color: '$muted',
+  marginTop: '$xxs',
+});
+
 export function CreateAgentWorkflow({
   title = 'Create an agent',
 }: CreateAgentWorkflowProps) {
   return (
-    <Box>
+    <WorkflowContainer>
       <WorkflowHeader>
-        <Text
-          css={{ fontSize: '$3', fontWeight: '$semibold', color: '$light' }}
-        >
-          {title}
-        </Text>
+        <SectionTitle level={2}>{title}</SectionTitle>
         <CopyButton text={WORKFLOW.copyText} title="Copy both commands" />
       </WorkflowHeader>
+      <PurposeCopy>Create a new agent to sell its services.</PurposeCopy>
       <WorkflowBlock>
         {WORKFLOW.steps.map(step => (
           <CommandBlock key={step.label}>
@@ -75,6 +85,6 @@ export function CreateAgentWorkflow({
           </CommandBlock>
         ))}
       </WorkflowBlock>
-    </Box>
+    </WorkflowContainer>
   );
 }

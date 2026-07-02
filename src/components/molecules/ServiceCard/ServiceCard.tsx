@@ -13,6 +13,7 @@ import {
 import { StatusPill } from '../../atoms/StatusIndicator';
 import { Tooltip } from '../../atoms/Tooltip';
 import { MetricCell } from '../../atoms/MetricCell';
+import { ChainIcon } from '../../atoms/ChainIcon';
 import { CopyButton } from '../../atoms/CopyButton/CopyButton';
 import { ObolAmountSwitch } from '../../atoms/ObolAmountSwitch';
 import { ExpandableChipList } from '../ExpandableChipList';
@@ -31,7 +32,9 @@ import {
   formatRelativeAgo,
   formatUsageDisplay,
 } from '@/lib/services/service-usage';
+import { toChainName } from '@/lib/marketplace/chain';
 import { truncateAddress } from '@/utils/address';
+import type { ChainName } from '@/types/dashboard';
 import type {
   ServiceOffer,
   ServiceOfferAgentLink,
@@ -110,6 +113,26 @@ const Description = styled(Text, {
   lineHeight: 1.4,
 });
 
+const ObjectiveLabel = styled('span', {
+  color: '$muted',
+});
+
+// Chip pairing the chain logo with its human name (raw string fallback).
+const NetworkPill = styled('span', {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: '$xxxs',
+  fontSize: '$1',
+  color: '$body',
+  backgroundColor: 'rgba(255, 255, 255, 0.04)',
+  border: '1px solid rgba(255, 255, 255, 0.08)',
+  borderRadius: '$pill',
+  padding: '1px 8px',
+  lineHeight: 1.4,
+  whiteSpace: 'nowrap',
+  flexShrink: 0,
+});
+
 const InfoRow = styled(Flex, {
   alignItems: 'center',
   gap: '$xxxs',
@@ -140,7 +163,6 @@ const PriceValue = styled(Text, {
   fontSize: '$1',
   color: '$light',
   fontFamily: 'monospace',
-  flex: 1,
   minWidth: 0,
 });
 
@@ -210,6 +232,15 @@ const TYPE_LABEL: Record<ServiceOfferType, string> = {
   http: 'HTTP',
 };
 
+const CHAIN_DISPLAY_NAME: Record<ChainName, string> = {
+  mainnet: 'Ethereum',
+  sepolia: 'Sepolia',
+  hoodi: 'Hoodi',
+  base: 'Base',
+  'base-sepolia': 'Base Sepolia',
+  aztec: 'Aztec',
+};
+
 const SALES_7D_TOOLTIP =
   'Successful charged requests in the last 7 days (Prometheus / x402 verifier).';
 
@@ -232,7 +263,7 @@ function pluralizeSales(n: number): string {
 
 function agentDisplayName(link: ServiceOfferAgentLink): string {
   if (link.runtime === 'hermes' && link.id === 'obol-agent')
-    return 'Obol Agent';
+    return 'Stack agent';
   if (link.runtime === 'openclaw' && link.id === 'default') return 'OpenClaw';
   return link.id;
 }
@@ -293,6 +324,7 @@ export function ServiceCard({
   const price = formatPrice(offer);
   const symbol = serviceOfferAssetSymbol(offer.payment);
   const network = offer.caip2Network || offer.payment?.network;
+  const chainName = toChainName(network);
   const transferMethod = offer.payment?.asset?.transferMethod;
   const modelName = offer.model?.name || offer.agentResolution?.model;
   const skills =
@@ -383,7 +415,10 @@ export function ServiceCard({
       </TopRow>
 
       {offer.registration?.description && (
-        <Description>{offer.registration.description}</Description>
+        <Description>
+          <ObjectiveLabel>Objective:</ObjectiveLabel>{' '}
+          {offer.registration.description}
+        </Description>
       )}
 
       {price && (
@@ -395,12 +430,13 @@ export function ServiceCard({
               symbol={symbol}
               unit={`/ ${price.unit}`}
             />
-            {network && (
-              <span style={{ marginLeft: '4px', color: 'inherit' }}>
-                on {network}
-              </span>
-            )}
           </PriceValue>
+          {network && (
+            <NetworkPill title={network}>
+              {chainName && <ChainIcon chain={chainName} size={12} />}
+              {chainName ? CHAIN_DISPLAY_NAME[chainName] : network}
+            </NetworkPill>
+          )}
         </PriceRow>
       )}
 
@@ -445,11 +481,11 @@ export function ServiceCard({
           value={formatUsageDisplay(requests24h)}
         />
         <MetricCell
-          label="Charged (7d)"
+          label="Sales (7d)"
           value={formatUsageDisplay(chargedRequests)}
         />
         <MetricCell
-          label="Last paid"
+          label="Last sale"
           value={
             lastSettlement != null && lastSettlement > 0
               ? formatRelativeAgo(lastSettlement)
@@ -460,9 +496,9 @@ export function ServiceCard({
 
       {endpoint && (
         <InfoRow>
-          <InfoLabel>Endpoint:</InfoLabel>
+          <InfoLabel>Public URL:</InfoLabel>
           <InfoValue css={{ wordBreak: 'break-all' }}>{endpoint}</InfoValue>
-          <CopyButton text={endpoint} title="Copy endpoint" />
+          <CopyButton text={endpoint} title="Copy public URL" />
         </InfoRow>
       )}
 
@@ -500,9 +536,9 @@ export function ServiceCard({
             trigger={
               <Button
                 color="secondary"
-                title="Drain in-flight buyers, then tear down the route"
+                title="Take this service off your storefront; in-flight buyers get a grace window"
               >
-                Stop &amp; drain
+                Stop selling
               </Button>
             }
           />

@@ -2,6 +2,7 @@
 
 import React, { useRef, useEffect, useState, useCallback } from 'react';
 import { Box, Flex, Text, Image, styled } from '@obolnetwork/obol-ui';
+import { Button } from '@/components/atoms/Button';
 import { Close } from '@/icons';
 import { useOpenClawChat } from '../../../hooks/useOpenClawChat';
 import { useOpenClawStatus } from '../../../hooks/useOpenClaw';
@@ -97,23 +98,6 @@ const HeaderTitle = styled(Text, {
   color: '#e1e9eb',
 });
 
-const CloseButton = styled('button', {
-  width: '$lg',
-  height: '$lg',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: 0,
-  border: 'none',
-  background: 'transparent',
-  cursor: 'pointer',
-  color: '#b8c5c7',
-  transition: 'color 0.2s ease',
-  '&:hover': {
-    color: '#ffffff',
-  },
-});
-
 // Messages area
 const MessagesContainer = styled(Box, {
   flex: 1,
@@ -191,28 +175,6 @@ const ChatInput = styled('textarea', {
 
   '&::placeholder': {
     color: '#6b7a7d',
-  },
-});
-
-const SendButton = styled('button', {
-  padding: '8px 16px',
-  backgroundColor: '#2FE4AB',
-  color: '#091011',
-  border: 'none',
-  borderRadius: '8px',
-  fontFamily: 'DM Sans',
-  fontSize: '14px',
-  fontWeight: 600,
-  cursor: 'pointer',
-  transition: 'opacity 0.2s ease',
-
-  '&:hover': {
-    opacity: 0.9,
-  },
-
-  '&:disabled': {
-    opacity: 0.5,
-    cursor: 'not-allowed',
   },
 });
 
@@ -319,13 +281,16 @@ export function OpenClawChatSidebar({
               {instance ? `openclaw-${instance.id}` : 'OpenClaw'}
             </HeaderTitle>
           </Flex>
-          <CloseButton
+          <Button
             type="button"
+            variant="bare"
+            size="sm"
+            iconOnly
             aria-label="Close chat"
             onClick={handleClose}
           >
             <Close size="s" />
-          </CloseButton>
+          </Button>
         </HeaderContainer>
 
         {/* Messages */}
@@ -370,12 +335,15 @@ export function OpenClawChatSidebar({
             rows={1}
             disabled={!instance}
           />
-          <SendButton
+          <Button
+            type="button"
+            variant="primary"
+            size="md"
             onClick={handleSend}
             disabled={isLoading || !input.trim() || !instance}
           >
             Send
-          </SendButton>
+          </Button>
         </InputContainer>
       </SidebarOverlay>
     </>

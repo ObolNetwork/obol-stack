@@ -17,11 +17,10 @@ import { CreateAgentWorkflow } from '../../home/CreateAgentWorkflow';
 import { AgentInstanceCard } from '../../molecules/AgentInstanceCard/AgentInstanceCard';
 import { DashboardData } from '../../../types/dashboard';
 import { AgentChatSidebar } from '../../molecules/AgentChatSidebar';
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useAnchorHash } from '../../../hooks/useAnchorHash';
 import { useAgentInstances } from '../../../hooks/useAgents';
 import { useServiceOffers } from '../../../hooks/useServiceOffers';
-import { sumChargedRequests24hForAgent } from '@/lib/services/service-usage';
 import type { AgentInstance } from '@/types/agent';
 
 interface DashboardContentProps {
@@ -67,7 +66,7 @@ const AgentGrid = styled(Box, {
 const AgentsSection = styled(Box, {
   marginTop: '$md',
   paddingTop: '$md',
-  borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+  borderTop: '1px solid $stroke',
 });
 
 const AgentsScroll = styled(Box, {
@@ -114,24 +113,6 @@ export function DashboardContent({
   }, [refetch, refetchOffers]);
   const { primary, subAgents } = partitionInstances(instances);
 
-  const legacyOrphanAgent = primary.find(
-    p => p.runtime === 'hermes' && p.id === 'obol-agent'
-  );
-
-  const chargedRequests24hByAgent = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const instance of primary) {
-      const key = `${instance.runtime}:${instance.id}`;
-      map.set(
-        key,
-        sumChargedRequests24hForAgent(offers, instance, {
-          receiveLegacyOrphans: instance === legacyOrphanAgent,
-        })
-      );
-    }
-    return map;
-  }, [offers, primary, legacyOrphanAgent]);
-
   const uptimeHours = data?.nodeOverview?.uptime?.hours ?? 0;
 
   const handleInstanceSelect = (instance: AgentInstance) => {
@@ -145,10 +126,9 @@ export function DashboardContent({
 
   const agentsHeader = (
     <Flex css={{ alignItems: 'center', gap: '$sm', paddingRight: '$xl' }}>
-      <Text css={{ fontSize: '$3', fontWeight: '$semibold', color: '$light' }}>
-        Agents
-      </Text>
+      <SectionTitle level={2}>Sub-agents</SectionTitle>
       {subAgents.length > 0 && <CountBadge count={subAgents.length} />}
+      <Text css={{ fontSize: '$2', color: '$muted' }}>Agents you can sell</Text>
     </Flex>
   );
 
@@ -166,7 +146,7 @@ export function DashboardContent({
             <Flex
               css={{ alignItems: 'center', gap: '$sm', marginBottom: '$md' }}
             >
-              <SectionTitle>AI Agent Instances</SectionTitle>
+              <SectionTitle>Agents</SectionTitle>
               {!instancesLoading && instances.length > 0 && (
                 <CountBadge count={instances.length} />
               )}
@@ -184,7 +164,7 @@ export function DashboardContent({
             {!instancesLoading && !instancesError && instances.length === 0 && (
               <EmptyMessage>
                 No agent instances found. Run <code>obol agent init</code> for
-                the default Hermes agent, or{' '}
+                the default stack agent, or{' '}
                 <code>obol agent new &lt;name&gt;</code> for an additional
                 agent.
               </EmptyMessage>
@@ -203,11 +183,6 @@ export function DashboardContent({
                     key={`${instance.runtime}:${instance.id}`}
                     instance={instance}
                     uptimeHours={uptimeHours}
-                    chargedRequests24h={
-                      chargedRequests24hByAgent.get(
-                        `${instance.runtime}:${instance.id}`
-                      ) ?? 0
-                    }
                     onChat={handleInstanceSelect}
                   />
                 ))}
@@ -216,7 +191,7 @@ export function DashboardContent({
 
             {!instancesLoading && !instancesError && subAgents.length > 0 && (
               <AgentsSection>
-                <Accordion header={agentsHeader} defaultExpanded={false}>
+                <Accordion header={agentsHeader} defaultExpanded={true}>
                   <AgentsScroll>
                     {subAgents.map(instance => (
                       <AgentInstanceCard

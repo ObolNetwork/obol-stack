@@ -10,8 +10,9 @@ export interface RemoteNodeStatusProps {
 }
 
 const CardBox = styled(Box, {
-  borderRadius: '$3',
-  background: '$bg04',
+  // Tier-2 nested card treatment — matches LocalNodeStatus in the same grid.
+  borderRadius: '$2',
+  background: '$bg03',
   border: '1px solid $stroke',
   overflow: 'hidden',
 });

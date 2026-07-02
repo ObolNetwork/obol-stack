@@ -79,6 +79,8 @@ const InnerDot = styled(Box, {
 const PillContainer = styled(Flex, {
   alignItems: 'center',
   width: 'fit-content',
+  whiteSpace: 'nowrap',
+  flexShrink: 0,
   gap: '$xxs',
   borderRadius: '$pill',
   paddingTop: '$xxxs',

@@ -1,8 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import type { MouseEventHandler, ReactNode } from 'react';
+import type { MouseEventHandler } from 'react';
 import { styled } from '@obolnetwork/obol-ui';
+
+import { Button } from '@/components/atoms/Button';
 
 export type ServicesTab = 'browse' | 'purchases' | 'listings';
 
@@ -48,6 +50,11 @@ const chipReset = {
   textDecoration: 'none',
   transition: 'background 150ms, color 150ms, border-color 150ms',
   '&:hover': { color: '$light' },
+  // Match the Button atom's focus ring — links deserve it too.
+  '&:focus-visible': {
+    outline: '2px solid $obolGreen',
+    outlineOffset: 2,
+  },
 } as const;
 
 const ChipLink = styled(Link, {
@@ -74,26 +81,6 @@ const Count = styled('span', {
       true: { opacity: 0.75 },
     },
   },
-});
-
-const NewListingBtn = styled('button', {
-  height: 32,
-  padding: '0 $sm',
-  borderRadius: '$pill',
-  border: 'none',
-  background: '$obolGreen',
-  color: '$obolDarkDark',
-  fontSize: '$2',
-  fontWeight: '$semibold',
-  cursor: 'pointer',
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: '$xxxs',
-  whiteSpace: 'nowrap',
-  flexShrink: 0,
-
-  '&:hover': { filter: 'brightness(1.05)' },
-  '&:disabled': { cursor: 'not-allowed', opacity: 0.55 },
 });
 
 function PlusIcon() {
@@ -140,32 +127,18 @@ export function ServicesSubNav({
         );
       })}
       <Spacer />
-      <NewListingBtn
+      <Button
         type="button"
+        variant="primary"
+        size="sm"
+        css={{ flexShrink: 0 }}
         onClick={onNewListing}
         disabled={!onNewListing}
         title={onNewListing ? 'Create a new listing' : 'Coming soon'}
       >
         <PlusIcon />
         New listing
-      </NewListingBtn>
+      </Button>
     </Bar>
   );
 }
-
-// Useful for pages that need the typed nav data without rendering the bar.
-export const SERVICES_TABS: ReadonlyArray<{
-  id: ServicesTab;
-  label: string;
-  href: string;
-}> = TABS;
-
-// Public helper for pages that want to render their own tab-count chip
-// alongside a custom right-side widget. Exposed because both MyPurchases
-// and MyListings want a "today · X spent / earned" string here that the
-// canonical SubNav doesn't host.
-export { Bar as SubNavBar, ChipLink as SubNavChip, Count as SubNavCount };
-
-// Hint nullable to avoid 'unused' lint on consumers that don't need the
-// extra render hook (e.g. the Browse page).
-export type _SubNavRenderHelpers = ReactNode;

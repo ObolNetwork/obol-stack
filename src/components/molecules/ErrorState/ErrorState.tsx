@@ -1,7 +1,8 @@
 'use client';
 
 import React from 'react';
-import { Box, Text, Button, theme } from '@obolnetwork/obol-ui';
+import { Box, Text, theme } from '@obolnetwork/obol-ui';
+import { Button } from '../../atoms/Button';
 import { LowConnection } from '@/icons';
 
 export interface ErrorStateProps {
@@ -20,8 +21,8 @@ export const ErrorState: React.FC<ErrorStateProps> = ({
         flexDirection: 'column',
         alignItems: 'center',
         padding: '$lg',
-        borderRadius: '$3',
-        border: '1px solid $bg05',
+        borderRadius: '$4',
+        border: '1px solid $stroke',
       }}
     >
       <LowConnection size="s" color={theme.colors.light.value} />
@@ -51,7 +52,7 @@ export const ErrorState: React.FC<ErrorStateProps> = ({
         {message}
       </Text>
       {onRetry && (
-        <Button onClick={onRetry} color="secondary" size="md">
+        <Button onClick={onRetry} variant="secondary" size="md">
           Retry
         </Button>
       )}

@@ -2,6 +2,7 @@
 
 import type { ReactNode } from 'react';
 import { useEffect, useState } from 'react';
+import { usePathname } from 'next/navigation';
 
 import { DashboardTemplate } from '@/components/templates/DashboardTemplate';
 import { NavigatedDashboardHeader } from '@/components/organisms/DashboardHeader';
@@ -25,6 +26,7 @@ export default function MarketplaceLayout({
   children: ReactNode;
 }) {
   const [hasMounted, setHasMounted] = useState(false);
+  const pathname = usePathname();
 
   useEffect(() => {
     setHasMounted(true);
@@ -34,9 +36,14 @@ export default function MarketplaceLayout({
     return null;
   }
 
+  // Only the browse grid needs the wider 1440px container; detail,
+  // purchases, and listings keep the default 1280px page width.
+  const wide = pathname === '/marketplace';
+
   return (
     <Providers>
       <DashboardTemplate
+        wide={wide}
         header={<NavigatedDashboardHeader />}
         content={children}
         footer={<FooterBar />}

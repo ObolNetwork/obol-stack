@@ -4,6 +4,7 @@ import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { type ChangeEvent } from 'react';
 import { CheckIcon, MagnifyingGlassIcon } from '@radix-ui/react-icons';
 
+import { Button } from '@/components/atoms/Button';
 import { ChainIcon } from '@/components/atoms/ChainIcon';
 import type {
   MarketplaceFacets as Facets,
@@ -86,22 +87,12 @@ const Items = styled(Box, {
   gap: 4,
 });
 
-const FacetItem = styled('button', {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  padding: '7px 10px',
-  borderRadius: '$2',
-  border: '1px solid $stroke',
-  background: 'transparent',
-  cursor: 'pointer',
+// Facet checkbox row — Button atom (ghost/sm) plus the layout the rail
+// needs: full-width, left-aligned content, selected state.
+const FacetItem = styled(Button, {
+  width: '100%',
+  justifyContent: 'flex-start',
   textAlign: 'left',
-  color: '$body',
-  fontSize: '$2',
-  fontFamily: '$fonts$body',
-  transition: 'background 120ms, border-color 120ms, color 120ms',
-
-  '&:hover': { color: '$light', borderColor: '$bg05' },
 
   variants: {
     active: {
@@ -109,9 +100,17 @@ const FacetItem = styled('button', {
         background: '$obolMidGreen',
         borderColor: '$obolGreen',
         color: '$obolGreen',
-        '&:hover': { color: '$obolGreen' },
+        '&:hover:not(:disabled)': {
+          color: '$obolGreen',
+          borderColor: '$obolGreen',
+        },
       },
     },
+  },
+
+  defaultVariants: {
+    variant: 'ghost',
+    size: 'sm',
   },
 });
 
@@ -198,31 +197,25 @@ const TabRow = styled(Box, {
   gap: 2,
   background: '$bg03',
   border: '1px solid $stroke',
-  borderRadius: '$2',
+  borderRadius: '$pill',
 });
 
-const TabButton = styled('button', {
-  padding: '6px 8px',
-  borderRadius: '$1',
-  border: 0,
-  cursor: 'pointer',
-  fontFamily: '$fonts$body',
-  fontSize: '$2',
-  fontWeight: '$medium',
-  color: '$body',
-  background: 'transparent',
-  textAlign: 'center',
-  whiteSpace: 'nowrap',
-  transition: 'background 120ms, color 120ms',
-
+// Segmented-control tab — Button atom (bare/sm/pill) with a selected state.
+const TabButton = styled(Button, {
   variants: {
     active: {
       true: {
         background: '$obolMidGreen',
         color: '$obolGreen',
-        fontWeight: '$semibold',
+        '&:hover:not(:disabled)': { color: '$obolGreen' },
       },
     },
+  },
+
+  defaultVariants: {
+    variant: 'bare',
+    size: 'sm',
+    pill: true,
   },
 });
 

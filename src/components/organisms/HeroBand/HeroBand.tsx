@@ -1,10 +1,12 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { StatusPill } from '../../atoms/StatusIndicator';
 import { useAgentInstances } from '../../../hooks/useAgents';
 import { useServiceOffers } from '../../../hooks/useServiceOffers';
 import type { DashboardData } from '../../../types/dashboard';
+import { networkToChainName } from '../../../lib/utils/network-rpc';
 import { formatUptime } from '@/lib/utils/format-uptime';
 
 interface HeroBandProps {
@@ -16,7 +18,7 @@ function displayInstanceName(instance: {
   id: string;
 }): string {
   if (instance.runtime === 'hermes' && instance.id === 'obol-agent')
-    return 'Obol Agent';
+    return 'Stack agent';
   if (instance.runtime === 'openclaw' && instance.id === 'default')
     return 'OpenClaw';
   return instance.id;
@@ -49,7 +51,7 @@ const Eyebrow = styled(Text, {
 });
 
 const Title = styled(Text, {
-  fontSize: 32,
+  fontSize: '$9',
   fontWeight: '$bold',
   color: '$light',
   letterSpacing: '-0.02em',
@@ -80,7 +82,7 @@ const MetricLabel = styled(Text, {
 });
 
 const MetricValue = styled(Text, {
-  fontSize: 32,
+  fontSize: '$9',
   fontWeight: '$semibold',
   letterSpacing: '-0.02em',
   lineHeight: 1,
@@ -103,7 +105,7 @@ function HeroMetric({
 }: {
   label: string;
   value: string;
-  sub: string;
+  sub: ReactNode;
   last?: boolean;
   tooltip?: string;
 }) {
@@ -131,9 +133,17 @@ export function HeroBand({ data }: HeroBandProps) {
   const serviceCount = offers.length;
   const uptimeHours = data?.nodeOverview?.uptime?.hours ?? 0;
 
-  const syncedNetworks =
-    data?.erpcData?.networks?.filter(n => n.state === 'OK').length ?? 0;
-  const syncingNetworks = networkCount - syncedNetworks;
+  // Same local-vs-remote split NetworksSection derives: a network is "local"
+  // when a locally-synced node serves its chain; otherwise it is remote-only.
+  const localChainNames = new Set(
+    (data?.localNodes ?? []).map(node => node.chainName)
+  );
+  const localNetworkCount =
+    data?.erpcData?.networks?.filter(n => {
+      const chainName = networkToChainName(n.alias);
+      return chainName !== null && localChainNames.has(chainName);
+    }).length ?? 0;
+  const remoteNetworkCount = networkCount - localNetworkCount;
 
   const isHealthy = data !== null;
   const uptimeStr = formatUptime(uptimeHours);
@@ -141,18 +151,29 @@ export function HeroBand({ data }: HeroBandProps) {
   const agentNames = instances
     .map(i => displayInstanceName(i))
     .join(' \u00b7 ');
-  const networkSub =
-    syncingNetworks > 0
-      ? `${syncedNetworks} synced \u00b7 ${syncingNetworks} syncing`
-      : networkCount > 0
-        ? `${syncedNetworks} synced`
-        : 'none connected';
-  const servicesSub =
-    serviceCount > 0 ? `${serviceCount} listed` : 'none listed';
+  const networkSub: ReactNode =
+    networkCount === 0 ? (
+      'not configured'
+    ) : (
+      <>
+        {localNetworkCount > 0 && (
+          <Text as="span" css={{ fontSize: '$1', color: '$light' }}>
+            {localNetworkCount} local
+          </Text>
+        )}
+        {localNetworkCount > 0 && remoteNetworkCount > 0 && ' \u00b7 '}
+        {remoteNetworkCount > 0 && (
+          <Text as="span" css={{ fontSize: '$1', color: '$muted' }}>
+            {remoteNetworkCount} remote
+          </Text>
+        )}
+      </>
+    );
+  const servicesSub = serviceCount > 0 ? `${serviceCount} on sale` : 'none yet';
 
   const description =
     agentCount > 0 && networkCount > 0
-      ? `${agentCount} agent${agentCount !== 1 ? 's' : ''} running across ${networkCount} eRPC network${networkCount !== 1 ? 's' : ''}, transacting over x402. Cluster up ${uptimeStr}.`
+      ? `${agentCount} agent${agentCount !== 1 ? 's' : ''} running across ${networkCount} network${networkCount !== 1 ? 's' : ''}, transacting over x402. Cluster up ${uptimeStr}.`
       : agentCount > 0
         ? `${agentCount} agent${agentCount !== 1 ? 's' : ''} running, transacting over x402. Cluster up ${uptimeStr}.`
         : `Cluster up ${uptimeStr}. Add agents with obol agent init.`;
@@ -178,13 +199,13 @@ export function HeroBand({ data }: HeroBandProps) {
             sub={agentNames || 'none running'}
           />
           <HeroMetric
-            label="eRPC Networks"
+            label="Networks"
             value={String(networkCount)}
-            sub={networkCount === 0 ? 'not configured' : networkSub}
-            tooltip="Blockchain RPC networks served through the eRPC gateway. Configure by running: obol stack edit → eRPC settings, or add a network via the stack config."
+            sub={networkSub}
+            tooltip="Served by the eRPC gateway: local nodes first, remote upstreams as fallback. Configure by running: obol stack edit, or add a network via the stack config."
           />
           <HeroMetric
-            label="No. of Services"
+            label="Services on Sale"
             value={String(serviceCount)}
             sub={servicesSub}
             last

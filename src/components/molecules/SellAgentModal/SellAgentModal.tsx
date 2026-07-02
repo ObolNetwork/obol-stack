@@ -9,6 +9,8 @@ import {
   styled,
   ResponsiveDialog,
 } from '@obolnetwork/obol-ui';
+import { Button as BaseButton } from '@/components/atoms/Button';
+import { tones } from '@/lib/ui/tones';
 import { SectionTitle } from '../../atoms/SectionTitle';
 import { ChainSelector } from '../../atoms/ChainSelector';
 import { SellFlowSteps } from '../SellFlowSteps';
@@ -45,21 +47,18 @@ const FieldLabel = styled(Text, {
   textTransform: 'uppercase',
 });
 
-const TokenToggle = styled('button', {
-  borderRadius: '$pill',
-  border: '1px solid $stroke',
-  background: '$bg03',
-  color: '$body',
-  fontSize: '$1',
-  fontWeight: '$medium',
-  padding: '$xxxs $sm',
-  cursor: 'pointer',
+const TokenToggle = styled(BaseButton, {
   variants: {
     active: {
       true: {
-        background: 'rgba(47, 228, 171, 0.1)',
-        borderColor: 'rgba(47, 228, 171, 0.35)',
-        color: '$obolGreen',
+        background: tones.success.bg,
+        borderColor: tones.success.border,
+        color: tones.success.text,
+        '&:hover:not(:disabled)': {
+          background: tones.success.bg,
+          borderColor: tones.success.border,
+          color: tones.success.text,
+        },
       },
     },
   },
@@ -121,7 +120,7 @@ export function SellAgentModal({
       {submitState === 'success' ? (
         <ModalBody>
           <Text css={{ fontSize: '$2', color: '$body' }}>
-            Listing created for sub-agent{' '}
+            Now on sale — sub-agent{' '}
             <Text
               as="span"
               css={{ color: '$obolGreen', fontFamily: 'monospace' }}
@@ -151,7 +150,7 @@ export function SellAgentModal({
             </Text>
 
             <FieldGroup>
-              <FieldLabel>Listing name</FieldLabel>
+              <FieldLabel>Service name</FieldLabel>
               <Text css={{ fontFamily: 'monospace', color: '$obolGreen' }}>
                 {agentName}
               </Text>
@@ -178,6 +177,9 @@ export function SellAgentModal({
                     <TokenToggle
                       key={token}
                       type="button"
+                      variant="secondary"
+                      size="sm"
+                      pill
                       active={tokenValue === token}
                       onClick={() => selectPaymentToken(token)}
                     >
@@ -224,7 +226,9 @@ export function SellAgentModal({
               type="submit"
               disabled={!isValid || submitState === 'submitting'}
             >
-              {submitState === 'submitting' ? 'Creating…' : 'Create listing'}
+              {submitState === 'submitting'
+                ? 'Putting on sale…'
+                : 'Put on sale'}
             </Button>
           </ModalFooter>
         </form>

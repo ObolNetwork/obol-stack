@@ -7,6 +7,8 @@ import { AddCircle } from '@/icons';
 import { CheckIcon } from '@radix-ui/react-icons';
 import { toast } from 'react-toastify';
 import { Tooltip } from '@/components/atoms/Tooltip';
+import { Button } from '@/components/atoms/Button';
+import { tones } from '@/lib/ui/tones';
 
 export interface AddNetworkButtonProps {
   chainName: ChainName;
@@ -18,33 +20,27 @@ const spin = keyframes({
   to: { transform: 'rotate(360deg)' },
 });
 
-const StyledButton = styled('button', {
-  display: 'flex',
+// Circular multi-state icon button — extends the canonical Button atom for
+// focus-visible/transition consistency; circle shape and 32px hit target are
+// deliberate (wallet-row affordance), state tints come from tones.*.
+const StyledButton = styled(Button, {
   width: 32,
   height: 32,
-  alignItems: 'center',
-  justifyContent: 'center',
-  border: '1.5px solid transparent',
+  paddingLeft: 0,
+  paddingRight: 0,
+  borderWidth: '1.5px',
   borderRadius: '$round',
-  background: 'transparent',
-  cursor: 'pointer',
-  padding: 0,
   transition:
-    'border-color 150ms ease, background 150ms ease, transform 100ms ease',
-  outline: 'none',
-
-  '&:focus-visible': {
-    boxShadow: `0 0 0 2px ${theme.colors.obolGreen.value}44`,
-  },
+    'border-color 150ms ease, background-color 150ms ease, transform 100ms ease',
 
   variants: {
     state: {
       idle: {
-        borderColor: `${theme.colors.obolGreen.value}55`,
-        color: theme.colors.obolGreen.value,
-        '&:hover': {
-          borderColor: theme.colors.obolGreen.value,
-          background: `${theme.colors.obolGreen.value}18`,
+        borderColor: tones.success.border,
+        color: tones.success.text,
+        '&:hover:not(:disabled)': {
+          borderColor: tones.success.text,
+          background: tones.success.bg,
           transform: 'scale(1.08)',
         },
         '&:active': {
@@ -52,24 +48,24 @@ const StyledButton = styled('button', {
         },
       },
       loading: {
-        borderColor: `${theme.colors.body.value}55`,
-        color: theme.colors.body.value,
+        borderColor: tones.neutral.border,
+        color: '$body',
         cursor: 'default',
       },
       success: {
-        borderColor: `${theme.colors.obolGreen.value}88`,
-        background: `${theme.colors.obolGreen.value}18`,
-        color: theme.colors.obolGreen.value,
+        borderColor: tones.success.border,
+        background: tones.success.bg,
+        color: tones.success.text,
         cursor: 'default',
       },
       error: {
-        borderColor: `${theme.colors.test.value}55`,
-        color: theme.colors.test.value,
+        borderColor: tones.danger.border,
+        color: tones.danger.text,
         cursor: 'default',
       },
       disabled: {
-        borderColor: `${theme.colors.body.value}33`,
-        color: theme.colors.body.value,
+        borderColor: tones.neutral.border,
+        color: '$body',
         cursor: 'not-allowed',
         opacity: 0.5,
       },
@@ -174,6 +170,8 @@ export function AddNetworkButton({
     <Tooltip content={label} side="top">
       <StyledButton
         type="button"
+        variant="bare"
+        size="sm"
         state={buttonState}
         onClick={handleClick}
         aria-label={label}

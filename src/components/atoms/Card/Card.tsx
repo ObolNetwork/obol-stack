@@ -8,6 +8,12 @@ export interface CardProps {
   title?: string;
   hover?: boolean;
   section?: boolean;
+  /**
+   * Tier 2 "nested" card — for cards rendered inside a section card:
+   * $bg03 fill, radius $2, padding $md. Default (tier 1) section cards
+   * stay $bg02 / radius $4 with $lg padding at the call site.
+   */
+  nested?: boolean;
   css?: CSS;
 }
 
@@ -32,6 +38,13 @@ const StyledCard = styled(Box, {
         padding: '0',
       },
     },
+    nested: {
+      true: {
+        borderRadius: '$2',
+        backgroundColor: '$bg03',
+        padding: '$md',
+      },
+    },
   },
 });
 
@@ -47,10 +60,17 @@ export function Card({
   title,
   hover = false,
   section = false,
+  nested = false,
   css,
 }: CardProps) {
   return (
-    <StyledCard hover={hover} section={section} className={className} css={css}>
+    <StyledCard
+      hover={hover}
+      section={section}
+      nested={nested}
+      className={className}
+      css={css}
+    >
       {title && <CardTitle as="h2">{title}</CardTitle>}
       {children}
     </StyledCard>

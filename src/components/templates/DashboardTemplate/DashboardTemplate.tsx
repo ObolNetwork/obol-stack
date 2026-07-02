@@ -1,17 +1,21 @@
 import { Box } from '@obolnetwork/obol-ui';
 import { ReactNode } from 'react';
 import { ToastContainer } from 'react-toastify';
+import { PageContainer } from '@/components/atoms/PageContainer';
 
 interface DashboardTemplateProps {
   header: ReactNode;
   content: ReactNode;
   footer?: ReactNode;
+  /** Marketplace grids need the wider (1440px) container. */
+  wide?: boolean;
 }
 
 export function DashboardTemplate({
   header,
   content,
   footer,
+  wide = false,
 }: DashboardTemplateProps) {
   return (
     <Box
@@ -20,8 +24,8 @@ export function DashboardTemplate({
         backgroundColor: '$bg01',
         color: 'white',
         paddingTop: '$xl',
-        paddingLeft: '$4xl',
-        paddingRight: '$4xl',
+        paddingLeft: '$xl',
+        paddingRight: '$xl',
         paddingBottom: footer ? '$2xl' : '$5xl',
         display: 'flex',
         flexDirection: 'column',
@@ -42,7 +46,8 @@ export function DashboardTemplate({
         },
       }}
     >
-      <Box
+      <PageContainer
+        wide={wide}
         css={{
           position: 'relative',
           marginBottom: '$2xl',
@@ -55,8 +60,8 @@ export function DashboardTemplate({
         }}
       >
         {header}
-      </Box>
-      <Box css={{ flex: 1 }}>
+      </PageContainer>
+      <PageContainer wide={wide} css={{ flex: 1 }}>
         {content}
         <ToastContainer
           theme="colored"
@@ -64,7 +69,7 @@ export function DashboardTemplate({
           position="bottom-left"
           style={{ paddingBottom: 100 }}
         />
-      </Box>
+      </PageContainer>
       {footer && (
         <Box
           css={{

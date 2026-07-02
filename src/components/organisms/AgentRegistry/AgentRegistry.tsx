@@ -294,16 +294,31 @@ export function AgentRegistry() {
             width: 'auto',
           }}
         >
-          <SectionTitle>ERC-8004 On-chain Agent Registry</SectionTitle>
+          <SectionTitle>Ethereum Agent Registry</SectionTitle>
           {!loading && total > 0 && (
             <Text css={{ fontSize: '$2', color: '$muted' }}>
-              {total.toLocaleString()} on {chainLabel}
+              {total.toLocaleString()} Agents on {chainLabel}
             </Text>
           )}
         </Flex>
         <Text css={{ fontSize: '$1', color: '$muted', marginTop: 2 }}>
-          Single-chain view · marketplace combines all 3 chains (Ethereum + Base
-          + Base Sepolia) · data from 8004scan.io
+          ERC-8004 · data from{' '}
+          <Text
+            as="a"
+            href="https://www.8004scan.io"
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e: React.MouseEvent) => e.stopPropagation()}
+            css={{
+              display: 'inline',
+              fontSize: '$1',
+              color: '$muted',
+              textDecoration: 'underline',
+              '&:hover': { color: '$body' },
+            }}
+          >
+            8004scan.io
+          </Text>
         </Text>
       </Box>
     </Flex>

@@ -1,13 +1,9 @@
 'use client';
 
-import type {
-  ChangeEvent,
-  MouseEvent as ReactMouseEvent,
-  ReactNode,
-} from 'react';
+import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useEffect, useMemo, useState } from 'react';
-import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
-import { ChainIcon } from '@/components/atoms/ChainIcon';
+import { Box, Text, styled } from '@obolnetwork/obol-ui';
+import { Button } from '@/components/atoms/Button';
 import { CopyButton } from '@/components/atoms/CopyButton';
 import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
 import {
@@ -15,7 +11,6 @@ import {
   isSellTokenSupportedOnChain,
   reconcileSellPaymentSelection,
   resolveSellAsset,
-  type SellPaymentChain,
   type SellPaymentToken,
 } from '@/lib/services/sell-assets';
 import { SellFlowSteps } from '@/components/molecules/SellFlowSteps';
@@ -31,7 +26,25 @@ import {
   inferencePostCreateSteps,
   type SellFlowStep,
 } from '@/lib/sell/flow-steps';
-import type { ChainName } from '@/types/dashboard';
+
+import {
+  Backdrop,
+  Banner,
+  Body,
+  Eyebrow,
+  Footer,
+  Header,
+  HeaderIcon,
+  HeaderTitle,
+  Panel,
+} from './new-listing/DialogShell';
+import { FormField, TextInput } from './new-listing/FormField';
+import { Segmented } from './new-listing/Segmented';
+import {
+  CHAIN_OPTIONS,
+  ChainPicker,
+  type ChainKey,
+} from './new-listing/ChainPicker';
 
 export interface NewListingDialogProps {
   open: boolean;
@@ -41,7 +54,6 @@ export interface NewListingDialogProps {
 type ServiceType = 'inference' | 'route';
 type PaymentToken = SellPaymentToken;
 type PriceUnit = 'req' | 'mtok' | 'hour';
-type ChainKey = SellPaymentChain;
 
 const Mono = styled('span', { fontFamily: 'monospace' });
 
@@ -49,377 +61,6 @@ const TOKEN_PREFIX: Record<PaymentToken, string> = {
   USDC: '$',
   OBOL: 'Ⓞ',
 };
-
-const CHAIN_OPTIONS: Array<{
-  k: ChainKey;
-  label: string;
-  icon: ChainName;
-}> = [
-  { k: 'base', label: 'Base', icon: 'base' },
-  { k: 'base-sepolia', label: 'Base Sepolia', icon: 'base-sepolia' },
-  { k: 'mainnet', label: 'Mainnet', icon: 'mainnet' },
-];
-
-// ── Styled shell ────────────────────────────────────────────────────────
-
-const Backdrop = styled('div', {
-  position: 'fixed',
-  inset: 0,
-  background: 'rgba(4, 8, 9, 0.55)',
-  backdropFilter: 'blur(2px)',
-  zIndex: 80,
-  display: 'flex',
-  alignItems: 'flex-start',
-  justifyContent: 'center',
-  padding: '48px 24px 24px',
-  overflowY: 'auto',
-});
-
-const Panel = styled('div', {
-  width: 720,
-  maxWidth: 'calc(100vw - 48px)',
-  maxHeight: '92vh',
-  background: '$bg02',
-  border: '1px solid $stroke',
-  borderRadius: '$4',
-  boxShadow: '0 30px 90px rgba(0,0,0,0.55)',
-  overflow: 'hidden',
-  display: 'flex',
-  flexDirection: 'column',
-});
-
-const Header = styled('header', {
-  padding: '$md $lg',
-  display: 'flex',
-  alignItems: 'center',
-  gap: '$xs',
-  borderBottom: '1px solid $stroke',
-});
-
-const HeaderIcon = styled('div', {
-  width: 32,
-  height: 32,
-  borderRadius: 8,
-  background: '$obolMidGreen',
-  color: '$obolGreen',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  flexShrink: 0,
-});
-
-const Eyebrow = styled('div', {
-  fontSize: '$1',
-  textTransform: 'uppercase',
-  letterSpacing: '0.04em',
-  color: '$muted',
-  fontWeight: '$semibold',
-  marginBottom: 2,
-});
-
-const HeaderTitle = styled('div', {
-  fontSize: '$5',
-  fontWeight: '$semibold',
-  color: '$light',
-  letterSpacing: '-0.005em',
-});
-
-const CloseBtn = styled('button', {
-  background: 'transparent',
-  border: 0,
-  color: '$body',
-  cursor: 'pointer',
-  padding: 6,
-  borderRadius: 4,
-  '&:hover': { color: '$light' },
-});
-
-const Body = styled('div', {
-  padding: '$md $lg',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '$md',
-  overflowY: 'auto',
-});
-
-const Footer = styled('footer', {
-  padding: '$xs $lg',
-  borderTop: '1px solid $stroke',
-  display: 'flex',
-  alignItems: 'center',
-  gap: 10,
-  background: '$bg02',
-});
-
-// ── Form primitives ─────────────────────────────────────────────────────
-
-const FieldLabel = styled('div', {
-  fontSize: '$1',
-  textTransform: 'uppercase',
-  letterSpacing: '0.04em',
-  color: '$body',
-  fontWeight: '$semibold',
-});
-
-const Hint = styled('div', {
-  fontSize: '$1',
-  color: '$muted',
-  lineHeight: 1.45,
-});
-
-const FieldStack = styled('div', {
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 6,
-});
-
-function FormField({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <FieldStack>
-      <FieldLabel>{label}</FieldLabel>
-      {children}
-      {hint ? <Hint>{hint}</Hint> : null}
-    </FieldStack>
-  );
-}
-
-const SegmentedRow = styled('div', {
-  display: 'inline-flex',
-  padding: 3,
-  gap: 2,
-  background: '$bg03',
-  border: '1px solid $stroke',
-  borderRadius: '$2',
-  width: '100%',
-});
-
-const SegmentedButton = styled('button', {
-  flex: 1,
-  padding: '8px 10px',
-  border: 0,
-  borderRadius: '$1',
-  cursor: 'pointer',
-  fontFamily: 'inherit',
-  fontSize: '$2',
-  background: 'transparent',
-  color: '$body',
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  gap: 6,
-  transition: 'background 120ms, color 120ms',
-
-  variants: {
-    active: {
-      true: {
-        background: '$obolMidGreen',
-        color: '$obolGreen',
-        fontWeight: '$semibold',
-      },
-      false: { fontWeight: '$medium' },
-    },
-    unavailable: {
-      true: {
-        cursor: 'not-allowed',
-        opacity: 0.5,
-      },
-    },
-  },
-});
-
-function Segmented<T extends string>({
-  value,
-  options,
-  onChange,
-}: {
-  value: T;
-  options: Array<{ k: T; label: string; disabled?: boolean; title?: string }>;
-  onChange: (v: T) => void;
-}) {
-  return (
-    <SegmentedRow role="tablist">
-      {options.map(opt => (
-        <SegmentedButton
-          key={opt.k}
-          type="button"
-          role="tab"
-          aria-selected={opt.k === value}
-          active={opt.k === value}
-          unavailable={opt.disabled}
-          disabled={opt.disabled}
-          title={opt.title}
-          onClick={() => {
-            if (!opt.disabled) onChange(opt.k);
-          }}
-        >
-          {opt.label}
-        </SegmentedButton>
-      ))}
-    </SegmentedRow>
-  );
-}
-
-const InputShell = styled('div', {
-  display: 'flex',
-  alignItems: 'stretch',
-  background: '$bg03',
-  border: '1px solid $stroke',
-  borderRadius: '$2',
-  overflow: 'hidden',
-
-  '&:focus-within': { borderColor: '$obolGreen' },
-});
-
-const Affix = styled('span', {
-  display: 'inline-flex',
-  alignItems: 'center',
-  padding: '0 10px',
-  color: '$muted',
-  fontSize: '$2',
-  background: '$bg02',
-
-  variants: {
-    side: {
-      left: { borderRight: '1px solid $stroke' },
-      right: { borderLeft: '1px solid $stroke' },
-    },
-  },
-});
-
-const NakedInput = styled('input', {
-  flex: 1,
-  minWidth: 0,
-  background: 'transparent',
-  border: 0,
-  padding: '9px 12px',
-  color: '$light',
-  fontSize: '$3',
-  fontFamily: 'inherit',
-  outline: 'none',
-
-  variants: {
-    mono: { true: { fontFamily: 'monospace' } },
-  },
-});
-
-function TextInput({
-  value,
-  onChange,
-  placeholder,
-  prefix,
-  suffix,
-  mono,
-  list,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  prefix?: React.ReactNode;
-  suffix?: React.ReactNode;
-  mono?: boolean;
-  list?: string;
-}) {
-  return (
-    <InputShell>
-      {prefix ? <Affix side="left">{prefix}</Affix> : null}
-      <NakedInput
-        mono={mono}
-        value={value}
-        placeholder={placeholder}
-        list={list}
-        onChange={(e: ChangeEvent<HTMLInputElement>) =>
-          onChange(e.target.value)
-        }
-      />
-      {suffix ? <Affix side="right">{suffix}</Affix> : null}
-    </InputShell>
-  );
-}
-
-const ChainGrid = styled('div', {
-  display: 'grid',
-  gridTemplateColumns: 'repeat(3, 1fr)',
-  gap: 8,
-});
-
-const ChainCard = styled('button', {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 8,
-  padding: '9px 12px',
-  border: '1px solid $stroke',
-  background: '$bg03',
-  borderRadius: '$2',
-  cursor: 'pointer',
-  color: '$body',
-  fontFamily: 'inherit',
-  fontSize: '$2',
-  textAlign: 'left',
-  fontWeight: '$medium',
-
-  variants: {
-    active: {
-      true: {
-        background: '$obolMidGreen',
-        borderColor: '$obolGreen',
-        color: '$obolGreen',
-        fontWeight: '$semibold',
-      },
-    },
-    unavailable: {
-      true: {
-        cursor: 'not-allowed',
-        opacity: 0.48,
-      },
-    },
-  },
-});
-
-function ChainPicker({
-  value,
-  onChange,
-  disabledChains = [],
-  disabledReason,
-}: {
-  value: ChainKey;
-  onChange: (k: ChainKey) => void;
-  disabledChains?: readonly ChainKey[];
-  disabledReason?: string;
-}) {
-  return (
-    <ChainGrid>
-      {CHAIN_OPTIONS.map(opt => {
-        const disabled = disabledChains.includes(opt.k);
-        return (
-          <ChainCard
-            key={opt.k}
-            type="button"
-            active={opt.k === value}
-            unavailable={disabled}
-            disabled={disabled}
-            title={disabled ? disabledReason : undefined}
-            onClick={() => {
-              if (!disabled) onChange(opt.k);
-            }}
-          >
-            <ChainIcon chain={opt.icon} size={16} />
-            <span style={{ flex: 1 }}>{opt.label}</span>
-          </ChainCard>
-        );
-      })}
-    </ChainGrid>
-  );
-}
-
-// ── Footer buttons ──────────────────────────────────────────────────────
 
 const CliCopyGroup = styled('div', {
   background: 'transparent',
@@ -433,61 +74,6 @@ const CliCopyGroup = styled('div', {
   alignItems: 'center',
   gap: '$xxxs',
   '&:hover': { background: '$bg03', color: '$light' },
-});
-
-const SecondaryBtn = styled('button', {
-  background: '$bg03',
-  border: '1px solid $stroke',
-  color: '$light',
-  padding: '6px 14px',
-  borderRadius: '$pill',
-  fontSize: '$2',
-  cursor: 'pointer',
-  '&:hover': { background: '$bg04' },
-});
-
-const PrimaryBtn = styled('button', {
-  background: '$obolGreen',
-  color: '$obolDarkDark',
-  border: 0,
-  padding: '6px 14px',
-  borderRadius: '$pill',
-  fontSize: '$2',
-  fontWeight: '$semibold',
-  cursor: 'pointer',
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 6,
-
-  '&:hover': { filter: 'brightness(1.05)' },
-  '&:disabled': { cursor: 'not-allowed', opacity: 0.55 },
-});
-
-const Banner = styled('div', {
-  padding: '$xs $sm',
-  borderRadius: '$2',
-  fontSize: '$2',
-  lineHeight: 1.4,
-
-  variants: {
-    tone: {
-      info: {
-        background: '$bg03',
-        color: '$body',
-        border: '1px solid $stroke',
-      },
-      error: {
-        background: 'rgba(221, 96, 60, 0.10)',
-        color: '$light',
-        border: '1px solid rgba(221, 96, 60, 0.40)',
-      },
-      success: {
-        background: '$obolMidGreen',
-        color: '$obolGreen',
-        border: '1px solid $obolGreen',
-      },
-    },
-  },
 });
 
 // ── Main dialog ─────────────────────────────────────────────────────────
@@ -729,7 +315,14 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
             <Eyebrow>List a new service</Eyebrow>
             <HeaderTitle id="new-listing-title">New listing</HeaderTitle>
           </Box>
-          <CloseBtn type="button" aria-label="Close" onClick={onClose}>
+          <Button
+            type="button"
+            variant="bare"
+            size="sm"
+            iconOnly
+            aria-label="Close"
+            onClick={onClose}
+          >
             <svg width="18" height="18" viewBox="0 0 16 16" fill="none">
               <path
                 d="M4 4l8 8M12 4l-8 8"
@@ -738,7 +331,7 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
                 strokeLinecap="round"
               />
             </svg>
-          </CloseBtn>
+          </Button>
         </Header>
 
         <Body>
@@ -932,11 +525,12 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
             <Text css={{ fontSize: '$2' }}>Copy CLI equivalent</Text>
           </CliCopyGroup>
           <Box css={{ flex: 1 }} />
-          <SecondaryBtn type="button" onClick={onClose}>
+          <Button type="button" variant="secondary" onClick={onClose}>
             Cancel
-          </SecondaryBtn>
-          <PrimaryBtn
+          </Button>
+          <Button
             type="button"
+            variant="primary"
             disabled={!canSubmit}
             onClick={handleSubmit}
           >
@@ -952,13 +546,9 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
                 />
               </svg>
             ) : null}
-          </PrimaryBtn>
+          </Button>
         </Footer>
       </Panel>
     </Backdrop>
   );
 }
-
-// Mark Flex import as used — Flex is exported by obol-ui and kept here in case
-// a future caller wants to compose against the same primitives the dialog uses.
-export { Flex as _DialogFlex };

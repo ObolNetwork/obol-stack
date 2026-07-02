@@ -4,6 +4,7 @@ import { useEffect, useId, useMemo, useState, type ChangeEvent } from 'react';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { Cross2Icon } from '@radix-ui/react-icons';
 
+import { Button } from '@/components/atoms/Button';
 import { CopyButton } from '@/components/atoms/CopyButton';
 import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
 import {
@@ -71,20 +72,6 @@ const Subtitle = styled(Text, {
   fontFamily: 'monospace',
 });
 
-const CloseBtn = styled('button', {
-  display: 'inline-flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  width: 32,
-  height: 32,
-  borderRadius: '$2',
-  border: '1px solid $stroke',
-  background: 'transparent',
-  color: '$body',
-  cursor: 'pointer',
-  '&:hover': { color: '$light', borderColor: '$body' },
-});
-
 const Body = styled(Box, {
   flex: 1,
   overflow: 'auto',
@@ -141,31 +128,32 @@ const CountRow = styled(Flex, {
   gap: '$xs',
 });
 
-const CountBtn = styled('button', {
+// Count preset chips — Button atom (secondary/sm/pill) with a selected
+// state; flex:1 so the presets share the row with the free-form input.
+const CountBtn = styled(Button, {
   flex: 1,
-  height: 32,
-  borderRadius: '$2',
-  border: '1px solid $stroke',
-  background: '$bg03',
-  color: '$light',
-  fontSize: '$1',
-  cursor: 'pointer',
-  transition: 'all 0.15s ease',
-  '&:hover': { borderColor: '$body' },
+
   variants: {
     active: {
       true: {
         background: '$obolMidGreen',
         borderColor: '$obolGreen',
         color: '$obolGreen',
+        '&:hover:not(:disabled)': { background: '$obolMidGreen' },
       },
     },
+  },
+
+  defaultVariants: {
+    variant: 'secondary',
+    size: 'sm',
+    pill: true,
   },
 });
 
 const CountInput = styled('input', {
   flex: 1,
-  height: 32,
+  height: 28,
   padding: '0 $sm',
   borderRadius: '$2',
   border: '1px solid $stroke',
@@ -249,14 +237,16 @@ export function BuyDrawer({ item, open, onClose }: BuyDrawerProps) {
             <Title id={titleId}>Buy access to {item.name}</Title>
             <Subtitle>{item.slug}</Subtitle>
           </TitleBlock>
-          <CloseBtn
+          <Button
             type="button"
+            variant="ghost"
+            iconOnly
             aria-label="Close"
             title="Close (Esc)"
             onClick={onClose}
           >
             <Cross2Icon width={16} height={16} />
-          </CloseBtn>
+          </Button>
         </Header>
         <Body>
           <Section>

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import dynamic from 'next/dynamic';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 
+import { Button } from '@/components/atoms/Button';
 import { CopyButton } from '@/components/atoms/CopyButton';
 import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
 import { LoadingState } from '@/components/molecules/LoadingState';
@@ -140,31 +141,6 @@ const KVValue = styled(Text, {
   wordBreak: 'break-all',
 });
 
-const PrimaryBtn = styled('button', {
-  height: 36,
-  padding: '0 $md',
-  borderRadius: '$2',
-  border: 'none',
-  background: '$obolGreen',
-  color: '$obolDarkDark',
-  fontSize: '$2',
-  fontWeight: '$semibold',
-  cursor: 'pointer',
-  '&:hover': { background: '$obolGreenHover' },
-});
-
-const GhostBtn = styled('button', {
-  height: 36,
-  padding: '0 $md',
-  borderRadius: '$2',
-  border: '1px solid $stroke',
-  background: 'transparent',
-  color: '$light',
-  fontSize: '$2',
-  cursor: 'pointer',
-  '&:hover': { borderColor: '$body' },
-});
-
 const ConditionTable = styled('table', {
   width: '100%',
   borderCollapse: 'collapse',
@@ -253,9 +229,9 @@ export function MarketplaceDetail({ slug, onBack }: MarketplaceDetailProps) {
           onRetry={() => refetch()}
         />
         {onBack ? (
-          <GhostBtn type="button" onClick={onBack}>
+          <Button type="button" variant="ghost" onClick={onBack}>
             ← Back to marketplace
-          </GhostBtn>
+          </Button>
         ) : null}
       </Layout>
     );
@@ -267,9 +243,9 @@ export function MarketplaceDetail({ slug, onBack }: MarketplaceDetailProps) {
           message={error?.message ?? 'Failed to load service detail'}
         />
         {onBack ? (
-          <GhostBtn type="button" onClick={onBack}>
+          <Button type="button" variant="ghost" onClick={onBack}>
             ← Back to marketplace
-          </GhostBtn>
+          </Button>
         ) : null}
       </Layout>
     );
@@ -292,14 +268,18 @@ export function MarketplaceDetail({ slug, onBack }: MarketplaceDetailProps) {
           </HeaderBlock>
           <Flex css={{ gap: '$xs' }}>
             {onBack ? (
-              <GhostBtn type="button" onClick={onBack}>
+              <Button type="button" variant="ghost" onClick={onBack}>
                 ← Back
-              </GhostBtn>
+              </Button>
             ) : null}
             {canBuy ? (
-              <PrimaryBtn type="button" onClick={() => setDrawerOpen(true)}>
+              <Button
+                type="button"
+                variant="primary"
+                onClick={() => setDrawerOpen(true)}
+              >
                 Buy access
-              </PrimaryBtn>
+              </Button>
             ) : null}
           </Flex>
         </BannerContent>

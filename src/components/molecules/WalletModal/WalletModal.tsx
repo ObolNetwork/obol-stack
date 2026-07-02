@@ -1,5 +1,6 @@
 import React from 'react';
 import { Image, Button, Flex, Text, styled, theme } from '@obolnetwork/obol-ui';
+import { Button as BaseButton } from '@/components/atoms/Button';
 import { Close } from '@/icons';
 import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
 import {
@@ -98,23 +99,11 @@ const ModalContent = styled('div', {
   zIndex: 1000,
 });
 
-const CloseButton = styled('button', {
+// Bare icon Button pinned to the modal corner.
+const CloseButton = styled(BaseButton, {
   position: 'absolute',
   top: '$sm',
   right: '$sm',
-  background: 'transparent',
-  border: 'none',
-  cursor: 'pointer',
-  width: '$sm',
-  height: '$sm',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center',
-  padding: 0,
-
-  '&:hover': {
-    opacity: 0.7,
-  },
 });
 
 const Avatar = styled('div', {
@@ -277,6 +266,9 @@ export function WalletModal({
     <ModalContent>
       <CloseButton
         type="button"
+        variant="bare"
+        size="sm"
+        iconOnly
         aria-label="Close wallet modal"
         onClick={onClose}
       >

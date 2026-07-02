@@ -1,7 +1,8 @@
 'use client';
 
 import { useRouter } from 'next/navigation';
-import { Box, Flex, Text, Button, styled } from '@obolnetwork/obol-ui';
+import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
+import { Button } from '../../atoms/Button';
 import { Card } from '../../atoms/Card';
 import { Accordion } from '../../molecules/Accordion';
 import { CountBadge } from '../../atoms/CountBadge';
@@ -37,12 +38,6 @@ const SubSectionHeader = styled(Flex, {
   gap: '$xs',
   paddingBottom: '$xs',
   borderBottom: '1px dashed $stroke',
-});
-
-const SubSectionTitle = styled(Text, {
-  fontSize: '$3',
-  fontWeight: '$semibold',
-  color: '$light',
 });
 
 const SubSectionHint = styled(Text, {
@@ -94,13 +89,13 @@ export function ServiceList({
         width: '100%',
       }}
     >
-      <SectionTitle>Paid services</SectionTitle>
+      <SectionTitle>Services on Sale</SectionTitle>
       {!loading && totalCount > 0 && <CountBadge count={totalCount} />}
       <Box css={{ marginLeft: 'auto' }}>
         <Button
-          color="secondary"
+          variant="secondary"
+          size="sm"
           onClick={() => router.push('/marketplace/listings')}
-          css={{ fontSize: '$2', height: 'auto', padding: '6px 12px' }}
         >
           Manage
         </Button>
@@ -120,7 +115,7 @@ export function ServiceList({
           )}
           {!loading && !error && totalCount === 0 && (
             <EmptyMessage>
-              No paid services yet. Create an agent, then run{' '}
+              Nothing on sale yet. Create an agent, then run{' '}
               <code>obol sell agent &lt;name&gt;</code> from Terminal.
             </EmptyMessage>
           )}
@@ -133,13 +128,12 @@ export function ServiceList({
               {pendingOffers.length > 0 ? (
                 <SubSection>
                   <SubSectionHeader>
-                    <SubSectionTitle>Pending listings</SubSectionTitle>
+                    <SectionTitle level={2}>Pending</SectionTitle>
                     <CountBadge count={pendingOffers.length} />
                     <SubSectionHint>agent</SubSectionHint>
                   </SubSectionHeader>
                   <SubSectionDesc>
-                    ServiceOffer created but not live on the storefront yet.
-                    Check conditions below for what is still reconciling.
+                    Created but not live on your storefront yet.
                   </SubSectionDesc>
                   {pendingOffers.map(offer => (
                     <ServiceCard
@@ -155,17 +149,17 @@ export function ServiceList({
 
               <SubSection>
                 <SubSectionHeader>
-                  <SubSectionTitle>Paid agents</SubSectionTitle>
+                  <SectionTitle level={2}>Agents for sale</SectionTitle>
                   {agentOffers.length > 0 && (
                     <CountBadge count={agentOffers.length} />
                   )}
                   <SubSectionHint>agent</SubSectionHint>
                 </SubSectionHeader>
                 <SubSectionDesc>
-                  Live paid agent listings on your storefront (what buyers see).
+                  Live on your storefront — what buyers see.
                 </SubSectionDesc>
                 {agentOffers.length === 0 ? (
-                  <EmptyMessage>No live paid agents yet.</EmptyMessage>
+                  <EmptyMessage>No agents on sale yet.</EmptyMessage>
                 ) : (
                   agentOffers.map(offer => (
                     <ServiceCard
@@ -182,7 +176,7 @@ export function ServiceList({
               {inferenceOffers.length > 0 && (
                 <SubSection>
                   <SubSectionHeader>
-                    <SubSectionTitle>Inference Services</SubSectionTitle>
+                    <SectionTitle level={2}>Inference for sale</SectionTitle>
                     <CountBadge count={inferenceOffers.length} />
                     <SubSectionHint>inference</SubSectionHint>
                   </SubSectionHeader>
@@ -201,7 +195,9 @@ export function ServiceList({
               {httpOffers.length > 0 && (
                 <SubSection>
                   <SubSectionHeader>
-                    <SubSectionTitle>API Services</SubSectionTitle>
+                    <SectionTitle level={2}>
+                      HTTP services for sale
+                    </SectionTitle>
                     <CountBadge count={httpOffers.length} />
                     <SubSectionHint>http</SubSectionHint>
                   </SubSectionHeader>

@@ -3,7 +3,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import type { Agent8004 } from '@/types/registry';
 import type { ChainOption } from '@/components/atoms/ChainSelector';
-import { chainIdForRegistryFilter } from '@/lib/services/registry-display';
+import {
+  chainIdForRegistryFilter,
+  rankRegistryAgents,
+} from '@/lib/services/registry-display';
 
 const PAGE_SIZE = 10;
 
@@ -40,7 +43,10 @@ export function useRegistryAgents(
           throw new Error(data.error || `HTTP ${res.status}`);
         }
         const data = await res.json();
-        setAgents(data.agents || []);
+        // Default order from the API is arbitrary; rank by quality signals.
+        // Applies to every fetch, so ranking persists within search/filter
+        // results too.
+        setAgents(rankRegistryAgents(data.agents || []));
         setTotal(data.total ?? 0);
         setHasMore(data.hasMore ?? false);
         setError(null);

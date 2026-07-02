@@ -2,38 +2,36 @@
 
 import { useState } from 'react';
 import { Flex, Text, styled } from '@obolnetwork/obol-ui';
+import { Button } from '@/components/atoms/Button';
+import { tones } from '@/lib/ui/tones';
 
 const ChipRow = styled(Flex, {
   flexWrap: 'wrap',
+  alignItems: 'center',
   gap: '$xxs',
 });
 
 const Chip = styled(Text, {
   fontSize: '$1',
   color: '$body',
-  backgroundColor: 'rgba(255, 255, 255, 0.04)',
-  border: '1px solid rgba(255, 255, 255, 0.08)',
+  backgroundColor: tones.neutral.bg,
+  border: `1px solid ${tones.neutral.border}`,
   borderRadius: '4px',
   padding: '1px 6px',
   lineHeight: 1.4,
   whiteSpace: 'nowrap',
 });
 
-const ToggleChip = styled('button', {
-  fontSize: '$1',
-  color: '$obolGreen',
-  backgroundColor: 'rgba(47, 228, 171, 0.06)',
-  border: '1px solid rgba(47, 228, 171, 0.25)',
-  borderRadius: '4px',
-  padding: '1px 6px',
-  lineHeight: 1.4,
-  whiteSpace: 'nowrap',
-  cursor: 'pointer',
-  fontFamily: 'inherit',
+// Success-toned expand/collapse chip on the canonical Button atom.
+const ToggleChip = styled(Button, {
+  background: tones.success.bg,
+  borderColor: tones.success.border,
+  color: tones.success.text,
 
-  '&:hover': {
-    backgroundColor: 'rgba(47, 228, 171, 0.12)',
-    borderColor: 'rgba(47, 228, 171, 0.45)',
+  '&:hover:not(:disabled)': {
+    background: tones.success.bg,
+    borderColor: tones.success.text,
+    color: tones.success.text,
   },
 });
 
@@ -67,6 +65,9 @@ export function ExpandableChipList({
       {hidden > 0 && (
         <ToggleChip
           type="button"
+          variant="ghost"
+          size="sm"
+          pill
           aria-expanded={expanded}
           onClick={() => setExpanded(true)}
         >
@@ -76,6 +77,9 @@ export function ExpandableChipList({
       {expanded && items.length > limit && (
         <ToggleChip
           type="button"
+          variant="ghost"
+          size="sm"
+          pill
           aria-expanded={expanded}
           onClick={() => setExpanded(false)}
         >

@@ -54,7 +54,7 @@ const MetricCardContainer = styled(Box, {
   flexDirection: 'column',
   alignItems: 'flex-start',
   flex: '1 0 0',
-  borderRadius: '$3',
+  borderRadius: '$2',
   background: '$bg03',
 });
 
@@ -171,7 +171,9 @@ const SectionContainer = styled(Box, {
   gap: '$md',
 });
 
-const SectionTitle = styled(Text, {
+// Uppercase eyebrow label for metric groups — a label, not a heading.
+// (Renamed from a local `SectionTitle` that collided with the shared atom.)
+const MetricGroupLabel = styled(Text, {
   color: '$body',
   fontFamily: '$fonts$body',
   fontSize: '$1',
@@ -201,7 +203,7 @@ const PortItem = styled(Flex, {
   padding: '$xs',
   alignItems: 'center',
   justifyContent: 'space-between',
-  borderRadius: '$3',
+  borderRadius: '$2',
   background: '$bg03',
 });
 

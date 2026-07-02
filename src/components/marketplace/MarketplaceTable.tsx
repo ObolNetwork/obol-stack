@@ -2,6 +2,7 @@
 
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 
+import { Button } from '@/components/atoms/Button';
 import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
 import type { MarketplaceSort, ServiceListItem } from '@/lib/marketplace/types';
 
@@ -82,18 +83,6 @@ const TypePill = styled(Text, {
 const Actions = styled(Flex, {
   gap: '$xs',
   justifyContent: 'flex-end',
-});
-
-const GhostBtn = styled('button', {
-  height: 26,
-  padding: '0 $xs',
-  borderRadius: '$1',
-  border: '1px solid $stroke',
-  background: 'transparent',
-  color: '$light',
-  fontSize: '$0',
-  cursor: 'pointer',
-  '&:hover': { borderColor: '$body' },
 });
 
 const SortIndicator = styled(Text, {
@@ -189,9 +178,14 @@ export function MarketplaceTable({
               <Td>{statusLabel(item.status)}</Td>
               <Td>
                 <Actions>
-                  <GhostBtn type="button" onClick={() => onDetails?.(item)}>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onDetails?.(item)}
+                  >
                     Details →
-                  </GhostBtn>
+                  </Button>
                 </Actions>
               </Td>
             </Row>

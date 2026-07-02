@@ -2,26 +2,22 @@ import { useState, useEffect, useRef } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { useDisconnect } from 'wagmi';
 import { Box, Button, Flex, Text, styled, Image } from '@obolnetwork/obol-ui';
+import { Button as BaseButton } from '@/components/atoms/Button';
+import { tones } from '@/lib/ui/tones';
 import { WalletModal } from '../WalletModal';
 import { truncateAddress } from '../../../utils/address';
 import { useWalletAssetBalances } from '../../../hooks/useWalletAssetBalances';
 
-const ConnectedButton = styled('button', {
-  display: 'inline-flex',
-  height: 36,
-  padding: '0 6px 0 10px',
-  alignItems: 'center',
+// Wallet pill on the canonical Button atom; asymmetric padding keeps the
+// chain chip / avatar / balance chip optically inset within the pill.
+const ConnectedButton = styled(BaseButton, {
+  paddingLeft: 10,
+  paddingRight: 6,
   gap: 8,
-  borderRadius: '$pill',
-  border: '1px solid $stroke',
   background: '$bg02',
-  color: '$light',
-  cursor: 'pointer',
-  fontSize: '$2',
-  transition: 'border-color 150ms ease, background 150ms ease',
   flexShrink: 0,
 
-  '&:hover': {
+  '&:hover:not(:disabled)': {
     borderColor: '$bg05',
     background: '$bg03',
   },
@@ -42,20 +38,22 @@ const ChainPill = styled('span', {
   variants: {
     tone: {
       green: {
-        background: 'rgba(47, 228, 171, 0.15)',
-        color: '$obolGreen',
+        background: tones.success.bg,
+        color: tones.success.text,
       },
       amber: {
-        background: 'rgba(250, 186, 90, 0.18)',
-        color: '#FABA5A',
+        background: tones.warning.bg,
+        color: tones.warning.text,
       },
+      // No cyan tone exists; keep the Base-brand cyan text but take the
+      // fill from the same 0.10-alpha wash pattern the tones use.
       cyan: {
-        background: 'rgba(60, 210, 221, 0.18)',
+        background: 'rgba(60, 210, 221, 0.10)',
         color: '#3CD2DD',
       },
       neutral: {
-        background: '$bg03',
-        color: '$body',
+        background: tones.neutral.bg,
+        color: tones.neutral.text,
       },
     },
   },
@@ -154,6 +152,9 @@ function ConnectedWalletPill({
     <ConnectedButton
       onClick={onClick}
       type="button"
+      variant="secondary"
+      size="md"
+      pill
       aria-label={`Wallet connected on ${chainShortName(chain)}`}
     >
       <ChainPill tone={chainTone(chain.id)}>
