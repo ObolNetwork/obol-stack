@@ -99,10 +99,10 @@ var (
 	facilitatorSettleTimeout = 60 * time.Second
 )
 
-// NewForwardAuthMiddleware creates an x402 payment-gating middleware compatible
-// with the v1 wire format. It checks the X-PAYMENT header, verifies the payment
-// with the facilitator, and optionally settles after a successful downstream
-// response.
+// NewForwardAuthMiddleware creates an x402 payment-gating middleware that accepts
+// both x402 wire versions. It reads the payment from the X-PAYMENT (v1) or
+// PAYMENT-SIGNATURE (v2) header, verifies the payment with the facilitator, and
+// optionally settles after a successful downstream response.
 //
 // When VerifyOnly is true (Traefik ForwardAuth path), settlement is skipped.
 // When VerifyOnly is false (standalone gateway path), settlement runs only
@@ -128,7 +128,15 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// x402 v1 clients send the payment under X-PAYMENT; x402 v2 clients
+			// (agentcash, poncho, coinbase SDK >= v2) send it under PAYMENT-SIGNATURE.
+			// Our 402 challenge advertises x402Version 2, so spec-compliant v2 buyers
+			// use PAYMENT-SIGNATURE. Accept both — otherwise a v2 payment is silently
+			// ignored and the caller is re-challenged with no way to pay.
 			paymentHeader := r.Header.Get("X-PAYMENT")
+			if paymentHeader == "" {
+				paymentHeader = r.Header.Get("PAYMENT-SIGNATURE")
+			}
 			if paymentHeader == "" {
 				send(w, r, requirements, cfg.Extensions)
 				return
@@ -137,18 +145,20 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 			// Decode the base64-encoded payment payload.
 			payloadBytes, err := base64.StdEncoding.DecodeString(paymentHeader)
 			if err != nil {
-				log.Printf("x402: invalid X-PAYMENT base64: %v", err)
+				log.Printf("x402: invalid payment header base64: %v", err)
 				http.Error(w, "Invalid payment header", http.StatusBadRequest)
 				return
 			}
 
-			// Find matching requirement by scheme+network.
-			var payload x402types.PaymentPayload
-			if err := json.Unmarshal(payloadBytes, &payload); err != nil {
-				log.Printf("x402: invalid payment JSON: %v", err)
+			// Unmarshal via the canonical x402 types helper rather than a local
+			// json.Unmarshal, so the payload envelope stays in lockstep with the SDK.
+			payloadPtr, err := x402types.ToPaymentPayload(payloadBytes)
+			if err != nil {
+				log.Printf("x402: invalid payment payload: %v", err)
 				http.Error(w, "Invalid payment header", http.StatusBadRequest)
 				return
 			}
+			payload := *payloadPtr
 
 			matchedReq, found := findMatchingRequirementV1(payload, requirements)
 			if !found {
@@ -195,7 +205,9 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 						// before http.Error commits the status code.
 						if settleResp != nil && settleResp.Transaction != "" {
 							settleJSON, _ := json.Marshal(settleResp)
-							w.Header().Set("X-PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString(settleJSON))
+							encodedSettle := base64.StdEncoding.EncodeToString(settleJSON)
+							w.Header().Set("X-PAYMENT-RESPONSE", encodedSettle)
+							w.Header().Set("PAYMENT-RESPONSE", encodedSettle)
 							log.Printf("x402: facilitator returned tx %s with the error — verify on-chain (network=%s payer=%s)",
 								settleResp.Transaction, settleResp.Network, settleResp.Payer)
 						}
@@ -209,9 +221,13 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 						return false
 					}
 
-					// Encode settlement response as X-PAYMENT-RESPONSE header.
+					// Encode the settlement receipt. v1 clients read it from
+					// X-PAYMENT-RESPONSE; x402 v2 clients read PAYMENT-RESPONSE.
+					// Emit both so either wire version can confirm the settle.
 					settleJSON, _ := json.Marshal(settleResp)
-					w.Header().Set("X-PAYMENT-RESPONSE", base64.StdEncoding.EncodeToString(settleJSON))
+					encodedSettle := base64.StdEncoding.EncodeToString(settleJSON)
+					w.Header().Set("X-PAYMENT-RESPONSE", encodedSettle)
+					w.Header().Set("PAYMENT-RESPONSE", encodedSettle)
 					return true
 				},
 				onFailure: func(statusCode int) {
