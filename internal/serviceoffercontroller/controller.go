@@ -622,9 +622,7 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 	// Rebuild the skill catalog on every reconcile so tunnel URL changes and
 	// offer status updates propagate immediately. reconcileSkillCatalog skips
 	// ConfigMap/Deployment writes when the rendered hash is unchanged.
-	freshOffer := *offer
-	freshOffer.Status = status
-	return c.reconcileSkillCatalog(ctx, &freshOffer)
+	return c.reconcileSkillCatalog(ctx, nil)
 }
 
 func (c *Controller) reconcileDeletingOffer(ctx context.Context, offer *monetizeapi.ServiceOffer) error {
@@ -1213,11 +1211,11 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	apiDocsHTML := scalarHTML()
 	contentHash := computeSkillCatalogContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML)
 
-	deployedHash, err := c.skillCatalogDeployedContentHash(ctx)
+	unchanged, err := c.skillCatalogContentUnchanged(ctx, content, servicesJSON, openAPIJSON, apiDocsHTML)
 	if err != nil {
 		return err
 	}
-	if deployedHash != "" && deployedHash == contentHash {
+	if unchanged {
 		readyOffers := countReadyServiceOffers(offers)
 		log.Printf("serviceoffer-controller: /skill.md unchanged (hash=%s, %d ready offer(s))", contentHash, readyOffers)
 		return nil

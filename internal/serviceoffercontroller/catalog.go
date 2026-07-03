@@ -11,10 +11,10 @@ import (
 )
 
 // listServiceOffersForCatalog returns every ServiceOffer from the API server.
-// Listing live objects avoids catalog hash flips caused by reconciling one
-// offer with a fresh status while other offers are still read from a lagging
-// informer cache. override is merged only when the informer/API list has not
-// yet observed a just-created offer.
+// A live list is the single source of truth for catalog rendering so parallel
+// offer reconciles do not mix one freshly-updated status with stale informer
+// copies. override is appended only when a just-created offer is not yet
+// visible in the list response.
 func (c *Controller) listServiceOffersForCatalog(ctx context.Context, override *monetizeapi.ServiceOffer) ([]*monetizeapi.ServiceOffer, error) {
 	list, err := c.offers.List(ctx, metav1.ListOptions{})
 	if err != nil {
@@ -22,22 +22,46 @@ func (c *Controller) listServiceOffersForCatalog(ctx context.Context, override *
 	}
 
 	offers := make([]*monetizeapi.ServiceOffer, 0, len(list.Items)+1)
-	overrideUsed := false
+	seen := make(map[string]struct{}, len(list.Items))
 	for i := range list.Items {
 		offer, err := decodeServiceOffer(&list.Items[i])
 		if err != nil {
 			return nil, err
 		}
-		if override != nil && offer.Namespace == override.Namespace && offer.Name == override.Name {
-			offer = override
-			overrideUsed = true
-		}
+		seen[offer.Namespace+"/"+offer.Name] = struct{}{}
 		offers = append(offers, offer)
 	}
-	if override != nil && !overrideUsed {
-		offers = append(offers, override)
+	if override != nil {
+		if _, ok := seen[override.Namespace+"/"+override.Name]; !ok {
+			offers = append(offers, override)
+		}
 	}
 	return offers, nil
+}
+
+func skillCatalogContentMatches(cm *unstructured.Unstructured, content, servicesJSON, openAPIJSON, apiDocsHTML string) bool {
+	if cm == nil {
+		return false
+	}
+	data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+	if data == nil {
+		return false
+	}
+	return data["skill.md"] == content &&
+		data["services.json"] == servicesJSON &&
+		data["openapi.json"] == openAPIJSON &&
+		data["api.html"] == apiDocsHTML
+}
+
+func (c *Controller) skillCatalogContentUnchanged(ctx context.Context, content, servicesJSON, openAPIJSON, apiDocsHTML string) (bool, error) {
+	cm, err := c.configMaps.Namespace(skillCatalogNamespace).Get(ctx, skillCatalogConfigMapName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return skillCatalogContentMatches(cm, content, servicesJSON, openAPIJSON, apiDocsHTML), nil
 }
 
 func computeSkillCatalogContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML string) string {
