@@ -619,12 +619,9 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		// requiring a spec mutation or unrelated ConfigMap update.
 		c.offerQueue.AddAfter(offer.Namespace+"/"+offer.Name, 5*time.Second)
 	}
-	// Rebuild the skill catalog on every reconcile so the just-updated status
-	// (not yet reflected in the informer store) and tunnel URL changes both
-	// propagate immediately. The catalog's ConfigMap/Deployment only rotate
-	// when the rendered markdown actually differs, so idle reconciles are
-	// no-ops at the API-server level. Pass `offer`+`status` as an override so
-	// the just-committed status is used instead of the stale informer copy.
+	// Rebuild the skill catalog on every reconcile so tunnel URL changes and
+	// offer status updates propagate immediately. reconcileSkillCatalog skips
+	// ConfigMap/Deployment writes when the rendered hash is unchanged.
 	freshOffer := *offer
 	freshOffer.Status = status
 	return c.reconcileSkillCatalog(ctx, &freshOffer)
@@ -1180,11 +1177,12 @@ func (c *Controller) loadStorefrontProfile(ctx context.Context) (*schemas.Storef
 }
 
 // reconcileSkillCatalog rebuilds the /skill.md ConfigMap/Deployment/Service/
-// HTTPRoute from the current set of Ready ServiceOffers. If `override` is
-// non-nil, that offer replaces (or is appended to) the informer-cached copy
-// with the same namespace/name; this is how reconcileOffer feeds its
-// just-committed status into the catalog without waiting for the informer's
-// watch event to update the local store.
+// HTTPRoute from the current set of operationally-ready ServiceOffers. Offers
+// are listed from the API server so every reconcile sees a consistent snapshot;
+// override replaces or appends a just-created offer the list has not observed yet.
+// ConfigMap and Deployment are only applied when the rendered catalog hash differs
+// from the live obol-skill-md Deployment annotation, so idle reconciles do not
+// roll the skill-catalog pod.
 func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *monetizeapi.ServiceOffer) error {
 	c.catalogMu.Lock()
 	defer c.catalogMu.Unlock()
@@ -1194,29 +1192,9 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 		return err
 	}
 
-	items := c.offerInformer.GetStore().List()
-	offers := make([]*monetizeapi.ServiceOffer, 0, len(items)+1)
-	overrideUsed := false
-	for _, item := range items {
-		raw := asUnstructured(item)
-		if raw == nil {
-			continue
-		}
-		offer, err := decodeServiceOffer(raw)
-		if err != nil {
-			return err
-		}
-		if override != nil && offer.Namespace == override.Namespace && offer.Name == override.Name {
-			offer = override
-			overrideUsed = true
-		}
-		offers = append(offers, offer)
-	}
-	if override != nil && !overrideUsed {
-		// Override refers to an offer the informer hasn't yet observed (e.g.
-		// a just-created ServiceOffer whose Add event hasn't fired). Include
-		// it so the catalog reflects reality.
-		offers = append(offers, override)
+	offers, err := c.listServiceOffersForCatalog(ctx, override)
+	if err != nil {
+		return err
 	}
 
 	storefrontProfile, err := c.loadStorefrontProfile(ctx)
@@ -1233,7 +1211,17 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	// when tunnelURL changes — see enqueueDiscoveryRefresh).
 	openAPIJSON := buildOpenAPIDocument(offers, baseURL)
 	apiDocsHTML := scalarHTML()
-	contentHash := fmt.Sprintf("%x", md5Sum(content+servicesJSON+openAPIJSON+apiDocsHTML))[:8]
+	contentHash := computeSkillCatalogContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML)
+
+	deployedHash, err := c.skillCatalogDeployedContentHash(ctx)
+	if err != nil {
+		return err
+	}
+	if deployedHash != "" && deployedHash == contentHash {
+		readyOffers := countReadyServiceOffers(offers)
+		log.Printf("serviceoffer-controller: /skill.md unchanged (hash=%s, %d ready offer(s))", contentHash, readyOffers)
+		return nil
+	}
 
 	if err := c.applyObject(ctx, c.configMaps.Namespace(skillCatalogNamespace), buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML)); err != nil {
 		return err
@@ -1256,14 +1244,19 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildAPIDocsHTTPRoute()); err != nil {
 		return err
 	}
+	readyOffers := countReadyServiceOffers(offers)
+	log.Printf("serviceoffer-controller: /skill.md published with %d ready offer(s) (hash=%s)", readyOffers, contentHash)
+	return nil
+}
+
+func countReadyServiceOffers(offers []*monetizeapi.ServiceOffer) int {
 	readyOffers := 0
 	for _, offer := range offers {
 		if offer != nil && offer.DeletionTimestamp == nil && isConditionTrue(offer.Status, "Ready") {
 			readyOffers++
 		}
 	}
-	log.Printf("serviceoffer-controller: /skill.md published with %d ready offer(s)", readyOffers)
-	return nil
+	return readyOffers
 }
 
 func (c *Controller) deleteRouteChildren(ctx context.Context, offer *monetizeapi.ServiceOffer) error {
