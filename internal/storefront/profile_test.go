@@ -1,6 +1,7 @@
 package storefront_test
 
 import (
+	"encoding/base64"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
@@ -35,6 +36,14 @@ func TestValidateLogoURL(t *testing.T) {
 		{"https://cdn.example/logo.png", true},
 		{"/obol-stack-logo.png", true},
 		{"logo.png", false},
+		// Inline data URIs: image mime + base64 only, size-capped.
+		{"data:image/png;base64," + base64.StdEncoding.EncodeToString([]byte("\x89PNG\r\n\x1a\n")), true},
+		{"data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString([]byte("<svg/>")), true},
+		{"data:text/html;base64," + base64.StdEncoding.EncodeToString([]byte("<html/>")), false},
+		{"data:image/png;base64,not-valid-base64!!!", false},
+		{"data:image/png;base64", false},                                                             // no comma separator
+		{"data:image/svg+xml,<svg/>", false},                                                         // not base64-encoded
+		{"data:image/png;base64," + base64.StdEncoding.EncodeToString(make([]byte, 300<<10)), false}, // over 256 KiB cap
 	} {
 		err := storefront.ValidateLogoURL(tc.raw)
 		if tc.ok && err != nil {

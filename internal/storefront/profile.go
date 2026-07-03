@@ -1,6 +1,7 @@
 package storefront
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/mail"
@@ -90,7 +91,14 @@ func ProfileLocalPath(cfg *config.Config) string {
 	return filepath.Join(cfg.ConfigDir, profileLocalRelPath)
 }
 
-// ValidateLogoURL accepts absolute http(s) URLs or site-relative paths.
+// maxInlineLogoBytes caps the decoded size of an inline data: logo. The
+// profile (and the published catalog that embeds it) live in ConfigMaps with
+// a hard 1 MiB object limit, so the logo must stay well under that.
+const maxInlineLogoBytes = 256 << 10 // 256 KiB
+
+// ValidateLogoURL accepts absolute http(s) URLs, site-relative paths, or
+// inline data:image/...;base64 URIs (self-contained — immune to CORS,
+// hotlink protection, and dead hosts).
 func ValidateLogoURL(raw string) error {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -102,7 +110,31 @@ func ValidateLogoURL(raw string) error {
 	if strings.HasPrefix(raw, "https://") || strings.HasPrefix(raw, "http://") {
 		return nil
 	}
-	return fmt.Errorf("logo URL must be https://..., http://..., or a path starting with /")
+	if strings.HasPrefix(raw, "data:") {
+		return validateInlineLogo(raw)
+	}
+	return fmt.Errorf("logo URL must be https://..., http://..., a path starting with /, or an inline data:image/...;base64 URI")
+}
+
+func validateInlineLogo(raw string) error {
+	meta, payload, ok := strings.Cut(strings.TrimPrefix(raw, "data:"), ",")
+	if !ok {
+		return fmt.Errorf("inline logo: malformed data: URI (missing comma separator)")
+	}
+	if !strings.HasPrefix(meta, "image/") {
+		return fmt.Errorf("inline logo must be a data:image/... URI, got data:%s", meta)
+	}
+	if !strings.HasSuffix(meta, ";base64") {
+		return fmt.Errorf("inline logo must be base64-encoded (data:image/...;base64,...)")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return fmt.Errorf("inline logo: invalid base64 payload: %w", err)
+	}
+	if len(decoded) > maxInlineLogoBytes {
+		return fmt.Errorf("inline logo is %d KiB decoded; max %d KiB (it is embedded in the catalog ConfigMap)", len(decoded)>>10, maxInlineLogoBytes>>10)
+	}
+	return nil
 }
 
 // ValidateContactEmail accepts a bare operator contact address for OpenAPI
