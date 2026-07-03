@@ -4,7 +4,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/mail"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -116,6 +118,44 @@ func ValidateLogoURL(raw string) error {
 	return fmt.Errorf("logo URL must be https://..., http://..., a path starting with /, or an inline data:image/...;base64 URI")
 }
 
+// InlineLogoFromFile reads a local image file and returns it as a
+// data:image/...;base64 URI suitable for StorefrontProfile.LogoURL. Inline
+// logos are self-contained — immune to CORS, hotlink protection, and dead
+// hosts — but must fit the ConfigMap budget (maxInlineLogoBytes).
+func InlineLogoFromFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read logo file: %w", err)
+	}
+	if len(data) == 0 {
+		return "", fmt.Errorf("logo file %s is empty", path)
+	}
+	if len(data) > maxInlineLogoBytes {
+		return "", fmt.Errorf("logo file is %d KiB; max %d KiB for an inline logo (it is embedded in the catalog ConfigMap) — host larger images at an https URL instead", len(data)>>10, maxInlineLogoBytes>>10)
+	}
+	mime := detectImageMIME(path, data)
+	if mime == "" {
+		return "", fmt.Errorf("logo file %s does not look like an image (png, jpeg, gif, webp, svg, ico)", path)
+	}
+	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
+// detectImageMIME sniffs an image content-type from file bytes, falling back
+// to the extension for SVG (which sniffs as XML/plain text).
+func detectImageMIME(path string, data []byte) string {
+	sniffed := http.DetectContentType(data)
+	if i := strings.Index(sniffed, ";"); i >= 0 {
+		sniffed = sniffed[:i]
+	}
+	if strings.HasPrefix(sniffed, "image/") {
+		return sniffed
+	}
+	if strings.EqualFold(filepath.Ext(path), ".svg") {
+		return "image/svg+xml"
+	}
+	return ""
+}
+
 func validateInlineLogo(raw string) error {
 	meta, payload, ok := strings.Cut(strings.TrimPrefix(raw, "data:"), ",")
 	if !ok {
@@ -152,6 +192,28 @@ func ValidateContactEmail(raw string) error {
 		return fmt.Errorf("contact email: address is empty")
 	}
 	return nil
+}
+
+// DescribeLogoURL returns a terminal-friendly rendering of a logo URL:
+// inline data: URIs are summarised (mime + decoded size) instead of dumping
+// the base64 payload; everything else passes through unchanged.
+func DescribeLogoURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "data:") {
+		return raw
+	}
+	meta, payload, ok := strings.Cut(strings.TrimPrefix(raw, "data:"), ",")
+	if !ok {
+		return raw
+	}
+	mime := strings.TrimSuffix(meta, ";base64")
+	// DecodedLen ignores '=' padding; subtract it for an exact size.
+	pad := 0
+	for i := len(payload) - 1; i >= 0 && payload[i] == '='; i-- {
+		pad++
+	}
+	size := len(payload)/4*3 - pad
+	return fmt.Sprintf("inline %s (%d KiB)", mime, (size+1023)>>10)
 }
 
 // IsDefaultLogoURL reports whether url is the stack default wordmark (relative or absolute).
