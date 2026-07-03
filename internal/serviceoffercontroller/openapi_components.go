@@ -158,8 +158,19 @@ func openAIChatCompletionsRequestSchema() map[string]any {
 			"temperature": map[string]any{"type": "number", "minimum": 0, "maximum": 2},
 			"top_p":       map[string]any{"type": "number", "minimum": 0, "maximum": 1},
 			"n":           map[string]any{"type": "integer", "minimum": 1},
-			"stream":      map[string]any{"type": "boolean"},
-			"max_tokens":  map[string]any{"type": "integer", "minimum": 1},
+			// Paid chat runs through the x402 paywall, which settles at
+			// status-commit time and returns the settlement receipt with a
+			// single buffered application/json body. A streamed (SSE) response
+			// commits its status before the body exists, so the receipt can't
+			// ride it and pay-and-confirm clients can't parse an event stream
+			// as a completion. Advertise stream:false as the default + required
+			// value until streaming-aware settlement lands (obol-stack#671).
+			"stream": map[string]any{
+				"type":        "boolean",
+				"default":     false,
+				"description": "Must be false. Streaming (text/event-stream / SSE) is not supported over the x402 payment path — the settlement receipt ships with one buffered application/json completion, so stream:true breaks payment confirmation in x402 clients.",
+			},
+			"max_tokens": map[string]any{"type": "integer", "minimum": 1},
 			"stop": map[string]any{
 				"oneOf": []any{
 					map[string]any{"type": "string"},
@@ -169,6 +180,13 @@ func openAIChatCompletionsRequestSchema() map[string]any {
 			"presence_penalty":  map[string]any{"type": "number", "minimum": -2, "maximum": 2},
 			"frequency_penalty": map[string]any{"type": "number", "minimum": -2, "maximum": 2},
 			"user":              map[string]any{"type": "string"},
+		},
+		// Example steers discovery clients (agentcash/poncho/CDP) to the
+		// non-streaming shape the x402 pay path requires.
+		"example": map[string]any{
+			"model":    "<model-id from /api/services.json>",
+			"stream":   false,
+			"messages": []any{map[string]any{"role": "user", "content": "Hello"}},
 		},
 	}
 }
