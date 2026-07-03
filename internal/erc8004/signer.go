@@ -127,6 +127,46 @@ func (s *RemoteSigner) SignTransaction(ctx context.Context, addr common.Address,
 	return sr.SignedTransaction, nil
 }
 
+// SignMessage signs a plain-text message with the EIP-191 personal-message
+// prefix via the remote-signer (POST /api/v1/sign/{address}/message). Used
+// for SIWE / Sign-In-With-X authentication. Returns the 65-byte signature
+// as a 0x-prefixed hex string.
+func (s *RemoteSigner) SignMessage(ctx context.Context, addr common.Address, message string) (string, error) {
+	url := fmt.Sprintf("%s/api/v1/sign/%s/message", s.baseURL, addr.Hex())
+
+	body, err := json.Marshal(map[string]string{"message": message})
+	if err != nil {
+		return "", fmt.Errorf("remote-signer: marshal message: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return "", fmt.Errorf("remote-signer: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("remote-signer: sign message: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("remote-signer: sign message: HTTP %d: %s", resp.StatusCode, body)
+	}
+
+	var sr signResponse
+	if err := json.NewDecoder(resp.Body).Decode(&sr); err != nil {
+		return "", fmt.Errorf("remote-signer: decode response: %w", err)
+	}
+	if sr.Error != "" {
+		return "", fmt.Errorf("remote-signer: %s", sr.Error)
+	}
+
+	return sr.Signature, nil
+}
+
 // EIP712TypedData represents a full EIP-712 typed data structure for signing.
 type EIP712TypedData struct {
 	Types       map[string][]EIP712Field `json:"types"`
