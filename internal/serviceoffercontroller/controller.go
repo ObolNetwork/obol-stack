@@ -1201,13 +1201,14 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	}
 	content := buildSkillCatalogMarkdown(offers, baseURL, storefrontProfile)
 	servicesJSON := buildServiceCatalogJSON(offers, baseURL, storefrontProfile)
+	resolvedProfile := storefront.ResolvePublished(storefrontProfile, baseURL)
 	// buildOpenAPIDocument prefers the tunnel URL for the public `servers[0]`
 	// entry; baseURL is sourced from obol-stack-config.tunnelURL via
 	// registrationBaseURL, which is also what /skill.md and services.json
 	// use as their public-facing prefix, so the three surfaces stay in sync
 	// on tunnel restarts (the configMap informer re-enqueues every offer
 	// when tunnelURL changes — see enqueueDiscoveryRefresh).
-	openAPIJSON := buildOpenAPIDocument(offers, baseURL)
+	openAPIJSON := buildOpenAPIDocument(offers, baseURL, resolvedProfile)
 	apiDocsHTML := scalarHTML()
 	contentHash := computeSkillCatalogContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML)
 

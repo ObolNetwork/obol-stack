@@ -46,6 +46,25 @@ func TestValidateLogoURL(t *testing.T) {
 	}
 }
 
+func TestValidateContactEmail(t *testing.T) {
+	for _, tc := range []struct {
+		raw string
+		ok  bool
+	}{
+		{"ops@acme.example", true},
+		{"", true},
+		{"not-an-email", false},
+	} {
+		err := storefront.ValidateContactEmail(tc.raw)
+		if tc.ok && err != nil {
+			t.Fatalf("%q: %v", tc.raw, err)
+		}
+		if !tc.ok && err == nil {
+			t.Fatalf("%q: expected error", tc.raw)
+		}
+	}
+}
+
 func TestIsDefaultLogoURL(t *testing.T) {
 	for _, tc := range []struct {
 		raw   string

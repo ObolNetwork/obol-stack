@@ -30,7 +30,7 @@ const localBaseURL = "http://obol.stack:8080"
 //
 // The output is JSON, deterministically ordered, indented with two spaces
 // so manual `curl /openapi.json` is readable.
-func buildOpenAPIDocument(offers []*monetizeapi.ServiceOffer, tunnelURL string) string {
+func buildOpenAPIDocument(offers []*monetizeapi.ServiceOffer, tunnelURL string, profile schemas.StorefrontProfile) string {
 	tunnelURL = strings.TrimRight(tunnelURL, "/")
 
 	now := time.Now()
@@ -55,7 +55,7 @@ func buildOpenAPIDocument(offers []*monetizeapi.ServiceOffer, tunnelURL string) 
 
 	doc := map[string]any{
 		"openapi": openAPISpecVersion,
-		"info":    buildOpenAPIInfo(len(ready)),
+		"info":    buildOpenAPIInfo(profile, len(ready)),
 		"servers": buildOpenAPIServers(tunnelURL),
 		"tags":    buildOpenAPITags(ready),
 		"paths":   buildOpenAPIPaths(ready),
@@ -82,7 +82,7 @@ func buildOpenAPIDocument(offers []*monetizeapi.ServiceOffer, tunnelURL string) 
 	return string(encoded)
 }
 
-func buildOpenAPIInfo(readyCount int) map[string]any {
+func buildOpenAPIInfo(profile schemas.StorefrontProfile, readyCount int) map[string]any {
 	description := "x402 payment-gated services advertised by this Obol Stack operator. " +
 		"Every operation expects an `X-PAYMENT` header carrying a signed x402 v2 payment payload; " +
 		"unpaid requests receive a 402 with `accepts[]` describing the prices the operator will honour. " +
@@ -94,14 +94,22 @@ func buildOpenAPIInfo(readyCount int) map[string]any {
 	if readyCount == 0 {
 		description = "This operator currently advertises no live services. " + description
 	}
+	contactName := strings.TrimSpace(profile.DisplayName)
+	if contactName == "" || contactName == "Obol Stack" {
+		contactName = "Obol Stack"
+	}
+	contact := map[string]any{
+		"name": contactName,
+		"url":  "https://github.com/ObolNetwork/obol-stack",
+	}
+	if email := strings.TrimSpace(profile.ContactEmail); email != "" {
+		contact["email"] = email
+	}
 	return map[string]any{
 		"title":       "Obol Stack — paid services",
 		"version":     "1",
 		"description": description,
-		"contact": map[string]any{
-			"name": "Obol Stack",
-			"url":  "https://github.com/ObolNetwork/obol-stack",
-		},
+		"contact":     contact,
 		// x-guidance is the agent-facing usage overview read by discovery
 		// indexers (x402scan L4 audit). Keep it answer-shaped: what an agent
 		// must do to call any operation in this document.
