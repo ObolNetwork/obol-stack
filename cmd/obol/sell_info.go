@@ -107,13 +107,15 @@ Logo URLs are preflight-checked before publishing: reachability, an image
 content-type, https (mixed content), and permissive CORS headers (needed by
 sites that embed your catalog). On a TTY a failing check asks before
 proceeding; non-interactive runs warn and continue. To sidestep hosting
-brittleness entirely, pass an inline data URI (self-contained, no CORS):
+brittleness entirely (CORS, hotlinking, dead hosts), inline a local image —
+it is embedded in the catalog as a self-contained data: URI:
 
-  obol sell info set --logo-url "data:image/png;base64,$(base64 -i logo.png)"`,
+  obol sell info set --logo-file ./logo.png`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "display-name", Usage: "Seller title shown in the storefront header"},
 			&cli.StringFlag{Name: "tagline", Usage: "Short subtitle under the storefront hero"},
 			&cli.StringFlag{Name: "logo-url", Usage: "Logo image URL (https://..., /path on this host, or inline data:image/...;base64)"},
+			&cli.StringFlag{Name: "logo-file", Usage: "Local image file to inline as the logo (≤256 KiB, converted to a data: URI — no hosting needed)"},
 			&cli.StringFlag{Name: "contact-email", Usage: "Operator contact email published in /openapi.json (x402scan)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -128,9 +130,12 @@ brittleness entirely, pass an inline data URI (self-contained, no CORS):
 			}
 
 			patch := schemas.StorefrontProfile{}
-			anyFlag := cmd.IsSet("display-name") || cmd.IsSet("tagline") || cmd.IsSet("logo-url") || cmd.IsSet("contact-email")
+			anyFlag := cmd.IsSet("display-name") || cmd.IsSet("tagline") || cmd.IsSet("logo-url") || cmd.IsSet("logo-file") || cmd.IsSet("contact-email")
 			if anyFlag {
 				// Flag mode: patch only the fields the operator passed.
+				if cmd.IsSet("logo-url") && cmd.IsSet("logo-file") {
+					return errors.New("--logo-url and --logo-file are mutually exclusive")
+				}
 				if cmd.IsSet("display-name") {
 					patch.DisplayName = strings.TrimSpace(cmd.String("display-name"))
 				}
@@ -140,13 +145,20 @@ brittleness entirely, pass an inline data URI (self-contained, no CORS):
 				if cmd.IsSet("logo-url") {
 					patch.LogoURL = strings.TrimSpace(cmd.String("logo-url"))
 				}
+				if cmd.IsSet("logo-file") {
+					uri, err := storefront.InlineLogoFromFile(strings.TrimSpace(cmd.String("logo-file")))
+					if err != nil {
+						return err
+					}
+					patch.LogoURL = uri
+				}
 				if cmd.IsSet("contact-email") {
 					patch.ContactEmail = strings.TrimSpace(cmd.String("contact-email"))
 				}
 			} else {
 				// No flags: prompt interactively (pre-filled with effective values).
 				if !u.IsTTY() {
-					return errors.New("no flags given and not a TTY: pass --display-name, --tagline, --logo-url, and/or --contact-email")
+					return errors.New("no flags given and not a TTY: pass --display-name, --tagline, --logo-url, --logo-file, and/or --contact-email")
 				}
 				effective := storefront.ResolvePublished(&current, mustSellerBaseURL(cfg))
 				if v, err := u.Input("Display name", effective.DisplayName); err == nil {
@@ -155,8 +167,15 @@ brittleness entirely, pass an inline data URI (self-contained, no CORS):
 				if v, err := u.Input("Tagline", effective.Tagline); err == nil {
 					patch.Tagline = strings.TrimSpace(v)
 				}
-				if v, err := u.Input("Logo URL", effective.LogoURL); err == nil {
-					patch.LogoURL = strings.TrimSpace(v)
+				// An inline data: URI is too long to pre-fill; keep it unless
+				// the operator types a replacement.
+				logoDefault := effective.LogoURL
+				if strings.HasPrefix(logoDefault, "data:") {
+					u.Dim("Current logo: " + storefront.DescribeLogoURL(logoDefault) + " (leave blank to keep)")
+					logoDefault = ""
+				}
+				if v, err := u.Input("Logo URL or local image file", logoDefault); err == nil {
+					patch.LogoURL = resolveLogoInput(u, v)
 				}
 				if v, err := u.Input("Contact email (OpenAPI)", effective.ContactEmail); err == nil {
 					patch.ContactEmail = strings.TrimSpace(v)
@@ -249,6 +268,27 @@ more field flags to reset only those fields, leaving the rest untouched.`,
 			return nil
 		},
 	}
+}
+
+// resolveLogoInput turns an interactive "Logo URL" answer into a profile
+// value: a path to an existing local image file is inlined as a data: URI;
+// anything else passes through unchanged for URL validation.
+func resolveLogoInput(u *ui.UI, v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" || strings.HasPrefix(v, "data:") ||
+		strings.HasPrefix(v, "http://") || strings.HasPrefix(v, "https://") {
+		return v
+	}
+	if st, err := os.Stat(v); err != nil || !st.Mode().IsRegular() {
+		return v
+	}
+	uri, err := storefront.InlineLogoFromFile(v)
+	if err != nil {
+		u.Warn(err.Error())
+		return v
+	}
+	u.Infof("Inlined %s as %s", v, storefront.DescribeLogoURL(uri))
+	return uri
 }
 
 // confirmLogoURL probes a newly-set logo URL the way browsers will load it
@@ -362,7 +402,7 @@ func printStorefrontHeader(u *ui.UI, catalog schemas.ServiceCatalog) {
 	u.Bold("Storefront")
 	u.Printf("  Name:    %s", valueOrNone(catalog.DisplayName))
 	u.Printf("  Tagline: %s", valueOrNone(catalog.Tagline))
-	u.Printf("  Logo:    %s", valueOrNone(catalog.LogoURL))
+	u.Printf("  Logo:    %s", valueOrNone(storefront.DescribeLogoURL(catalog.LogoURL)))
 	u.Blank()
 }
 
@@ -543,7 +583,7 @@ func mustSellerBaseURL(cfg *config.Config) string {
 func printSellerProfile(u *ui.UI, profile schemas.StorefrontProfile) {
 	u.Printf("  Display name:   %s", profile.DisplayName)
 	u.Printf("  Tagline:        %s", profile.Tagline)
-	u.Printf("  Logo URL:       %s", profile.LogoURL)
+	u.Printf("  Logo URL:       %s", storefront.DescribeLogoURL(profile.LogoURL))
 	if email := strings.TrimSpace(profile.ContactEmail); email != "" {
 		u.Printf("  Contact email:  %s", email)
 	} else {
