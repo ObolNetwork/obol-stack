@@ -3,6 +3,7 @@ package storefront
 import (
 	"encoding/json"
 	"fmt"
+	"net/mail"
 	"path/filepath"
 	"strings"
 
@@ -37,6 +38,9 @@ func ResolvePublished(explicit *schemas.StorefrontProfile, baseURL string) schem
 	}
 	if v := strings.TrimSpace(explicit.LogoURL); v != "" {
 		profile.LogoURL = v
+	}
+	if v := strings.TrimSpace(explicit.ContactEmail); v != "" {
+		profile.ContactEmail = v
 	}
 	return profile
 }
@@ -75,6 +79,9 @@ func MergeProfile(base, patch schemas.StorefrontProfile) schemas.StorefrontProfi
 	if v := strings.TrimSpace(patch.LogoURL); v != "" {
 		out.LogoURL = v
 	}
+	if v := strings.TrimSpace(patch.ContactEmail); v != "" {
+		out.ContactEmail = v
+	}
 	return out
 }
 
@@ -96,6 +103,23 @@ func ValidateLogoURL(raw string) error {
 		return nil
 	}
 	return fmt.Errorf("logo URL must be https://..., http://..., or a path starting with /")
+}
+
+// ValidateContactEmail accepts a bare operator contact address for OpenAPI
+// info.contact.email (required by x402scan discovery audits).
+func ValidateContactEmail(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	addr, err := mail.ParseAddress(raw)
+	if err != nil {
+		return fmt.Errorf("contact email: %w", err)
+	}
+	if addr.Address == "" {
+		return fmt.Errorf("contact email: address is empty")
+	}
+	return nil
 }
 
 // IsDefaultLogoURL reports whether url is the stack default wordmark (relative or absolute).

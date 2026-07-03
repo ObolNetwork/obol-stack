@@ -8,21 +8,28 @@ import (
 )
 
 func TestClearProfileFields(t *testing.T) {
-	base := schemas.StorefrontProfile{DisplayName: "Acme", Tagline: "Paid APIs.", LogoURL: "https://acme/logo.png"}
+	base := schemas.StorefrontProfile{
+		DisplayName:  "Acme",
+		Tagline:      "Paid APIs.",
+		LogoURL:      "https://acme/logo.png",
+		ContactEmail: "ops@acme.example",
+	}
 
 	tests := []struct {
 		name       string
 		dn, tl, lu bool
+		ce         bool
 		want       schemas.StorefrontProfile
 	}{
-		{"none", false, false, false, base},
-		{"tagline only", false, true, false, schemas.StorefrontProfile{DisplayName: "Acme", LogoURL: "https://acme/logo.png"}},
-		{"display+logo", true, false, true, schemas.StorefrontProfile{Tagline: "Paid APIs."}},
-		{"all", true, true, true, schemas.StorefrontProfile{}},
+		{"none", false, false, false, false, base},
+		{"tagline only", false, true, false, false, schemas.StorefrontProfile{DisplayName: "Acme", LogoURL: "https://acme/logo.png", ContactEmail: "ops@acme.example"}},
+		{"display+logo", true, false, true, false, schemas.StorefrontProfile{Tagline: "Paid APIs.", ContactEmail: "ops@acme.example"}},
+		{"contact only", false, false, false, true, schemas.StorefrontProfile{DisplayName: "Acme", Tagline: "Paid APIs.", LogoURL: "https://acme/logo.png"}},
+		{"all", true, true, true, true, schemas.StorefrontProfile{}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := clearProfileFields(base, tc.dn, tc.tl, tc.lu)
+			got := clearProfileFields(base, tc.dn, tc.tl, tc.lu, tc.ce)
 			if got != tc.want {
 				t.Fatalf("clearProfileFields = %+v, want %+v", got, tc.want)
 			}

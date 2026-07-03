@@ -47,6 +47,7 @@ Manage the storefront's own branding (independent of individual services):
   obol sell info set             Interactive when no flags are passed;
   obol sell info set --tagline … updates only the fields you pass, leaving
                                  the rest untouched.
+  obol sell info set --contact-email … publishes info.contact.email in /openapi.json
   obol sell info reset           Clears all branding back to defaults;
   obol sell info reset --tagline resets only the fields you pass.
 
@@ -105,6 +106,7 @@ the fields you pass change; everything else is left untouched.`,
 			&cli.StringFlag{Name: "display-name", Usage: "Seller title shown in the storefront header"},
 			&cli.StringFlag{Name: "tagline", Usage: "Short subtitle under the storefront hero"},
 			&cli.StringFlag{Name: "logo-url", Usage: "Logo image URL (https://... or /path on this host)"},
+			&cli.StringFlag{Name: "contact-email", Usage: "Operator contact email published in /openapi.json (x402scan)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -118,7 +120,7 @@ the fields you pass change; everything else is left untouched.`,
 			}
 
 			patch := schemas.StorefrontProfile{}
-			anyFlag := cmd.IsSet("display-name") || cmd.IsSet("tagline") || cmd.IsSet("logo-url")
+			anyFlag := cmd.IsSet("display-name") || cmd.IsSet("tagline") || cmd.IsSet("logo-url") || cmd.IsSet("contact-email")
 			if anyFlag {
 				// Flag mode: patch only the fields the operator passed.
 				if cmd.IsSet("display-name") {
@@ -130,10 +132,13 @@ the fields you pass change; everything else is left untouched.`,
 				if cmd.IsSet("logo-url") {
 					patch.LogoURL = strings.TrimSpace(cmd.String("logo-url"))
 				}
+				if cmd.IsSet("contact-email") {
+					patch.ContactEmail = strings.TrimSpace(cmd.String("contact-email"))
+				}
 			} else {
 				// No flags: prompt interactively (pre-filled with effective values).
 				if !u.IsTTY() {
-					return errors.New("no flags given and not a TTY: pass --display-name, --tagline, and/or --logo-url")
+					return errors.New("no flags given and not a TTY: pass --display-name, --tagline, --logo-url, and/or --contact-email")
 				}
 				effective := storefront.ResolvePublished(&current, mustSellerBaseURL(cfg))
 				if v, err := u.Input("Display name", effective.DisplayName); err == nil {
@@ -145,12 +150,18 @@ the fields you pass change; everything else is left untouched.`,
 				if v, err := u.Input("Logo URL", effective.LogoURL); err == nil {
 					patch.LogoURL = strings.TrimSpace(v)
 				}
+				if v, err := u.Input("Contact email (OpenAPI)", effective.ContactEmail); err == nil {
+					patch.ContactEmail = strings.TrimSpace(v)
+				}
 			}
 
-			if patch.DisplayName == "" && patch.Tagline == "" && patch.LogoURL == "" {
+			if patch.DisplayName == "" && patch.Tagline == "" && patch.LogoURL == "" && patch.ContactEmail == "" {
 				return errors.New("nothing to set")
 			}
 			if err := storefront.ValidateLogoURL(patch.LogoURL); err != nil {
+				return err
+			}
+			if err := storefront.ValidateContactEmail(patch.ContactEmail); err != nil {
 				return err
 			}
 
@@ -183,6 +194,7 @@ more field flags to reset only those fields, leaving the rest untouched.`,
 			&cli.BoolFlag{Name: "display-name", Usage: "Reset only the display name"},
 			&cli.BoolFlag{Name: "tagline", Usage: "Reset only the tagline"},
 			&cli.BoolFlag{Name: "logo-url", Usage: "Reset only the logo URL"},
+			&cli.BoolFlag{Name: "contact-email", Usage: "Reset only the OpenAPI contact email"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -190,7 +202,7 @@ more field flags to reset only those fields, leaving the rest untouched.`,
 				return err
 			}
 
-			partial := cmd.Bool("display-name") || cmd.Bool("tagline") || cmd.Bool("logo-url")
+			partial := cmd.Bool("display-name") || cmd.Bool("tagline") || cmd.Bool("logo-url") || cmd.Bool("contact-email")
 
 			var explicit *schemas.StorefrontProfile
 			if partial {
@@ -198,7 +210,7 @@ more field flags to reset only those fields, leaving the rest untouched.`,
 				if err != nil {
 					return err
 				}
-				cleared := clearProfileFields(current, cmd.Bool("display-name"), cmd.Bool("tagline"), cmd.Bool("logo-url"))
+				cleared := clearProfileFields(current, cmd.Bool("display-name"), cmd.Bool("tagline"), cmd.Bool("logo-url"), cmd.Bool("contact-email"))
 				if cleared == (schemas.StorefrontProfile{}) {
 					// Everything is back to default — remove the override entirely.
 					if err := deleteSellerProfile(cfg); err != nil {
@@ -231,7 +243,7 @@ more field flags to reset only those fields, leaving the rest untouched.`,
 // clearProfileFields returns a copy of p with the flagged fields emptied, so
 // they fall back to stack defaults while the rest of the operator override is
 // preserved.
-func clearProfileFields(p schemas.StorefrontProfile, displayName, tagline, logoURL bool) schemas.StorefrontProfile {
+func clearProfileFields(p schemas.StorefrontProfile, displayName, tagline, logoURL, contactEmail bool) schemas.StorefrontProfile {
 	if displayName {
 		p.DisplayName = ""
 	}
@@ -240,6 +252,9 @@ func clearProfileFields(p schemas.StorefrontProfile, displayName, tagline, logoU
 	}
 	if logoURL {
 		p.LogoURL = ""
+	}
+	if contactEmail {
+		p.ContactEmail = ""
 	}
 	return p
 }
@@ -436,11 +451,7 @@ func waitForPublishedCatalog(cfg *config.Config, explicit *schemas.StorefrontPro
 		if err == nil && strings.TrimSpace(raw) != "" {
 			var got schemas.ServiceCatalog
 			if err := json.Unmarshal([]byte(raw), &got); err == nil && sellerProfilesEqual(got, want) {
-				return schemas.StorefrontProfile{
-					DisplayName: got.DisplayName,
-					Tagline:     got.Tagline,
-					LogoURL:     got.LogoURL,
-				}, nil
+				return want, nil
 			}
 		}
 		time.Sleep(2 * time.Second)
@@ -477,9 +488,14 @@ func mustSellerBaseURL(cfg *config.Config) string {
 }
 
 func printSellerProfile(u *ui.UI, profile schemas.StorefrontProfile) {
-	u.Printf("  Display name: %s", profile.DisplayName)
-	u.Printf("  Tagline:      %s", profile.Tagline)
-	u.Printf("  Logo URL:     %s", profile.LogoURL)
+	u.Printf("  Display name:   %s", profile.DisplayName)
+	u.Printf("  Tagline:        %s", profile.Tagline)
+	u.Printf("  Logo URL:       %s", profile.LogoURL)
+	if email := strings.TrimSpace(profile.ContactEmail); email != "" {
+		u.Printf("  Contact email:  %s", email)
+	} else {
+		u.Printf("  Contact email:  (not set — x402scan may reject /openapi.json)")
+	}
 }
 
 // endpointBase returns the origin (scheme://host[:port]) of a service endpoint,
