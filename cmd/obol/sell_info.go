@@ -101,11 +101,19 @@ func sellInfoSetCommand(cfg *config.Config) *cli.Command {
 		Usage: "Set storefront display name, tagline, and/or logo URL",
 		Description: `Updates seller-wide storefront branding. With no flags on a TTY this walks
 you through each field (pre-filled with the current value). With flags, only
-the fields you pass change; everything else is left untouched.`,
+the fields you pass change; everything else is left untouched.
+
+Logo URLs are preflight-checked before publishing: reachability, an image
+content-type, https (mixed content), and permissive CORS headers (needed by
+sites that embed your catalog). On a TTY a failing check asks before
+proceeding; non-interactive runs warn and continue. To sidestep hosting
+brittleness entirely, pass an inline data URI (self-contained, no CORS):
+
+  obol sell info set --logo-url "data:image/png;base64,$(base64 -i logo.png)"`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "display-name", Usage: "Seller title shown in the storefront header"},
 			&cli.StringFlag{Name: "tagline", Usage: "Short subtitle under the storefront hero"},
-			&cli.StringFlag{Name: "logo-url", Usage: "Logo image URL (https://... or /path on this host)"},
+			&cli.StringFlag{Name: "logo-url", Usage: "Logo image URL (https://..., /path on this host, or inline data:image/...;base64)"},
 			&cli.StringFlag{Name: "contact-email", Usage: "Operator contact email published in /openapi.json (x402scan)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -162,6 +170,9 @@ the fields you pass change; everything else is left untouched.`,
 				return err
 			}
 			if err := storefront.ValidateContactEmail(patch.ContactEmail); err != nil {
+				return err
+			}
+			if err := confirmLogoURL(ctx, u, cfg, patch.LogoURL); err != nil {
 				return err
 			}
 
@@ -238,6 +249,48 @@ more field flags to reset only those fields, leaving the rest untouched.`,
 			return nil
 		},
 	}
+}
+
+// confirmLogoURL probes a newly-set logo URL the way browsers will load it
+// (reachability, image content-type, permissive CORS, https, size) before it
+// is published to every catalog consumer. On a TTY, problems become a
+// proceed-anyway confirmation; non-interactive runs warn and continue so
+// scripts never block. Default, inline (data:), and empty logos skip the
+// probe — there is nothing remote to check.
+func confirmLogoURL(ctx context.Context, u *ui.UI, cfg *config.Config, logoURL string) error {
+	logoURL = strings.TrimSpace(logoURL)
+	if logoURL == "" || strings.HasPrefix(logoURL, "data:") || storefront.IsDefaultLogoURL(logoURL) {
+		return nil
+	}
+	if strings.HasPrefix(logoURL, "/") {
+		// Site-relative paths are resolved against the seller origin by
+		// consumers; probe the same absolute URL they will fetch.
+		logoURL = strings.TrimRight(mustSellerBaseURL(cfg), "/") + logoURL
+	}
+
+	var result storefront.LogoPreflight
+	_ = u.RunWithSpinner("Checking logo URL", func() error {
+		result = storefront.PreflightLogoURL(ctx, logoURL)
+		return nil
+	})
+	if result.OK() {
+		return nil
+	}
+	for _, w := range result.Warnings {
+		u.Warn(w)
+	}
+	if !u.IsTTY() || u.IsJSON() {
+		u.Warn("continuing anyway (non-interactive); the logo may not load on all sites")
+		return nil
+	}
+	msg, defaultYes := "The logo may not display on every site. Set it anyway?", true
+	if result.LoadFailure {
+		msg, defaultYes = "Unable to load the logo image. Set it anyway?", false
+	}
+	if !u.Confirm(msg, defaultYes) {
+		return errors.New("cancelled: storefront branding not updated")
+	}
+	return nil
 }
 
 // clearProfileFields returns a copy of p with the flagged fields emptied, so
