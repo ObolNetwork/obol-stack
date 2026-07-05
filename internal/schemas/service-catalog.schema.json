@@ -6,12 +6,17 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
+    "schemaVersion",
     "displayName",
     "tagline",
     "logoUrl",
     "services"
   ],
   "properties": {
+    "schemaVersion": {
+      "const": "1",
+      "description": "Envelope wire version. Bumped only on breaking changes; additive fields do not bump it."
+    },
     "displayName": {
       "type": "string",
       "minLength": 1
