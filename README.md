@@ -336,6 +336,10 @@ obol app install bitnami/redis
 # With specific version
 obol app install bitnami/postgresql@15.0.0
 
+# Customize values at install or sync time (persisted into the app's values.yaml)
+obol app install bitnami/redis --set architecture=standalone --set auth.enabled=false
+obol app sync redis --values ./my-overrides.yaml --set image.tag=7.2
+
 # Deploy to cluster (auto-selects if only one app is installed)
 obol app sync
 obol app sync postgresql/eager-fox
@@ -344,6 +348,8 @@ obol app sync postgresql/eager-fox
 obol app list
 obol app delete postgresql/eager-fox --force
 ```
+
+Installed apps are re-synced automatically on `obol stack up`, so they survive cluster recreation. After a sync, the CLI prints a ready-to-run `obol sell http` command for each service the app exposes.
 
 Find charts at [Artifact Hub](https://artifacthub.io).
 

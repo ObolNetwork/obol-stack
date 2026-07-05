@@ -223,6 +223,14 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 							// Best-effort. No-op when `obol sell info set` was
 							// never used.
 							storefront.ReconcileRecorded(cfg, u)
+							// Re-sync installed app deployments BEFORE sell
+							// offers: `obol sell http` offers can gate an
+							// app's Service as their upstream, and the
+							// controller's upstream health check needs it
+							// present. App state is declarative on disk
+							// (helmfile.yaml + values.yaml) but its cluster
+							// resources live in etcd. Best-effort.
+							app.ResumeAll(cfg, u)
 							// Re-apply cluster-side state for locally-persisted
 							// `obol sell *` offers. ServiceOffer CRs and the
 							// Service/Endpoints that route to the host gateway
@@ -373,6 +381,14 @@ Find charts at https://artifacthub.io`,
 								Aliases: []string{"f"},
 								Usage:   "Overwrite existing deployment",
 							},
+							&cli.StringSliceFlag{
+								Name:  "values",
+								Usage: "Values file merged onto chart defaults (repeatable, merged in order)",
+							},
+							&cli.StringSliceFlag{
+								Name:  "set",
+								Usage: "Override a value, e.g. --set image.tag=1.2.3 (repeatable, applied after --values)",
+							},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							if cmd.NArg() == 0 {
@@ -387,10 +403,12 @@ Find charts at https://artifacthub.io`,
 
 							chartRef := cmd.Args().First()
 							opts := app.InstallOptions{
-								Name:    cmd.String("name"),
-								Version: cmd.String("version"),
-								ID:      cmd.String("id"),
-								Force:   cmd.Bool("force"),
+								Name:        cmd.String("name"),
+								Version:     cmd.String("version"),
+								ID:          cmd.String("id"),
+								Force:       cmd.Bool("force"),
+								ValuesFiles: cmd.StringSlice("values"),
+								Set:         cmd.StringSlice("set"),
 							}
 
 							return app.Install(cfg, getUI(cmd), chartRef, opts)
@@ -400,13 +418,37 @@ Find charts at https://artifacthub.io`,
 						Name:      "sync",
 						Usage:     "Deploy application to cluster",
 						ArgsUsage: "[<app>/<id>]",
+						Flags: []cli.Flag{
+							&cli.StringSliceFlag{
+								Name:  "values",
+								Usage: "Values file merged into the deployment's values.yaml before syncing (repeatable)",
+							},
+							&cli.StringSliceFlag{
+								Name:  "set",
+								Usage: "Override a value before syncing, e.g. --set image.tag=1.2.3 (repeatable)",
+							},
+						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							identifier, _, err := app.ResolveInstance(cfg, cmd.Args().Slice())
 							if err != nil {
 								return err
 							}
 
-							return app.Sync(cfg, getUI(cmd), identifier)
+							u := getUI(cmd)
+							// Overrides are persisted into the deployment's
+							// values.yaml (not passed as ephemeral flags) so
+							// resume-on-stack-up replays them.
+							if err := app.ApplyOverrides(cfg, identifier, cmd.StringSlice("values"), cmd.StringSlice("set")); err != nil {
+								return err
+							}
+
+							if err := app.Sync(cfg, u, identifier); err != nil {
+								return err
+							}
+
+							app.PrintSellHint(cfg, u, identifier)
+
+							return nil
 						},
 					},
 					{
