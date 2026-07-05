@@ -121,6 +121,13 @@ spec:
             - rancher.io/local-path
             - --helper-image
             - rancher/mirrored-library-busybox:1.36.1
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
           volumeMounts:
             - name: config-volume
               mountPath: /etc/config/

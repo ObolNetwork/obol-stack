@@ -31,7 +31,7 @@ Built on [Kubernetes](https://kubernetes.io) with [Helm](https://helm.sh/) for p
 ### Install
 
 ```bash
-bash <(curl -s https://stack.obol.org)
+bash <(curl -fsSL https://stack.obol.org)
 ```
 
 The installer will set up the `obol` CLI and all dependencies (`kubectl`, `helm`, `k3d`, `helmfile`, `k9s`) into `~/.local/bin/`, configure your PATH, and offer to start the cluster.
@@ -334,7 +334,7 @@ Follows the [XDG Base Directory](https://specifications.freedesktop.org/basedir-
 ## Updating
 
 ```bash
-bash <(curl -s https://stack.obol.org)
+bash <(curl -fsSL https://stack.obol.org)
 ```
 
 The installer detects your existing installation and upgrades safely.

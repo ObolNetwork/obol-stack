@@ -404,18 +404,6 @@ spec:
             claimName: x402-buyer-state
 
 ---
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: litellm
-  namespace: llm
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels:
-      app: litellm
-
----
 apiVersion: v1
 kind: Service
 metadata:
