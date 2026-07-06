@@ -1,6 +1,6 @@
 ---
 name: agent-factory
-description: "Spawn durable child Hermes agents from inside Obol Stack. Creates child namespaces, optional profile/env Secrets, Agent CRDs, and optional ServiceOffers for x402-paid child services."
+description: "Spawn durable child Hermes agents from inside Obol Stack. Creates child namespaces, optional profile/env Secrets, Agent CRDs, and optional ServiceOffers for x402-paid child services. Use when the user says 'spawn an agent', 'create a sub-agent', 'child agent', or wants a separate long-lived service agent. For deciding WHAT agent to build, whether it's good enough to sell, and how to price it, load sub-agent-business first."
 metadata: { "openclaw": { "requires": { "bins": ["python3"] } } }
 ---
 

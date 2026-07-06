@@ -212,43 +212,43 @@ Use `obol agent` for Obol-managed lifecycle and auth flows. Use `obol hermes` fo
 
 The stack ships with embedded Obol skills installed automatically for the default Hermes agent and OpenClaw instances. Skills give agents domain-specific capabilities — from querying blockchains to buying and selling services.
 
-#### Infrastructure & Commerce
+#### Commerce & Agents
 
 | Skill | Purpose |
 |-------|---------|
+| `sub-agent-business` | The business playbook — design, evaluate, price, and sell specialised sub-agents people pay per turn |
+| `agent-factory` | Spawn durable child agents with their own namespace, wallet, skills, and paid endpoint |
+| `sell` | ServiceOffer CRUD — payment-gated routes, reconciliation status, ERC-8004 registration |
+| `monetize-guide` | Guided end-to-end walkthrough for selling inference or an HTTP API |
 | `buy-x402` | Buy paid services: probe pricing, pre-sign payments, auto-refill, check balances |
-| `monetize` | Manage the agent's own sell offers (ServiceOffer CRUD) |
+| `discovery` | Find agents registered on the ERC-8004 Identity Registry across chains |
+| `swap` | Treasury moves — swap USDC/ETH/OBOL on Base and mainnet via Uniswap V3 |
+| `autoresearch` | Run autonomous LLM optimization experiments and publish the best checkpoints |
+| `autoresearch-coordinator` | Coordinate distributed experiments across GPU workers, discovered via ERC-8004 and paid via x402 |
+| `autoresearch-worker` | Sell your GPU as a paid experiment worker |
+
+#### Ethereum
+
+| Skill | Purpose |
+|-------|---------|
 | `ethereum-networks` | Read-only Ethereum queries via cast — blocks, balances, contract reads, ERC-20, ENS |
 | `ethereum-local-wallet` | Sign and send Ethereum transactions via the per-agent remote-signer |
+| `addresses` | Verified contract addresses — payment rails, DeFi, tokens, bridges, ERC-8004 registries |
+| `building-blocks` | DeFi legos and protocol composability — Uniswap, Aave, Aerodrome, Pendle |
+| `concepts` | Mental model — state machines, incentive design, why nothing onchain is automatic |
+| `gas` | Real transaction costs today, mainnet vs L2, fee settings |
+| `indexing` | The Graph, Dune, Ponder, event-first design for onchain data at scale |
+| `l2s` | L2 comparison — Base, Arbitrum, Optimism, zkSync with costs and use cases |
+| `standards` | ERC-8004, x402, EIP-3009, EIP-7702, ERC-4337 — spec details and integration patterns |
+| `wallets` | Wallet management — EOAs, Safe multisig, EIP-7702, key safety for AI agents |
+| `why` | Why Ethereum — the AI agent angle with ERC-8004 and x402 |
+
+#### Operations
+
+| Skill | Purpose |
+|-------|---------|
 | `obol-stack` | Kubernetes cluster diagnostics — pods, logs, events, deployments |
 | `distributed-validators` | Obol DVT cluster monitoring, operator audit, exit coordination |
-
-#### Ethereum Development
-
-| Skill | Purpose |
-|-------|---------|
-| `addresses` | Verified contract addresses — DeFi, tokens, bridges, ERC-8004 registries across chains |
-| `building-blocks` | OpenZeppelin patterns, DEX integration, oracle usage, access control |
-| `concepts` | Mental model — state machines, incentive design, gas mechanics, EOAs vs contracts |
-| `gas` | Gas optimization patterns, L2 fee structures, estimation |
-| `indexing` | The Graph, Dune, event indexing for onchain data |
-| `l2s` | L2 comparison — Base, Arbitrum, Optimism, zkSync with gas costs and use cases |
-| `orchestration` | End-to-end dApp build (Scaffold-ETH 2) + AI agent commerce cycle |
-| `security` | Smart contract vulnerability patterns, reentrancy, flash loans, MEV protection |
-| `standards` | ERC-8004, x402, EIP-3009, EIP-7702, ERC-4337 — spec details and integration patterns |
-| `ship` | Architecture planning — onchain vs offchain, chain selection, agent service patterns |
-| `testing` | Foundry testing — unit, fuzz, fork, invariant tests |
-| `tools` | Development tooling — Foundry, Hardhat, Scaffold-ETH 2, verification |
-| `wallets` | Wallet management — EOAs, Safe multisig, EIP-7702, key safety for AI agents |
-
-#### Frontend & QA
-
-| Skill | Purpose |
-|-------|---------|
-| `frontend-playbook` | Deployment — IPFS, Vercel, ENS subdomains |
-| `frontend-ux` | Web3 UX patterns — wallet connection, transaction flows, error handling |
-| `qa` | Quality assurance — testing strategy, coverage, CI/CD patterns |
-| `why` | Why Ethereum — the AI agent angle with ERC-8004 and x402 |
 
 Manage skills at runtime:
 

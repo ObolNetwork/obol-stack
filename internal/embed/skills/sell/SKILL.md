@@ -1,6 +1,6 @@
 ---
 name: sell
-description: "Sell access to services via x402 payment gating. Create ServiceOffer CRDs that automatically health-check upstreams, create payment-gated routes, and optionally pull models and register on ERC-8004. Supports inference, HTTP, and fine-tuning service types."
+description: "Sell access to services via x402 payment gating. Create ServiceOffer CRDs that automatically health-check upstreams, create payment-gated routes, and optionally pull models and register on ERC-8004. Supports inference, HTTP, and fine-tuning service types. Use for ServiceOffer plumbing: listing offers, checking/waiting on reconciliation status, creating or deleting offers. For the guided end-to-end walkthrough use monetize-guide; for selling a child agent's turns use sub-agent-business + agent-factory."
 metadata: { "openclaw": { "emoji": "\ud83d\udcb0", "requires": { "bins": ["python3"] } } }
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: addresses
-description: Verified contract addresses for major Ethereum protocols across mainnet and L2s. Use this instead of guessing. SKILL.md is an index — load the appropriate references/*.md file for the addresses you need. Categories include stablecoins, staking + Obol/Splits, DEXs, lending and DeFi, L2-native protocols, infrastructure (Safe, AA, Chainlink, EigenLayer, ENS, OpenSea), bridges (CCIP, Across), agents (ERC-8004), and major token addresses. Always verify on-chain via eth_getCode + eth_call before sending value.
+description: Verified contract addresses for major Ethereum protocols across mainnet and L2s. Use this instead of guessing. SKILL.md is an index — load the appropriate references/*.md file for the addresses you need. Start with references/obol-payments.md for the Stack's own rails (USDC + OBOL + Permit2 + ERC-8004 on the supported chains). Other categories include stablecoins, staking + Obol/Splits, DEXs, lending and DeFi, L2-native protocols, infrastructure (Safe, AA, Chainlink, EigenLayer, ENS, OpenSea), bridges (CCIP, Across), and major token addresses. Always verify on-chain via eth_getCode + eth_call before sending value.
 ---
 
 # Contract Addresses
@@ -19,6 +19,7 @@ Open the file that matches the category you need:
 
 | Reference | What's in it |
 |-----------|--------------|
+| [`references/obol-payments.md`](references/obol-payments.md) | **Start here for anything payment-related** — USDC + OBOL on the chains the Stack supports, Permit2, ERC-8004 registries, facilitator |
 | [`references/stablecoins.md`](references/stablecoins.md) | USDC, USDT, DAI, WETH on mainnet + L2s |
 | [`references/staking.md`](references/staking.md) | Lido (stETH, wstETH, withdrawals), Rocket Pool, Obol Splits, Splits.org |
 | [`references/dex.md`](references/dex.md) | Uniswap V2/V3/V4, Universal Router, Permit2, 1inch, UNI token |

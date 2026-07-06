@@ -19,7 +19,8 @@ func TestGetEmbeddedSkillNames(t *testing.T) {
 	coreSkills := []string{
 		"addresses", "agent-factory", "building-blocks", "buy-x402", "concepts", "discovery",
 		"distributed-validators", "ethereum-networks", "ethereum-local-wallet",
-		"gas", "indexing", "l2s", "sell", "obol-stack", "standards", "wallets", "why",
+		"gas", "indexing", "l2s", "sell", "obol-stack", "standards", "sub-agent-business",
+		"swap", "wallets", "why",
 	}
 
 	sort.Strings(names)
