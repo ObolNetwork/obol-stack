@@ -120,16 +120,16 @@ releases:
             tag: v8.2.0
             {{- else if eq .Values.consensusClient "prysm" }}
             # renovate: datasource=github-releases depName=OffchainLabs/prysm
-            tag: v7.1.5
+            tag: v7.1.6
             {{- else if eq .Values.consensusClient "teku" }}
             # renovate: datasource=github-releases depName=Consensys/teku
-            tag: "26.6.1"
+            tag: "26.7.0"
             {{- else if eq .Values.consensusClient "nimbus" }}
             # renovate: datasource=docker depName=statusim/nimbus-eth2
             tag: multiarch-v26.5.0
             {{- else if eq .Values.consensusClient "lodestar" }}
             # renovate: datasource=github-releases depName=ChainSafe/lodestar
-            tag: v1.43.0
+            tag: v1.44.0
             {{- end }}
           persistence:
             enabled: true
