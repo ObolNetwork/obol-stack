@@ -1,0 +1,264 @@
+{
+  "$comment": "storefront-mcp tool catalog (proposal). Offer-spec sub-schemas are a hand-written representative subset here; the implementation derives them mechanically from the ServiceOffer CRD structural schema (internal/embed/infrastructure/base/templates/serviceoffer-crd.yaml, generated from internal/monetizeapi types by `just generate`). Shared shapes are under $defs. Validity is ultimately enforced by the ValidatingWebhookConfiguration (see the proposal doc §1-§2); plan_offer surfaces the webhook's findings via kubectl apply --dry-run=server, so a tool call and a raw apply hit the same gate.",
+  "server": {
+    "name": "storefront",
+    "transport": "streamable-http",
+    "endpoint": "/mcp",
+    "auth": "bearer (per-agent token minted from StorefrontGrant; go-sdk auth.RequireBearerToken; verifier watches the token Secret via informer for bounded revocation)"
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "required": ["severity", "code", "message"],
+      "properties": {
+        "severity": { "type": "string", "enum": ["error", "warning"] },
+        "code": { "type": "string", "description": "stable machine code, e.g. price-required, path-conflict, path-reserved, hostname-not-granted, logo-cors, logo-unreachable, design-copy-invalid, design-not-yet-rendered, quota-exceeded, price-out-of-bounds, ledger-provenance" },
+        "field": { "type": "string", "description": "JSON pointer into the offer spec, e.g. /payment/price" },
+        "message": { "type": "string" }
+      }
+    },
+    "priceTable": {
+      "type": "object",
+      "description": "USDC human-decimal strings; at least one field REQUIRED by the webhook (the CRD alone admits price:{} which gates at $0, payment.go:141). perEpoch is fine-tuning-only.",
+      "minProperties": 1,
+      "properties": {
+        "perRequest": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$" },
+        "perMTok": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$" },
+        "perHour": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$" },
+        "perEpoch": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$" }
+      }
+    },
+    "design": {
+      "type": "object",
+      "description": "Structured visual identity. Tokens only — no raw HTML/CSS. Rendered server-side (Phase 2) into the per-offer landing (P1), the 402 paywall, and storefront cards. On a pre-Phase-2 cluster a non-empty design block yields a design-not-yet-rendered warning finding (syntactically valid, no-op).",
+      "properties": {
+        "template": { "type": "string", "enum": ["minimal", "terminal", "data"], "default": "minimal" },
+        "accent": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$" },
+        "heroTitle": { "type": "string", "maxLength": 80, "description": "free text; HTML-escaped on render, reject-not-mangle validation (control chars and raw <>& forbidden in source → design-copy-invalid). NOT sanitizeDisplayToken, whose identifier allowlist would strip spaces." },
+        "heroTagline": { "type": "string", "maxLength": 200, "description": "free text; same validation as heroTitle" },
+        "icon": { "type": "string", "description": "https URL, /-relative, or data:image/*;base64 (decoded max 256 KiB — ConfigMap budget)" }
+      }
+    },
+    "offerSpec": {
+      "type": "object",
+      "required": ["name", "type", "upstream", "payment"],
+      "properties": {
+        "name": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$", "maxLength": 63 },
+        "namespace": { "type": "string", "description": "must be within grant.offerNamespaces; defaults to the grant's first namespace" },
+        "type": { "type": "string", "enum": ["inference", "fine-tuning", "http", "agent"], "description": "further restricted by grant.types" },
+        "upstream": {
+          "type": "object",
+          "required": ["service", "namespace", "port"],
+          "properties": {
+            "service": { "type": "string" },
+            "namespace": { "type": "string" },
+            "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+            "healthPath": { "type": "string", "default": "/health" }
+          }
+        },
+        "path": { "type": "string", "pattern": "^/[a-zA-Z0-9/_.-]*$", "description": "default /services/<name>; checked against reserved-path denylist and cross-offer first-claimant conflict" },
+        "hostname": { "type": "string", "description": "P1 per-offer origin; must match a grant.hostnamePatterns entry" },
+        "payment": {
+          "type": "object",
+          "required": ["network", "payTo", "price"],
+          "properties": {
+            "network": { "type": "string", "enum": ["base", "base-sepolia"] },
+            "payTo": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" },
+            "price": { "$ref": "#/$defs/priceTable" }
+          }
+        },
+        "listing": {
+          "type": "object",
+          "properties": {
+            "category": { "type": "string", "maxLength": 40 },
+            "weight": { "type": "integer", "minimum": 0, "maximum": 1000 }
+          }
+        },
+        "registration": {
+          "type": "object",
+          "description": "ERC-8004 metadata; on-chain publication gated by grant.registration (may require operator approval)",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "name": { "type": "string", "maxLength": 80 },
+            "description": { "type": "string", "maxLength": 800 },
+            "image": { "type": "string" },
+            "skills": { "type": "array", "items": { "type": "string" }, "maxItems": 32 },
+            "domains": { "type": "array", "items": { "type": "string" }, "maxItems": 16 },
+            "metadata": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
+        },
+        "design": { "$ref": "#/$defs/design" },
+        "drainGracePeriod": { "type": "string", "description": "Go duration, default 1h; used by retire mode=drain" }
+      }
+    },
+    "conditions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "type": { "type": "string", "description": "RoutePublished | PaymentGateReady | Draining | PendingApproval | ..." },
+          "status": { "type": "string", "enum": ["True", "False", "Unknown"] },
+          "reason": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "storefront_whoami",
+      "description": "Return the caller's StorefrontGrant: allowed offer namespaces, remaining quota, allowed types, price bounds, hostname patterns, profile/registration permissions. Call first; plan within the charter.",
+      "inputSchema": { "type": "object", "properties": {} },
+      "output": {
+        "type": "object",
+        "properties": {
+          "subject": { "type": "string" },
+          "offerNamespaces": { "type": "array", "items": { "type": "string" } },
+          "quota": { "type": "object", "properties": { "used": { "type": "integer" }, "max": { "type": "integer" } } },
+          "types": { "type": "array", "items": { "type": "string" } },
+          "pricePerRequest": { "type": "object", "properties": { "min": { "type": "string" }, "max": { "type": "string" } } },
+          "hostnamePatterns": { "type": "array", "items": { "type": "string" } },
+          "allowProfile": { "type": "boolean" },
+          "registration": { "type": "object", "properties": { "allowed": { "type": "boolean" }, "requiresApproval": { "type": "boolean" } } }
+        }
+      }
+    },
+    {
+      "name": "storefront_list_offers",
+      "description": "List offers visible under the grant with name, namespace, type, path/hostname, price, condition summary, resumeCovered.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "namespace": { "type": "string", "description": "optional filter; must be within grant" } }
+      }
+    },
+    {
+      "name": "storefront_get_offer",
+      "description": "Full offer view: normalized spec, conditions, public URLs (paid surface, openapi, landing), provenance labels, resumeCovered flag.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["name"],
+        "properties": { "name": { "type": "string" }, "namespace": { "type": "string" } }
+      }
+    },
+    {
+      "name": "storefront_plan_offer",
+      "description": "Submit the draft spec to the apiserver via kubectl apply --dry-run=server so the ValidatingWebhookConfiguration returns AUTHORITATIVE findings (price-required, grant bounds, quota, path first-claimant conflict, reserved paths, hostname grant, logo/contact, design). Then normalize + diff live state. Returns {planId, action, diff, findings, approvalRequired}. dryRun:true returns findings only (no planId/diff) — this subsumes a separate validate tool. NO mutation.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["spec"],
+        "properties": {
+          "spec": { "$ref": "#/$defs/offerSpec" },
+          "dryRun": { "type": "boolean", "default": false, "description": "true = validity check only, skip diff/planId" }
+        }
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "planId": { "type": "string", "description": "absent when dryRun:true" },
+          "action": { "type": "string", "enum": ["create", "update", "noop"] },
+          "diff": { "type": "string" },
+          "findings": { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+          "approvalRequired": { "type": "boolean" },
+          "expiresAt": { "type": "string", "format": "date-time", "description": "30-min TTL; plans with approvalRequired or a recorded preview never hard-expire (apply re-validates in place)" }
+        }
+      }
+    },
+    {
+      "name": "storefront_apply_plan",
+      "description": "Apply a plan by id. Uses resourceVersion optimistic concurrency — a 409 (object changed) forces a re-plan; the WEBHOOK re-runs path-conflict against live state at admission, so a sibling offer claiming the path between plan and apply is rejected there (not missed). Server-side apply, field-manager storefront-mcp (no Force); labels obol.org/created-by; emits an audit Event. The controller records the offer in-cluster so it survives stack down/up. Returns initial conditions; poll storefront_offer_status for convergence.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["planId"],
+        "properties": { "planId": { "type": "string" } }
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "applied": { "type": "boolean" },
+          "name": { "type": "string" },
+          "namespace": { "type": "string" },
+          "resumeCovered": { "type": "boolean", "description": "true once the controller has written the in-cluster offer record (Phase 0); the offer survives stack down/up" },
+          "conditions": { "$ref": "#/$defs/conditions" }
+        }
+      }
+    },
+    {
+      "name": "storefront_offer_status",
+      "description": "Conditions plus convergence probes: (a) catalog publish — the offer's entry visible in the rendered services.json; (b) live probe of the public URL (expect 402 with accepts[] on the paid surface, 200 on free discovery docs). Distinguishes applied from serving.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["name"],
+        "properties": { "name": { "type": "string" }, "namespace": { "type": "string" } }
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "conditions": { "$ref": "#/$defs/conditions" },
+          "catalogPublished": { "type": "boolean" },
+          "probe": {
+            "type": "object",
+            "properties": {
+              "url": { "type": "string" },
+              "status": { "type": "integer" },
+              "ok": { "type": "boolean", "description": "status matches expectation for the surface (402 paid / 200 free)" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "storefront_preview_landing",
+      "description": "Render the buyer-visible artifacts for a plan or live offer WITHOUT applying: landing HTML (from design tokens + fixed template), offer-scoped openapi.json, /.well-known/x402. Pure function of the input.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "planId": { "type": "string" },
+          "name": { "type": "string", "description": "live offer alternative to planId" },
+          "namespace": { "type": "string" }
+        }
+      },
+      "output": {
+        "type": "object",
+        "properties": {
+          "landingHtml": { "type": "string" },
+          "openapiJson": { "type": "object" },
+          "wellKnownX402": { "type": "object" }
+        }
+      }
+    },
+    {
+      "name": "storefront_set_profile",
+      "description": "Plan/apply a patch to the store-wide StorefrontProfile (displayName, tagline, logoUrl, contactEmail). Requires grant.allowProfile. Non-empty fields overlay (MergeProfile semantics); logo and email validated. Two-phase like offers: omit planId to plan, pass it to apply.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "patch": {
+            "type": "object",
+            "properties": {
+              "displayName": { "type": "string", "maxLength": 80 },
+              "tagline": { "type": "string", "maxLength": 200 },
+              "logoUrl": { "type": "string" },
+              "contactEmail": { "type": "string", "format": "email" }
+            }
+          },
+          "planId": { "type": "string" }
+        }
+      }
+    },
+    {
+      "name": "storefront_retire_offer",
+      "description": "Safe retire. mode=drain: patch spec.drainAt (+grace) — route and payment gate stay up for in-flight buyers, discovery flips available=false, controller tears down routes at drain expiry. mode=delete: requires Drained conditions (finalizer then serializes route teardown and ERC-8004 handoff/cleanup). confirm must echo the offer name exactly.",
+      "inputSchema": {
+        "type": "object",
+        "required": ["name", "mode", "confirm"],
+        "properties": {
+          "name": { "type": "string" },
+          "namespace": { "type": "string" },
+          "mode": { "type": "string", "enum": ["drain", "delete"] },
+          "gracePeriod": { "type": "string", "description": "Go duration for drain, default 1h" },
+          "confirm": { "type": "string", "description": "must equal name" }
+        }
+      }
+    }
+  ]
+}
