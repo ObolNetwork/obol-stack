@@ -463,6 +463,14 @@ func generateRemoteSignerValues(wallet *WalletInfo) string {
 keystorePassword:
   value: %q
 
+# The signer is a singleton over a ReadWriteOnce keystore PVC: a RollingUpdate
+# surge pod can wedge on the volume attach on multi-node clusters and briefly
+# double-runs the signer over the same keystore on any cluster. Recreate is the
+# chart default as of remote-signer 0.4.0; pinned explicitly here so the intent
+# is visible and robust to a future chart-default change.
+strategy:
+  type: Recreate
+
 persistence:
   enabled: true
   size: 100Mi

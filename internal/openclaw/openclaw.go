@@ -454,13 +454,6 @@ func doSync(cfg *config.Config, id string, u *ui.UI) error {
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
 
-	// The remote-signer chart cannot express strategy: Recreate itself; pin
-	// it post-sync so the RWO keystore PVC never faces a RollingUpdate surge
-	// (deadlocks on multi-node volume attach).
-	if err := agentruntime.EnforceRemoteSignerRecreate(cfg, namespace); err != nil {
-		u.Warnf("Could not pin remote-signer Recreate strategy (continuing): %v", err)
-	}
-
 	// Patch ConfigMap to inject heartbeat config that the chart template
 	// does not render. The chart's _helpers.tpl only outputs
 	// agents.defaults.model and agents.defaults.workspace into openclaw.json,
