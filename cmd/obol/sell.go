@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/agentcrd"
+	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
@@ -3943,6 +3944,10 @@ Examples:
 			// Recorded Agent CRs first: agent-backed offers resolve
 			// agent.ref and would dangle on a freshly-recreated cluster.
 			agentcrd.ResumeAll(cfg, u)
+			// Installed apps next: http offers can gate an app's Service
+			// as their upstream, so the Service must exist before the
+			// offer republishes. Best-effort.
+			app.ResumeAll(cfg, u)
 			if err := resumeSellOffers(ctx, cfg, u); err != nil {
 				return err
 			}

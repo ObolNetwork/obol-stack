@@ -866,3 +866,49 @@ func TestForwardAuth_SettlesInProcess_SuppressesWarning(t *testing.T) {
 		t.Fatalf("SettlesInProcess=true must suppress the verifyOnly=false warning, got:\n%s", gotLog)
 	}
 }
+
+// TestForwardAuth_402CarriesCatalogLinkHeader locks the discovery Link
+// header on the default (JSON) 402 path through the middleware itself —
+// both on the no-payment challenge and on the re-issued challenge after an
+// invalid payment. Header-only: verification behaviour is asserted by the
+// sibling tests and must not change.
+func TestForwardAuth_402CarriesCatalogLinkHeader(t *testing.T) {
+	const wantLink = `</api/services.json>; rel="catalog"`
+
+	var verifyCalled, settleCalled atomic.Int32
+	fac := mockFacilitatorV1(false, true, &verifyCalled, &settleCalled)
+	defer fac.Close()
+
+	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL: fac.URL,
+		VerifyOnly:     true,
+	}, testRequirements())
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("inner handler should not be called on a 402")
+	})
+
+	t.Run("no payment", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		rec := httptest.NewRecorder()
+		mw(inner).ServeHTTP(rec, req)
+		if rec.Code != http.StatusPaymentRequired {
+			t.Fatalf("status = %d, want 402", rec.Code)
+		}
+		if got := rec.Header().Get("Link"); got != wantLink {
+			t.Errorf("Link = %q, want %q", got, wantLink)
+		}
+	})
+
+	t.Run("invalid payment rechallenge", func(t *testing.T) {
+		req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+		req.Header.Set("X-PAYMENT", validPaymentHeader())
+		rec := httptest.NewRecorder()
+		mw(inner).ServeHTTP(rec, req)
+		if rec.Code != http.StatusPaymentRequired {
+			t.Fatalf("status = %d, want 402", rec.Code)
+		}
+		if got := rec.Header().Get("Link"); got != wantLink {
+			t.Errorf("Link = %q, want %q", got, wantLink)
+		}
+	})
+}

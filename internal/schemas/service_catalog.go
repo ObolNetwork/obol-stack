@@ -137,10 +137,20 @@ type StorefrontProfile struct {
 	ContactEmail string `json:"contactEmail,omitempty"`
 }
 
+// ServiceCatalogSchemaVersion is the current version of the
+// /api/services.json envelope. Bump only on a breaking change to the wire
+// shape; additive fields do not bump the version. Integrators/indexers use
+// it to detect incompatible catalogs instead of guessing from field shapes.
+const ServiceCatalogSchemaVersion = "1"
+
 // ServiceCatalog is the public /api/services.json envelope.
 type ServiceCatalog struct {
-	DisplayName string                `json:"displayName"`
-	Tagline     string                `json:"tagline"`
-	LogoURL     string                `json:"logoUrl"`
-	Services    []ServiceCatalogEntry `json:"services"`
+	// SchemaVersion identifies the envelope wire version (currently "1").
+	// Always populated by the controller; consumers should treat an absent
+	// field as a legacy pre-versioning catalog.
+	SchemaVersion string                `json:"schemaVersion"`
+	DisplayName   string                `json:"displayName"`
+	Tagline       string                `json:"tagline"`
+	LogoURL       string                `json:"logoUrl"`
+	Services      []ServiceCatalogEntry `json:"services"`
 }

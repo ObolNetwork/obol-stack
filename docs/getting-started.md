@@ -20,7 +20,7 @@ This guide walks you through installing the Obol Stack, starting a local Kuberne
 Run the bootstrap installer:
 
 ```bash
-bash <(curl -s https://stack.obol.org)
+bash <(curl -fsSL https://stack.obol.org)
 ```
 
 This installs the `obol` CLI and all required tools (kubectl, helm, k3d, helmfile, k9s) to `~/.local/bin/`.

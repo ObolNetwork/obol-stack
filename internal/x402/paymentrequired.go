@@ -210,6 +210,9 @@ func isLocalHost(host string) bool {
 // full OG metadata, a service-info card, three "ways to pay" prompt cards
 // (Obol Agent, other AI agent, raw JSON), and copy buttons.
 func sendPaymentRequiredHTML(w http.ResponseWriter, r *http.Request, requirements []x402types.PaymentRequirements, extensions map[string]any, display PaymentDisplay) {
+	// Catalog discovery link rides on the HTML branch too (and survives the
+	// JSON fallbacks below — Header().Set is idempotent).
+	setCatalogLinkHeader(w)
 	jsonBody := buildPaymentRequired(r, requirements, extensions)
 	indented, err := json.MarshalIndent(jsonBody, "", "  ")
 	if err != nil {

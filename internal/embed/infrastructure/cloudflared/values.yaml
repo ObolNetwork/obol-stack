@@ -14,7 +14,7 @@ quickTunnel:
   url: "http://traefik.traefik.svc.cluster.local:80"
 
 persistent:
-  replicaCount: 2
+  replicaCount: 1
 
 management:
   configMapName: "cloudflared-management"

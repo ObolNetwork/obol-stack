@@ -22,6 +22,7 @@ func TestStackUpAction_ReplaysRecordedState(t *testing.T) {
 	upIdx := strings.Index(body, "stack.Up(cfg")
 	rpcIdx := strings.Index(body, "network.ReconcileRecordedRPCs(")
 	agentsIdx := strings.Index(body, "agentcrd.ResumeAll(")
+	appsIdx := strings.Index(body, "app.ResumeAll(")
 	offersIdx := strings.Index(body, "resumeSellOffers(")
 
 	if rpcIdx < 0 {
@@ -30,14 +31,20 @@ func TestStackUpAction_ReplaysRecordedState(t *testing.T) {
 	if agentsIdx < 0 {
 		t.Fatal("cmd/obol/main.go must call agentcrd.ResumeAll — without it recorded Agent CRs never reach a freshly-recreated cluster")
 	}
+	if appsIdx < 0 {
+		t.Fatal("cmd/obol/main.go must call app.ResumeAll — without it installed apps never reach a freshly-recreated cluster")
+	}
 	if upIdx < 0 || offersIdx < 0 {
 		t.Fatalf("expected stack.Up and resumeSellOffers in main.go; upIdx=%d offersIdx=%d", upIdx, offersIdx)
 	}
-	if rpcIdx < upIdx || agentsIdx < upIdx {
+	if rpcIdx < upIdx || agentsIdx < upIdx || appsIdx < upIdx {
 		t.Error("recorded-state replay must run AFTER stack.Up — before it there is no kubeconfig/cluster")
 	}
 	if agentsIdx > offersIdx {
 		t.Error("agentcrd.ResumeAll must run BEFORE resumeSellOffers — agent-backed ServiceOffers need their Agent CR first")
+	}
+	if appsIdx > offersIdx {
+		t.Error("app.ResumeAll must run BEFORE resumeSellOffers — http ServiceOffers can gate an app's Service as their upstream")
 	}
 }
 
@@ -56,6 +63,10 @@ func TestSellResumeAction_ReplaysAgentsBeforeOffers(t *testing.T) {
 	if agentsIdx < 0 {
 		t.Fatal("cmd/obol/sell.go (sell resume action) must call agentcrd.ResumeAll before replaying offers")
 	}
+	appsIdx := strings.Index(body, "app.ResumeAll(")
+	if appsIdx < 0 {
+		t.Fatal("cmd/obol/sell.go (sell resume action) must call app.ResumeAll before replaying offers — http offers can gate app upstreams")
+	}
 	// The resume action's offer replay is the only call site that returns
 	// the error (`if err := resumeSellOffers(...)`); main.go's stack-up
 	// call warns instead.
@@ -65,5 +76,8 @@ func TestSellResumeAction_ReplaysAgentsBeforeOffers(t *testing.T) {
 	}
 	if agentsIdx > offersIdx {
 		t.Error("agentcrd.ResumeAll must run BEFORE resumeSellOffers in the sell resume action")
+	}
+	if appsIdx > offersIdx {
+		t.Error("app.ResumeAll must run BEFORE resumeSellOffers in the sell resume action")
 	}
 }

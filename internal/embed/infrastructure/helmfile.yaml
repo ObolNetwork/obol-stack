@@ -150,6 +150,16 @@ releases:
     createNamespace: true
     chart: stakater/reloader
     version: 2.2.7
+    values:
+      - reloader:
+          deployment:
+            resources:
+              requests:
+                cpu: 10m
+                memory: 64Mi
+              limits:
+                cpu: 100m
+                memory: 256Mi
 
   # eRPC
   - name: erpc

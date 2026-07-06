@@ -473,6 +473,101 @@ EOF
 	log_success "Installed development wrapper at $OBOL_BIN_DIR/obol"
 }
 
+# Compute the SHA256 hash of a file.
+# Portable: macOS ships shasum, Linux ships sha256sum.
+sha256_file() {
+	local file="$1"
+	if command_exists sha256sum; then
+		sha256sum "$file" | awk '{print $1}'
+	elif command_exists shasum; then
+		shasum -a 256 "$file" | awk '{print $1}'
+	else
+		return 1
+	fi
+}
+
+# Download a URL to a file with retries (3 attempts, short sleep between).
+# Used for the obol release binary and its SHA256SUMS file only.
+download_with_retries() {
+	local url="$1"
+	local dest="$2"
+	local attempts=3
+	local attempt
+
+	for attempt in $(seq 1 "$attempts"); do
+		if command_exists curl; then
+			if curl -fsSL "$url" -o "$dest"; then
+				return 0
+			fi
+		elif command_exists wget; then
+			if wget -q "$url" -O "$dest"; then
+				return 0
+			fi
+		else
+			log_error "Neither curl nor wget is available"
+			return 1
+		fi
+
+		if [[ "$attempt" -lt "$attempts" ]]; then
+			log_warn "Download failed (attempt $attempt/$attempts), retrying in 2s..."
+			sleep 2
+		fi
+	done
+
+	rm -f "$dest"
+	return 1
+}
+
+# Verify a downloaded release binary against the published SHA256SUMS file.
+# Fails (returns 1) on checksum mismatch. Warns and continues (returns 0) if
+# SHA256SUMS is unavailable (older releases) or no local sha256 tool exists.
+verify_release_checksum() {
+	local release_tag="$1"
+	local binary_name="$2"
+	local binary_path="$3"
+
+	local sums_url="https://github.com/ObolNetwork/obol-stack/releases/download/${release_tag}/SHA256SUMS"
+	local tmp_sums="${binary_path}.sha256sums"
+
+	if ! download_with_retries "$sums_url" "$tmp_sums"; then
+		log_warn "SHA256SUMS not published for $release_tag, skipping checksum verification"
+		return 0
+	fi
+
+	# Match on the artifact name as published (e.g. obol_darwin_arm64),
+	# handling both "hash  name" and "hash *name" (binary mode) formats.
+	local expected_hash
+	expected_hash=$(awk -v name="$binary_name" '$2 == name || $2 == "*"name {print $1; exit}' "$tmp_sums")
+	rm -f "$tmp_sums"
+
+	if [[ -z "$expected_hash" ]]; then
+		log_warn "No checksum entry for $binary_name in SHA256SUMS, skipping verification"
+		return 0
+	fi
+
+	local actual_hash
+	if ! actual_hash=$(sha256_file "$binary_path"); then
+		log_warn "Neither sha256sum nor shasum is available, skipping checksum verification"
+		return 0
+	fi
+
+	if [[ "$actual_hash" != "$expected_hash" ]]; then
+		log_error "Checksum mismatch for $binary_name ($release_tag)"
+		echo ""
+		echo "  Expected: $expected_hash"
+		echo "  Actual:   $actual_hash"
+		echo ""
+		echo "The downloaded binary may be corrupted or tampered with."
+		echo "Please re-run the installer. If the problem persists, report an issue at:"
+		echo "  https://github.com/ObolNetwork/obol-stack/issues"
+		echo ""
+		return 1
+	fi
+
+	log_success "Checksum verified for $binary_name"
+	return 0
+}
+
 # Download and install binary from GitHub releases
 download_release() {
 	local release_tag="$1"
@@ -506,21 +601,16 @@ download_release() {
 
 	local tmp_obol="$OBOL_BIN_DIR/obol.tmp"
 
-	# Download binary
-	if command_exists curl; then
-		if ! curl -fsSL "$download_url" -o "$tmp_obol"; then
-			log_warn "Failed to download release $release_tag"
-			rm -f "$tmp_obol"
-			return 1
-		fi
-	elif command_exists wget; then
-		if ! wget -q "$download_url" -O "$tmp_obol"; then
-			log_warn "Failed to download release $release_tag"
-			rm -f "$tmp_obol"
-			return 1
-		fi
-	else
-		log_error "Neither curl nor wget is available"
+	# Download binary (with retries)
+	if ! download_with_retries "$download_url" "$tmp_obol"; then
+		log_warn "Failed to download release $release_tag"
+		rm -f "$tmp_obol"
+		return 1
+	fi
+
+	# Verify against the published SHA256SUMS before installing
+	if ! verify_release_checksum "$release_tag" "$binary_name" "$tmp_obol"; then
+		rm -f "$tmp_obol"
 		return 1
 	fi
 
@@ -700,7 +790,7 @@ copy_bootstrap_script() {
 			log_warn "Failed to download bootstrap script (non-critical)"
 			log_info "You can manually download it later with:"
 			echo ""
-			echo "  curl -sSL $script_source_url -o $OBOL_BIN_DIR/obolup.sh"
+			echo "  curl -fsSL $script_source_url -o $OBOL_BIN_DIR/obolup.sh"
 			echo "  chmod +x $OBOL_BIN_DIR/obolup.sh"
 			echo ""
 		fi
@@ -818,7 +908,7 @@ install_kubectl() {
 	# Download kubectl
 	local download_url="https://dl.k8s.io/release/v${target_version}/bin/${platform}/${arch}/kubectl"
 
-	if curl -sSL "$download_url" -o "$OBOL_BIN_DIR/kubectl.tmp"; then
+	if curl -fsSL "$download_url" -o "$OBOL_BIN_DIR/kubectl.tmp"; then
 		chmod +x "$OBOL_BIN_DIR/kubectl.tmp"
 		mv "$OBOL_BIN_DIR/kubectl.tmp" "$OBOL_BIN_DIR/kubectl"
 		log_success "kubectl v$target_version installed"
@@ -877,7 +967,7 @@ install_helm() {
 	local tmp_dir=$(mktemp -d)
 	local download_url="https://get.helm.sh/helm-v${target_version}-${platform}-${arch}.tar.gz"
 
-	if curl -sSL "$download_url" | tar xz -C "$tmp_dir" 2>/dev/null; then
+	if curl -fsSL "$download_url" | tar xz -C "$tmp_dir" 2>/dev/null; then
 		mv "$tmp_dir/${platform}-${arch}/helm" "$OBOL_BIN_DIR/helm"
 		chmod +x "$OBOL_BIN_DIR/helm"
 		rm -rf "$tmp_dir"
@@ -940,7 +1030,7 @@ install_k3d() {
 	# Download k3d
 	local download_url="https://github.com/k3d-io/k3d/releases/download/v${target_version}/k3d-${k3d_platform}-${k3d_arch}"
 
-	if curl -sSL "$download_url" -o "$OBOL_BIN_DIR/k3d.tmp"; then
+	if curl -fsSL "$download_url" -o "$OBOL_BIN_DIR/k3d.tmp"; then
 		chmod +x "$OBOL_BIN_DIR/k3d.tmp"
 		mv "$OBOL_BIN_DIR/k3d.tmp" "$OBOL_BIN_DIR/k3d"
 		log_success "k3d v$target_version installed"
@@ -1010,7 +1100,7 @@ install_helmfile() {
 	local tmp_dir=$(mktemp -d)
 	local download_url="https://github.com/helmfile/helmfile/releases/download/v${target_version}/helmfile_${target_version}_${helmfile_platform}_${helmfile_arch}.tar.gz"
 
-	if curl -sSL "$download_url" | tar xz -C "$tmp_dir" 2>/dev/null; then
+	if curl -fsSL "$download_url" | tar xz -C "$tmp_dir" 2>/dev/null; then
 		mv "$tmp_dir/helmfile" "$OBOL_BIN_DIR/helmfile"
 		chmod +x "$OBOL_BIN_DIR/helmfile"
 		rm -rf "$tmp_dir"
@@ -1140,7 +1230,7 @@ install_k9s() {
 	local tmp_dir=$(mktemp -d)
 	local download_url="https://github.com/derailed/k9s/releases/download/v${target_version}/k9s_${k9s_platform}_${k9s_arch}.tar.gz"
 
-	if curl -sSL "$download_url" | tar xz -C "$tmp_dir" 2>/dev/null; then
+	if curl -fsSL "$download_url" | tar xz -C "$tmp_dir" 2>/dev/null; then
 		mv "$tmp_dir/k9s" "$OBOL_BIN_DIR/k9s"
 		chmod +x "$OBOL_BIN_DIR/k9s"
 		rm -rf "$tmp_dir"
@@ -1556,10 +1646,10 @@ install_dependencies() {
 check_hosts_file() {
 	log_info "Checking /etc/hosts for obol.stack entry..."
 
-	# Check if /etc/hosts contains obol.stack pointing to localhost
-	if grep -q "obol.stack" /etc/hosts 2>/dev/null; then
+	# Check if /etc/hosts contains obol.stack (exact hostname, not e.g. dev.obol.stack)
+	if grep -E "^[^#]*[[:space:]]obol\.stack([[:space:]]|$)" /etc/hosts >/dev/null 2>&1; then
 		# Check if it points to localhost (127.0.0.1 or ::1)
-		if grep -E "^(127\.0\.0\.1|::1)[[:space:]].*obol\.stack" /etc/hosts >/dev/null 2>&1; then
+		if grep -E "^(127\.0\.0\.1|::1)[[:space:]]([^#]*[[:space:]])?obol\.stack([[:space:]]|$)" /etc/hosts >/dev/null 2>&1; then
 			log_success "obol.stack already configured in /etc/hosts"
 			return 0
 		else
@@ -1577,6 +1667,13 @@ update_hosts_file() {
 	log_info "Adding obol.stack to /etc/hosts..."
 
 	local hosts_entry="127.0.0.1 obol.stack"
+
+	# Idempotency guard: skip the append if a localhost entry already exists
+	# (protects against duplicates on re-run, even if the caller's check changes)
+	if grep -E "^(127\.0\.0\.1|::1)[[:space:]]([^#]*[[:space:]])?obol\.stack([[:space:]]|$)" /etc/hosts >/dev/null 2>&1; then
+		log_success "obol.stack already configured in /etc/hosts, skipping"
+		return 0
+	fi
 
 	# Check if sudo is available
 	if ! command_exists sudo; then
