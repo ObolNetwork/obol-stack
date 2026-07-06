@@ -222,7 +222,7 @@ external_snapshot_on_fail() {
         python3 -c "
 import urllib.request, json
 try:
-    resp = urllib.request.urlopen('http://localhost:8402/status', timeout=5)
+    resp = urllib.request.urlopen('http://x402-buyer.llm.svc.cluster.local:8402/status', timeout=5)
     print(json.dumps(json.loads(resp.read()), indent=2))
 except Exception as e:
     print(json.dumps({'error': repr(e)}))
@@ -478,7 +478,7 @@ bob kubectl exec -n llm deployment/litellm -c litellm -- \
     python3 -c "
 import urllib.request, json, sys
 try:
-    resp = urllib.request.urlopen('http://localhost:8402/status', timeout=5)
+    resp = urllib.request.urlopen('http://x402-buyer.llm.svc.cluster.local:8402/status', timeout=5)
     print(json.dumps(json.loads(resp.read()), indent=2))
 except Exception as e:
     print(json.dumps({'error': repr(e)}))
@@ -550,7 +550,7 @@ bob kubectl rollout status deployment/litellm -n llm --timeout=180s >/dev/null 2
 sidecar_status_raw=$(bob kubectl exec -n llm deployment/litellm -c litellm -- \
     python3 -c "
 import urllib.request
-print(urllib.request.urlopen('http://localhost:8402/status', timeout=5).read().decode())
+print(urllib.request.urlopen('http://x402-buyer.llm.svc.cluster.local:8402/status', timeout=5).read().decode())
 " 2>/dev/null || true)
 PAID_MODEL=$(printf '%s' "$sidecar_status_raw" | python3 -c "
 import json, sys
@@ -682,7 +682,7 @@ bob kubectl exec -n llm deployment/litellm -c litellm -- \
     python3 -c "
 import urllib.request, json
 try:
-    resp = urllib.request.urlopen('http://localhost:8402/status', timeout=5)
+    resp = urllib.request.urlopen('http://x402-buyer.llm.svc.cluster.local:8402/status', timeout=5)
     print(json.dumps(json.loads(resp.read()), indent=2))
 except Exception as e:
     print(json.dumps({'error': repr(e)}))

@@ -59,9 +59,9 @@ func (c *Controller) getLiteLLMMasterKey(ctx context.Context, ns string) (string
 }
 
 // hotAddLiteLLMModel adds a model via the LiteLLM /model/new HTTP API. The
-// in-memory router is updated without a pod restart, preserving the x402-buyer
-// sidecar's consumed-auth state (which lives in a pod-local emptyDir and would
-// be wiped by a rollout).
+// in-memory router is updated without a pod restart, so paid routes appear
+// with zero inference downtime (issue #321 — Reloader deliberately does not
+// watch litellm-config, making this hot call the primary apply path).
 //
 // Returns an error if the API call fails; callers fall back to a pod restart
 // only as a last resort — see addLiteLLMModelEntry.
@@ -275,14 +275,33 @@ func (c *Controller) removeBuyerUpstream(ctx context.Context, ns, name string) {
 	}
 }
 
+// buyerAPIBase returns the LiteLLM api_base for paid routes: the standalone
+// x402-buyer Deployment's Service. The /v1 suffix is required — LiteLLM's
+// OpenAI provider does not append it (CLAUDE.md pitfall 6).
+func buyerAPIBase(ns string) string {
+	return fmt.Sprintf("http://x402-buyer.%s.svc.cluster.local:8402/v1", ns)
+}
+
+// legacyBuyerAPIBase is the pre-split address from when x402-buyer ran as a
+// sidecar in the litellm pod. Entries still carrying it are dead upstreams
+// (nothing listens on the litellm pod's localhost:8402 anymore) and are
+// migrated in place by addLiteLLMModelEntry and
+// migrateLegacyBuyerAPIBases.
+const legacyBuyerAPIBase = "http://127.0.0.1:8402/v1"
+
 // addLiteLLMModelEntry adds a paid/<model> route to LiteLLM. Writes the
 // ConfigMap (persistence across restarts) and then hot-adds via /model/new
-// (no pod restart — preserves the buyer sidecar's consumed-auth state).
+// (no pod restart — paid routes appear with zero inference downtime).
 //
-// If the hot-add API call fails, we do NOT fall back to a pod restart: that
-// would wipe the sidecar's emptyDir /state/consumed.json and cause the
-// facilitator to reject previously-spent auths as double-spends. Instead we
-// log and rely on the ConfigMap being reloaded on the next natural restart.
+// If the hot-add API call fails, we do NOT fall back to a pod restart.
+// Instead we log and rely on the ConfigMap being reloaded on the next
+// natural rollout (litellm rolls gaplessly via RollingUpdate
+// maxUnavailable: 0, but a restart here would still churn in-flight
+// requests for no reason).
+//
+// An existing entry that still points at the legacy sidecar address is
+// migrated to the x402-buyer Service in place (ConfigMap + hot
+// delete/re-add) — it was a dead upstream anyway.
 func (c *Controller) addLiteLLMModelEntry(ctx context.Context, ns, modelName string) {
 	cm, err := c.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, "litellm-config", metav1.GetOptions{})
 	if err != nil {
@@ -299,20 +318,43 @@ func (c *Controller) addLiteLLMModelEntry(ctx context.Context, ns, modelName str
 		return
 	}
 
-	for _, entry := range cfg.ModelList {
-		if entry.ModelName == modelName {
-			return
-		}
-	}
-
 	entry := model.ModelEntry{
 		ModelName: modelName,
 		LiteLLMParams: model.LiteLLMParams{
 			Model:   "openai/" + modelName,
-			APIBase: "http://127.0.0.1:8402/v1",
+			APIBase: buyerAPIBase(ns),
 			APIKey:  "unused",
 		},
 	}
+
+	for i := range cfg.ModelList {
+		if cfg.ModelList[i].ModelName != modelName {
+			continue
+		}
+		if cfg.ModelList[i].LiteLLMParams.APIBase != legacyBuyerAPIBase {
+			return
+		}
+		// Legacy sidecar address: rewrite in place, persist, hot-sync.
+		cfg.ModelList[i].LiteLLMParams.APIBase = buyerAPIBase(ns)
+		rendered, err := yaml.Marshal(&cfg)
+		if err != nil {
+			log.Printf("purchase: failed to serialize litellm-config: %v", err)
+			return
+		}
+		cm.Data["config.yaml"] = string(rendered)
+		if _, err := c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{FieldManager: litellmConfigFieldManager}); err != nil {
+			log.Printf("purchase: failed to update litellm-config: %v", err)
+			return
+		}
+		if err := c.hotDeleteLiteLLMModel(ctx, ns, modelName); err != nil {
+			log.Printf("purchase: migrate %s: hot-delete failed: %v", modelName, err)
+		}
+		if err := c.hotAddLiteLLMModel(ctx, ns, cfg.ModelList[i]); err != nil {
+			log.Printf("purchase: migrate %s: hot-add failed: %v; relying on ConfigMap reload", modelName, err)
+		}
+		return
+	}
+
 	cfg.ModelList = append(cfg.ModelList, entry)
 
 	rendered, err := yaml.Marshal(&cfg)
@@ -443,12 +485,72 @@ func (c *Controller) removeLiteLLMModelEntry(ctx context.Context, ns, modelName 
 	}
 }
 
-// triggerBuyerReload sends POST /admin/reload to the x402-buyer sidecar
-// on all running litellm pods. Best-effort — the sidecar reloads on its
-// own 5-second timer anyway.
+// migrateLegacyBuyerAPIBases rewrites model_list entries that still point at
+// the pre-split buyer sidecar address (127.0.0.1:8402 inside the litellm
+// pod) to the standalone x402-buyer Service. One-shot at controller startup:
+// this is what heals clusters upgraded in place, whose litellm-config still
+// carries paid/<model> entries written before the buyer split. Those entries
+// are dead upstreams until migrated, so the delete/re-add window is not a
+// regression. Best-effort: failures are logged and the ConfigMap rewrite
+// alone still fixes the next LiteLLM rollout.
+func (c *Controller) migrateLegacyBuyerAPIBases(ctx context.Context, ns string) {
+	cm, err := c.kubeClient.CoreV1().ConfigMaps(ns).Get(ctx, "litellm-config", metav1.GetOptions{})
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			log.Printf("buyer-migrate: read litellm-config: %v", err)
+		}
+		return
+	}
+
+	var cfg model.LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(cm.Data["config.yaml"]), &cfg); err != nil {
+		log.Printf("buyer-migrate: parse litellm-config: %v", err)
+		return
+	}
+
+	var migrated []model.ModelEntry
+	for i := range cfg.ModelList {
+		if cfg.ModelList[i].LiteLLMParams.APIBase != legacyBuyerAPIBase {
+			continue
+		}
+		cfg.ModelList[i].LiteLLMParams.APIBase = buyerAPIBase(ns)
+		migrated = append(migrated, cfg.ModelList[i])
+	}
+	if len(migrated) == 0 {
+		return
+	}
+
+	rendered, err := yaml.Marshal(&cfg)
+	if err != nil {
+		log.Printf("buyer-migrate: serialize litellm-config: %v", err)
+		return
+	}
+	if cm.Data == nil {
+		cm.Data = make(map[string]string)
+	}
+	cm.Data["config.yaml"] = string(rendered)
+	if _, err := c.kubeClient.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{FieldManager: litellmConfigFieldManager}); err != nil {
+		log.Printf("buyer-migrate: update litellm-config: %v", err)
+		return
+	}
+
+	for _, entry := range migrated {
+		if err := c.hotDeleteLiteLLMModel(ctx, ns, entry.ModelName); err != nil {
+			log.Printf("buyer-migrate: hot-delete %s: %v", entry.ModelName, err)
+		}
+		if err := c.hotAddLiteLLMModel(ctx, ns, entry); err != nil {
+			log.Printf("buyer-migrate: hot-add %s: %v; entry loads on next LiteLLM rollout", entry.ModelName, err)
+		}
+	}
+	log.Printf("buyer-migrate: rewrote %d legacy buyer api_base entries in %s/litellm-config", len(migrated), ns)
+}
+
+// triggerBuyerReload sends POST /admin/reload to all running x402-buyer
+// pods (a standalone Deployment since the litellm pod went stateless).
+// Best-effort — the buyer reloads on its own 5-second timer anyway.
 func (c *Controller) triggerBuyerReload(ctx context.Context, ns string) {
 	pods, err := c.kubeClient.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: "app=litellm",
+		LabelSelector: "app=x402-buyer",
 	})
 	if err != nil || len(pods.Items) == 0 {
 		return
@@ -471,7 +573,7 @@ func (c *Controller) triggerBuyerReload(ctx context.Context, ns string) {
 
 func (c *Controller) triggerBuyerRemove(ctx context.Context, ns, name string) {
 	pods, err := c.kubeClient.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: "app=litellm",
+		LabelSelector: "app=x402-buyer",
 	})
 	if err != nil || len(pods.Items) == 0 {
 		return
@@ -495,12 +597,12 @@ func (c *Controller) triggerBuyerRemove(ctx context.Context, ns, name string) {
 // ── Sidecar status check ────────────────────────────────────────────────────
 
 func (c *Controller) checkBuyerStatus(ctx context.Context, ns, name string) (remaining, spent int, err error) {
-	// List LiteLLM pods to get a pod IP.
+	// List x402-buyer pods to get a pod IP.
 	pods, err := c.kubeClient.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: "app=litellm",
+		LabelSelector: "app=x402-buyer",
 	})
 	if err != nil || len(pods.Items) == 0 {
-		return 0, 0, fmt.Errorf("no litellm pods in %s", ns)
+		return 0, 0, fmt.Errorf("no x402-buyer pods in %s", ns)
 	}
 
 	for _, pod := range pods.Items {

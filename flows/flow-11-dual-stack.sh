@@ -308,7 +308,7 @@ buyer_sidecar_status() {
         python3 -c "
 import urllib.request, json
 try:
-    resp = urllib.request.urlopen('http://localhost:8402/status', timeout=5)
+    resp = urllib.request.urlopen('http://x402-buyer.llm.svc.cluster.local:8402/status', timeout=5)
     d = json.loads(resp.read())
     for name, info in d.items():
         print('%s: remaining=%d spent=%d model=%s' % (name, info['remaining'], info['spent'], info['public_model']))

@@ -357,9 +357,9 @@ flowchart LR
 
 4. **Reconcile**: The controller validates pricing, writes per-upstream buyer config/auth files into the `x402-buyer-config` and `x402-buyer-auths` ConfigMaps in `llm`, and keeps the paid model route available in LiteLLM.
 
-5. **Runtime mount**: A lean Go sidecar (`x402-buyer`) already runs inside the existing `litellm` pod in the `llm` namespace. It mounts both ConfigMaps and serves as an OpenAI-compatible reverse proxy on `127.0.0.1:8402`.
+5. **Runtime mount**: A lean Go service (`x402-buyer`) runs as its own Deployment in the `llm` namespace. It mounts both ConfigMaps and serves as an OpenAI-compatible reverse proxy at `x402-buyer.llm.svc.cluster.local:8402`.
 
-6. **Wire**: LiteLLM keeps one static wildcard route: `paid/* -> openai/* -> 127.0.0.1:8402/v1`. The controller also adds explicit paid-model entries when required so models with colons resolve reliably. The public model name is always `paid/<remote-model>`.
+6. **Wire**: LiteLLM keeps one static wildcard route: `paid/* -> openai/* -> http://x402-buyer.llm.svc.cluster.local:8402/v1`. The controller also adds explicit paid-model entries when required so models with colons resolve reliably. The public model name is always `paid/<remote-model>`.
 
 7. **Runtime**: On each request through the sidecar:
    - Sidecar forwards to upstream seller

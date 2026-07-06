@@ -228,12 +228,12 @@ model_list:
   - model_name: "paid/*"
     litellm_params:
       model: "openai/*"
-      api_base: "http://127.0.0.1:8402/v1"
+      api_base: "http://x402-buyer.llm.svc.cluster.local:8402/v1"
       api_key: "unused"
   - model_name: "paid/qwen3.5:9b"
     litellm_params:
       model: "openai/paid/qwen3.5:9b"
-      api_base: "http://127.0.0.1:8402/v1"
+      api_base: "http://x402-buyer.llm.svc.cluster.local:8402/v1"
       api_key: "unused"
 ```
 

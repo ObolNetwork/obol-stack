@@ -248,6 +248,11 @@ func (c *Controller) Run(ctx context.Context, workers int) error {
 		log.Printf("serviceoffer-controller: ensure default AgentIdentity: %v", err)
 	}
 
+	// Heal paid-route entries written before the x402-buyer split (they
+	// point at the removed litellm-pod sidecar address). One-shot,
+	// idempotent, no-op on fresh clusters.
+	c.migrateLegacyBuyerAPIBases(ctx, "llm")
+
 	if workers < 1 {
 		workers = 1
 	}
