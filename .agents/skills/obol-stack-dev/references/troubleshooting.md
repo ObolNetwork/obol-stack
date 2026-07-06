@@ -61,7 +61,7 @@ obol kubectl create configmap ca-certificates -n x402 \
 
 ### `OpenAIException - 404 page not found` on `paid/<model>`
 
-`api_base` for the buyer route must end in `/v1`. LiteLLM's OpenAI provider does **not** append `/v1` to a bare `api_base`. The buyer route must be `http://127.0.0.1:8402/v1`, not `http://127.0.0.1:8402`.
+`api_base` for the buyer route must end in `/v1`. LiteLLM's OpenAI provider does **not** append `/v1` to a bare `api_base`. The buyer route must be `http://x402-buyer.llm.svc.cluster.local:8402/v1` (the standalone buyer Service), not the bare `:8402` address.
 
 ### `eRPC` `eth_call` cache lag
 
