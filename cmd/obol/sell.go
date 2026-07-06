@@ -240,6 +240,7 @@ Examples:
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
+			warnOnClockSkew(ctx, u, cmd.String("facilitator"))
 			name := cmd.Args().First()
 			if name == "" {
 				if u.IsTTY() {
@@ -802,6 +803,7 @@ Examples:
 		}, acceptFlags()...),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
+			warnOnClockSkew(ctx, u, "")
 
 			// --from-json: read spec from file/stdin and apply directly.
 			if jsonPath := cmd.String("from-json"); jsonPath != "" {
@@ -1435,6 +1437,11 @@ func serviceOfferStatusLines(namespace, name string, offer monetizeapi.ServiceOf
 	for _, cond := range offer.Status.Conditions {
 		lines = append(lines, formatConditionLine(cond))
 	}
+	if len(offer.Status.Conditions) > 0 {
+		lines = append(lines, "",
+			"Note: conditions are the controller's last reconciled snapshot — they update on",
+			"state changes, not per paid request. The chain is the canonical revenue record.")
+	}
 	return lines
 }
 
@@ -1539,7 +1546,27 @@ func formatConditionLine(cond monetizeapi.Condition) string {
 	if cond.Message != "" {
 		header = header + " — " + cond.Message
 	}
+	if !cond.LastTransitionTime.IsZero() {
+		header = header + fmt.Sprintf(" (changed %s)", humanAge(cond.LastTransitionTime.Time))
+	}
 	return fmt.Sprintf("  %s %s", icon, header)
+}
+
+// humanAge renders how long ago t was in the coarsest useful unit. Used
+// on condition lines so sellers can tell a fresh reconcile from a status
+// the controller last touched hours ago.
+func humanAge(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
 
 // conditionIcon picks a glyph based on the condition's status + reason. The
@@ -3941,6 +3968,7 @@ Examples:
 			if err := waitForClusterAPI(ctx, cfg, u, 3*time.Minute); err != nil {
 				u.Warnf("cluster API not ready: %v (continuing — per-offer applies may fail)", err)
 			}
+			warnOnClockSkew(ctx, u, "")
 			// Recorded Agent CRs first: agent-backed offers resolve
 			// agent.ref and would dangle on a freshly-recreated cluster.
 			agentcrd.ResumeAll(cfg, u)
@@ -4085,6 +4113,35 @@ func installResumeBootUnit(cfg *config.Config, u *ui.UI) error {
 	return nil
 }
 
+// warnOnClockSkew is a best-effort seller preflight. EIP-3009 payment
+// authorizations anchor validAfter/validBefore to wall clocks, so a
+// drifted seller host makes the facilitator reject every buyer payment
+// ("authorization is not yet valid") while `sell status` still looks
+// healthy — revenue silently stops. Probes the facilitator's HTTP Date
+// header and warns above the threshold; probe failures stay silent
+// because the check must never block or delay selling.
+func warnOnClockSkew(ctx context.Context, u *ui.UI, facilitatorURL string) {
+	if facilitatorURL == "" {
+		facilitatorURL = x402verifier.DefaultFacilitatorURL
+	}
+
+	skew, err := x402verifier.MeasureClockSkew(ctx, facilitatorURL)
+	if err != nil {
+		return
+	}
+	if skew.Abs() <= x402verifier.ClockSkewWarnThreshold {
+		return
+	}
+
+	direction := "ahead of"
+	if skew < 0 {
+		direction = "behind"
+	}
+	u.Warnf("This machine's clock is %s %s the payment facilitator (%s). Buyer payment authorizations may be rejected (\"authorization is not yet valid\") and revenue silently stops.",
+		skew.Abs().Round(time.Second), direction, facilitatorURL)
+	u.Dim("  Fix: enable NTP time sync (macOS: Date & Time → set automatically; Linux: timedatectl set-ntp true).")
+}
+
 // resumeSellOffers re-applies the cluster-side artifacts (Service +
 // Endpoints + ServiceOffer) for every locally-persisted `obol sell
 // inference` deployment, and relaunches each offer's host gateway as a
@@ -4127,6 +4184,8 @@ func resumeSellOffers(ctx context.Context, cfg *config.Config, u *ui.UI) error {
 	}
 	deployments := activeInferenceDeployments(all)
 
+	var failed []string
+
 	if len(deployments) > 0 {
 		u.Blank()
 		u.Infof("Resuming %d locally-persisted sell-inference offer(s)...", len(deployments))
@@ -4135,6 +4194,7 @@ func resumeSellOffers(ctx context.Context, cfg *config.Config, u *ui.UI) error {
 		for _, d := range deployments {
 			if err := resumeOneInferenceOffer(cfg, u, d); err != nil {
 				u.Warnf("resume %s: %v", d.Name, err)
+				failed = append(failed, d.Name)
 				continue
 			}
 			resumed++
@@ -4151,8 +4211,21 @@ func resumeSellOffers(ctx context.Context, cfg *config.Config, u *ui.UI) error {
 	//    The two stores stay separate on disk because the inference
 	//    descriptor is rich (listen addr, asset, registration, gateway
 	//    PID) while the ledger holds only rendered ServiceOffer manifests.
-	if err := resumePersistedServiceOffers(cfg, u); err != nil {
+	persistedFailed, err := resumePersistedServiceOffers(cfg, u)
+	if err != nil {
 		u.Warnf("resume persisted sell offers: %v", err)
+	}
+	failed = append(failed, persistedFailed...)
+
+	// A seller who reboots and sees "stack up: OK" assumes their offers
+	// are live. Per-offer warnings scroll past; this summary — and a
+	// non-nil error that fails `obol sell resume` outright — makes a
+	// partial resume impossible to miss.
+	if len(failed) > 0 {
+		u.Blank()
+		u.Errorf("%d sell offer(s) failed to resume and are NOT live for buyers: %s", len(failed), strings.Join(failed, ", "))
+		u.Dim("  Retry with `obol sell resume`; inspect with `obol sell status <name> -n <namespace>`.")
+		return fmt.Errorf("%d sell offer(s) failed to resume: %s", len(failed), strings.Join(failed, ", "))
 	}
 
 	return nil
@@ -4861,18 +4934,18 @@ func removePersistedServiceOffersInNamespace(cfg *config.Config, ns string) (int
 // the cluster yet). Counts and announces what was reattached so the
 // operator sees the same "Resumed N offers" feedback they get for
 // inference.
-func resumePersistedServiceOffers(cfg *config.Config, u *ui.UI) error {
+func resumePersistedServiceOffers(cfg *config.Config, u *ui.UI) (failed []string, err error) {
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, statErr := os.Stat(kubeconfigPath); statErr != nil {
-		return nil // no cluster yet
+		return nil, nil // no cluster yet
 	}
 
 	manifests, err := loadPersistedServiceOffers(sellOfferStoreDir(cfg), u)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(manifests) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	u.Blank()
@@ -4880,11 +4953,12 @@ func resumePersistedServiceOffers(cfg *config.Config, u *ui.UI) error {
 	for _, m := range manifests {
 		if err := kubectlApply(cfg, m.Manifest); err != nil {
 			u.Warnf("resume %s %s/%s: %v", m.label(), m.Namespace, m.Name, err)
+			failed = append(failed, fmt.Sprintf("%s/%s", m.Namespace, m.Name))
 			continue
 		}
 		u.Successf("Resumed %s offer %s/%s", m.label(), m.Namespace, m.Name)
 	}
-	return nil
+	return failed, nil
 }
 
 // loadPersistedServiceOffers walks a ledger dir and parses every
