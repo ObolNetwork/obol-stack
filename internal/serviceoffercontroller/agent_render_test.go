@@ -358,6 +358,24 @@ func TestRenderHermesConfig_HasModelAndSkillsDir(t *testing.T) {
 	}
 }
 
+// Sell sub-agents are seeded with the pay_mcp plugin so a wallet-bearing agent
+// can settle paid (3rd-party) MCP tools during its turn. A user-installed
+// plugin only loads when named in plugins.enabled, so the rendered config must
+// enable it. (The plugin stays inert without REMOTE_SIGNER_URL, which the
+// reconciler wires only for wallet-bearing agents.)
+func TestRenderHermesConfig_EnablesPayMCPPlugin(t *testing.T) {
+	cfg := renderHermesConfig("qwen3.5:9b", "lit-key")
+	for _, must := range []string{
+		"plugins:",
+		"enabled:",
+		"- pay_mcp",
+	} {
+		if !strings.Contains(cfg, must) {
+			t.Errorf("hermes config missing plugin-enable line %q\n---\n%s", must, cfg)
+		}
+	}
+}
+
 // Sub-agents share LiteLLM with the master, so we cannot cap output tokens
 // per-model. Instead, every CRD-rendered agent runs under tighter Hermes
 // knobs so a single sale stays inside the 100s Cloudflare free-tunnel

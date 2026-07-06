@@ -29,6 +29,9 @@ var networksFS embed.FS
 //go:embed all:skills
 var skillsFS embed.FS
 
+//go:embed all:plugins
+var pluginsFS embed.FS
+
 // InfrastructureDigest returns a stable digest of the embedded infrastructure
 // assets. Callers use this to decide whether an existing copied defaults tree
 // needs to be refreshed from the current binary.
@@ -281,6 +284,89 @@ func GetEmbeddedSkillNames() ([]string, error) {
 	entries, err := fs.ReadDir(skillsFS, "skills")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read embedded skills: %w", err)
+	}
+
+	var names []string
+
+	for _, entry := range entries {
+		if entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+
+	return names, nil
+}
+
+// CopyPlugins recursively copies all embedded hermes plugins to the destination
+// directory (the agent's user-plugins dir, e.g. $HERMES_HOME/plugins). Mirrors
+// CopySkills: it only writes files from the embedded FS, so user-added plugins
+// with different names are preserved, and re-running on an existing deployment
+// refreshes the shipped plugins to the current binary.
+//
+// __pycache__ dirs and .pyc/.pyo files are skipped defensively — they can get
+// generated when a dev runs the plugin locally before `go build` and would
+// otherwise be baked into the embed.FS and seeded onto every agent's PVC,
+// confusing python on a different interpreter version. The plugins/.gitignore
+// keeps them out of the repo; this is belt-and-suspenders.
+func CopyPlugins(destDir string) error {
+	return fs.WalkDir(pluginsFS, "plugins", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// Skip root plugins directory
+		if path == "plugins" {
+			return nil
+		}
+
+		// Skip generated python caches.
+		if d.IsDir() && d.Name() == "__pycache__" {
+			return fs.SkipDir
+		}
+		if !d.IsDir() {
+			if name := d.Name(); strings.HasSuffix(name, ".pyc") || strings.HasSuffix(name, ".pyo") {
+				return nil
+			}
+		}
+
+		// Get relative path within plugins/
+		relPath := strings.TrimPrefix(path, "plugins/")
+		destPath := filepath.Join(destDir, relPath)
+
+		if d.IsDir() {
+			if err := os.MkdirAll(destPath, 0o755); err != nil {
+				return fmt.Errorf("failed to create directory %s: %w", destPath, err)
+			}
+
+			return nil
+		}
+
+		// Ensure parent directory exists
+		parentDir := filepath.Dir(destPath)
+		if err := os.MkdirAll(parentDir, 0o755); err != nil {
+			return fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
+		}
+
+		// Read embedded file
+		data, err := pluginsFS.ReadFile(path)
+		if err != nil {
+			return fmt.Errorf("failed to read embedded file %s: %w", path, err)
+		}
+
+		// Write to destination
+		if err := os.WriteFile(destPath, data, 0o600); err != nil {
+			return fmt.Errorf("failed to write file %s: %w", destPath, err)
+		}
+
+		return nil
+	})
+}
+
+// GetEmbeddedPluginNames returns the names of all embedded plugin directories.
+func GetEmbeddedPluginNames() ([]string, error) {
+	entries, err := fs.ReadDir(pluginsFS, "plugins")
+	if err != nil {
+		return nil, fmt.Errorf("failed to read embedded plugins: %w", err)
 	}
 
 	var names []string

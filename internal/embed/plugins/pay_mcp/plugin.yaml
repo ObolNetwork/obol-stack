@@ -1,0 +1,6 @@
+name: pay_mcp
+version: 0.1.0
+description: "Pay-for-MCP — settles HTTP 402 from paid MCP servers via x402 (v2, EIP-3009 'exact') using the obol-agent wallet/remote-signer, after an in-chat price confirmation. Modular settlement rails (obol credit layer today; MPP/local-key/prepaid-pool pluggable). Inert until a signer is configured: set HERMES_X402_SIGNER_URL / REMOTE_SIGNER_URL env, pay_mcp.signer_url in config.yaml, or pay_mcp.enabled: true (uses the obol in-pod default)."
+author: NousResearch
+kind: backend
+provides_hooks: []

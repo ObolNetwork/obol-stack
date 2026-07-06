@@ -30,6 +30,14 @@ const (
 	helmfileFileName     = "helmfile.yaml"
 	gatewayTokenFileName = ".gateway-token"
 	obolSkillsDirName    = "obol-skills"
+	// pluginsDirName is the agent's user-plugins dir under $HERMES_HOME. Hermes
+	// discovers directory plugins at ~/.hermes/plugins/<name>/; with
+	// HERMES_HOME=/data/.hermes that resolves to /data/.hermes/plugins.
+	pluginsDirName = "plugins"
+	// payMCPPluginName must match plugins/pay_mcp/plugin.yaml's name. It is the
+	// embedded plugin we seed + enable by default so agents can settle paid
+	// MCP tools (x402) using the pod's remote-signer.
+	payMCPPluginName = "pay_mcp"
 
 	// renovate: datasource=helm depName=raw registryUrl=https://bedag.github.io/helm-charts/
 	rawChartVersion = "2.0.2"
@@ -1078,6 +1086,9 @@ func syncRuntimeFiles(cfg *config.Config, id string, configData []byte, u *ui.UI
 	if err := syncObolSkills(cfg, id); err != nil {
 		return err
 	}
+	if err := syncObolPlugins(cfg, id); err != nil {
+		return err
+	}
 	if err := removeLegacyHeartbeat(targetDir); err != nil {
 		return err
 	}
@@ -1099,6 +1110,23 @@ func syncObolSkills(cfg *config.Config, id string) error {
 	}
 	if err := obolembed.CopySkills(targetDir); err != nil {
 		return fmt.Errorf("failed to copy Obol skills: %w", err)
+	}
+	return nil
+}
+
+// syncObolPlugins seeds the embedded hermes plugins into the agent's
+// user-plugins dir on the host PVC ($HERMES_HOME/plugins → /data/.hermes/plugins
+// inside the pod). Mirrors syncObolSkills: it refreshes shipped plugins on every
+// sync and preserves any user-added plugins with different names. The plugins
+// are activated via the plugins.enabled list in generateConfig, and pay_mcp in
+// particular self-activates from the REMOTE_SIGNER_URL already on the pod.
+func syncObolPlugins(cfg *config.Config, id string) error {
+	targetDir := filepath.Join(agentruntime.HomePath(cfg, agentruntime.Hermes, id), pluginsDirName)
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return fmt.Errorf("failed to create Obol plugins directory: %w", err)
+	}
+	if err := obolembed.CopyPlugins(targetDir); err != nil {
+		return fmt.Errorf("failed to copy Obol plugins: %w", err)
 	}
 	return nil
 }
@@ -1163,6 +1191,14 @@ func generateConfig(cfg *config.Config, primary string) ([]byte, error) {
 		"command_allowlist": []string{"tirith:lookalike_tld"},
 		"skills": map[string]any{
 			"external_dirs": []string{"/data/.hermes/" + obolSkillsDirName},
+		},
+		// User-installed plugins are opt-in via plugins.enabled (a stock-image
+		// safety gate). We seed pay_mcp into the user-plugins dir (see
+		// syncObolPlugins), so enable it here. Bundled in-image backend/platform
+		// plugins auto-load regardless of this list, so naming only pay_mcp does
+		// not suppress them.
+		"plugins": map[string]any{
+			"enabled": []string{payMCPPluginName},
 		},
 	}
 	return yaml.Marshal(payload)
