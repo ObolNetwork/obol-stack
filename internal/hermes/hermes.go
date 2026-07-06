@@ -254,13 +254,6 @@ func Sync(cfg *config.Config, id string, u *ui.UI) error {
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
 
-	// The remote-signer chart cannot express strategy: Recreate itself; pin
-	// it post-sync so the RWO keystore PVC never faces a RollingUpdate surge
-	// (deadlocks on multi-node volume attach).
-	if err := agentruntime.EnforceRemoteSignerRecreate(cfg, agentruntime.Namespace(agentruntime.Hermes, id)); err != nil {
-		u.Warnf("Could not pin remote-signer Recreate strategy (continuing): %v", err)
-	}
-
 	// Publish wallet-metadata ConfigMap for the frontend (namespace now exists).
 	applyWalletMetadataConfigMap(cfg, id, deploymentDir)
 
