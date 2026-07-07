@@ -124,12 +124,15 @@ Before a full release smoke, spend two minutes ruling out environment drift:
 curl -fsS "$OBOL_LLM_ENDPOINT/models" | head
 helm repo add bedag https://bedag.github.io/helm-charts/ >/dev/null 2>&1 || true
 helm pull bedag/raw --version 2.0.2 --destination "$QA/.tmp" >/dev/null
+docker pull registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0 >/dev/null
 k3d cluster list
 ```
 
 If `helm pull bedag/raw --version 2.0.2` times out, Hermes agent install can
 fail before the flow reaches product logic. Record it as a dependency/bootstrap
 blocker and rerun after the repo or cache is healthy; do not mutate the flow.
+The kube-state-metrics pull catches the flow-02 monitoring dependency before a
+full smoke spends its first timeout waiting on a registry path.
 
 ## Cleanup
 
