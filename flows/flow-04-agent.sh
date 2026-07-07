@@ -218,25 +218,33 @@ else
     fail "Hermes gateway health check failed — ${oc_health:0:100}"
 fi
 
-step "Hermes native dashboard UI via deeplink"
+step "Hermes native dashboard UI reachable + auth-gated"
 HERMES_DASHBOARD_HOST="obol-agent.obol.stack"
 if [ "$ingress_port" = "80" ]; then
     HERMES_DASHBOARD_URL="http://${HERMES_DASHBOARD_HOST}"
 else
     HERMES_DASHBOARD_URL="http://${HERMES_DASHBOARD_HOST}:${ingress_port}"
 fi
-dashboard_html=""
+# hermes-agent v2026.7.x hardening: a non-loopback (0.0.0.0) dashboard bind now
+# requires an auth provider, and the loopback-only inline __HERMES_SESSION_TOKEN__
+# is deliberately disabled on a gated bind (closes the hermes-0day hole). The
+# stack configures basic-auth. Assert the dashboard container is UP (public
+# /api/status → 200) and ENFORCES auth (protected /api/sessions → 401 for an
+# unauthenticated caller; /api routes gate on the session token, not basic-auth).
+dash_code() { curl --resolve "${HERMES_DASHBOARD_HOST}:${ingress_port}:127.0.0.1" \
+    -s -o /dev/null -w "%{http_code}" --max-time 10 "$@" 2>/dev/null; }
+dash_status="" dash_protected=""
 for i in $(seq 1 15); do
-    dashboard_html=$(curl --resolve "${HERMES_DASHBOARD_HOST}:${ingress_port}:127.0.0.1" \
-        -sf --max-time 10 "$HERMES_DASHBOARD_URL/" 2>&1) || true
-    if echo "$dashboard_html" | grep -q "__HERMES_SESSION_TOKEN__"; then
-        pass "Hermes dashboard UI loaded: $HERMES_DASHBOARD_URL"
+    dash_status=$(dash_code "$HERMES_DASHBOARD_URL/api/status")
+    dash_protected=$(dash_code "$HERMES_DASHBOARD_URL/api/sessions")
+    if [ "$dash_status" = "200" ] && [ "$dash_protected" = "401" ]; then
+        pass "Hermes dashboard up + auth-gated (status=$dash_status protected=$dash_protected)"
         break
     fi
     sleep 2
 done
-if ! echo "$dashboard_html" | grep -q "__HERMES_SESSION_TOKEN__"; then
-    fail "Hermes dashboard UI deeplink failed — ${dashboard_html:0:100}"
+if [ "$dash_status" != "200" ] || [ "$dash_protected" != "401" ]; then
+    fail "Hermes dashboard check failed — status=$dash_status protected=$dash_protected"
 fi
 
 # §4: Verify Hermes config still has the expected model/provider wiring.
