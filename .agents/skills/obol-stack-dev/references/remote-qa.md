@@ -9,11 +9,16 @@ explicit release-smoke/full-flow gates or named flow regressions.
 - Never use the shared source checkout directly for QA.
 - Always create a separate worktree per run.
 - Assume parallel stack tests may already be running.
+- Treat the QA runner and LLM inference endpoint as separate inputs. Set
+  `OBOL_LLM_ENDPOINT` and `OBOL_LLM_MODEL` explicitly; do not infer either one
+  from the machine running the flow.
 - Never run broad host cleanup such as global Docker/k3d purges.
 - Delete only stacks whose stack IDs are recorded in the QA worktree.
 - Do not record hostnames, personal paths, or secrets in the skill.
 - Do not create custom shell scripts. Use `tmux` to run the exact CLI command
   sequence when a long run needs to continue unattended.
+- Never edit flow files inside a QA worktree to make a smoke pass. If the flow
+  is stale, fix it in the repo and rerun from that commit.
 
 ## Create Worktree
 
@@ -79,8 +84,9 @@ under `$QA/.tmp/` and avoid writing a wrapper script.
 
 ## Launch Release-Gate Flow
 
-Full seller/buyer QA needs an OpenAI-compatible endpoint on the QA machine.
-Set `OBOL_LLM_MODEL` to an id returned by `/models`.
+Full seller/buyer QA needs an OpenAI-compatible endpoint reachable from the QA
+runner and from the in-cluster LiteLLM pods. Set `OBOL_LLM_MODEL` to an id
+returned by `/models`.
 
 ```bash
 cd "$QA"
@@ -109,6 +115,21 @@ Monitor:
 tmux has-session -t "qa-flow14-$ts" 2>/dev/null && echo RUNNING || echo NOT_RUNNING
 tail -n 200 "$log"
 ```
+
+## Fast Failure Checks
+
+Before a full release smoke, spend two minutes ruling out environment drift:
+
+```bash
+curl -fsS "$OBOL_LLM_ENDPOINT/models" | head
+helm repo add bedag https://bedag.github.io/helm-charts/ >/dev/null 2>&1 || true
+helm pull bedag/raw --version 2.0.2 --destination "$QA/.tmp" >/dev/null
+k3d cluster list
+```
+
+If `helm pull bedag/raw --version 2.0.2` times out, Hermes agent install can
+fail before the flow reaches product logic. Record it as a dependency/bootstrap
+blocker and rerun after the repo or cache is healthy; do not mutate the flow.
 
 ## Cleanup
 
