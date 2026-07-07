@@ -412,6 +412,26 @@ spec:
       protocol: TCP
 
 ---
+# PodDisruptionBudget: the verifier is the ForwardAuth gate for every paid
+# route — evicting its only pod takes all /services/* traffic down. With the
+# deliberate single replica (see the Deployment comment on per-pod metric
+# registries), minAvailable: 1 makes voluntary evictions (multi-node drains,
+# upgrades) require explicit operator intent instead of silently gapping the
+# payment path. Same stance as the litellm PDB in llm.yaml. Rollouts are
+# unaffected — the default RollingUpdate surge at 1 replica is 0-unavailable,
+# gated by /readyz (config + routes loaded).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: x402-verifier
+  namespace: x402
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: x402-verifier
+
+---
 # ServiceMonitor for x402-verifier — scrapes the stable Service endpoint
 # rather than per-pod IPs (which is what a PodMonitor would do). Lives
 # alongside the Service it observes so adding/changing the port or

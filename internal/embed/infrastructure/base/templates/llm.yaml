@@ -23,7 +23,7 @@ metadata:
   name: llm
   labels:
     # Pod Security Standards: Restricted profile enforced at admission.
-    # The litellm pod (litellm + x402-buyer sidecar) runs as non-root with
+    # The litellm and x402-buyer pods run as non-root with
     # all caps dropped, seccomp=RuntimeDefault, and readOnlyRootFilesystem;
     # write paths are routed to named emptyDir mounts.
     pod-security.kubernetes.io/enforce: restricted
@@ -82,7 +82,11 @@ data:
       - model_name: "paid/*"
         litellm_params:
           model: "openai/*"
-          api_base: "http://127.0.0.1:8402/v1"
+          # x402-buyer runs as its own Deployment/Service (not a sidecar) so
+          # LiteLLM stays stateless and can roll with maxUnavailable: 0.
+          # The /v1 suffix is required — LiteLLM's OpenAI provider does not
+          # append it (CLAUDE.md pitfall 6).
+          api_base: "http://x402-buyer.llm.svc.cluster.local:8402/v1"
           api_key: "unused"
     general_settings:
       master_key: os.environ/LITELLM_MASTER_KEY
@@ -133,10 +137,6 @@ stringData:
 # facilitator's nonce protection until a manual buy.py process --all.
 # PVC backed by local-path (single-node k3d default storage class)
 # gives crash-safety without conversion to StatefulSet.
-#
-# Deployment strategy: Recreate — RWO PVC can't be mounted by two
-# pods, so RollingUpdate's surge would block. Recreate accepts a
-# brief gap during rollout (litellm is replicas:1 anyway).
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -158,16 +158,23 @@ metadata:
   labels:
     app: litellm
 spec:
-  # Keep a single LiteLLM + x402-buyer pod while buyer auth consumption state
-  # is local to the sidecar pod. Scale this back out only after consumed auth
-  # state is shared or auth pools are sharded per replica.
+  # Single replica is enough locally: with RollingUpdate maxUnavailable: 0
+  # below, every rollout (image bump, secret rotation via Reloader) surges a
+  # new pod to Ready before the old one terminates — no inference gap.
+  # LiteLLM is stateless here (config is copied from the ConfigMap at pod
+  # start; x402-buyer runs as its own Deployment with the stateful PVC), so
+  # scaling out is safe if ever needed — but note the hot model APIs must
+  # then be fanned out per pod (the CLI already does; see litellmAPICall).
   replicas: 1
-  # Recreate (not RollingUpdate) because the x402-buyer-state PVC is RWO and
-  # cannot be co-mounted by an overlapping new pod during surge. Litellm is
-  # replicas: 1 so this just trades the (currently maxSurge:1) overlap for a
-  # short gap during rollout — acceptable, and unavoidable with RWO storage.
+  # RollingUpdate with zero unavailability is the whole point of keeping
+  # this pod stateless (issue #321). The old Recreate strategy was forced by
+  # the buyer sidecar's RWO PVC, which now lives in the x402-buyer
+  # Deployment below.
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: litellm
@@ -176,15 +183,23 @@ spec:
       labels:
         app: litellm
       annotations:
-        # litellm-config only: model-list changes must roll the pod so paid
-        # routes pick up new entries. The buyer ConfigMaps are deliberately
-        # NOT listed — x402-buyer hot-reloads them via /admin/reload (driven
-        # by the serviceoffer-controller on every buy/refill), and this
-        # Deployment is strategy Recreate with one replica: reloading on
-        # x402-buyer-config/x402-buyer-auths would take the whole inference
-        # gateway down on every purchase event (CLAUDE.md pitfall 7: restart
-        # is the fallback, not the default buy path).
-        configmap.reloader.stakater.com/reload: "litellm-config"
+        # litellm-secrets ONLY. Deliberately narrow:
+        # - litellm-config is NOT watched: every model_list change is
+        #   hot-applied to the live router via /model/new + /model/delete by
+        #   both the CLI (internal/model/model.go hotAddModels/hotDeleteModel)
+        #   and the serviceoffer-controller (purchase_helpers.go). The
+        #   ConfigMap is persistence for the next pod start, nothing more.
+        #   Watching it here would roll the pod on every model add/remove/
+        #   prefer and on every first-time purchase — reintroducing the
+        #   inference gap the hot APIs exist to remove (issue #321).
+        # - x402-buyer-config/x402-buyer-auths are NOT watched: x402-buyer
+        #   hot-reloads them via /admin/reload driven by the controller on
+        #   every buy/refill (CLAUDE.md pitfall 7: restart is the fallback,
+        #   not the default buy path).
+        # - litellm-secrets IS watched: os.environ/ API-key references are
+        #   resolved once at config load, so key changes genuinely need a
+        #   pod replacement. With RollingUpdate maxUnavailable:0 below this
+        #   is a gapless surge, not an outage.
         secret.reloader.stakater.com/reload: "litellm-secrets"
     spec:
       terminationGracePeriodSeconds: 60
@@ -300,9 +315,81 @@ spec:
             limits:
               cpu: "1"
               memory: 2Gi
+      volumes:
+        - name: litellm-config-source
+          configMap:
+            name: litellm-config
+            items:
+              - key: config.yaml
+                path: config.yaml
+        # Runtime copy of litellm-config. ConfigMap volumes are read-only, but
+        # LiteLLM's config-backed /model/new path persists to config.yaml after
+        # updating the live router. Keep the source ConfigMap immutable and give
+        # LiteLLM a pod-local writable working file instead.
+        - name: litellm-config-work
+          emptyDir:
+            sizeLimit: 1Mi
+        # Writable /tmp for Python tempfile / multipart uploads. Sized
+        # modestly — LiteLLM streams responses rather than buffering them.
+        - name: litellm-tmp
+          emptyDir:
+            sizeLimit: 128Mi
+        # Writable HOME for LiteLLM's pip/HF/XDG cache lookups so the
+        # container can run with readOnlyRootFilesystem=true.
+        - name: litellm-home
+          emptyDir:
+            sizeLimit: 256Mi
+
+---
+# x402-buyer as its own Deployment (was: sidecar in the litellm pod).
+# Separating it makes LiteLLM stateless so LiteLLM can use RollingUpdate
+# maxUnavailable: 0 (zero-downtime rollouts on image bumps and secret
+# rotation, issue #321). The buyer keeps the RWO PVC and stays single
+# replica + Recreate: consumed-auth state must have exactly one writer or
+# pre-signed auths could be double-spent. Buyer rollouts briefly gap paid/*
+# routes only — rare (buyer image bumps; buyer CM changes hot-reload via
+# /admin/reload, driven by the serviceoffer-controller).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: x402-buyer
+  namespace: llm
+  labels:
+    app: x402-buyer
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: x402-buyer
+  template:
+    metadata:
+      labels:
+        app: x402-buyer
+      # No Reloader annotations: x402-buyer-config/x402-buyer-auths changes
+      # are hot-reloaded via /admin/reload (CLAUDE.md pitfall 7).
+    spec:
+      # PSS Restricted. UID/GID 1000 (not the 65532 distroless default): on
+      # fresh clusters the StorageClass provisions local PVs where kubelet
+      # applies fsGroup and any UID works, but clusters UPGRADED in place
+      # from <= v0.10.0-rc12 have a hostPath-typed x402-buyer-state PV
+      # (kubelet ignores fsGroup there) chowned 1000:1000 with consumed.json
+      # written 0600 by UID 1000 — a 65532 buyer cannot read it and
+      # crashloops on startup (`load state` Fatalf), taking every paid/*
+      # route down. Keep 1000 until hostPath PVs are out of support.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
         - name: x402-buyer
           # Pinned by sha256 digest (multi-arch manifest list, amd64+arm64)
-          # so the deployed sidecar is byte-for-byte identical across QA
+          # so the deployed buyer is byte-for-byte identical across QA
           # hosts. The :62f11c9 tag is preserved for human readability; the
           # digest is authoritative.
           # Previous tag-only pin allowed the local-build path to silently
@@ -312,20 +399,7 @@ spec:
           # across flow-08/11/14/13. See internal/embed/embed_image_pin_test.go.
           image: ghcr.io/obolnetwork/x402-buyer:62f11c9@sha256:c58f7a20303538311d7e207e816e699c038bd8ded6339697fc0a01ed187abcda
           imagePullPolicy: IfNotPresent
-          # PSS Restricted + writable PVC. On fresh clusters the StorageClass
-          # asks local-path-provisioner for local PVs, so kubelet applies the
-          # pod-level fsGroup to /state on mount and any UID works. The
-          # explicit UID/GID 1000 below is for clusters UPGRADED in place
-          # from <= v0.10.0-rc12: their x402-buyer-state PV is hostPath-typed
-          # (kubelet ignores fsGroup there) and the old provisioner chowned
-          # the dir 1000:1000 with consumed.json written 0600 by UID 1000 —
-          # a 65532 sidecar cannot even read it and crashloops on startup
-          # (`load state` Fatalf), taking every paid/* route down. Keep 1000
-          # until hostPath PVs are out of support.
           securityContext:
-            runAsNonRoot: true
-            runAsUser: 1000
-            runAsGroup: 1000
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
@@ -368,29 +442,6 @@ spec:
             - name: x402-buyer-state
               mountPath: /state
       volumes:
-        - name: litellm-config-source
-          configMap:
-            name: litellm-config
-            items:
-              - key: config.yaml
-                path: config.yaml
-        # Runtime copy of litellm-config. ConfigMap volumes are read-only, but
-        # LiteLLM's config-backed /model/new path persists to config.yaml after
-        # updating the live router. Keep the source ConfigMap immutable and give
-        # LiteLLM a pod-local writable working file instead.
-        - name: litellm-config-work
-          emptyDir:
-            sizeLimit: 1Mi
-        # Writable /tmp for Python tempfile / multipart uploads. Sized
-        # modestly — LiteLLM streams responses rather than buffering them.
-        - name: litellm-tmp
-          emptyDir:
-            sizeLimit: 128Mi
-        # Writable HOME for LiteLLM's pip/HF/XDG cache lookups so the
-        # container can run with readOnlyRootFilesystem=true.
-        - name: litellm-home
-          emptyDir:
-            sizeLimit: 256Mi
         - name: buyer-config
           configMap:
             name: x402-buyer-config
@@ -402,6 +453,42 @@ spec:
         - name: x402-buyer-state
           persistentVolumeClaim:
             claimName: x402-buyer-state
+
+---
+# Stable in-cluster address for the buyer: LiteLLM's paid/* routes point
+# api_base at this Service, and agents' buy.py reaches /status through it.
+# Exposure note: pod IP :8402 was already cluster-reachable when the buyer
+# was a sidecar (no NetworkPolicy in this namespace); the Service changes
+# addressing, not the security posture. Auth spend is bounded by the
+# pre-signed pool (max loss = N x price).
+apiVersion: v1
+kind: Service
+metadata:
+  name: x402-buyer
+  namespace: llm
+  labels:
+    app: x402-buyer
+spec:
+  type: ClusterIP
+  selector:
+    app: x402-buyer
+  ports:
+    - name: buyer-http
+      port: 8402
+      targetPort: buyer-http
+      protocol: TCP
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: litellm
+  namespace: llm
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: litellm
 
 ---
 apiVersion: v1
@@ -423,15 +510,16 @@ spec:
 
 ---
 # Relocated from helmfile.yaml `llm-buyer-podmonitor` bedag/raw release.
-# Lives alongside its workload (litellm + x402-buyer sidecar) instead of
+# Lives alongside its workload (the x402-buyer Deployment) instead of
 # inlined in helmfile so the chart layout is the single source of truth
 # for what ships in the llm namespace. The PodMonitor CRD comes from the
 # monitoring release (kube-prometheus-stack), so `base` now declares a
 # `needs: [monitoring/monitoring]` in helmfile.yaml to guarantee CRD
 # presence before this template applies.
 #
-# PodMonitor (not ServiceMonitor) because the sidecar listens on a per-pod
-# port (8402) that is NOT exposed via the litellm Service.
+# PodMonitor kept under its historical name (litellm-x402-buyer) so
+# helmfile ordering notes and tests stay stable; it now targets the
+# standalone x402-buyer pods (the buyer is no longer a litellm sidecar).
 # Picked up by kube-prometheus-stack via the `release: monitoring` label.
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
@@ -440,11 +528,11 @@ metadata:
   namespace: llm
   labels:
     release: monitoring
-    app: litellm
+    app: x402-buyer
 spec:
   selector:
     matchLabels:
-      app: litellm
+      app: x402-buyer
   podMetricsEndpoints:
     - port: buyer-http
       path: /metrics

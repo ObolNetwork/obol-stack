@@ -465,6 +465,12 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 type modelStatusResult struct {
 	Providers  []modelStatusProvider `json:"providers"`
 	Discovered []discoverProvider    `json:"discovered,omitempty"`
+	// RouterDrift is set when the live LiteLLM router disagrees with the
+	// litellm-config ConfigMap (a hot-add/hot-delete failed or never ran).
+	// Omitted when the check passed; RouterDriftError explains when the
+	// check itself could not run (cluster or pod unavailable).
+	RouterDrift      *model.RouterDrift `json:"router_drift,omitempty"`
+	RouterDriftError string             `json:"router_drift_error,omitempty"`
 }
 
 type modelStatusProvider struct {
@@ -498,9 +504,20 @@ func modelStatusCommand(cfg *config.Config) *cli.Command {
 			defer cancel()
 			discovered, _ := model.DiscoverLocalProviders(scanCtx)
 
+			// Drift safety net: Reloader no longer restarts LiteLLM on
+			// litellm-config changes, so a silently-failed hot-add/hot-delete
+			// is only visible here. Non-fatal — status must still render
+			// when the cluster or pod is unreachable.
+			drift, driftErr := model.CheckRouterDrift(cfg)
+
 			if u.IsJSON() {
 				result := modelStatusResult{
 					Discovered: discoveredProvidersToJSON(discovered),
+				}
+				if driftErr != nil {
+					result.RouterDriftError = driftErr.Error()
+				} else if !drift.Empty() {
+					result.RouterDrift = &drift
 				}
 				for _, name := range providers {
 					s := status[name]
@@ -548,6 +565,21 @@ func modelStatusCommand(cfg *config.Config) *cli.Command {
 			}
 
 			u.Blank()
+			switch {
+			case driftErr != nil:
+				u.Dim(fmt.Sprintf("  Live router check unavailable: %v", driftErr))
+				u.Blank()
+			case !drift.Empty():
+				u.Warnf("LiteLLM live router disagrees with litellm-config (hot update failed?):")
+				for _, m := range drift.Missing {
+					u.Printf("    missing from router: %s (requests 404 until next LiteLLM rollout)", m)
+				}
+				for _, m := range drift.Extra {
+					u.Printf("    extra in router:     %s (disappears on next LiteLLM rollout)", m)
+				}
+				u.Dim("  Fix: `obol kubectl rollout restart deployment/litellm -n llm` reloads the ConfigMap.")
+				u.Blank()
+			}
 			if printModelRanking(u, cfg, "section") {
 				u.Blank()
 			}

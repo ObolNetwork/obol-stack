@@ -62,7 +62,10 @@ from signer import _signer_get, _signer_post, _rpc_call  # noqa: E402
 DEFAULT_CHAIN = os.environ.get("ERPC_NETWORK", "base-sepolia")
 
 BUYER_NS = "llm"
-LITELLM_DEPLOY = "litellm"
+# x402-buyer runs as its own Deployment (label app=x402-buyer) since the
+# litellm pod went stateless for zero-downtime rollouts; it is no longer a
+# sidecar in the litellm pod.
+BUYER_DEPLOY = "x402-buyer"
 BUYER_PORT = 8402
 
 # Some sellers sit behind a Cloudflare WAF that blocks the default
@@ -335,13 +338,13 @@ def _parse_money_amount(value, asset, extra=None):
 
 
 # ---------------------------------------------------------------------------
-# Buyer sidecar status helpers
+# Buyer status helpers
 # ---------------------------------------------------------------------------
 
-def _get_litellm_pod(token, ssl_ctx):
-    """Return the current LiteLLM pod object, or None if unavailable."""
+def _get_buyer_pod(token, ssl_ctx):
+    """Return the current x402-buyer pod object, or None if unavailable."""
     pods = api_get(
-        f"/api/v1/namespaces/{BUYER_NS}/pods?labelSelector=app={LITELLM_DEPLOY}",
+        f"/api/v1/namespaces/{BUYER_NS}/pods?labelSelector=app={BUYER_DEPLOY}",
         token, ssl_ctx,
     )
     for item in pods.get("items", []):
@@ -353,10 +356,10 @@ def _get_litellm_pod(token, ssl_ctx):
 
 
 def _buyer_status():
-    """Return live sidecar status JSON, or None if the sidecar is unavailable."""
+    """Return live buyer status JSON, or None if the buyer is unavailable."""
     token, _ = load_sa()
     ssl_ctx = make_ssl_context()
-    pod = _get_litellm_pod(token, ssl_ctx)
+    pod = _get_buyer_pod(token, ssl_ctx)
     if not pod:
         return None
 
@@ -2344,11 +2347,11 @@ def cmd_status(name):
     print(f"Auths spent:     {live_status.get('spent', status.get('spent', 0))}")
     print()
 
-    pod = _get_litellm_pod(token, ssl_ctx)
+    pod = _get_buyer_pod(token, ssl_ctx)
     if not pod:
-        print("Sidecar: NOT RUNNING (LiteLLM pod unavailable)")
+        print("Buyer: NOT RUNNING (x402-buyer pod unavailable)")
     else:
-        print(f"Sidecar: {pod.get('status', {}).get('phase', 'Unknown')}")
+        print(f"Buyer: {pod.get('status', {}).get('phase', 'Unknown')}")
 
 
 # ---------------------------------------------------------------------------

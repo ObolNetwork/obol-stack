@@ -119,19 +119,21 @@ if [ "$litellm_port" = "4000" ]; then
 else
     fail "LiteLLM service port unexpected: $litellm_port (expected 4000)"
 fi
-# Verify LiteLLM pod has 2 containers (litellm + x402-buyer sidecar)
-step "LiteLLM pod has 2 containers (litellm + x402-buyer sidecar)"
-container_count=$("$OBOL" kubectl get pods -n llm --no-headers 2>&1 | awk '{print $2}' | head -1)
-if [ "$container_count" = "2/2" ]; then
-    pass "LiteLLM pod has 2/2 containers (litellm + x402-buyer sidecar)"
+# x402-buyer runs as its own Deployment since the buyer split (litellm pod
+# is single-container and stateless for zero-downtime rollouts).
+step "x402-buyer deployment ready (standalone, no longer a litellm sidecar)"
+buyer_ready=$("$OBOL" kubectl get deploy x402-buyer -n llm \
+    -o jsonpath='{.status.readyReplicas}' 2>&1) || true
+if [ "$buyer_ready" = "1" ]; then
+    pass "x402-buyer deployment has 1 ready replica"
 else
-    fail "LiteLLM pod container count unexpected: $container_count (expected 2/2)"
+    fail "x402-buyer deployment not ready: readyReplicas=$buyer_ready (expected 1)"
 fi
 
-# Verify x402-buyer sidecar health (serves /healthz at port 8402 in litellm pod)
-step "x402-buyer sidecar healthy (buy-side payment handler)"
+# Verify x402-buyer health (serves /healthz at port 8402 via its Service)
+step "x402-buyer healthy (buy-side payment handler)"
 kill $(lsof -ti:8402) 2>/dev/null || true
-"$OBOL" kubectl port-forward -n llm deployment/litellm 8402:8402 &>/dev/null &
+"$OBOL" kubectl port-forward -n llm svc/x402-buyer 8402:8402 &>/dev/null &
 PF_BUYER_PID=$!
 for i in $(seq 1 8); do
     if curl -sf --max-time 2 http://localhost:8402/healthz >/dev/null 2>&1; then
@@ -142,9 +144,9 @@ done
 buyer_health=$(curl -sf --max-time 5 http://localhost:8402/healthz 2>&1) || true
 cleanup_pid "$PF_BUYER_PID"
 if echo "$buyer_health" | grep -q "ok"; then
-    pass "x402-buyer sidecar healthy: $buyer_health"
+    pass "x402-buyer healthy: $buyer_health"
 else
-    fail "x402-buyer sidecar health check failed — ${buyer_health:0:100}"
+    fail "x402-buyer health check failed — ${buyer_health:0:100}"
 fi
 if [ "$SELL_UPSTREAM_SERVICE" = "ollama" ]; then
     run_step_grep "Ollama reachable" "models" curl -sf http://localhost:11434/api/tags
