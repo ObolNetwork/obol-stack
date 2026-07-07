@@ -109,12 +109,22 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 
 	if opts.IsDefault && !opts.Force {
 		if _, err := os.Stat(deploymentDir); err == nil {
-			u.Info("Default Hermes instance already configured, re-syncing...")
+			u.Info("Default Hermes instance already configured.")
 			if err := dns.EnsureHostsEntries(agentruntime.CollectHostnames(cfg, agentruntime.DeploymentRef{
 				Runtime: agentruntime.Hermes,
 				ID:      id,
 			})); err != nil {
 				u.Warnf("Could not update /etc/hosts for Hermes hostnames: %v", err)
+			}
+			if opts.Sync {
+				installed, err := hermesDeploymentInstalledForOnboard(cfg, id)
+				if err != nil {
+					u.Warnf("Could not check existing Hermes deployment, re-syncing: %v", err)
+				} else if installed {
+					u.Success("Default Hermes instance already installed.")
+					return nil
+				}
+				u.Info("Default Hermes deployment not found, re-syncing...")
 			}
 			if err := writeDeploymentFiles(cfg, id, deploymentDir, currentAgentBaseURL(deploymentDir), u); err != nil {
 				return err
@@ -527,9 +537,35 @@ func strategyMigrationPatchArgs(namespace string) []string {
 func SyncDefaultModels(cfg *config.Config, u *ui.UI) error {
 	deploymentDir := DeploymentPath(cfg, agentruntime.DefaultInstanceID)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
-		return nil
+		return setupDefaultForModelSync(cfg, u)
 	}
-	return Sync(cfg, agentruntime.DefaultInstanceID, u)
+	return syncDefaultForModelSync(cfg, agentruntime.DefaultInstanceID, u)
+}
+
+var (
+	setupDefaultForModelSync = SetupDefault
+	syncDefaultForModelSync  = Sync
+)
+
+var hermesDeploymentInstalledForOnboard = hermesDeploymentInstalled
+
+func hermesDeploymentInstalled(cfg *config.Config, id string) (bool, error) {
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return false, nil
+	}
+
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	cmd := exec.Command(kubectlBinary, "get", "deployment/hermes", "-n", agentruntime.Namespace(agentruntime.Hermes, id))
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func Skills(cfg *config.Config, id string, args []string) error {
