@@ -3,15 +3,11 @@
 # Tests: agent init, agent list, auth, agent gateway inference.
 source "$(dirname "$0")/lib.sh"
 
-# Route before `agent init` so Hermes is rendered with the intended primary
-# model on first deploy. `stack up` can skip the default agent when no model was
-# configured yet.
+# §4: Deploy AI Agent (idempotent)
+run_step "obol agent init" "$OBOL" agent init
 if [ -n "${OBOL_LLM_ENDPOINT:-}" ]; then
     run_step "Route default agent through QA LLM endpoint" route_llm_via_obol_cli "$OBOL"
 fi
-
-# §4: Deploy AI Agent (idempotent)
-run_step "obol agent init" "$OBOL" agent init
 
 # List agent instances — verify name AND URL are shown (getting-started §4)
 run_step_grep "agent list shows instances" "obol-agent" "$OBOL" agent list
@@ -229,9 +225,12 @@ if [ "$ingress_port" = "80" ]; then
 else
     HERMES_DASHBOARD_URL="http://${HERMES_DASHBOARD_HOST}:${ingress_port}"
 fi
-# hermes-agent v2026.7.x gates non-loopback dashboard binds with cookie auth.
-# The legacy inline __HERMES_SESSION_TOKEN__ is intentionally absent in that
-# mode, so assert the container is up and protected instead of scraping a token.
+# hermes-agent v2026.7.x hardening: a non-loopback (0.0.0.0) dashboard bind now
+# requires an auth provider, and the loopback-only inline __HERMES_SESSION_TOKEN__
+# is deliberately disabled on a gated bind (closes the hermes-0day hole). The
+# stack configures basic-auth. Assert the dashboard container is UP (public
+# /api/status → 200) and ENFORCES auth (protected /api/sessions → 401 for an
+# unauthenticated caller; /api routes gate on the session token, not basic-auth).
 dash_code() { curl --resolve "${HERMES_DASHBOARD_HOST}:${ingress_port}:127.0.0.1" \
     -s -o /dev/null -w "%{http_code}" --max-time 10 "$@" 2>/dev/null; }
 dash_status="" dash_protected=""
