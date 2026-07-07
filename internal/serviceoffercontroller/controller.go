@@ -1231,6 +1231,11 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	if err := c.applyObject(ctx, c.services.Namespace(skillCatalogNamespace), buildSkillCatalogService()); err != nil {
 		return err
 	}
+	// Headers Middleware must exist before the routes that reference it, or
+	// Traefik drops the routes for a dangling ExtensionRef.
+	if err := c.applyObject(ctx, c.middlewares.Namespace(skillCatalogNamespace), buildCatalogHeadersMiddleware()); err != nil {
+		return err
+	}
 	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildSkillCatalogHTTPRoute()); err != nil {
 		return err
 	}

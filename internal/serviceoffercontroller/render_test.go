@@ -11,6 +11,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 )
 
@@ -1567,5 +1568,187 @@ func TestBuildServiceCatalogJSON_RegistrationPendingFalseForFullyReady(t *testin
 	}
 	if services[0].RegistrationPending {
 		t.Error("RegistrationPending must be false for fully Ready=True offers")
+	}
+}
+
+// TestBuildCatalogHeadersMiddleware locks the CORS + cache posture on the
+// public catalog surfaces: wildcard origin (read-only public data, no
+// credentials), GET/OPTIONS only, and a 5-minute public cache.
+func TestBuildCatalogHeadersMiddleware(t *testing.T) {
+	mw := buildCatalogHeadersMiddleware()
+	if got := mw.GetAPIVersion(); got != "traefik.io/v1alpha1" {
+		t.Fatalf("apiVersion = %q, want traefik.io/v1alpha1", got)
+	}
+	if got := mw.GetKind(); got != "Middleware" {
+		t.Fatalf("kind = %q, want Middleware", got)
+	}
+	if mw.GetName() != catalogHeadersMiddlewareName {
+		t.Fatalf("name = %q, want %q", mw.GetName(), catalogHeadersMiddlewareName)
+	}
+	if mw.GetNamespace() != skillCatalogNamespace {
+		t.Fatalf("namespace = %q, want %q", mw.GetNamespace(), skillCatalogNamespace)
+	}
+
+	headers := mw.Object["spec"].(map[string]any)["headers"].(map[string]any)
+	origins := headers["accessControlAllowOriginList"].([]any)
+	if len(origins) != 1 || origins[0] != "*" {
+		t.Errorf("accessControlAllowOriginList = %v, want [*]", origins)
+	}
+	methods := headers["accessControlAllowMethods"].([]any)
+	if len(methods) != 2 || methods[0] != "GET" || methods[1] != "OPTIONS" {
+		t.Errorf("accessControlAllowMethods = %v, want [GET OPTIONS]", methods)
+	}
+	custom := headers["customResponseHeaders"].(map[string]any)
+	if custom["Cache-Control"] != "public, max-age=300" {
+		t.Errorf("Cache-Control = %v, want 'public, max-age=300'", custom["Cache-Control"])
+	}
+}
+
+// TestCatalogRoutesCarryHeadersFilter asserts every catalog HTTPRoute
+// (/skill.md, /api/services.json, /openapi.json, /api) attaches the headers
+// Middleware via an ExtensionRef filter — the same mechanism the x402
+// middleware uses on paid routes. Paid /services/* routes must NOT carry it
+// (locked separately by TestBuildHTTPRoute's no-filters assertion).
+func TestCatalogRoutesCarryHeadersFilter(t *testing.T) {
+	routes := map[string]*unstructured.Unstructured{
+		"/skill.md":          buildSkillCatalogHTTPRoute(),
+		"/api/services.json": buildServicesJSONHTTPRoute(),
+		"/openapi.json":      buildOpenAPIHTTPRoute(),
+		"/api":               buildAPIDocsHTTPRoute(),
+	}
+	for path, route := range routes {
+		rules := route.Object["spec"].(map[string]any)["rules"].([]any)
+		firstRule := rules[0].(map[string]any)
+		filters, found := firstRule["filters"].([]any)
+		if !found || len(filters) != 1 {
+			t.Errorf("%s route: filters = %v, want exactly one ExtensionRef filter", path, firstRule["filters"])
+			continue
+		}
+		filter := filters[0].(map[string]any)
+		if filter["type"] != "ExtensionRef" {
+			t.Errorf("%s route: filter type = %v, want ExtensionRef", path, filter["type"])
+		}
+		ref := filter["extensionRef"].(map[string]any)
+		if ref["group"] != "traefik.io" || ref["kind"] != "Middleware" || ref["name"] != catalogHeadersMiddlewareName {
+			t.Errorf("%s route: extensionRef = %v, want traefik.io Middleware %q", path, ref, catalogHeadersMiddlewareName)
+		}
+	}
+}
+
+// TestBuildServiceCatalogJSON_SchemaVersion locks the envelope version
+// marker: always present, always "1" until a breaking wire change bumps it.
+func TestBuildServiceCatalogJSON_SchemaVersion(t *testing.T) {
+	jsonStr := buildServiceCatalogJSON(nil, "https://example.com", nil)
+	assertServiceCatalogSchema(t, jsonStr)
+
+	if got := decodeServiceCatalog(t, jsonStr).SchemaVersion; got != schemas.ServiceCatalogSchemaVersion {
+		t.Errorf("schemaVersion = %q, want %q", got, schemas.ServiceCatalogSchemaVersion)
+	}
+	// Assert on the raw wire too, so a struct/tag rename can't silently
+	// satisfy the decode-side check.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
+		t.Fatalf("unmarshal raw catalog: %v", err)
+	}
+	if string(raw["schemaVersion"]) != `"1"` {
+		t.Errorf(`raw schemaVersion = %s, want "1"`, raw["schemaVersion"])
+	}
+
+	// The fallback envelope must carry the same version.
+	fallback := fallbackServiceCatalogJSON("https://example.com")
+	assertServiceCatalogSchema(t, fallback)
+	if got := decodeServiceCatalog(t, fallback).SchemaVersion; got != schemas.ServiceCatalogSchemaVersion {
+		t.Errorf("fallback schemaVersion = %q, want %q", got, schemas.ServiceCatalogSchemaVersion)
+	}
+}
+
+// TestBuildSkillCatalogMarkdown_TryIt asserts every offer detail block ends
+// with a copy-paste "Try it" section: a 402 probe curl plus a worked paid
+// request. Chat-shaped offers must show the REAL model id (including the
+// AgentResolution fallback for type=agent) — the same id services.json
+// publishes — and http offers a curl of the gated path.
+func TestBuildSkillCatalogMarkdown_TryIt(t *testing.T) {
+	readyCond := []monetizeapi.Condition{{Type: "Ready", Status: "True"}}
+	inferenceOffer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "flow-qwen", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type:  "inference",
+			Model: monetizeapi.ServiceOfferModel{Name: "qwen36-deep"},
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base",
+				PayTo:   "0x1111111111111111111111111111111111111111",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerMTok: "0.10"},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
+	}
+	agentOffer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "quant", Namespace: "agent-quant"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "agent",
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base",
+				PayTo:   "0x2222222222222222222222222222222222222222",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.05"},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			AgentResolution: &monetizeapi.ServiceOfferAgentResolution{Model: "qwen3.5:9b", Runtime: "hermes"},
+			Conditions:      readyCond,
+		},
+	}
+	httpOffer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "echo", Namespace: "demo"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type: "http",
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base",
+				PayTo:   "0x3333333333333333333333333333333333333333",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
+	}
+
+	content := buildSkillCatalogMarkdown(
+		[]*monetizeapi.ServiceOffer{inferenceOffer, agentOffer, httpOffer},
+		"https://seller.example", nil,
+	)
+
+	if got := strings.Count(content, "#### Try it"); got != 3 {
+		t.Fatalf("Try it sections = %d, want 3:\n%s", got, content)
+	}
+	// 402 probe curl per offer.
+	for _, probe := range []string{
+		"curl -i https://seller.example/services/flow-qwen",
+		"curl -i https://seller.example/services/quant",
+		"curl -i https://seller.example/services/echo",
+	} {
+		if !strings.Contains(content, probe) {
+			t.Errorf("missing 402 probe %q:\n%s", probe, content)
+		}
+	}
+	// Chat-shaped offers: worked chat-completions example with the real model
+	// id (identical bytes to services.json's buy.example — buyprompts is the
+	// single authoring point).
+	if !strings.Contains(content, "POST https://seller.example/services/flow-qwen/v1/chat/completions") {
+		t.Errorf("inference Try it missing chat-completions example:\n%s", content)
+	}
+	if !strings.Contains(content, `"model": "qwen36-deep"`) {
+		t.Errorf("inference Try it missing real model id qwen36-deep:\n%s", content)
+	}
+	if !strings.Contains(content, `"model": "qwen3.5:9b"`) {
+		t.Errorf("agent Try it missing AgentResolution model qwen3.5:9b:\n%s", content)
+	}
+	if !strings.Contains(content, "X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>") {
+		t.Errorf("Try it examples missing X-PAYMENT placeholder:\n%s", content)
+	}
+	// http offer: paid retry is a curl of the gated path.
+	if !strings.Contains(content, `curl -i https://seller.example/services/echo -H "X-PAYMENT: <base64-signed-authorization>"`) {
+		t.Errorf("http Try it missing paid curl:\n%s", content)
+	}
+	// Payment mechanics are referenced, not duplicated.
+	if !strings.Contains(content, "[How to pay (x402)](#how-to-pay-x402)") {
+		t.Errorf("Try it missing How-to-pay anchor link:\n%s", content)
 	}
 }

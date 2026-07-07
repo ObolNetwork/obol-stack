@@ -28,6 +28,12 @@ const (
 	servicesJSONRouteName     = "obol-services-json-route"
 	openAPIRouteName          = "obol-openapi-route"
 	apiDocsRouteName          = "obol-api-docs-route"
+
+	// catalogHeadersMiddlewareName is the Traefik headers Middleware attached
+	// to the public catalog HTTPRoutes (/skill.md, /openapi.json, /api,
+	// /api/services.json). The busybox httpd serving those files cannot set
+	// custom response headers, so CORS + caching are applied at the gateway.
+	catalogHeadersMiddlewareName = "obol-catalog-headers"
 )
 
 // restrictedPodSecurityContext returns a Pod-level securityContext that
@@ -377,6 +383,59 @@ func buildSkillCatalogService() *unstructured.Unstructured {
 	}
 }
 
+// buildCatalogHeadersMiddleware renders the Traefik headers Middleware for
+// the public discovery surfaces. These are read-only public documents served
+// without credentials, so a wildcard CORS origin is correct — browser-based
+// buyers, dashboards, and aggregators must be able to fetch them cross-origin.
+// Cache-Control keeps CDN/browser refetch pressure off the busybox httpd
+// while staying short enough (5 min) that catalog updates propagate quickly.
+//
+// Deliberately NOT attached to the /services/* paid routes (the 402/paid
+// path has its own header semantics) nor to the ERC-8004
+// /.well-known/agent-registration.json routes (those live in per-agent
+// namespaces, where an ExtensionRef cannot reference this x402-namespace
+// Middleware).
+func buildCatalogHeadersMiddleware() *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "traefik.io/v1alpha1",
+			"kind":       "Middleware",
+			"metadata": map[string]any{
+				"name":      catalogHeadersMiddlewareName,
+				"namespace": skillCatalogNamespace,
+				"labels": map[string]any{
+					"obol.org/managed-by": "serviceoffer-controller",
+				},
+			},
+			"spec": map[string]any{
+				"headers": map[string]any{
+					"accessControlAllowOriginList": []any{"*"},
+					"accessControlAllowMethods":    []any{"GET", "OPTIONS"},
+					"customResponseHeaders": map[string]any{
+						"Cache-Control": "public, max-age=300",
+					},
+				},
+			},
+		},
+	}
+}
+
+// catalogHeadersFilters is the HTTPRoute rule filter list that attaches the
+// catalog headers Middleware — same ExtensionRef mechanism the x402
+// ForwardAuth Middleware uses on gated routes.
+func catalogHeadersFilters() []any {
+	return []any{
+		map[string]any{
+			"type": "ExtensionRef",
+			"extensionRef": map[string]any{
+				"group": "traefik.io",
+				"kind":  "Middleware",
+				"name":  catalogHeadersMiddlewareName,
+			},
+		},
+	}
+}
+
 func buildSkillCatalogHTTPRoute() *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
@@ -407,6 +466,7 @@ func buildSkillCatalogHTTPRoute() *unstructured.Unstructured {
 								},
 							},
 						},
+						"filters": catalogHeadersFilters(),
 						"backendRefs": []any{
 							map[string]any{
 								"name":      skillCatalogConfigMapName,
@@ -459,6 +519,7 @@ func buildOpenAPIHTTPRoute() *unstructured.Unstructured {
 								},
 							},
 						},
+						"filters": catalogHeadersFilters(),
 						"backendRefs": []any{
 							map[string]any{
 								"name":      skillCatalogConfigMapName,
@@ -520,6 +581,7 @@ func buildAPIDocsHTTPRoute() *unstructured.Unstructured {
 								},
 							},
 						},
+						"filters": catalogHeadersFilters(),
 						"backendRefs": []any{
 							map[string]any{
 								"name":      skillCatalogConfigMapName,
@@ -564,6 +626,7 @@ func buildServicesJSONHTTPRoute() *unstructured.Unstructured {
 								},
 							},
 						},
+						"filters": catalogHeadersFilters(),
 						"backendRefs": []any{
 							map[string]any{
 								"name":      skillCatalogConfigMapName,
@@ -1013,6 +1076,7 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 			description = fmt.Sprintf("x402 payment-gated %s service", fallbackOfferType(offer))
 		}
 		lines = append(lines, fmt.Sprintf("- **Description**: %s", description), "")
+		lines = append(lines, skillCatalogTryIt(offer, endpoint)...)
 	}
 
 	return strings.Join(lines, "\n")
@@ -1054,6 +1118,69 @@ func skillCatalogHowToPay(baseURL string) []string {
 			"pre-authorize a batch of paid inference.",
 		"",
 	}
+}
+
+// catalogModelName resolves the model id a buyer should put in a paid
+// chat-completions body. type=agent offers leave spec.model empty by design
+// (the model lives on the linked Agent), so fall back to the controller's
+// resolved view. Shared by /api/services.json and the /skill.md worked
+// examples so both surfaces advertise the same id.
+func catalogModelName(offer *monetizeapi.ServiceOffer) string {
+	if offer == nil {
+		return ""
+	}
+	if offer.Spec.Model.Name != "" {
+		return offer.Spec.Model.Name
+	}
+	if offer.Status.AgentResolution != nil {
+		return offer.Status.AgentResolution.Model
+	}
+	return ""
+}
+
+// skillCatalogTryIt renders the per-offer "Try it" subsection: one curl that
+// probes the 402 pricing, and one worked paid request. The paid example for
+// chat-shaped offers is buyprompts.Build's Example — the exact same bytes
+// /api/services.json publishes in the entry's buy.example — so the two
+// surfaces cannot drift. Agent buyers convert off copy-paste, not prose.
+func skillCatalogTryIt(offer *monetizeapi.ServiceOffer, endpoint string) []string {
+	lines := []string{
+		"#### Try it",
+		"",
+		"Probe the price (no payment; the `402` body carries the signable `accepts[]` requirements):",
+		"",
+		"```bash",
+		fmt.Sprintf("curl -i %s", endpoint),
+		"```",
+		"",
+	}
+	block := buyprompts.Build(buyprompts.Input{
+		Type:  fallbackOfferType(offer),
+		URL:   endpoint,
+		Model: catalogModelName(offer),
+	})
+	if block.Example != "" {
+		// inference/agent: OpenAI-style chat-completions with the real model id.
+		lines = append(lines,
+			"Then sign one `accepts[]` entry — see [How to pay (x402)](#how-to-pay-x402) — and send a paid request:",
+			"",
+			"```",
+			block.Example,
+			"```",
+			"",
+		)
+	} else {
+		// http/fine-tuning: retry the gated path itself with the payment attached.
+		lines = append(lines,
+			"Then sign one `accepts[]` entry — see [How to pay (x402)](#how-to-pay-x402) — and retry the identical request with the payment attached:",
+			"",
+			"```bash",
+			fmt.Sprintf("curl -i %s -H \"X-PAYMENT: <base64-signed-authorization>\"", endpoint),
+			"```",
+			"",
+		)
+	}
+	return lines
 }
 
 // offerOperationallyReady reports whether an offer is usable for x402
@@ -1175,13 +1302,7 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string,
 		if desc == "" {
 			desc = fmt.Sprintf("x402 payment-gated %s service", fallbackOfferType(offer))
 		}
-		// type=agent offers leave spec.model empty by design (the model
-		// lives on the linked Agent). Fall back to the controller's
-		// resolved view so the storefront can display it.
-		modelName := offer.Spec.Model.Name
-		if modelName == "" && offer.Status.AgentResolution != nil {
-			modelName = offer.Status.AgentResolution.Model
-		}
+		modelName := catalogModelName(offer)
 
 		drainEndsAt := ""
 		if offer.IsDraining() {
@@ -1256,10 +1377,11 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string,
 	}
 
 	catalog := schemas.ServiceCatalog{
-		DisplayName: profile.DisplayName,
-		Tagline:     profile.Tagline,
-		LogoURL:     profile.LogoURL,
-		Services:    services,
+		SchemaVersion: schemas.ServiceCatalogSchemaVersion,
+		DisplayName:   profile.DisplayName,
+		Tagline:       profile.Tagline,
+		LogoURL:       profile.LogoURL,
+		Services:      services,
 	}
 	if catalog.Services == nil {
 		catalog.Services = []schemas.ServiceCatalogEntry{}
@@ -1275,14 +1397,15 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string,
 func fallbackServiceCatalogJSON(baseURL string) string {
 	profile := storefront.ResolvePublished(nil, baseURL)
 	catalog := schemas.ServiceCatalog{
-		DisplayName: profile.DisplayName,
-		Tagline:     profile.Tagline,
-		LogoURL:     profile.LogoURL,
-		Services:    []schemas.ServiceCatalogEntry{},
+		SchemaVersion: schemas.ServiceCatalogSchemaVersion,
+		DisplayName:   profile.DisplayName,
+		Tagline:       profile.Tagline,
+		LogoURL:       profile.LogoURL,
+		Services:      []schemas.ServiceCatalogEntry{},
 	}
 	out, err := json.MarshalIndent(catalog, "", "  ")
 	if err != nil {
-		return `{"displayName":"Obol Stack","tagline":"Unlock Agent and API services with digital payments.","logoUrl":"/obol-stack-logo.png","services":[]}`
+		return `{"schemaVersion":"1","displayName":"Obol Stack","tagline":"Unlock Agent and API services with digital payments.","logoUrl":"/obol-stack-logo.png","services":[]}`
 	}
 	return string(out)
 }

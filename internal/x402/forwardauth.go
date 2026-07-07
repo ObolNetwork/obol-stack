@@ -376,6 +376,7 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 // understand; it remains the default when ForwardAuthConfig.SendPaymentRequired
 // is unset and the fallback when the renderer has nothing else to do.
 func sendPaymentRequiredJSON(w http.ResponseWriter, r *http.Request, requirements []x402types.PaymentRequirements, extensions map[string]any) {
+	setCatalogLinkHeader(w)
 	resp := buildPaymentRequired(r, requirements, extensions)
 
 	body, err := json.Marshal(resp)
@@ -388,6 +389,16 @@ func sendPaymentRequiredJSON(w http.ResponseWriter, r *http.Request, requirement
 	setPaymentRequiredHeader(w, body)
 	w.WriteHeader(http.StatusPaymentRequired)
 	_, _ = w.Write(body)
+}
+
+// setCatalogLinkHeader advertises the seller's machine-readable service
+// catalog on every 402 response (RFC 8288 web linking). An agent that lands
+// on a paid endpoint directly — with no prior knowledge of the seller's
+// layout — can follow the link to /api/services.json and self-serve
+// discovery of every other offer. Header-only addition: the 402 body schema
+// and the verification/settlement flow are unchanged.
+func setCatalogLinkHeader(w http.ResponseWriter) {
+	w.Header().Set("Link", `</api/services.json>; rel="catalog"`)
 }
 
 // buildPaymentRequired assembles the v2 PaymentRequired object for the

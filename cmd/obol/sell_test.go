@@ -8,6 +8,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/inference"
@@ -412,6 +415,60 @@ func TestServiceOfferStatusLines_RawTxFallback(t *testing.T) {
 	}
 	if strings.Contains(joined, "https://") {
 		t.Fatalf("unexpected URL in tx line for unknown network:\n%s", joined)
+	}
+}
+
+func TestFormatConditionLine_ShowsAge(t *testing.T) {
+	cond := monetizeapi.Condition{
+		Type:               "Ready",
+		Status:             "True",
+		Reason:             "Ready",
+		LastTransitionTime: metav1.Time{Time: time.Now().Add(-3 * time.Hour)},
+	}
+	line := formatConditionLine(cond)
+	if !strings.Contains(line, "(changed 3h ago)") {
+		t.Errorf("condition line missing age, got: %q", line)
+	}
+
+	// Zero transition time (older controllers, hand-built fixtures) must
+	// not render a bogus age.
+	cond.LastTransitionTime = metav1.Time{}
+	if line := formatConditionLine(cond); strings.Contains(line, "changed") {
+		t.Errorf("zero LastTransitionTime must not render an age, got: %q", line)
+	}
+}
+
+func TestServiceOfferStatusLines_SnapshotCaveat(t *testing.T) {
+	withConditions := monetizeapi.ServiceOffer{
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+		},
+	}
+	joined := strings.Join(serviceOfferStatusLines("llm", "demo", withConditions, ""), "\n")
+	if !strings.Contains(joined, "last reconciled snapshot") {
+		t.Errorf("status output missing the snapshot caveat:\n%s", joined)
+	}
+
+	// No conditions (offer not yet reconciled) → no caveat about them.
+	joined = strings.Join(serviceOfferStatusLines("llm", "demo", monetizeapi.ServiceOffer{}, ""), "\n")
+	if strings.Contains(joined, "snapshot") {
+		t.Errorf("caveat must only render when conditions exist:\n%s", joined)
+	}
+}
+
+func TestHumanAge(t *testing.T) {
+	for _, tt := range []struct {
+		age  time.Duration
+		want string
+	}{
+		{30 * time.Second, "just now"},
+		{5 * time.Minute, "5m ago"},
+		{2 * time.Hour, "2h ago"},
+		{49 * time.Hour, "2d ago"},
+	} {
+		if got := humanAge(time.Now().Add(-tt.age)); got != tt.want {
+			t.Errorf("humanAge(-%v) = %q, want %q", tt.age, got, tt.want)
+		}
 	}
 }
 
@@ -1834,8 +1891,12 @@ func TestResumeSellHTTPOffers_EmptyStoreNoOp(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfg.ConfigDir, "kubeconfig.yaml"), []byte("placeholder"), 0o600); err != nil {
 		t.Fatalf("seed kubeconfig: %v", err)
 	}
-	if err := resumePersistedServiceOffers(cfg, ui.New(false)); err != nil {
+	failed, err := resumePersistedServiceOffers(cfg, ui.New(false))
+	if err != nil {
 		t.Errorf("empty-store resume must succeed: %v", err)
+	}
+	if len(failed) != 0 {
+		t.Errorf("empty-store resume must report no failed offers, got %v", failed)
 	}
 }
 
@@ -1885,11 +1946,16 @@ func TestResumeSellOffers_HTTPOnlyStore(t *testing.T) {
 	if err := persistServiceOffer(cfg, "llm", "only-http", manifest); err != nil {
 		t.Fatalf("persist: %v", err)
 	}
-	// kubectl apply will fail against the fake kubeconfig — that's
-	// expected and reported as a warn, not an error. We just need
-	// resumeSellOffers itself to return nil.
-	if err := resumeSellOffers(context.Background(), cfg, ui.New(false)); err != nil {
-		t.Errorf("http-only store must not error from resumeSellOffers: %v", err)
+	// kubectl apply fails against the fake kubeconfig, which means the
+	// offer did NOT come back — resumeSellOffers must say so loudly: a
+	// seller who reboots and reads "OK" while their offer is down loses
+	// revenue silently. The error must name the failed offer.
+	err := resumeSellOffers(context.Background(), cfg, ui.New(false))
+	if err == nil {
+		t.Fatal("resumeSellOffers must return an error when an offer fails to resume")
+	}
+	if !strings.Contains(err.Error(), "llm/only-http") {
+		t.Errorf("resume error must name the failed offer, got: %v", err)
 	}
 }
 
