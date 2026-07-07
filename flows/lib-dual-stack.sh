@@ -353,9 +353,19 @@ with urllib.request.urlopen(
     timeout=20,
 ) as resp:
     status = resp.status
-    services = json.loads(resp.read(200000))
+    payload = json.loads(resp.read(200000))
 
-entry = next((svc for svc in services if svc.get("name") == service_name), None)
+if isinstance(payload, dict):
+    services = payload.get("services", [])
+elif isinstance(payload, list):
+    services = payload
+else:
+    raise RuntimeError(f"unexpected catalog payload type {type(payload).__name__}")
+
+if not isinstance(services, list):
+    raise RuntimeError(f"unexpected catalog services type {type(services).__name__}")
+
+entry = next((svc for svc in services if isinstance(svc, dict) and svc.get("name") == service_name), None)
 if entry is None:
     raise RuntimeError(f"{service_name} not present")
 

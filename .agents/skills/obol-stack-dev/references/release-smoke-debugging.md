@@ -122,6 +122,30 @@ The buyer sidecar's `/status` (and `PurchaseRequest.status`, and verifier logs) 
 - **Operator debugging recipe** (when a buyer-reported "0 spent" disagrees with a suspected debit): see `docs/observability.md` § "Verify settlement against the chain, never the sidecar snapshot" — has the exact `eth_getLogs` curl to confirm.
 - **Rule of thumb**: chain is canonical, sidecar status is a derived snapshot. The CRD itself documents this (`PurchaseRequest.status` is the controller's last reconciled snapshot, not a live counter — `CLAUDE.md` "Quick full-cycle smoke test"). For real-time auth pool state, always query the sidecar `/status`; for real-money truth, always query the chain.
 
+### 12. flow-13 catalog assertion crashes on `/api/services.json`
+
+The public catalog is the versioned `ServiceCatalog` envelope (`{"services":[...]}`), not the old bare array. If a smoke helper iterates the decoded object directly, Python walks the string keys and crashes with `'str' object has no attribute 'get'`.
+
+- **Symptom**: flow-13 "discover Alice's OBOL service in `/api/services.json`" fails from Bob's agent pod even though the tunnel is reachable and the catalog route exists.
+- **Fix in repo**: `flows/lib-dual-stack.sh::assert_bob_service_catalog_contains` parses `payload["services"]` when the payload is an object and still accepts a legacy list for compatibility.
+- **If you see this again**: curl the catalog from the same pod and inspect the top-level JSON type before changing a flow script.
+
+### 13. Hermes depends on the third-party `bedag/raw` chart
+
+Hermes uses a generated Helmfile with `chart: bedag/raw`, currently pinned as `rawChartVersion = "2.0.2"` in `internal/hermes/hermes.go`. The chart renders the raw Kubernetes resources from `values-hermes.yaml` for the Hermes deployment/service/config, while `obol/remote-signer` is installed as a separate release.
+
+- **Symptom**: `obol hermes sync` or `obol agent sync` fails with a timeout fetching `https://github.com/bedag/helm-charts/releases/download/raw-2.0.2/raw-2.0.2.tgz`.
+- **Meaning**: this is a dependency/bootstrap failure, not proof that the smoke's payment or agent logic is broken.
+- **Debt reduction path**: replace `bedag/raw` with a first-party local chart embedded in obol-stack, or promote Hermes to a first-party chart so release smoke no longer depends on the Bedag chart repository during agent install.
+
+### 14. flow-02 waits on kube-state-metrics image pull
+
+The monitoring chart pulls `registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0`. If that pull stalls, `flow-02-stack-init-up` sits at "Core platform pods Running or Completed" until the poll timeout and reports the monitoring pod as `ContainerCreating`.
+
+- **Symptom**: all core pods except `monitoring-kube-state-metrics-*` are Running; `kubectl describe pod` shows only `Pulling image "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0"`.
+- **Meaning**: this is registry/bootstrap drift unless the image is actually wrong for the platform.
+- **If you see this again**: preflight `docker pull registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0` or import a known-good cache into the k3d cluster before starting the full release smoke. Record the cache step as environment setup, not a product fix.
+
 ## Diagnostic Patterns
 
 - **Don't confuse 503 with "verifier broken"** — almost always one of #1, #2, #5, #6, or a missing CA bundle (`paid-flows.md`).
