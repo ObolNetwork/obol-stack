@@ -35,7 +35,7 @@ const (
 	rawChartVersion = "2.0.2"
 
 	// renovate: datasource=docker depName=nousresearch/hermes-agent
-	defaultImage = "nousresearch/hermes-agent:v2026.6.19"
+	defaultImage = "nousresearch/hermes-agent:v2026.7.1"
 	// Use the upstream image venv instead of cloning Hermes into the PVC on
 	// every cold start. The init container below validates the required extras
 	// are present so image regressions fail before the gateway starts.
@@ -984,6 +984,16 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                 # is safe here. Production deployments must override this via a values overlay.
                 - name: GATEWAY_ALLOW_ALL_USERS
                   value: "true"
+                # v2026.7.x hardening: a non-loopback (0.0.0.0) dashboard bind now
+                # requires an auth provider; the legacy --insecure flag no longer
+                # bypasses it (closes the hermes-0day unauthenticated-dashboard
+                # hole). Register the bundled basic-auth provider using the agent's
+                # existing API token as the password (already surfaced to the
+                # operator). Probe path /api/status stays auth-exempt.
+                - name: HERMES_DASHBOARD_BASIC_AUTH_USERNAME
+                  value: obol
+                - name: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
+                  value: %s
               readinessProbe:
                 httpGet:
                   path: /api/status
@@ -1063,7 +1073,7 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
             - name: %s
               port: %d
 `, desc.DefaultPort, desc.DefaultPort, desc.DefaultPort,
-		quoteYAML(image()), quoteYAML(hermesBinary), dashboardPort, dashboardPort, desc.DefaultPort, dashboardPort, dashboardPort, dashboardPort,
+		quoteYAML(image()), quoteYAML(hermesBinary), dashboardPort, dashboardPort, desc.DefaultPort, quoteYAML(token), dashboardPort, dashboardPort, dashboardPort,
 		desc.DataPVCName,
 		desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.DefaultPort, dashboardPort,
 		desc.ServiceName, namespace, quoteYAML(hostname), desc.ServiceName, desc.DefaultPort,
