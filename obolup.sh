@@ -61,7 +61,7 @@ readonly HELM_VERSION="3.21.2"
 # renovate: datasource=github-releases depName=k3d-io/k3d
 readonly K3D_VERSION="5.9.0"
 # renovate: datasource=github-releases depName=helmfile/helmfile
-readonly HELMFILE_VERSION="1.6.0"
+readonly HELMFILE_VERSION="1.7.0"
 # renovate: datasource=github-releases depName=derailed/k9s
 readonly K9S_VERSION="0.51.0"
 # renovate: datasource=github-releases depName=databus23/helm-diff
