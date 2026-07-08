@@ -171,6 +171,29 @@ Port-forward to `x402-verifier` and calling `/verify` directly: MUST set `X-Forw
                                1. ServiceOffer CR namespace
                                2. upstream k8s service namespace
 --health-path /api/tags      Upstream health check path            [default: /health]
+--hostname    audit.acme.io  Dedicated public origin: offer routes rooted at "/" on that
+                             hostname (rewritten into /services/<name> before the gate),
+                             plus per-offer /openapi.json + /.well-known/x402 + landing page.
+                             One offer per origin (HostnameConflict). Storefront catch-all
+                             skips offer-bound hostnames. Bind later via
+                             `obol tunnel hostname add <host> --offer <ns>/<name>`.
+--async                      Broker-mediated delivery: paid call settles at acceptance → 202
+                             {jobId, statusUrl, jobToken}; broker (job-broker deploy, x402 ns,
+                             SQLite on PVC) replays upstream with no deadline. Free /jobs/<id>
+                             status (dual HTML/JSON); result gated to paying wallet (SIWX) or
+                             jobToken (--result-visibility public → id is the capability).
+                             --job-ttl (default 72h) → 410 after. No refunds (settle-at-accept).
+--max-in-flight/--rps        Traefik inFlightReq/rateLimit middleware on the offer routes.
+--route       path=/x,...    Repeatable route-table entry: path=/submit[,methods=POST|GET]
+                             [,gate=paid|free|auth][,price=0.5][,summary=...]. Declaring ANY
+                             route makes the table exhaustive (undeclared paths 404) — add
+                             path=/*,gate=paid for a catch-all. gate=free skips payment;
+                             gate=auth requires SIWX wallet sign-in (EIP-4361; verifier serves
+                             <offer>/auth + /auth/verify; upstream gets X-Verified-Wallet,
+                             paid routes get X-Payment-Payer — client-supplied copies are
+                             stripped). Reserved paths (/api, /openapi.json, /skill.md, /rpc,
+                             /.well-known, bare /services, /) are rejected.
+                             Full guide: docs/guides/route-gating-and-auth.md
 ```
 **Critical**: `--namespace` sets BOTH the ServiceOffer namespace and the upstream service namespace to the same value. Always pass the same `-n <namespace>` to every follow-up command (`sell status`, `sell stop`, `sell delete`). The CLI itself prints the correct namespace after creation.
 

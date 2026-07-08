@@ -2,6 +2,7 @@ package serviceoffercontroller
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -53,16 +54,32 @@ func buildOpenAPIDocument(offers []*monetizeapi.ServiceOffer, tunnelURL string, 
 		return ready[i].Namespace < ready[j].Namespace
 	})
 
+	components := map[string]any{
+		"schemas":   openAPIComponentSchemas(),
+		"responses": openAPIComponentResponses(),
+	}
+	// The siwx securityScheme is emitted ONLY when some offer declares a
+	// gate:auth route — those genuinely are HTTP-auth-gated (wallet
+	// sign-in). An unconditional scheme would re-introduce the indexer
+	// misclassification the "no securitySchemes" rule below exists to
+	// prevent (schemes present ⇒ x402scan reads the API as auth-gated).
+	if anyOfferHasAuthRoute(ready) {
+		components["securitySchemes"] = map[string]any{
+			"siwx": map[string]any{
+				"type":        "http",
+				"scheme":      "bearer",
+				"description": "Sign-In With X (EIP-4361). Either send `Authorization: SIWX <base64 message>.<base64 signature>` — an EIP-4361 message (domain = this host, Version 1, fresh Nonce, recent Issued At) signed with EIP-191 personal_sign — or POST {message, signature} to the offer's `/auth/verify` endpoint and reuse the returned session token as `Authorization: Bearer <token>`. Operations gated this way carry `x-auth-info` with the exact URLs.",
+			},
+		}
+	}
+
 	doc := map[string]any{
-		"openapi": openAPISpecVersion,
-		"info":    buildOpenAPIInfo(profile, len(ready)),
-		"servers": buildOpenAPIServers(tunnelURL),
-		"tags":    buildOpenAPITags(ready),
-		"paths":   buildOpenAPIPaths(ready),
-		"components": map[string]any{
-			"schemas":   openAPIComponentSchemas(),
-			"responses": openAPIComponentResponses(),
-		},
+		"openapi":    openAPISpecVersion,
+		"info":       buildOpenAPIInfo(profile, len(ready)),
+		"servers":    buildOpenAPIServers(tunnelURL),
+		"tags":       buildOpenAPITags(ready),
+		"paths":      buildOpenAPIPaths(ready),
+		"components": components,
 		// No global security block: payment is enforced by the x402 paywall
 		// (runtime 402 + X-PAYMENT retry), not an HTTP auth scheme. Modeling
 		// X-PAYMENT as an apiKey securityScheme made discovery indexers
@@ -203,7 +220,49 @@ func openAPIPrimaryPathForOffer(offer *monetizeapi.ServiceOffer) string {
 	if offer.IsInference() || offer.IsAgent() {
 		return joinOpenAPIPath(offer.EffectivePath(), "/v1/chat/completions")
 	}
+	if rt, ok := primaryPaidRoute(offer); ok {
+		return joinOpenAPIPath(offer.EffectivePath(), openAPIRelPathForRoute(rt.Path))
+	}
 	return joinOpenAPIPath(offer.EffectivePath(), "")
+}
+
+// anyOfferHasAuthRoute reports whether any offer's declared route table
+// contains a gate:auth entry (the condition for emitting the siwx
+// securityScheme).
+func anyOfferHasAuthRoute(offers []*monetizeapi.ServiceOffer) bool {
+	for _, offer := range offers {
+		for _, rt := range offer.Spec.Routes {
+			if rt.EffectiveGate() == monetizeapi.GateAuth {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// primaryPaidRoute returns the first paid entry of a DECLARED route table.
+// ok=false for offers without spec.routes — callers keep the legacy
+// offer-root behavior — and for (misconfigured) all-free tables.
+func primaryPaidRoute(offer *monetizeapi.ServiceOffer) (monetizeapi.ServiceOfferRoute, bool) {
+	if len(offer.Spec.Routes) == 0 {
+		return monetizeapi.ServiceOfferRoute{}, false
+	}
+	for _, rt := range offer.EffectiveRoutes() {
+		if rt.EffectiveGate() == monetizeapi.GatePaid {
+			return rt, true
+		}
+	}
+	return monetizeapi.ServiceOfferRoute{}, false
+}
+
+// primaryPaidMethod is the HTTP method advertised for the offer's primary
+// paid operation: the first declared method on the primary paid route, or
+// POST (the phase-1 default emission everywhere else).
+func primaryPaidMethod(offer *monetizeapi.ServiceOffer) string {
+	if rt, ok := primaryPaidRoute(offer); ok && len(rt.Methods) > 0 {
+		return strings.ToUpper(rt.Methods[0])
+	}
+	return "POST"
 }
 
 // openAPIDocsAnchorForOffer returns the site-relative Scalar deep link for
@@ -217,8 +276,7 @@ func openAPIDocsAnchorForOffer(offer *monetizeapi.ServiceOffer) string {
 	if path == "" {
 		return ""
 	}
-	// Every operation emitted today is a POST (see openAPIPathsForOffer).
-	return "/api#tag/" + fallbackOfferType(offer) + "/POST" + path
+	return "/api#tag/" + fallbackOfferType(offer) + "/" + primaryPaidMethod(offer) + path
 }
 
 // openAPIPathsForOffer returns the set of {path → pathItem} entries this
@@ -237,6 +295,13 @@ func openAPIDocsAnchorForOffer(offer *monetizeapi.ServiceOffer) string {
 func openAPIPathsForOffer(offer *monetizeapi.ServiceOffer) map[string]map[string]any {
 	if offer == nil {
 		return nil
+	}
+	// Declared route tables drive the emission for http/fine-tuning offers:
+	// one operation per route, with per-route gate + price. Inference/agent
+	// offers keep the chat-completions synthesis (their wire shape is fixed
+	// by the OpenAI contract regardless of route carve-outs).
+	if len(offer.Spec.Routes) > 0 && !offer.IsInference() && !offer.IsAgent() {
+		return annotateAsyncPaths(offer, openAPIPathsForRouteTable(offer))
 	}
 	switch {
 	case offer.IsInference(), offer.IsAgent():
@@ -279,7 +344,7 @@ func openAPIPathsForOffer(offer *monetizeapi.ServiceOffer) map[string]map[string
 			},
 		}
 	default:
-		return map[string]map[string]any{
+		return annotateAsyncPaths(offer, map[string]map[string]any{
 			"": {
 				"post": openAPIOperation(offer, openAPIOperationOptions{
 					summary:     "Invoke " + offer.Name,
@@ -291,7 +356,260 @@ func openAPIPathsForOffer(offer *monetizeapi.ServiceOffer) map[string]map[string
 					successResponse: openAPIGenericSuccessResponse("Upstream response (shape is operator-defined)."),
 				}),
 			},
+		})
+	}
+}
+
+// annotateAsyncPaths marks the paid operations of an async offer and adds
+// the /jobs surface, so buyers learn the 202→poll→result dance from the
+// document alone.
+func annotateAsyncPaths(offer *monetizeapi.ServiceOffer, paths map[string]map[string]any) map[string]map[string]any {
+	if !offer.Spec.Async.Enabled {
+		return paths
+	}
+	for _, item := range paths {
+		for _, rawOp := range item {
+			op, ok := rawOp.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, paid := op["x-payment-info"]; !paid {
+				continue
+			}
+			op["x-async"] = true
+			if responses, ok := op["responses"].(map[string]any); ok {
+				responses["202"] = map[string]any{
+					"description": "Job accepted; payment settled. The body carries {jobId, statusUrl, resultUrl, jobToken}; Location points at the free status page. Poll statusUrl until state=complete, then GET resultUrl authenticated as the paying wallet (SIWX) or with `Authorization: Bearer <jobToken>`. Optional: include {\"callbackUrl\": \"...\"} in a JSON submit body for a completion webhook.",
+				}
+				delete(responses, "200")
+			}
 		}
+	}
+	paths["/jobs/{jobId}"] = map[string]any{
+		"get": map[string]any{
+			"summary":     offer.Name + " — job status (free)",
+			"description": "Free async job status: JSON for pollers, an auto-refreshing HTML page for browsers. `Prefer: redirect` returns 303 to the result once complete.",
+			"operationId": openAPIOperationID(offer) + "-job-status",
+			"tags":        operationTagsForOffer(offer),
+			"security":    []any{},
+			"x-gate":      "free",
+			"responses": map[string]any{
+				"200": openAPIGenericSuccessResponse("Job state: {jobId, state, createdAt, expiresAt, resultUrl?, error?}."),
+				"410": map[string]any{"description": "Retention window elapsed; the job record and result were deleted."},
+			},
+		},
+	}
+	access := "Access: the paying wallet (SIWX) or the jobToken from the 202 body."
+	if offer.Spec.Async.EffectiveResultVisibility() == monetizeapi.ResultVisibilityPublic {
+		access = "This offer publishes results publicly — the unguessable job id is the capability."
+	}
+	paths["/jobs/{jobId}/result"] = map[string]any{
+		"get": map[string]any{
+			"summary":     offer.Name + " — job result",
+			"description": "The stored upstream response, served verbatim once state=complete. " + access,
+			"operationId": openAPIOperationID(offer) + "-job-result",
+			"tags":        operationTagsForOffer(offer),
+			"security":    []any{},
+			"responses": map[string]any{
+				"200": openAPIGenericSuccessResponse("The stored upstream response (original content type)."),
+				"401": map[string]any{"description": "Not the paying wallet and no valid jobToken."},
+				"409": map[string]any{"description": "Job still running; poll the status URL."},
+				"502": map[string]any{"description": "The job failed. Payment settled at acceptance — report via info.contact."},
+			},
+		},
+	}
+	return paths
+}
+
+// openAPIPathsForRouteTable renders one operation per declared route.
+// Paid routes carry the shared 402 reference and an x-payment-info built
+// from the route's effective price (per-route override or the offer's
+// payments). Free routes carry neither — they are advertised as plainly
+// callable, marked with x-gate: free so indexers don't misread the absence
+// of payment metadata as an omission.
+//
+// openAPIRelPathForRoute collapses an exact path and its own "/*" wildcard
+// sibling onto the same {key, method} slot (e.g. "/jobs" and "/jobs/*" both
+// key as "/jobs"). The verifier resolves that overlap by specificity, not
+// declaration order (sortRoutesBySpecificity in internal/x402/matcher.go) —
+// exact beats wildcard. We sort a copy of the route table the same way
+// before rendering, and skip a method that a more specific route already
+// wrote, so the collapsed operation always reflects the route the verifier
+// will actually select instead of whichever was declared last.
+func openAPIPathsForRouteTable(offer *monetizeapi.ServiceOffer) map[string]map[string]any {
+	routes := append([]monetizeapi.ServiceOfferRoute(nil), offer.EffectiveRoutes()...)
+	sortRouteTableBySpecificity(routes)
+
+	paths := map[string]map[string]any{}
+	for _, rt := range routes {
+		rel := openAPIRelPathForRoute(rt.Path)
+		item := paths[rel]
+		if item == nil {
+			item = map[string]any{}
+			paths[rel] = item
+		}
+		gate := rt.EffectiveGate()
+
+		summary := rt.Summary
+		if summary == "" {
+			switch gate {
+			case monetizeapi.GateFree:
+				summary = fmt.Sprintf("%s — %s (free)", offer.Name, rt.Path)
+			case monetizeapi.GateAuth:
+				summary = fmt.Sprintf("%s — %s (wallet sign-in)", offer.Name, rt.Path)
+			default:
+				summary = fmt.Sprintf("Invoke %s — %s", offer.Name, rt.Path)
+			}
+		}
+		description := offerDescription(offer, "x402 payment-gated HTTP service.")
+		if strings.HasSuffix(rt.Path, "/*") {
+			description += " This operation covers every sub-path under " + rt.Path + "."
+		}
+
+		methods := rt.Methods
+		if len(methods) == 0 {
+			if gate == monetizeapi.GatePaid {
+				methods = []string{"POST"}
+			} else {
+				methods = []string{"GET"}
+			}
+		}
+
+		for _, method := range methods {
+			// routes is sorted most-specific-first: if a more specific
+			// route already claimed this method at this collapsed key,
+			// it wins — matching the verifier's resolution.
+			if _, claimed := item[strings.ToLower(method)]; claimed {
+				continue
+			}
+			op := map[string]any{
+				"summary":     summary,
+				"description": description,
+				"operationId": openAPIRouteOperationID(offer, method, rt.Path),
+				"tags":        operationTagsForOffer(offer),
+				"security":    []any{},
+			}
+			switch gate {
+			case monetizeapi.GateFree:
+				op["responses"] = map[string]any{
+					"200": openAPIGenericSuccessResponse("Upstream response (shape is operator-defined)."),
+				}
+				op["x-gate"] = "free"
+			case monetizeapi.GateAuth:
+				op["responses"] = map[string]any{
+					"200": openAPIGenericSuccessResponse("Upstream response (shape is operator-defined)."),
+					"401": map[string]any{
+						"description": "Authentication required. The body and WWW-Authenticate header describe the SIWX challenge; browsers get a sign-in page.",
+					},
+				}
+				op["security"] = []any{map[string]any{"siwx": []any{}}}
+				op["x-gate"] = "auth"
+				op["x-auth-info"] = map[string]any{
+					"scheme":    "siwx",
+					"version":   "eip4361",
+					"signInUrl": joinOpenAPIPath(offer.EffectivePath(), "/auth"),
+					"verifyUrl": joinOpenAPIPath(offer.EffectivePath(), "/auth/verify"),
+				}
+			default:
+				op["responses"] = map[string]any{
+					"200": openAPIGenericSuccessResponse("Upstream response (shape is operator-defined)."),
+					"402": map[string]any{"$ref": "#/components/responses/PaymentRequired"},
+				}
+				op["x-payment-info"] = routePaymentInfoExtension(offer, rt)
+				if strings.EqualFold(method, "POST") || strings.EqualFold(method, "PUT") || strings.EqualFold(method, "PATCH") {
+					op["requestBody"] = openAPIJSONRequestBody(
+						"",
+						"Operator-defined JSON payload. Shape is not specified in phase 1.",
+					)
+				}
+			}
+			item[strings.ToLower(method)] = op
+		}
+	}
+	return paths
+}
+
+// sortRouteTableBySpecificity orders a copy of the route table
+// most-specific-first: exact patterns before wildcards, then longer literal
+// prefix, then deeper (more path segments) — the same rule
+// sortRoutesBySpecificity (internal/x402/matcher.go) applies to the
+// verifier's RouteRules. All routes in a table share the offer's prefix, so
+// comparing the relative rt.Path is equivalent to comparing the full
+// verifier pattern. sort.SliceStable so equally-specific routes keep their
+// declared order.
+func sortRouteTableBySpecificity(routes []monetizeapi.ServiceOfferRoute) {
+	sort.SliceStable(routes, func(i, j int) bool {
+		ei, li := routePatternSpecificity(routes[i].Path)
+		ej, lj := routePatternSpecificity(routes[j].Path)
+		if ei != ej {
+			return ei // exact before wildcard
+		}
+		if li != lj {
+			return li > lj // longer literal prefix first
+		}
+		si := strings.Count(routes[i].Path, "/")
+		sj := strings.Count(routes[j].Path, "/")
+		return si > sj // deeper pattern first
+	})
+}
+
+// routePatternSpecificity mirrors patternSpecificity in
+// internal/x402/matcher.go: whether the path is an exact match (no
+// wildcards) and the length of its literal prefix before the first "*".
+func routePatternSpecificity(routePath string) (exact bool, literalLen int) {
+	i := strings.IndexByte(routePath, '*')
+	if i < 0 {
+		return true, len(routePath)
+	}
+	return false, i
+}
+
+// openAPIRelPathForRoute converts a route-table path into an OpenAPI paths
+// key relative to the offer root: the catch-all "/*" is the offer root
+// itself (""), a trailing wildcard collapses to its literal prefix (the
+// operation description notes the sub-path coverage), exact paths pass
+// through verbatim.
+func openAPIRelPathForRoute(routePath string) string {
+	if routePath == "" || routePath == "/" || routePath == "/*" {
+		return ""
+	}
+	return strings.TrimSuffix(routePath, "/*")
+}
+
+// openAPIRouteOperationID derives a unique, stable operation id for one
+// route-table operation: the offer's base id plus method and sanitized path.
+func openAPIRouteOperationID(offer *monetizeapi.ServiceOffer, method, routePath string) string {
+	suffix := strings.Trim(strings.TrimSuffix(routePath, "/*"), "/")
+	suffix = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		default:
+			return '-'
+		}
+	}, suffix)
+	suffix = strings.Trim(suffix, "-")
+	if suffix == "" {
+		suffix = "root"
+	}
+	return openAPIOperationID(offer) + "-" + strings.ToLower(method) + "-" + suffix
+}
+
+// routePaymentInfoExtension is offerPaymentInfoExtension with the
+// route-table price semantics applied: a per-route price override replaces
+// the primary option's price and collapses the route to single-payment
+// (mirrors routeRulesFromOffer in the verifier's route source — the two
+// MUST agree or discovery advertises a price the gate doesn't charge).
+func routePaymentInfoExtension(offer *monetizeapi.ServiceOffer, rt monetizeapi.ServiceOfferRoute) map[string]any {
+	if !rt.HasPriceOverride() {
+		return offerPaymentInfoExtension(offer)
+	}
+	p := offer.EffectivePayments()[0]
+	p.Price = rt.Price
+	return map[string]any{
+		"price":     paymentInfoPrice(p),
+		"protocols": []any{map[string]any{"x402": map[string]any{}}},
+		"accepts":   []any{paymentInfoAccept(p)},
 	}
 }
 

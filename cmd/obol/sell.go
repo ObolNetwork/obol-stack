@@ -753,10 +753,52 @@ Examples:
 				Name:  "path",
 				Usage: "URL path prefix (default: /services/<name>)",
 			},
+			&cli.StringFlag{
+				Name: "hostname",
+				Usage: "Dedicated public origin for this offer (e.g. audit.example.com). The offer's " +
+					"routes answer at the hostname root with their own discovery bundle (/openapi.json, " +
+					"/.well-known/x402, landing page) so per-origin crawlers (x402scan, agentcash) list " +
+					"it as its own product. The /services/<name> path stays as an alias. Route the DNS " +
+					"via 'obol tunnel hostname add <host> --offer <ns>/<name>'.",
+			},
+			&cli.StringSliceFlag{
+				Name: "route",
+				Usage: "Declare one route in the offer's route table (repeatable). " +
+					"Format: path=/submit[,methods=POST|GET][,gate=paid|free|auth][,price=0.5][,summary=...]. " +
+					"Paths are relative to the offer prefix; trailing /* covers sub-paths. " +
+					"When any --route is set, only declared routes are served (undeclared paths 404) — " +
+					"add path=/*,gate=paid for a catch-all. gate=free carves the route out of the " +
+					"payment gate; gate=auth requires a SIWX wallet sign-in instead of payment; " +
+					"price overrides the offer price for that route.",
+			},
 			&cli.IntFlag{
 				Name:  "max-timeout",
 				Usage: "Payment validity window in seconds",
 				Value: 300,
+			},
+			&cli.BoolFlag{
+				Name: "async",
+				Usage: "Deliver paid requests as accepted jobs: payment settles at acceptance, the request " +
+					"replays upstream with no client-facing deadline (survives tunnel timeouts), and the buyer " +
+					"gets 202 + a free status page at <offer>/jobs/<id>. Results are gated to the paying " +
+					"wallet (SIWX) or the jobToken from the 202 body. NOTE: no refunds — a failed run was " +
+					"still paid for; set a contact via 'obol sell info set --contact-email'.",
+			},
+			&cli.StringFlag{
+				Name:  "result-visibility",
+				Usage: "Async result access: 'payer' (paying wallet or jobToken; default) or 'public' (the unguessable job id is the capability)",
+			},
+			&cli.StringFlag{
+				Name:  "job-ttl",
+				Usage: "Async job + result retention (Go duration, e.g. 72h); status pages return 410 afterwards",
+			},
+			&cli.IntFlag{
+				Name:  "max-in-flight",
+				Usage: "Cap concurrent in-flight requests to this offer (Traefik inFlightReq); 0 = uncapped",
+			},
+			&cli.IntFlag{
+				Name:  "rps",
+				Usage: "Cap average requests/second to this offer (Traefik rateLimit, burst 2x); 0 = uncapped",
 			},
 			// Registration flags
 			&cli.BoolFlag{
@@ -940,6 +982,49 @@ Examples:
 
 			if path := cmd.String("path"); path != "" {
 				spec["path"] = path
+			}
+
+			if hostname := strings.ToLower(strings.TrimSpace(cmd.String("hostname"))); hostname != "" {
+				spec["hostname"] = hostname
+			}
+
+			if cmd.Bool("async") || cmd.String("result-visibility") != "" || cmd.String("job-ttl") != "" {
+				asyncBlock := map[string]any{"enabled": true}
+				if vis := cmd.String("result-visibility"); vis != "" {
+					if vis != monetizeapi.ResultVisibilityPayer && vis != monetizeapi.ResultVisibilityPublic {
+						return fmt.Errorf("--result-visibility must be payer or public (got %q)", vis)
+					}
+					asyncBlock["resultVisibility"] = vis
+				}
+				if ttl := cmd.String("job-ttl"); ttl != "" {
+					if _, err := time.ParseDuration(ttl); err != nil {
+						return fmt.Errorf("--job-ttl: %w", err)
+					}
+					asyncBlock["ttl"] = ttl
+				}
+				spec["async"] = asyncBlock
+			}
+
+			if cmd.Int("max-in-flight") > 0 || cmd.Int("rps") > 0 {
+				limits := map[string]any{}
+				if v := cmd.Int("max-in-flight"); v > 0 {
+					limits["maxInFlight"] = v
+				}
+				if v := cmd.Int("rps"); v > 0 {
+					limits["rps"] = v
+				}
+				spec["limits"] = limits
+			}
+
+			if routeVals := cmd.StringSlice("route"); len(routeVals) > 0 {
+				routes, hasPaid, err := parseRouteFlags(routeVals)
+				if err != nil {
+					return err
+				}
+				spec["routes"] = routes
+				if !hasPaid {
+					u.Warn("Route table has no paid route — every declared path is free and undeclared paths are not served. Add a paid route (e.g. --route path=/*,gate=paid) if this offer should charge.")
+				}
 			}
 
 			if pf := cmd.String("provenance-file"); pf != "" {
@@ -4717,6 +4802,82 @@ func sellOfferStorePath(cfg *config.Config, namespace, name string) string {
 	return filepath.Join(sellOfferStoreDir(cfg), namespace+"__"+name+".yaml")
 }
 
+// parseRouteFlags converts repeatable --route values into spec.routes
+// entries. Each value is a comma-separated key=value list; a segment
+// without "=" is folded into the previous value so free-text summaries may
+// contain commas (mirrors the --accept parsing approach). hasPaid reports
+// whether at least one route charges — an all-free table is legal but
+// almost certainly a mistake, so the caller warns.
+func parseRouteFlags(vals []string) (routes []map[string]any, hasPaid bool, err error) {
+	routes = make([]map[string]any, 0, len(vals))
+	for _, val := range vals {
+		route := map[string]any{}
+		var segments []string
+		for _, seg := range strings.Split(val, ",") {
+			if !strings.Contains(seg, "=") && len(segments) > 0 {
+				segments[len(segments)-1] += "," + seg
+				continue
+			}
+			segments = append(segments, seg)
+		}
+		gate := monetizeapi.GatePaid
+		for _, seg := range segments {
+			key, v, _ := strings.Cut(seg, "=")
+			key = strings.TrimSpace(key)
+			v = strings.TrimSpace(v)
+			switch key {
+			case "path":
+				if !strings.HasPrefix(v, "/") {
+					return nil, false, fmt.Errorf("--route %q: path must start with / (got %q)", val, v)
+				}
+				route["path"] = v
+			case "methods":
+				methods := []any{}
+				for _, m := range strings.Split(v, "|") {
+					m = strings.ToUpper(strings.TrimSpace(m))
+					switch m {
+					case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
+						methods = append(methods, m)
+					default:
+						return nil, false, fmt.Errorf("--route %q: unknown method %q", val, m)
+					}
+				}
+				route["methods"] = methods
+			case "gate":
+				switch v {
+				case monetizeapi.GatePaid, monetizeapi.GateFree, monetizeapi.GateAuth:
+					gate = v
+				default:
+					return nil, false, fmt.Errorf("--route %q: gate must be paid, free, or auth (got %q)", val, v)
+				}
+			case "price":
+				route["price"] = map[string]any{"perRequest": v}
+			case "freeQuota", "free-quota":
+				n, err := strconv.ParseInt(v, 10, 64)
+				if err != nil || n < 0 {
+					return nil, false, fmt.Errorf("--route %q: freeQuota must be a non-negative integer", val)
+				}
+				route["freeQuota"] = n
+			case "summary":
+				route["summary"] = v
+			default:
+				return nil, false, fmt.Errorf("--route %q: unknown key %q (want path, methods, gate, price, freeQuota, summary)", val, key)
+			}
+		}
+		if route["path"] == nil {
+			return nil, false, fmt.Errorf("--route %q: path is required", val)
+		}
+		route["gate"] = gate
+		if gate == monetizeapi.GatePaid {
+			hasPaid = true
+		} else if route["price"] != nil || route["freeQuota"] != nil {
+			return nil, false, fmt.Errorf("--route %q: price and freeQuota only apply to paid routes (gate=%s)", val, gate)
+		}
+		routes = append(routes, route)
+	}
+	return routes, hasPaid, nil
+}
+
 // preflightOfferPathCollision fails fast when another live ServiceOffer
 // already claims the manifest's public path. The x402 verifier's route
 // table is first-match-wins, so a colliding offer would silently shadow
@@ -4735,16 +4896,62 @@ func preflightOfferPathCollision(cfg *config.Config, manifest map[string]any) er
 	if path == "" {
 		path = "/services/" + name
 	}
+	hostname, _ := spec["hostname"].(string)
+	// Static check first — reserved platform paths are rejected even when
+	// the cluster is unreachable (the controller backstops with
+	// RoutePublished=False/ReservedPath, but failing here is friendlier).
+	if root := monetizeapi.ReservedPathConflict(path); root != "" {
+		return fmt.Errorf("path %s collides with the reserved platform path %s (discovery/routing surface) — pass --path to pick a different public path", path, root)
+	}
+	// F8: same static check, but over each declared spec.routes[].path
+	// entry rather than just the offer root. A route landing on "/auth" (or
+	// nested under it) would shadow the verifier's SIWX sign-in endpoints.
+	if routePath, root := reservedRoutePathCollision(spec); root != "" {
+		return fmt.Errorf("route path %s collides with the reserved platform path %s (discovery/routing surface) — pick a different route path", routePath, root)
+	}
 	bin, kubeconfig := kubectl.Paths(cfg)
 	out, err := kubectl.Output(bin, kubeconfig, "get", "serviceoffers.obol.org", "-A", "-o", "json")
 	if err != nil {
 		return nil //nolint:nilerr // best-effort preflight; the apply surfaces real errors
 	}
-	return offerPathCollisionInList([]byte(out), ns, name, path)
+	return offerPathCollisionInList([]byte(out), ns, name, path, hostname)
+}
+
+// reservedRoutePathCollision checks spec["routes"] against the route-level
+// reserved-path denylist and returns the first colliding route's path and
+// the reserved root it hit, or ("", "") when none collide. spec["routes"]
+// takes two shapes depending on how the manifest was built: []map[string]any
+// from parseRouteFlags (the --route flag path) or []any of
+// map[string]interface{} from json.Unmarshal (the --from-json path) — any
+// is an alias for interface{}, so both element types assert the same way.
+func reservedRoutePathCollision(spec map[string]any) (routePath, root string) {
+	var routes []any
+	switch rs := spec["routes"].(type) {
+	case []map[string]any:
+		for _, r := range rs {
+			routes = append(routes, r)
+		}
+	case []any:
+		routes = rs
+	}
+	for _, item := range routes {
+		rm, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		p, _ := rm["path"].(string)
+		if p == "" {
+			continue
+		}
+		if r := monetizeapi.ReservedRoutePathConflict(p); r != "" {
+			return p, r
+		}
+	}
+	return "", ""
 }
 
 // offerPathCollisionInList is the pure core of preflightOfferPathCollision.
-func offerPathCollisionInList(listJSON []byte, ns, name, path string) error {
+func offerPathCollisionInList(listJSON []byte, ns, name, path, hostname string) error {
 	var list struct {
 		Items []struct {
 			Metadata struct {
@@ -4753,7 +4960,8 @@ func offerPathCollisionInList(listJSON []byte, ns, name, path string) error {
 				DeletionTimestamp string `json:"deletionTimestamp"`
 			} `json:"metadata"`
 			Spec struct {
-				Path string `json:"path"`
+				Path     string `json:"path"`
+				Hostname string `json:"hostname"`
 			} `json:"spec"`
 		} `json:"items"`
 	}
@@ -4778,6 +4986,10 @@ func offerPathCollisionInList(listJSON []byte, ns, name, path string) error {
 		if strings.TrimSuffix(other, "/") == want {
 			return fmt.Errorf("path %s is already used by offer %s/%s — pass --path to pick a different public path, or delete the existing offer first",
 				path, item.Metadata.Namespace, item.Metadata.Name)
+		}
+		if hostname != "" && strings.EqualFold(item.Spec.Hostname, hostname) {
+			return fmt.Errorf("hostname %s is already used by offer %s/%s — one offer per origin; pass a different --hostname or delete the existing offer first",
+				hostname, item.Metadata.Namespace, item.Metadata.Name)
 		}
 	}
 	return nil

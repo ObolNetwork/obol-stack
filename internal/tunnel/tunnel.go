@@ -1226,6 +1226,33 @@ func storefrontHostnames(cfg *config.Config, tunnelURL string) []string {
 	return nil
 }
 
+// offerBoundHostnames returns the set of hostnames claimed by ServiceOffers
+// (spec.hostname), normalized, and any error from the query itself (cluster
+// down, CRD missing, kubectl not found). A successful query with no offers
+// bound returns an empty, non-nil map with a nil error — callers must not
+// conflate that with a query failure (P1b): collapsing both into the same
+// "nil" previously made CreateStorefront treat "can't tell" as "zero
+// hostnames are bound" and reclaim every hostname, including live
+// per-offer origins, under the catch-all.
+func offerBoundHostnames(kubectlPath, kubeconfigPath string) (map[string]bool, error) {
+	cmd := exec.Command(kubectlPath,
+		"--kubeconfig", kubeconfigPath,
+		"get", "serviceoffers.obol.org", "-A",
+		"-o", `jsonpath={range .items[*]}{.spec.hostname}{"\n"}{end}`,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	bound := map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if h := normalizeHostname(line); h != "" {
+			bound[h] = true
+		}
+	}
+	return bound, nil
+}
+
 // CreateStorefront creates (or updates) the public storefront landing page and
 // publishes it at the root path of EVERY supplied hostname. Each argument may be
 // a bare hostname or a full URL (scheme/path stripped); empty or duplicate
@@ -1239,6 +1266,37 @@ func CreateStorefront(cfg *config.Config, hostnames ...string) error {
 
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	// Hostnames claimed by a ServiceOffer (spec.hostname) belong to that
+	// offer's dedicated-origin route — the storefront catch-all must not
+	// contest their root (Gateway API breaks PathPrefix-/ ties on route
+	// age, i.e. silently).
+	bound, err := offerBoundHostnames(kubectlPath, kubeconfigPath)
+	if err != nil {
+		// ponytail: fail safe (P1b) — we can't tell which hostnames are
+		// offer-bound, so proceeding would risk the catch-all reclaiming a
+		// live per-offer origin on what may be a transient kubectl error.
+		// Leave the existing storefront route untouched instead of
+		// guessing "zero hostnames are bound".
+		fmt.Printf("   Storefront: could not query offer-bound hostnames (%v) — leaving existing storefront route unchanged\n", err)
+		return nil
+	}
+	if len(bound) > 0 {
+		kept := hosts[:0]
+		for _, h := range hosts {
+			if bound[h] {
+				fmt.Printf("   Storefront: skipping %s (bound to a ServiceOffer via spec.hostname)\n", h)
+				continue
+			}
+			kept = append(kept, h)
+		}
+		hosts = kept
+		if len(hosts) == 0 {
+			// Every tracked hostname is offer-bound; nothing for the
+			// storefront to serve — a valid configuration.
+			return nil
+		}
+	}
 
 	labels := map[string]string{"app": "tunnel-storefront"}
 

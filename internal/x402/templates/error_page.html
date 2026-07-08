@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>{{.Status}} — {{.Title}}</title>
+    <meta name="robots" content="noindex" />
+    <meta name="theme-color" content="#091011" />
+    <style>
+      :root {
+        /* Mirrors web/public-storefront/src/app/globals.css token names */
+        --bg01: #091011;
+        --bg02: #111f22;
+        --stroke: #1e3a3f;
+        --green: #2fe4ab;
+        --light: #d9eef3;
+        --body: #9cc2c9;
+        --muted: #475e64;
+        --font-mono: "JetBrains Mono", "IBM Plex Mono", "Fira Code", ui-monospace, monospace;
+      }
+      * { box-sizing: border-box; }
+      html, body { background-color: var(--bg01); }
+      body {
+        margin: 0;
+        color: var(--light);
+        font-family: "DM Sans", system-ui, -apple-system, Segoe UI, sans-serif;
+        min-height: 100vh;
+        line-height: 1.5;
+      }
+      .wrap { max-width: 560px; margin: 0 auto; padding: 96px 24px; }
+      .code {
+        font-family: var(--font-mono);
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--green);
+        margin-bottom: 12px;
+      }
+      h1 { font-size: 24px; margin: 0 0 12px; }
+      p { color: var(--body); margin: 0 0 12px; }
+      a { color: var(--green); }
+      .fineprint { color: var(--muted); font-size: 13px; margin-top: 32px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="code">{{.Status}}</div>
+      <h1>{{.Title}}</h1>
+      <p>{{.Detail}}</p>
+      <p><a href="/">Browse the services this operator sells</a></p>
+      <p class="fineprint">
+        Something broken, or a paid result not what you expected? Reach the
+        operator via the contact in
+        <a href="/openapi.json">/openapi.json</a> (<code>info.contact</code>).
+      </p>
+    </div>
+  </body>
+</html>

@@ -8,9 +8,11 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	x402types "github.com/x402-foundation/x402/go/v2/types"
@@ -40,6 +42,15 @@ type Verifier struct {
 	// Sorted by length descending so longer-prefix matches win first
 	// (defensive — fixes nothing today but cheap insurance).
 	paidPrefixes atomic.Pointer[[]string]
+
+	// siwx authenticates gate:auth routes (EIP-4361 signatures + session
+	// tokens). Sessions are signed with a per-process secret: a verifier
+	// restart invalidates them (single-replica; clients re-authenticate).
+	siwx *SIWXAuthenticator
+
+	// quota tracks per-wallet free-tier usage on paid routes with a
+	// freeQuota (in-memory, UTC-day windows).
+	quota *freeQuotaCounter
 }
 
 // MarkRoutesLoaded signals that the route source has produced its first
@@ -49,7 +60,11 @@ func (v *Verifier) MarkRoutesLoaded() { v.routesLoaded.Store(true) }
 
 // NewVerifier creates a Verifier with the given initial configuration.
 func NewVerifier(cfg *PricingConfig) (*Verifier, error) {
-	v := &Verifier{metrics: newVerifierMetrics()}
+	siwx, err := NewSIWXAuthenticator(0, 0)
+	if err != nil {
+		return nil, err
+	}
+	v := &Verifier{metrics: newVerifierMetrics(), siwx: siwx, quota: newFreeQuotaCounter()}
 	if err := v.load(cfg); err != nil {
 		return nil, err
 	}
@@ -95,10 +110,36 @@ func (v *Verifier) load(cfg *PricingConfig) error {
 	// uses this to fail-closed when a URI is under a tracked prefix but
 	// no rule matches (see isUnderPaidPrefix for the rationale).
 	prefixes := make([]string, 0, len(cfg.Routes))
+	seenPrefix := make(map[string]struct{}, len(cfg.Routes))
+	addPrefix := func(p string) {
+		if p == "" {
+			return
+		}
+		if _, ok := seenPrefix[p]; ok {
+			return
+		}
+		seenPrefix[p] = struct{}{}
+		prefixes = append(prefixes, p)
+	}
 	for _, r := range cfg.Routes {
-		prefix := patternToPrefix(r.Pattern)
-		if prefix != "" {
-			prefixes = append(prefixes, prefix)
+		// Free carve-outs never establish a paid prefix: a wildcard free
+		// route (e.g. /services/foo/jobs/*) must not make unmatched
+		// siblings fail closed.
+		if r.IsFree() {
+			continue
+		}
+		addPrefix(patternToPrefix(r.Pattern))
+		// Fail-closed for exact-only route tables. A wildcard route yields
+		// a paid prefix above, but an offer whose non-free routes are ALL
+		// exact (e.g. only `/services/foo/submit`) would register none, so
+		// an undeclared sibling like `/services/foo/other` — which matched
+		// no rule — would 200-free-pass in ForwardAuth mode, contradicting
+		// the route-table contract that undeclared paths are refused once
+		// any route is declared. Register the offer base as a paid prefix
+		// so those siblings fail closed. Declared routes (free/auth/paid)
+		// still return from matchRoute before this prefix is ever consulted.
+		if base := strings.TrimSuffix(r.StripPrefix, "/"); base != "" {
+			addPrefix(base + "/")
 		}
 	}
 	sort.Slice(prefixes, func(i, j int) bool { return len(prefixes[i]) > len(prefixes[j]) })
@@ -149,10 +190,14 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Match on the path alone: Traefik forwards the full request URI, and
+	// "/rpc?method=x" must hit the "/rpc" rule, not free-pass around it.
+	uri = stripQueryFragment(uri)
+
 	cfg := v.config.Load()
 
-	mr, ok := v.matchPaidRouteFull(cfg, uri)
-	if !ok {
+	rule := matchRoute(cfg.Routes, uri)
+	if rule == nil {
 		// Check if this URI is under a tracked paid prefix. If yes,
 		// the route was supposed to match but didn't — fail closed
 		// rather than silently make it free (Traefik ForwardAuth 200
@@ -165,6 +210,47 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		}
 		// Not under any paid prefix — legitimately free route.
 		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Declared free carve-out (offer route table, gate: free): allow the
+	// request through, still authenticating it with the upstream when the
+	// offer has upstream auth configured. Identity headers are set to
+	// empty so Traefik's authResponseHeaders overwrite any client-forged
+	// values on the forwarded request.
+	if rule.IsFree() {
+		if rule.UpstreamAuth != "" {
+			w.Header().Set("Authorization", rule.UpstreamAuth)
+		}
+		w.Header().Set(HeaderVerifiedWallet, "")
+		w.Header().Set(HeaderPaymentPayer, "")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// SIWX-gated carve-out (gate: auth): a verified wallet substitutes for
+	// payment; the wallet is handed to the upstream via authResponseHeaders.
+	if rule.IsAuth() {
+		wallet, err := v.siwx.Authenticate(r, requestHost(r), time.Now())
+		if err != nil {
+			v.writeSIWXChallenge(w, r, rule, err)
+			return
+		}
+		if rule.UpstreamAuth != "" {
+			w.Header().Set("Authorization", rule.UpstreamAuth)
+		}
+		w.Header().Set(HeaderVerifiedWallet, wallet)
+		w.Header().Set(HeaderPaymentPayer, "")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	mr, ok := v.resolvePaidRoute(cfg, rule)
+	if !ok {
+		// A rule matched but none of its payment options resolve to a
+		// known chain — a paid route we cannot price. Fail closed.
+		log.Printf("x402-verifier: rule %q matched but no payment option resolves — fail closed", rule.Pattern)
+		http.Error(w, "route is payment-gated but has no resolvable payment option", http.StatusForbidden)
 		return
 	}
 
@@ -206,6 +292,13 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		OnPaymentFailure: func(reason string) {
 			v.metrics.paymentFailureReasons.With(withReason(matchedLabels, reason)).Inc()
 		},
+		// Propagate the verified payer to the upstream. Set even when
+		// empty: Traefik's authResponseHeaders only overwrite forwarded
+		// request headers when present on the auth response, so an
+		// always-set header is what neutralizes client-forged values.
+		OnPaymentVerified: func(payer string) {
+			w.Header().Set(HeaderPaymentPayer, payer)
+		},
 	}, mr.requirements)
 
 	upstreamAuth := mr.rule.UpstreamAuth
@@ -213,6 +306,10 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		if upstreamAuth != "" {
 			w.Header().Set("Authorization", upstreamAuth)
 		}
+		if w.Header().Get(HeaderPaymentPayer) == "" {
+			w.Header().Set(HeaderPaymentPayer, "")
+		}
+		w.Header().Set(HeaderVerifiedWallet, "")
 
 		w.WriteHeader(http.StatusOK)
 	})
@@ -238,9 +335,76 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	cfg := v.config.Load()
 
-	mr, ok := v.matchPaidRouteFull(cfg, r.URL.Path)
+	// The identity headers are verifier-set facts; client-supplied values
+	// must never reach an upstream — on any route class.
+	stripIdentityHeaders(r.Header)
+
+	// Verifier-served sign-in endpoints (<offer>/auth[/verify]) for offers
+	// with gate:auth routes — handled before route matching so they never
+	// proxy or gate.
+	if v.handleAuthEndpoints(w, r) {
+		return
+	}
+
+	rule := matchRoute(cfg.Routes, r.URL.Path)
+	if rule == nil {
+		writeErrorResponse(w, r, http.StatusNotFound, "No service here",
+			"This path is not part of any published service. The operator's catalog lists every live endpoint.")
+		return
+	}
+
+	// Declared free carve-out: proxy straight to the upstream, no payment
+	// middleware. buildUpstreamProxy still injects upstream auth and strips
+	// the offer's route prefix, so free and paid routes reach the upstream
+	// identically shaped.
+	if rule.IsFree() {
+		proxy, err := buildUpstreamProxy(rule)
+		if err != nil {
+			log.Printf("x402-verifier: build upstream proxy for %s/%s: %v", rule.OfferNamespace, rule.OfferName, err)
+			writeErrorResponse(w, r, http.StatusInternalServerError, "Upstream unavailable",
+				"The service behind this route is not reachable right now. Retry shortly.")
+			return
+		}
+		// Opportunistic identity: free routes don't REQUIRE a credential,
+		// but a valid one still yields X-Verified-Wallet — this is how the
+		// broker's job listing and payer-gated results see who's asking.
+		// Invalid or non-SIWX credentials (e.g. a jobToken bearer the
+		// broker itself checks) pass through anonymous.
+		if wallet, err := v.siwx.Authenticate(r, requestHost(r), time.Now()); err == nil {
+			r.Header.Set(HeaderVerifiedWallet, wallet)
+		}
+		proxy.ServeHTTP(&statusRecorder{ResponseWriter: w, status: http.StatusOK}, r)
+		return
+	}
+
+	// SIWX-gated carve-out: verified wallet substitutes for payment; the
+	// wallet rides to the upstream as X-Verified-Wallet.
+	if rule.IsAuth() {
+		wallet, err := v.siwx.Authenticate(r, requestHost(r), time.Now())
+		if err != nil {
+			v.writeSIWXChallenge(w, r, rule, err)
+			return
+		}
+		proxy, err := buildUpstreamProxy(rule)
+		if err != nil {
+			log.Printf("x402-verifier: build upstream proxy for %s/%s: %v", rule.OfferNamespace, rule.OfferName, err)
+			writeErrorResponse(w, r, http.StatusInternalServerError, "Upstream unavailable",
+				"The service behind this route is not reachable right now. Retry shortly.")
+			return
+		}
+		r.Header.Set(HeaderVerifiedWallet, wallet)
+		proxy.ServeHTTP(&statusRecorder{ResponseWriter: w, status: http.StatusOK}, r)
+		return
+	}
+
+	mr, ok := v.resolvePaidRoute(cfg, rule)
 	if !ok {
-		http.NotFound(w, r)
+		// Paid route with no resolvable payment option — fail closed, and
+		// loudly: silently 404ing here is the CAIP-2/legacy chain-form
+		// mismatch failure mode (CLAUDE.md pitfall #10).
+		log.Printf("x402-verifier: rule %q matched but no payment option resolves — fail closed", rule.Pattern)
+		writeErrorResponse(w, r, http.StatusForbidden, "Route misconfigured",
+			"route is payment-gated but has no resolvable payment option")
 		return
 	}
 
@@ -252,6 +416,20 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		log.Printf("x402-verifier: build upstream proxy for %s/%s: %v", mr.rule.OfferNamespace, mr.rule.OfferName, err)
 		http.Error(w, "upstream unavailable", http.StatusInternalServerError)
 		return
+	}
+
+	// Free tier: a paid route with a freeQuota lets a SIWX-verified wallet
+	// ride free until its daily allowance is spent, then falls through to
+	// the normal 402. The wallet is forwarded so upstreams (and the async
+	// broker) still see an owner identity on free-tier calls.
+	if mr.rule.FreeQuota > 0 {
+		if wallet, err := v.siwx.Authenticate(r, requestHost(r), time.Now()); err == nil &&
+			v.quota.consume(mr.rule.Pattern, wallet, mr.rule.FreeQuota, time.Now()) {
+			r.Header.Set(HeaderVerifiedWallet, wallet)
+			r.Header.Set(HeaderPaymentPayer, wallet)
+			proxy.ServeHTTP(&statusRecorder{ResponseWriter: w, status: http.StatusOK}, r)
+			return
+		}
 	}
 
 	primary := mr.requirements[0]
@@ -273,6 +451,14 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		OnPaymentFailure: func(reason string) {
 			paymentFailed = true
 			v.metrics.paymentFailureReasons.With(withReason(matchedLabels, reason)).Inc()
+		},
+		// Hand the verified payer to the upstream (client-supplied copies
+		// were stripped at the top of HandleProxy). Upstreams use it to
+		// bind created resources (e.g. async jobs) to the paying wallet.
+		OnPaymentVerified: func(payer string) {
+			if payer != "" {
+				r.Header.Set(HeaderPaymentPayer, payer)
+			}
 		},
 	}, mr.requirements)
 
@@ -371,15 +557,11 @@ func (m *matchedRoute) labelsForMatched(req x402types.PaymentRequirements) prome
 	return m.labels
 }
 
-// matchPaidRouteFull matches a URI to a paid route and resolves the full set
-// of accepted payment options into x402 PaymentRequirements. Returns nil,false
-// when no rule matches or none of its options resolve to a known chain.
-func (v *Verifier) matchPaidRouteFull(cfg *PricingConfig, uri string) (*matchedRoute, bool) {
-	rule := matchRoute(cfg.Routes, uri)
-	if rule == nil {
-		return nil, false
-	}
-
+// resolvePaidRoute resolves a matched paid rule's full set of accepted
+// payment options into x402 PaymentRequirements. Returns nil,false when none
+// of the rule's options resolve to a known chain — callers fail closed on
+// that (the route is declared paid but cannot be priced).
+func (v *Verifier) resolvePaidRoute(cfg *PricingConfig, rule *RouteRule) (*matchedRoute, bool) {
 	chains := v.chains.Load()
 	opts := rule.PaymentOptions()
 	reqs := make([]x402types.PaymentRequirements, 0, len(opts))
@@ -593,10 +775,26 @@ func humanizeNetwork(name string) string {
 }
 
 func buildUpstreamProxy(rule *RouteRule) (http.Handler, error) {
-	target, err := url.Parse(rule.UpstreamURL)
-	if err != nil {
-		return nil, fmt.Errorf("parse upstream URL %q: %w", rule.UpstreamURL, err)
+	// Async rules proxy to the job broker instead of the upstream; the
+	// broker learns everything it needs (real upstream, offer identity,
+	// retention, visibility, public prefix) from contract headers the
+	// verifier sets here — client-supplied copies are stripped at the
+	// HandleProxy entry, so the broker may trust them. Header names are
+	// mirrored in internal/jobbroker (not imported: that would pull the
+	// broker's SQLite driver into the verifier binary).
+	targetURL := rule.UpstreamURL
+	if rule.Async && rule.BrokerURL != "" {
+		targetURL = rule.BrokerURL
 	}
+	target, err := url.Parse(targetURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse upstream URL %q: %w", targetURL, err)
+	}
+
+	// Shared secret for the verifier→broker HMAC (F1 defense in depth over
+	// the NetworkPolicy). Read once here; empty disables signing, and the
+	// broker likewise only enforces when its own copy is set.
+	brokerHMACSecret := os.Getenv("JOB_BROKER_HMAC_SECRET")
 
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -606,7 +804,23 @@ func buildUpstreamProxy(rule *RouteRule) (http.Handler, error) {
 			pr.Out.URL.Path = singleJoiningSlash(target.Path, strippedPath)
 			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 			pr.Out.Host = target.Host
-			if rule.UpstreamAuth != "" {
+			if rule.Async && rule.BrokerURL != "" {
+				pr.Out.Header.Set(headerBrokerUpstreamURL, rule.UpstreamURL)
+				pr.Out.Header.Set(headerBrokerOffer, rule.OfferNamespace+"/"+rule.OfferName)
+				pr.Out.Header.Set(headerBrokerPayTo, rule.PayTo)
+				pr.Out.Header.Set(headerBrokerJobTTL, rule.AsyncTTL)
+				pr.Out.Header.Set(headerBrokerVisibility, rule.AsyncVisibility)
+				pr.Out.Header.Set(headerBrokerPublicPrefix, publicPrefix(rule, requestHost(pr.In)))
+				// The broker replays with this on the upstream request;
+				// the client's own Authorization (SIWX / jobToken bearer)
+				// must keep flowing through for result access.
+				pr.Out.Header.Set(headerBrokerUpstreamAuth, rule.UpstreamAuth)
+				if brokerHMACSecret != "" {
+					pr.Out.Header.Set(headerBrokerSig,
+						brokerSignature(brokerHMACSecret, rule.UpstreamURL,
+							rule.OfferNamespace+"/"+rule.OfferName, rule.UpstreamAuth))
+				}
+			} else if rule.UpstreamAuth != "" {
 				pr.Out.Header.Set("Authorization", rule.UpstreamAuth)
 			}
 		},

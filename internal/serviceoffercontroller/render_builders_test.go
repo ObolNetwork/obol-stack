@@ -79,7 +79,7 @@ func assertRestrictedPSS(t *testing.T, deploymentName string, spec map[string]an
 // Regression test for the cross-PR interaction with #521 surfaced by
 // the 14-PR integration test (Bug #3).
 func TestBuildSkillCatalogDeployment_RestrictedPSS(t *testing.T) {
-	d := buildSkillCatalogDeployment("hash-x")
+	d := buildSkillCatalogDeployment("hash-x", nil)
 	spec, _ := d.Object["spec"].(map[string]any)
 	assertRestrictedPSS(t, skillCatalogConfigMapName, spec)
 }
@@ -103,7 +103,7 @@ func TestBuildAgentIdentityRegistrationDeployment_RestrictedPSS(t *testing.T) {
 // TestBuildSkillCatalogConfigMap: exposes skill.md + services.json + openapi.json
 // + api docs HTML + httpd conf.
 func TestBuildSkillCatalogConfigMap(t *testing.T) {
-	cm := buildSkillCatalogConfigMap("# Catalog", `{"displayName":"Acme","tagline":"t","logoUrl":"https://x/logo.png","services":[{"name":"a"}]}`, `{"openapi":"3.1.0"}`, "<html>shell</html>")
+	cm := buildSkillCatalogConfigMap("# Catalog", `{"displayName":"Acme","tagline":"t","logoUrl":"https://x/logo.png","services":[{"name":"a"}]}`, `{"openapi":"3.1.0"}`, "<html>shell</html>", nil)
 
 	if cm.GetName() != skillCatalogConfigMapName {
 		t.Errorf("name = %q, want %q", cm.GetName(), skillCatalogConfigMapName)
@@ -137,8 +137,8 @@ func TestBuildSkillCatalogConfigMap(t *testing.T) {
 // TestBuildSkillCatalogDeployment: content-hash annotation + correct volume wiring
 // (skill.md and api/services.json paths).
 func TestBuildSkillCatalogDeployment(t *testing.T) {
-	d1 := buildSkillCatalogDeployment("hash-1")
-	d2 := buildSkillCatalogDeployment("hash-2")
+	d1 := buildSkillCatalogDeployment("hash-1", nil)
+	d2 := buildSkillCatalogDeployment("hash-2", nil)
 
 	spec1, _ := d1.Object["spec"].(map[string]any)
 	template1, _ := spec1["template"].(map[string]any)

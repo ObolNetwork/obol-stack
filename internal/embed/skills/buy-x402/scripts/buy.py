@@ -2392,8 +2392,119 @@ def cmd_balance(chain=None):
 
 
 # ---------------------------------------------------------------------------
+# SIWX (Sign-In With X, EIP-4361) — wallet auth for gate:auth routes
+# ---------------------------------------------------------------------------
+
+def cmd_siwx(url, fetch=False, method="GET"):
+    """Mint a SIWX credential for a wallet-gated (gate: auth) route.
+
+    Some seller routes are gated by wallet sign-in instead of payment (the
+    401 challenge advertises `WWW-Authenticate: SIWX`). This builds an
+    EIP-4361 message bound to the URL's host, signs it with the agent wallet
+    via the remote-signer (personal_sign — no key material leaves the
+    signer), and prints the ready-to-use Authorization header. With --fetch
+    it performs the request itself and prints the response.
+
+    The credential is short-lived (sellers accept Issued At within ~10
+    minutes) and single-use (nonce). Sellers may also return a session
+    token from their /auth/verify endpoint for reuse as `Bearer <token>`.
+    """
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        print(f"Error: {url!r} is not an absolute URL", file=sys.stderr)
+        sys.exit(1)
+    host = parsed.netloc
+
+    keys_data = _signer_get("/api/v1/keys")
+    keys = keys_data.get("keys", [])
+    if not keys:
+        print("Error: no signing keys in remote-signer.", file=sys.stderr)
+        sys.exit(1)
+    address = keys[0]
+
+    issued_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    message = (
+        f"{host} wants you to sign in with your Ethereum account:\n"
+        f"{address}\n"
+        f"\n"
+        f"Sign in to access a wallet-gated resource.\n"
+        f"\n"
+        f"URI: {url}\n"
+        f"Version: 1\n"
+        f"Nonce: {secrets.token_hex(12)}\n"
+        f"Issued At: {issued_at}"
+    )
+
+    result = _signer_post(f"/api/v1/sign/{address}/message", {"message": message})
+    signature = result.get("signature", "")
+    if not signature:
+        print("Error: remote-signer returned no signature.", file=sys.stderr)
+        sys.exit(1)
+
+    header = (
+        "SIWX "
+        + base64.b64encode(message.encode()).decode()
+        + "."
+        + base64.b64encode(signature.encode()).decode()
+    )
+
+    if not fetch:
+        print(f"Wallet:  {address}")
+        print(f"Domain:  {host}")
+        print()
+        print("Send within ~10 minutes (single-use):")
+        print(f"Authorization: {header}")
+        print()
+        print(f'  curl -H "Authorization: {header}" {url}')
+        return
+
+    req = urllib.request.Request(url, method=method)
+    req.add_header("Authorization", header)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            body = resp.read()
+            print(f"HTTP {resp.status}", file=sys.stderr)
+            sys.stdout.buffer.write(body)
+            if body and not body.endswith(b"\n"):
+                print()
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode(errors="replace")
+        print(f"HTTP {exc.code}", file=sys.stderr)
+        print(body)
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # Pay (single-shot HTTP/x402 purchase)
 # ---------------------------------------------------------------------------
+
+def _print_async_job_guidance(request_url, body_text):
+    """A 202 means the seller runs async delivery: payment settled at
+    acceptance, the work continues server-side. Tell the caller exactly how
+    to collect the result instead of leaving them staring at a job id."""
+    try:
+        accepted = json.loads(body_text)
+    except (ValueError, TypeError):
+        return
+    status_url = accepted.get("statusUrl", "")
+    result_url = accepted.get("resultUrl", "")
+    token = accepted.get("jobToken", "")
+    if not status_url:
+        return
+    origin = "{0.scheme}://{0.netloc}".format(urllib.parse.urlparse(request_url))
+    if status_url.startswith("/"):
+        status_url = origin + status_url
+    if result_url.startswith("/"):
+        result_url = origin + result_url
+    print("Async job accepted (payment settled). To collect the result:")
+    print(f"  1. Poll (free, no payment):  curl {status_url}")
+    print("     ... until \"state\": \"complete\" (or \"failed\").")
+    if token:
+        print(f"  2. Fetch:  curl -H 'Authorization: Bearer {token}' {result_url}")
+        print("     (or sign in with the wallet that paid: buy.py siwx <resultUrl> --fetch)")
+    else:
+        print(f"  2. Fetch:  curl {result_url}")
+
 
 def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=None, token=None, payment_option=None):
     """Single-shot paid HTTP request: probe → pre-sign one auth → send with X-PAYMENT.
@@ -2516,6 +2627,8 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=Non
                 print(f"X-PAYMENT-RESPONSE: {settle}")
             print()
             print(body)
+            if resp.status == 202:
+                _print_async_job_guidance(url, body)
             return 0
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace") if e.fp else ""
@@ -3000,6 +3113,9 @@ def usage():
     print("  status <name>                                Check sidecar + auths (incl. expiry countdown)")
     print("  process <name> | --all                       Reconcile auto-refill policies")
     print("  balance [--chain <network>]                  Check wallet token balances")
+    print("  siwx <url> [--fetch] [--method GET|POST]     Wallet sign-in (EIP-4361) for gate:auth routes — prints the")
+    print("                                               Authorization: SIWX header (or performs the request with --fetch).")
+    print("                                               Use when a route returns 401 + WWW-Authenticate: SIWX instead of 402.")
     print()
     print("Multi-currency offers auto-select the first affordable payment option when")
     print("no --token/--network/--payment-option is given (choice is printed).")
@@ -3149,6 +3265,13 @@ if __name__ == "__main__":
     elif cmd == "balance":
         _, opts = parse_flags(rest)
         cmd_balance(opts.get("chain"))
+
+    elif cmd == "siwx":
+        args, opts = parse_flags(rest)
+        if not args:
+            print("Usage: siwx <url> [--fetch] [--method GET|POST]", file=sys.stderr)
+            sys.exit(1)
+        cmd_siwx(args[0], fetch="fetch" in opts, method=(opts.get("method") or "GET").upper())
 
     elif cmd == "remove":
         if not rest:

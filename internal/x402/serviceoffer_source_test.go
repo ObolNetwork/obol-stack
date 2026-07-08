@@ -88,12 +88,14 @@ func TestRoutesFromStore(t *testing.T) {
 	if len(routes) != 3 {
 		t.Fatalf("len(routes) = %d, want 3", len(routes))
 	}
-	// Expected sort order: alpha/a, alpha/c, beta/b.
-	// "drained" must be filtered out because its drain window expired.
-	if routes[0].OfferName != "a" || routes[1].OfferName != "c" || routes[2].OfferName != "b" {
-		t.Fatalf("routes not sorted by offer identity (drained leaked?): %+v", routes)
+	// Expected order: specificity sort — all three are equal-specificity
+	// catch-alls, so the pattern lexical tie-break applies: /services/a/*,
+	// /services/b/*, /services/c/*. "drained" must be filtered out because
+	// its drain window expired.
+	if routes[0].OfferName != "a" || routes[1].OfferName != "b" || routes[2].OfferName != "c" {
+		t.Fatalf("routes not in specificity/pattern order (drained leaked?): %+v", routes)
 	}
-	if routes[0].OfferNamespace != "alpha" || routes[1].OfferNamespace != "alpha" || routes[2].OfferNamespace != "beta" {
+	if routes[0].OfferNamespace != "alpha" || routes[1].OfferNamespace != "beta" || routes[2].OfferNamespace != "alpha" {
 		t.Fatalf("unexpected route namespaces: %+v", routes)
 	}
 	if routes[0].Pattern != "/services/a/*" {
@@ -111,16 +113,16 @@ func TestRoutesFromStore(t *testing.T) {
 	if routes[0].StripPrefix != "/services/a" {
 		t.Fatalf("routes[0].StripPrefix = %q, want /services/a", routes[0].StripPrefix)
 	}
-	if routes[2].UpstreamAuth != "" {
-		t.Fatalf("routes[2].UpstreamAuth = %q, want empty", routes[2].UpstreamAuth)
+	if routes[1].UpstreamAuth != "" {
+		t.Fatalf("routes[1].UpstreamAuth = %q, want empty", routes[1].UpstreamAuth)
 	}
-	if routes[2].UpstreamURL != "http://httpbin.beta.svc.cluster.local:11434" {
-		t.Fatalf("routes[2].UpstreamURL = %q, want httpbin upstream URL", routes[2].UpstreamURL)
+	if routes[1].UpstreamURL != "http://httpbin.beta.svc.cluster.local:11434" {
+		t.Fatalf("routes[1].UpstreamURL = %q, want httpbin upstream URL", routes[1].UpstreamURL)
 	}
 	// Mid-drain offer "c" stays in the rules but tracks its own
 	// upstream — verifies the drain window keeps the route alive.
-	if routes[1].UpstreamURL != "http://httpbin.alpha.svc.cluster.local:11434" {
-		t.Fatalf("routes[1] (mid-drain) UpstreamURL = %q, want httpbin upstream URL", routes[1].UpstreamURL)
+	if routes[2].UpstreamURL != "http://httpbin.alpha.svc.cluster.local:11434" {
+		t.Fatalf("routes[2] (mid-drain) UpstreamURL = %q, want httpbin upstream URL", routes[2].UpstreamURL)
 	}
 }
 
@@ -356,4 +358,73 @@ func mustSecretObject(t *testing.T, namespace, name string, data map[string]stri
 		"data": values,
 	}}
 	return obj
+}
+
+// TestRoutesFromStore_RouteTable covers spec.routes[] rendering end to end
+// (including the unstructured round-trip of the new CRD field): one rule
+// per route entry, patterns anchored under the offer path, free carve-outs
+// with no payment surface, per-route price overrides collapsing to a
+// single payment option, and specificity ordering across the entries.
+func TestRoutesFromStore_RouteTable(t *testing.T) {
+	items := []any{
+		mustOfferObject(t, monetizeapi.ServiceOffer{
+			ObjectMeta: metav1.ObjectMeta{Name: "audit", Namespace: "sec"},
+			Spec: monetizeapi.ServiceOfferSpec{
+				Type:     "http",
+				Upstream: monetizeapi.ServiceOfferUpstream{Service: "auditd"},
+				Payment: monetizeapi.ServiceOfferPayment{
+					PayTo: "0x1111111111111111111111111111111111111111",
+					Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.1"},
+				},
+				Routes: []monetizeapi.ServiceOfferRoute{
+					{Path: "/submit", Methods: []string{"POST"}, Gate: monetizeapi.GatePaid,
+						Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.5"},
+						Summary: "Submit source for audit"},
+					{Path: "/jobs/*", Gate: monetizeapi.GateFree},
+					{Path: "/*", Gate: monetizeapi.GatePaid},
+				},
+			},
+			Status: monetizeapi.ServiceOfferStatus{
+				Conditions: []monetizeapi.Condition{{Type: "RoutePublished", Status: "True"}},
+			},
+		}),
+	}
+
+	routes, err := routesFromStore(items, nil)
+	if err != nil {
+		t.Fatalf("routesFromStore: %v", err)
+	}
+	if len(routes) != 3 {
+		t.Fatalf("len(routes) = %d, want 3 (one per spec.routes entry)", len(routes))
+	}
+
+	// Specificity order: exact /submit, then /jobs/* (longer literal), then /*.
+	if routes[0].Pattern != "/services/audit/submit" ||
+		routes[1].Pattern != "/services/audit/jobs/*" ||
+		routes[2].Pattern != "/services/audit/*" {
+		t.Fatalf("unexpected pattern order: %v", patterns(routes))
+	}
+
+	submit, jobs, catchall := routes[0], routes[1], routes[2]
+
+	if submit.IsFree() || submit.Price != "0.5" {
+		t.Errorf("submit rule = gate %q price %q, want paid 0.5 (per-route override)", submit.Gate, submit.Price)
+	}
+	if len(submit.Payments) != 1 || submit.Payments[0].Price != "0.5" || submit.Payments[0].PayTo != "0x1111111111111111111111111111111111111111" {
+		t.Errorf("submit payments = %+v, want single overridden option keeping the offer payTo", submit.Payments)
+	}
+	if submit.Description != "Submit source for audit" {
+		t.Errorf("submit description = %q, want the route summary", submit.Description)
+	}
+
+	if !jobs.IsFree() || jobs.Price != "0" || jobs.Payments != nil {
+		t.Errorf("jobs rule = gate %q price %q payments %+v, want free with no payment surface", jobs.Gate, jobs.Price, jobs.Payments)
+	}
+	if jobs.UpstreamURL == "" || jobs.StripPrefix != "/services/audit" {
+		t.Errorf("free rule lost upstream wiring: url %q strip %q", jobs.UpstreamURL, jobs.StripPrefix)
+	}
+
+	if catchall.IsFree() || catchall.Price != "0.1" {
+		t.Errorf("catch-all rule = gate %q price %q, want paid at the offer price", catchall.Gate, catchall.Price)
+	}
 }

@@ -3,6 +3,7 @@ package serviceoffercontroller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -39,7 +40,7 @@ func (c *Controller) listServiceOffersForCatalog(ctx context.Context, override *
 	return offers, nil
 }
 
-func skillCatalogContentMatches(cm *unstructured.Unstructured, content, servicesJSON, openAPIJSON, apiDocsHTML string) bool {
+func skillCatalogContentMatches(cm *unstructured.Unstructured, content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) bool {
 	if cm == nil {
 		return false
 	}
@@ -47,13 +48,34 @@ func skillCatalogContentMatches(cm *unstructured.Unstructured, content, services
 	if data == nil {
 		return false
 	}
-	return data["skill.md"] == content &&
-		data["services.json"] == servicesJSON &&
-		data["openapi.json"] == openAPIJSON &&
-		data["api.html"] == apiDocsHTML
+	if data["skill.md"] != content ||
+		data["services.json"] != servicesJSON ||
+		data["openapi.json"] != openAPIJSON ||
+		data["api.html"] != apiDocsHTML {
+		return false
+	}
+	// Per-offer bundles: every expected file present + identical, and no
+	// stale bundle keys lingering from removed hostname offers.
+	expected := make(map[string]string, len(bundles))
+	for _, f := range bundles {
+		expected[f.Key] = f.Content
+	}
+	for key, content := range expected {
+		if data[key] != content {
+			return false
+		}
+	}
+	for key := range data {
+		if strings.HasPrefix(key, "offer_") {
+			if _, ok := expected[key]; !ok {
+				return false
+			}
+		}
+	}
+	return true
 }
 
-func (c *Controller) skillCatalogContentUnchanged(ctx context.Context, content, servicesJSON, openAPIJSON, apiDocsHTML string) (bool, error) {
+func (c *Controller) skillCatalogContentUnchanged(ctx context.Context, content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) (bool, error) {
 	cm, err := c.configMaps.Namespace(skillCatalogNamespace).Get(ctx, skillCatalogConfigMapName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return false, nil
@@ -61,11 +83,11 @@ func (c *Controller) skillCatalogContentUnchanged(ctx context.Context, content, 
 	if err != nil {
 		return false, err
 	}
-	return skillCatalogContentMatches(cm, content, servicesJSON, openAPIJSON, apiDocsHTML), nil
+	return skillCatalogContentMatches(cm, content, servicesJSON, openAPIJSON, apiDocsHTML, bundles), nil
 }
 
-func computeSkillCatalogContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML string) string {
-	return fmt.Sprintf("%x", md5Sum(content+servicesJSON+openAPIJSON+apiDocsHTML))[:8]
+func computeSkillCatalogContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) string {
+	return fmt.Sprintf("%x", md5Sum(content+servicesJSON+openAPIJSON+apiDocsHTML+bundleDigestInput(bundles)))[:8]
 }
 
 func skillCatalogDeployedContentHash(deployment *unstructured.Unstructured) string {

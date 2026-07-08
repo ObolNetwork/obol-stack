@@ -36,19 +36,19 @@ type PricingConfig struct {
 // RouteRule so a single-payment route synthesizes one of these from its
 // inline fields (see RouteRule.PaymentOptions).
 type RoutePayment struct {
-	Price               string `yaml:"price"`
-	PayTo               string `yaml:"payTo,omitempty"`
-	Network             string `yaml:"network,omitempty"`
-	AssetAddress        string `yaml:"assetAddress,omitempty"`
-	AssetSymbol         string `yaml:"assetSymbol,omitempty"`
-	AssetDecimals       int    `yaml:"assetDecimals,omitempty"`
-	AssetTransferMethod string `yaml:"assetTransferMethod,omitempty"`
-	EIP712Name          string `yaml:"eip712Name,omitempty"`
-	EIP712Version       string `yaml:"eip712Version,omitempty"`
-	PriceModel          string `yaml:"priceModel,omitempty"`
-	PerMTok             string `yaml:"perMTok,omitempty"`
-	ApproxTokensPerRequest int `yaml:"approxTokensPerRequest,omitempty"`
-	MaxTimeoutSeconds   int64  `yaml:"maxTimeoutSeconds,omitempty"`
+	Price                  string `yaml:"price"`
+	PayTo                  string `yaml:"payTo,omitempty"`
+	Network                string `yaml:"network,omitempty"`
+	AssetAddress           string `yaml:"assetAddress,omitempty"`
+	AssetSymbol            string `yaml:"assetSymbol,omitempty"`
+	AssetDecimals          int    `yaml:"assetDecimals,omitempty"`
+	AssetTransferMethod    string `yaml:"assetTransferMethod,omitempty"`
+	EIP712Name             string `yaml:"eip712Name,omitempty"`
+	EIP712Version          string `yaml:"eip712Version,omitempty"`
+	PriceModel             string `yaml:"priceModel,omitempty"`
+	PerMTok                string `yaml:"perMTok,omitempty"`
+	ApproxTokensPerRequest int    `yaml:"approxTokensPerRequest,omitempty"`
+	MaxTimeoutSeconds      int64  `yaml:"maxTimeoutSeconds,omitempty"`
 }
 
 // RouteRule maps a URL pattern to x402 payment requirements.
@@ -170,6 +170,61 @@ type RouteRule struct {
 	// Payments[0] mirrors the inline fields above (the primary option).
 	// Empty means a single-payment route described by the inline fields.
 	Payments []RoutePayment `yaml:"payments,omitempty"`
+
+	// Hostname is the originating offer's dedicated public origin (empty
+	// for shared-origin offers). Requests arriving via that hostname have
+	// their public paths rooted at "/" (Traefik rewrites them into the
+	// /services/<name> path-world before this rule matches); the verifier
+	// uses this to build public-facing URLs (SIWX sign-in, redirects)
+	// without leaking the internal path prefix.
+	Hostname string `yaml:"hostname,omitempty"`
+
+	// Async marks a rule whose verified+settled requests are handed to the
+	// job broker instead of the upstream: the broker snapshots the
+	// request, answers 202 with a job id, and replays it upstream with no
+	// client-facing deadline. Set on the paid rules of spec.async offers
+	// AND on their synthesized free /jobs/* rules (both proxy to the
+	// broker; the broker tells submits from job lookups by path).
+	Async bool `yaml:"async,omitempty"`
+
+	// BrokerURL is the job broker base URL for async rules.
+	BrokerURL string `yaml:"brokerURL,omitempty"`
+
+	// AsyncTTL is the job retention window advertised to the broker
+	// (Go duration string, e.g. "72h").
+	AsyncTTL string `yaml:"asyncTTL,omitempty"`
+
+	// AsyncVisibility is the result-access mode: "payer" or "public".
+	AsyncVisibility string `yaml:"asyncVisibility,omitempty"`
+
+	// FreeQuota grants each SIWX-verified wallet this many free calls per
+	// UTC day on a paid route before the 402 applies. Verifier-local
+	// counters (reset on restart) — a giveaway, not a ledger.
+	FreeQuota int64 `yaml:"freeQuota,omitempty"`
+
+	// Gate is the route's gate class from the originating ServiceOffer's
+	// route table: "paid" (default when empty — fail closed), "free", or
+	// "auth". Free rules pass the payment gate entirely: HandleVerify
+	// allows the request through and HandleProxy proxies to the upstream
+	// without the payment middleware. Auth rules require a SIWX-verified
+	// wallet (EIP-4361) instead of payment; the verified wallet is
+	// forwarded upstream as X-Verified-Wallet. Both exist so an offer can
+	// carve health checks, job status pages, and wallet-gated result pages
+	// out of an otherwise paid prefix.
+	Gate string `yaml:"gate,omitempty"`
+}
+
+// IsFree reports whether this rule passes the payment gate. Only an
+// explicit "free" gate is free — empty and unknown values gate as paid so
+// a malformed rule never opens a free path.
+func (r *RouteRule) IsFree() bool {
+	return r.Gate == "free"
+}
+
+// IsAuth reports whether this rule is gated by SIWX wallet authentication
+// instead of payment.
+func (r *RouteRule) IsAuth() bool {
+	return r.Gate == "auth"
 }
 
 // PaymentOptions returns the route's accepted payment options. When the

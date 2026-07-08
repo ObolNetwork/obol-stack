@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Sign in with your wallet — Obol Stack</title>
+    <meta name="description" content="Prove wallet ownership with a gasless EIP-4361 signature to access this page." />
+    <meta name="theme-color" content="#091011" />
+    <style>
+      :root {
+        /* Mirrors web/public-storefront/src/app/globals.css token names */
+        --bg01: #091011;
+        --bg02: #111f22;
+        --bg03: #182d32;
+        --stroke: #1e3a3f;
+        --green: #2fe4ab;
+        --light: #d9eef3;
+        --body: #9cc2c9;
+        --muted: #475e64;
+        --red: #ff7a7a;
+        --font-mono: "JetBrains Mono", "IBM Plex Mono", "Fira Code", ui-monospace, monospace;
+      }
+      * { box-sizing: border-box; }
+      html, body { background-color: var(--bg01); }
+      body {
+        margin: 0;
+        color: var(--light);
+        font-family: "DM Sans", system-ui, -apple-system, Segoe UI, sans-serif;
+        min-height: 100vh;
+        line-height: 1.5;
+      }
+      .wrap { max-width: 560px; margin: 0 auto; padding: 64px 24px 96px; }
+      .pill {
+        display: inline-block;
+        font-family: var(--font-mono);
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--green);
+        border: 1px solid var(--green);
+        border-radius: 999px;
+        padding: 6px 14px;
+        margin-bottom: 28px;
+      }
+      h1 { font-size: 26px; margin: 0 0 12px; }
+      p { color: var(--body); margin: 0 0 12px; }
+      .card {
+        background: var(--bg02);
+        border: 1px solid var(--stroke);
+        border-radius: 12px;
+        padding: 24px;
+        margin-top: 28px;
+      }
+      button {
+        font: inherit;
+        font-weight: 600;
+        color: var(--bg01);
+        background: var(--green);
+        border: 0;
+        border-radius: 8px;
+        padding: 12px 22px;
+        cursor: pointer;
+        width: 100%;
+      }
+      button:disabled { opacity: 0.5; cursor: wait; }
+      .status { font-family: var(--font-mono); font-size: 13px; margin-top: 16px; min-height: 20px; }
+      .status.error { color: var(--red); }
+      .status.ok { color: var(--green); }
+      .fineprint { color: var(--muted); font-size: 13px; margin-top: 24px; }
+      code { font-family: var(--font-mono); color: var(--light); font-size: 0.9em; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <span class="pill">wallet sign-in</span>
+      <h1>Sign in to {{.OfferName}}</h1>
+      <p>
+        This page is wallet-gated. Prove you control your address by signing a
+        message — it's free, gasless, and never leaves this site
+        (<code>{{.Host}}</code>).
+      </p>
+      {{if .Reason}}<p class="status error">{{.Reason}}</p>{{end}}
+      <div class="card">
+        <button id="signin">Connect wallet &amp; sign</button>
+        <div id="status" class="status"></div>
+      </div>
+      <p class="fineprint">
+        Uses Sign-In With Ethereum (EIP-4361) via your browser wallet. Agents
+        and API clients: request this page with
+        <code>Accept: application/json</code> for the machine-readable
+        challenge, or send
+        <code>Authorization: SIWX &lt;b64 message&gt;.&lt;b64 signature&gt;</code>
+        directly.
+      </p>
+    </div>
+    <script>
+      (function () {
+        var btn = document.getElementById("signin");
+        var status = document.getElementById("status");
+        var host = {{.Host}};
+        var verifyUrl = {{.VerifyURL}};
+        var next = {{.Next}};
+
+        function say(msg, cls) {
+          status.textContent = msg;
+          status.className = "status " + (cls || "");
+        }
+
+        function nonce() {
+          var bytes = new Uint8Array(12);
+          crypto.getRandomValues(bytes);
+          return Array.from(bytes, function (b) { return b.toString(16).padStart(2, "0"); }).join("");
+        }
+
+        btn.addEventListener("click", async function () {
+          if (!window.ethereum) {
+            say("No browser wallet found — install one, or use the JSON/API flow described below.", "error");
+            return;
+          }
+          btn.disabled = true;
+          try {
+            say("Requesting account…");
+            var accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+            var address = accounts[0];
+
+            var message =
+              host + " wants you to sign in with your Ethereum account:\n" +
+              address + "\n\n" +
+              "Sign in to " + {{.OfferName}} + " on Obol Stack.\n\n" +
+              "URI: https://" + host + verifyUrl + "\n" +
+              "Version: 1\n" +
+              "Nonce: " + nonce() + "\n" +
+              "Issued At: " + new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
+
+            say("Waiting for signature…");
+            var signature = await window.ethereum.request({
+              method: "personal_sign",
+              params: [message, address],
+            });
+
+            say("Verifying…");
+            var res = await fetch(verifyUrl, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ message: message, signature: signature, next: next }),
+              redirect: "follow",
+            });
+            if (res.redirected) {
+              window.location.href = res.url;
+              return;
+            }
+            if (!res.ok) {
+              var body = await res.json().catch(function () { return {}; });
+              throw new Error(body.detail || ("verification failed (" + res.status + ")"));
+            }
+            if (next) {
+              window.location.href = next;
+              return;
+            }
+            say("Signed in as " + address + ". You can return to the page you were visiting.", "ok");
+          } catch (err) {
+            say(err && err.message ? err.message : String(err), "error");
+          } finally {
+            btn.disabled = false;
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

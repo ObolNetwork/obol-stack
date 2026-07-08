@@ -34,7 +34,14 @@ func TestEmbeddedImages_NoNewLatestTags(t *testing.T) {
 
 	// Known unpinned images as of PR #343 follow-up. Each entry MUST have a
 	// TODO in the template body explaining the pin-by-digest policy.
-	allowed := map[string]string{}
+	allowed := map[string]string{
+		// job-broker ships first in this branch — no published release to
+		// pin against yet. The release workflow pins it by digest on the
+		// first tagged build (same lifecycle the other obolnetwork images
+		// followed); under OBOL_DEVELOPMENT the :latest tag is what the
+		// local dev build produces.
+		"base/templates/x402.yaml:ghcr.io/obolnetwork/job-broker:latest": "pending first release pin",
+	}
 
 	files := []string{
 		"base/templates/llm.yaml",
