@@ -202,7 +202,42 @@ func preflightOpenAPI(ctx context.Context, u *ui.UI, origin string) {
 	var doc struct {
 		Paths map[string]json.RawMessage `json:"paths"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&doc); err == nil && len(doc.Paths) == 0 {
-		u.Warn("the published /openapi.json advertises no operations — put at least one offer on sale (obol sell inference|http|agent) before registering")
+	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
+		return
 	}
+	if len(doc.Paths) == 0 {
+		u.Warn("the published /openapi.json advertises no operations — put at least one offer on sale (obol sell inference|http|agent) before registering")
+		return
+	}
+	// x402scan indexes per ORIGIN — it crawls this one /openapi.json and
+	// lists everything it finds under the origin we submit. On the shared
+	// /services/<name> origin model, that means every offer collapses into
+	// one mixed listing (a data API next to a chat agent next to a dataset),
+	// which reads as a single blurry product to discovery crawlers. Count
+	// the distinct offers and warn: the clean shape is one origin per offer.
+	offers := map[string]struct{}{}
+	for p := range doc.Paths {
+		if name := servicesOfferName(p); name != "" {
+			offers[name] = struct{}{}
+		}
+	}
+	if len(offers) > 1 {
+		u.Warnf("this origin advertises %d offers in one /openapi.json — x402scan indexes per origin, so all of them will be listed together under %s rather than as distinct products. For clean discovery, give each offer its own subdomain (obol tunnel hostname add <host>) and register that origin.", len(offers), origin)
+	}
+}
+
+// servicesOfferName extracts the offer name from a shared-origin OpenAPI path
+// key like "/services/foo/v1/chat/completions" → "foo". Returns "" for paths
+// that aren't under /services/ — a per-offer subdomain roots its paths
+// elsewhere, so it correctly never trips the multi-offer warning.
+func servicesOfferName(path string) string {
+	const prefix = "/services/"
+	if !strings.HasPrefix(path, prefix) {
+		return ""
+	}
+	rest := path[len(prefix):]
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		return rest[:i]
+	}
+	return rest
 }

@@ -34,3 +34,32 @@ func TestResolveX402scanOrigin_Explicit(t *testing.T) {
 		}
 	}
 }
+
+func TestServicesOfferName(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"/services/foo/v1/chat/completions", "foo"},
+		{"/services/bar", "bar"},
+		{"/services/baz/", "baz"},
+		{"/openapi.json", ""}, // per-offer subdomain root — no /services/ prefix
+		{"/audits/{id}", ""},  // app path on a dedicated origin
+		{"/", ""},
+		{"/servicesfoo", ""}, // not the /services/ prefix
+	} {
+		if got := servicesOfferName(tc.in); got != tc.want {
+			t.Errorf("servicesOfferName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+
+	// The leak signal: two distinct /services/<name> prefixes = a shared
+	// origin serving multiple offers (what the preflight warns about).
+	paths := []string{"/services/foo/v1", "/services/foo/v1/models", "/services/bar", "/openapi.json"}
+	offers := map[string]struct{}{}
+	for _, p := range paths {
+		if n := servicesOfferName(p); n != "" {
+			offers[n] = struct{}{}
+		}
+	}
+	if len(offers) != 2 {
+		t.Fatalf("distinct offers = %d, want 2 (foo, bar)", len(offers))
+	}
+}
