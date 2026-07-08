@@ -46,6 +46,10 @@ type Verifier struct {
 	// tokens). Sessions are signed with a per-process secret: a verifier
 	// restart invalidates them (single-replica; clients re-authenticate).
 	siwx *SIWXAuthenticator
+
+	// quota tracks per-wallet free-tier usage on paid routes with a
+	// freeQuota (in-memory, UTC-day windows).
+	quota *freeQuotaCounter
 }
 
 // MarkRoutesLoaded signals that the route source has produced its first
@@ -59,7 +63,7 @@ func NewVerifier(cfg *PricingConfig) (*Verifier, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := &Verifier{metrics: newVerifierMetrics(), siwx: siwx}
+	v := &Verifier{metrics: newVerifierMetrics(), siwx: siwx, quota: newFreeQuotaCounter()}
 	if err := v.load(cfg); err != nil {
 		return nil, err
 	}
@@ -340,6 +344,14 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 				"The service behind this route is not reachable right now. Retry shortly.")
 			return
 		}
+		// Opportunistic identity: free routes don't REQUIRE a credential,
+		// but a valid one still yields X-Verified-Wallet — this is how the
+		// broker's job listing and payer-gated results see who's asking.
+		// Invalid or non-SIWX credentials (e.g. a jobToken bearer the
+		// broker itself checks) pass through anonymous.
+		if wallet, err := v.siwx.Authenticate(r, requestHost(r), time.Now()); err == nil {
+			r.Header.Set(HeaderVerifiedWallet, wallet)
+		}
 		proxy.ServeHTTP(&statusRecorder{ResponseWriter: w, status: http.StatusOK}, r)
 		return
 	}
@@ -383,6 +395,20 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		log.Printf("x402-verifier: build upstream proxy for %s/%s: %v", mr.rule.OfferNamespace, mr.rule.OfferName, err)
 		http.Error(w, "upstream unavailable", http.StatusInternalServerError)
 		return
+	}
+
+	// Free tier: a paid route with a freeQuota lets a SIWX-verified wallet
+	// ride free until its daily allowance is spent, then falls through to
+	// the normal 402. The wallet is forwarded so upstreams (and the async
+	// broker) still see an owner identity on free-tier calls.
+	if mr.rule.FreeQuota > 0 {
+		if wallet, err := v.siwx.Authenticate(r, requestHost(r), time.Now()); err == nil &&
+			v.quota.consume(mr.rule.Pattern, wallet, mr.rule.FreeQuota, time.Now()) {
+			r.Header.Set(HeaderVerifiedWallet, wallet)
+			r.Header.Set(HeaderPaymentPayer, wallet)
+			proxy.ServeHTTP(&statusRecorder{ResponseWriter: w, status: http.StatusOK}, r)
+			return
+		}
 	}
 
 	primary := mr.requirements[0]
@@ -728,9 +754,20 @@ func humanizeNetwork(name string) string {
 }
 
 func buildUpstreamProxy(rule *RouteRule) (http.Handler, error) {
-	target, err := url.Parse(rule.UpstreamURL)
+	// Async rules proxy to the job broker instead of the upstream; the
+	// broker learns everything it needs (real upstream, offer identity,
+	// retention, visibility, public prefix) from contract headers the
+	// verifier sets here — client-supplied copies are stripped at the
+	// HandleProxy entry, so the broker may trust them. Header names are
+	// mirrored in internal/jobbroker (not imported: that would pull the
+	// broker's SQLite driver into the verifier binary).
+	targetURL := rule.UpstreamURL
+	if rule.Async && rule.BrokerURL != "" {
+		targetURL = rule.BrokerURL
+	}
+	target, err := url.Parse(targetURL)
 	if err != nil {
-		return nil, fmt.Errorf("parse upstream URL %q: %w", rule.UpstreamURL, err)
+		return nil, fmt.Errorf("parse upstream URL %q: %w", targetURL, err)
 	}
 
 	proxy := &httputil.ReverseProxy{
@@ -741,7 +778,18 @@ func buildUpstreamProxy(rule *RouteRule) (http.Handler, error) {
 			pr.Out.URL.Path = singleJoiningSlash(target.Path, strippedPath)
 			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 			pr.Out.Host = target.Host
-			if rule.UpstreamAuth != "" {
+			if rule.Async && rule.BrokerURL != "" {
+				pr.Out.Header.Set(headerBrokerUpstreamURL, rule.UpstreamURL)
+				pr.Out.Header.Set(headerBrokerOffer, rule.OfferNamespace+"/"+rule.OfferName)
+				pr.Out.Header.Set(headerBrokerPayTo, rule.PayTo)
+				pr.Out.Header.Set(headerBrokerJobTTL, rule.AsyncTTL)
+				pr.Out.Header.Set(headerBrokerVisibility, rule.AsyncVisibility)
+				pr.Out.Header.Set(headerBrokerPublicPrefix, publicPrefix(rule, requestHost(pr.In)))
+				// The broker replays with this on the upstream request;
+				// the client's own Authorization (SIWX / jobToken bearer)
+				// must keep flowing through for result access.
+				pr.Out.Header.Set(headerBrokerUpstreamAuth, rule.UpstreamAuth)
+			} else if rule.UpstreamAuth != "" {
 				pr.Out.Header.Set("Authorization", rule.UpstreamAuth)
 			}
 		},

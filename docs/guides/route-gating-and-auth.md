@@ -124,6 +124,50 @@ to the tunnel stays your job (`obol tunnel hostname add` handles
 local-managed tunnels end-to-end; dashboard-managed tunnels print the one
 remaining Cloudflare step).
 
+## Async delivery (`--async`)
+
+Long-running paid work dies on tunnel idle timeouts (~100 s) unless it
+streams. Async delivery removes the deadline entirely:
+
+```bash
+obol sell http audit ... --async [--result-visibility payer|public] [--job-ttl 72h]
+```
+
+- A paid call is **accepted, not awaited**: payment verifies and settles,
+  the job broker snapshots the request, and the buyer gets
+  `202 { jobId, statusUrl, resultUrl, jobToken }` with `Location` pointing
+  at the status page. The broker replays the request against your upstream
+  with no client-facing deadline.
+- `GET <offer>/jobs/<id>` is **free**: JSON for pollers, an auto-refreshing
+  HTML page for browsers, `Prefer: redirect` → 303 to the result when done.
+- `GET <offer>/jobs/<id>/result` serves the stored upstream response
+  verbatim. Default access: the paying wallet (SIWX — payment identity and
+  read identity are the same wallet) **or** the `jobToken` capability from
+  the 202 body. `--result-visibility public` makes the unguessable job id
+  the capability instead.
+- `GET <offer>/jobs` lists jobs, wallet-scoped: buyers see what they paid
+  for; your `payTo` wallet sees everything — sign with it to monitor sales.
+- A JSON submit body may include `{"callbackUrl": "..."}` for a completion
+  webhook (bounded retries).
+- Records + results are deleted after `--job-ttl` (default 72h; 410 Gone
+  afterwards). **No refunds**: settlement happens at acceptance, so a
+  failed run was still paid for — failure pages say so and point at your
+  `--contact-email`.
+
+Obol agents: `buy.py pay`/`go` detect the 202 and print the exact
+poll-then-fetch commands.
+
+## Free tiers and rate limits
+
+- `--route "path=/x,price=0.02,freeQuota=25"` gives every SIWX-verified
+  wallet 25 free calls per UTC day before the 402 applies (the x402scan
+  model). Counters are verifier-local and reset on restart — a giveaway,
+  not an entitlement ledger.
+- `--max-in-flight N` / `--rps N` render Traefik protection middleware in
+  front of the offer (concurrency cap / rate limit). Strongly recommended
+  for paid agents: one under-specified prompt can otherwise burn unbounded
+  concurrent tool-call budgets.
+
 ## Error pages and operator contact
 
 Human-facing errors (404/403/5xx, the 401 challenge, the 402 paywall) render

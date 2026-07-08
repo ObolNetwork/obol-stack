@@ -776,6 +776,30 @@ Examples:
 				Usage: "Payment validity window in seconds",
 				Value: 300,
 			},
+			&cli.BoolFlag{
+				Name: "async",
+				Usage: "Deliver paid requests as accepted jobs: payment settles at acceptance, the request " +
+					"replays upstream with no client-facing deadline (survives tunnel timeouts), and the buyer " +
+					"gets 202 + a free status page at <offer>/jobs/<id>. Results are gated to the paying " +
+					"wallet (SIWX) or the jobToken from the 202 body. NOTE: no refunds — a failed run was " +
+					"still paid for; set a contact via 'obol sell info set --contact-email'.",
+			},
+			&cli.StringFlag{
+				Name:  "result-visibility",
+				Usage: "Async result access: 'payer' (paying wallet or jobToken; default) or 'public' (the unguessable job id is the capability)",
+			},
+			&cli.StringFlag{
+				Name:  "job-ttl",
+				Usage: "Async job + result retention (Go duration, e.g. 72h); status pages return 410 afterwards",
+			},
+			&cli.IntFlag{
+				Name:  "max-in-flight",
+				Usage: "Cap concurrent in-flight requests to this offer (Traefik inFlightReq); 0 = uncapped",
+			},
+			&cli.IntFlag{
+				Name:  "rps",
+				Usage: "Cap average requests/second to this offer (Traefik rateLimit, burst 2x); 0 = uncapped",
+			},
 			// Registration flags
 			&cli.BoolFlag{
 				Name:  "register",
@@ -962,6 +986,34 @@ Examples:
 
 			if hostname := strings.ToLower(strings.TrimSpace(cmd.String("hostname"))); hostname != "" {
 				spec["hostname"] = hostname
+			}
+
+			if cmd.Bool("async") || cmd.String("result-visibility") != "" || cmd.String("job-ttl") != "" {
+				asyncBlock := map[string]any{"enabled": true}
+				if vis := cmd.String("result-visibility"); vis != "" {
+					if vis != monetizeapi.ResultVisibilityPayer && vis != monetizeapi.ResultVisibilityPublic {
+						return fmt.Errorf("--result-visibility must be payer or public (got %q)", vis)
+					}
+					asyncBlock["resultVisibility"] = vis
+				}
+				if ttl := cmd.String("job-ttl"); ttl != "" {
+					if _, err := time.ParseDuration(ttl); err != nil {
+						return fmt.Errorf("--job-ttl: %w", err)
+					}
+					asyncBlock["ttl"] = ttl
+				}
+				spec["async"] = asyncBlock
+			}
+
+			if cmd.Int("max-in-flight") > 0 || cmd.Int("rps") > 0 {
+				limits := map[string]any{}
+				if v := cmd.Int("max-in-flight"); v > 0 {
+					limits["maxInFlight"] = v
+				}
+				if v := cmd.Int("rps"); v > 0 {
+					limits["rps"] = v
+				}
+				spec["limits"] = limits
 			}
 
 			if routeVals := cmd.StringSlice("route"); len(routeVals) > 0 {
@@ -4800,10 +4852,16 @@ func parseRouteFlags(vals []string) (routes []map[string]any, hasPaid bool, err 
 				}
 			case "price":
 				route["price"] = map[string]any{"perRequest": v}
+			case "freeQuota", "free-quota":
+				n, err := strconv.ParseInt(v, 10, 64)
+				if err != nil || n < 0 {
+					return nil, false, fmt.Errorf("--route %q: freeQuota must be a non-negative integer", val)
+				}
+				route["freeQuota"] = n
 			case "summary":
 				route["summary"] = v
 			default:
-				return nil, false, fmt.Errorf("--route %q: unknown key %q (want path, methods, gate, price, summary)", val, key)
+				return nil, false, fmt.Errorf("--route %q: unknown key %q (want path, methods, gate, price, freeQuota, summary)", val, key)
 			}
 		}
 		if route["path"] == nil {
@@ -4812,8 +4870,8 @@ func parseRouteFlags(vals []string) (routes []map[string]any, hasPaid bool, err 
 		route["gate"] = gate
 		if gate == monetizeapi.GatePaid {
 			hasPaid = true
-		} else if route["price"] != nil {
-			return nil, false, fmt.Errorf("--route %q: only paid routes carry a price (gate=%s)", val, gate)
+		} else if route["price"] != nil || route["freeQuota"] != nil {
+			return nil, false, fmt.Errorf("--route %q: price and freeQuota only apply to paid routes (gate=%s)", val, gate)
 		}
 		routes = append(routes, route)
 	}

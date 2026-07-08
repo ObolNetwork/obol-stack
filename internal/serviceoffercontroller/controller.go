@@ -779,6 +779,19 @@ func (c *Controller) reconcilePaymentGate(ctx context.Context, status *monetizea
 }
 
 func (c *Controller) reconcileRoute(ctx context.Context, status *monetizeapi.ServiceOfferStatus, offer *monetizeapi.ServiceOffer) error {
+	// Protection middleware must exist before the routes that reference it
+	// (Traefik drops routes with a dangling ExtensionRef).
+	if hasLimits(offer) {
+		if err := c.applyObject(ctx, c.middlewares.Namespace(offer.Namespace), buildLimitsMiddleware(offer)); err != nil {
+			setCondition(status, "RoutePublished", "False", "ApplyFailed", err.Error())
+			return err
+		}
+	} else {
+		err := c.middlewares.Namespace(offer.Namespace).Delete(ctx, limitsMiddlewareName(offer.Name), metav1.DeleteOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
 	if err := c.applyObject(ctx, c.httpRoutes.Namespace(offer.Namespace), buildHTTPRoute(offer)); err != nil {
 		setCondition(status, "RoutePublished", "False", "ApplyFailed", err.Error())
 		return err
@@ -1318,6 +1331,7 @@ func (c *Controller) deleteRouteChildren(ctx context.Context, offer *monetizeapi
 		{resource: c.referenceGrants.Namespace("x402"), name: backendReferenceGrantName(offer.Name)},
 		{resource: c.httpRoutes.Namespace(offer.Namespace), name: childName(offer.Name)},
 		{resource: c.httpRoutes.Namespace(offer.Namespace), name: hostChildName(offer.Name)},
+		{resource: c.middlewares.Namespace(offer.Namespace), name: limitsMiddlewareName(offer.Name)},
 	} {
 		err := deletion.resource.Delete(ctx, deletion.name, metav1.DeleteOptions{})
 		if err != nil && !apierrors.IsNotFound(err) {

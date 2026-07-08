@@ -656,6 +656,57 @@ func buildServicesJSONHTTPRoute() *unstructured.Unstructured {
 	}
 }
 
+// hasLimits reports whether the offer wants protection middleware.
+func hasLimits(offer *monetizeapi.ServiceOffer) bool {
+	return offer.Spec.Limits.MaxInFlight > 0 || offer.Spec.Limits.RPS > 0
+}
+
+// buildLimitsMiddleware renders the Traefik protection middleware for
+// spec.limits: inFlightReq (concurrency cap — the unbounded-concurrency
+// hole on paid agents is pentest-proven) and/or rateLimit. Lives in the
+// offer's namespace because Gateway API ExtensionRef resolves there.
+func buildLimitsMiddleware(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured {
+	spec := map[string]any{}
+	if offer.Spec.Limits.MaxInFlight > 0 {
+		spec["inFlightReq"] = map[string]any{"amount": offer.Spec.Limits.MaxInFlight}
+	}
+	if offer.Spec.Limits.RPS > 0 {
+		spec["rateLimit"] = map[string]any{
+			"average": offer.Spec.Limits.RPS,
+			"burst":   offer.Spec.Limits.RPS * 2,
+		}
+	}
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "traefik.io/v1alpha1",
+			"kind":       "Middleware",
+			"metadata": map[string]any{
+				"name":            limitsMiddlewareName(offer.Name),
+				"namespace":       offer.Namespace,
+				"ownerReferences": []any{ownerRefMap(offer)},
+			},
+			"spec": spec,
+		},
+	}
+}
+
+func limitsMiddlewareName(offerName string) string {
+	return safeName("so-", offerName, "-limits")
+}
+
+// limitsFilter is the ExtensionRef filter attached to gated rules when
+// spec.limits is set.
+func limitsFilter(offer *monetizeapi.ServiceOffer) map[string]any {
+	return map[string]any{
+		"type": "ExtensionRef",
+		"extensionRef": map[string]any{
+			"group": "traefik.io",
+			"kind":  "Middleware",
+			"name":  limitsMiddlewareName(offer.Name),
+		},
+	}
+}
+
 func buildHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{
 		Object: map[string]any{
@@ -675,23 +726,7 @@ func buildHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured 
 					},
 				},
 				"rules": []any{
-					map[string]any{
-						"matches": []any{
-							map[string]any{
-								"path": map[string]any{
-									"type":  "PathPrefix",
-									"value": offer.EffectivePath(),
-								},
-							},
-						},
-						"backendRefs": []any{
-							map[string]any{
-								"name":      "x402-verifier",
-								"namespace": "x402",
-								"port":      int64(8080),
-							},
-						},
-					},
+					sharedOriginRule(offer),
 				},
 			},
 		},
@@ -734,6 +769,30 @@ func buildHostHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructu
 		}
 	}
 
+	catchallFilters := []any{
+		map[string]any{
+			"type": "URLRewrite",
+			"urlRewrite": map[string]any{
+				"path": map[string]any{
+					"type":               "ReplacePrefixMatch",
+					"replacePrefixMatch": strings.TrimSuffix(offer.EffectivePath(), "/"),
+				},
+			},
+		},
+		map[string]any{
+			"type": "RequestHeaderModifier",
+			"requestHeaderModifier": map[string]any{
+				"set": []any{
+					map[string]any{"name": "X-Forwarded-Host", "value": offer.Spec.Hostname},
+					map[string]any{"name": "X-Forwarded-Proto", "value": "https"},
+				},
+			},
+		},
+	}
+	if hasLimits(offer) {
+		catchallFilters = append(catchallFilters, limitsFilter(offer))
+	}
+
 	return &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "gateway.networking.k8s.io/v1",
@@ -760,26 +819,7 @@ func buildHostHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructu
 						"matches": []any{
 							map[string]any{"path": map[string]any{"type": "PathPrefix", "value": "/"}},
 						},
-						"filters": []any{
-							map[string]any{
-								"type": "URLRewrite",
-								"urlRewrite": map[string]any{
-									"path": map[string]any{
-										"type":               "ReplacePrefixMatch",
-										"replacePrefixMatch": strings.TrimSuffix(offer.EffectivePath(), "/"),
-									},
-								},
-							},
-							map[string]any{
-								"type": "RequestHeaderModifier",
-								"requestHeaderModifier": map[string]any{
-									"set": []any{
-										map[string]any{"name": "X-Forwarded-Host", "value": offer.Spec.Hostname},
-										map[string]any{"name": "X-Forwarded-Proto", "value": "https"},
-									},
-								},
-							},
-						},
+						"filters": catchallFilters,
 						"backendRefs": []any{
 							map[string]any{"name": "x402-verifier", "namespace": "x402", "port": int64(8080)},
 						},
@@ -788,6 +828,32 @@ func buildHostHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructu
 			},
 		},
 	}
+}
+
+// sharedOriginRule is the /services/<name> PathPrefix rule → verifier,
+// with the protection middleware attached when spec.limits is set.
+func sharedOriginRule(offer *monetizeapi.ServiceOffer) map[string]any {
+	rule := map[string]any{
+		"matches": []any{
+			map[string]any{
+				"path": map[string]any{
+					"type":  "PathPrefix",
+					"value": offer.EffectivePath(),
+				},
+			},
+		},
+		"backendRefs": []any{
+			map[string]any{
+				"name":      "x402-verifier",
+				"namespace": "x402",
+				"port":      int64(8080),
+			},
+		},
+	}
+	if hasLimits(offer) {
+		rule["filters"] = []any{limitsFilter(offer)}
+	}
+	return rule
 }
 
 func hostChildName(offerName string) string {
@@ -1193,6 +1259,15 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 			}
 		}
 		lines = append(lines, skillCatalogRouteLines(offer, endpoint)...)
+		if offer.Spec.Async.Enabled {
+			access := "results are gated to the paying wallet (SIWX sign-in) or the `jobToken` from the 202 body"
+			if offer.Spec.Async.EffectiveResultVisibility() == monetizeapi.ResultVisibilityPublic {
+				access = "results are public (the unguessable job id is the capability)"
+			}
+			lines = append(lines, fmt.Sprintf(
+				"- **Delivery**: async — paid calls return `202` with `{jobId, statusUrl, resultUrl, jobToken}`; poll `%s/jobs/<jobId>` (free) until `state=complete`, then fetch the result — %s. Optional `{\"callbackUrl\": ...}` in a JSON body registers a completion webhook.",
+				endpoint, access))
+		}
 		if offer.IsDraining() {
 			lines = append(lines, fmt.Sprintf("- **Drain ends at**: %s", offer.DrainEndsAt().UTC().Format(time.RFC3339)))
 		}

@@ -301,7 +301,7 @@ func openAPIPathsForOffer(offer *monetizeapi.ServiceOffer) map[string]map[string
 	// offers keep the chat-completions synthesis (their wire shape is fixed
 	// by the OpenAI contract regardless of route carve-outs).
 	if len(offer.Spec.Routes) > 0 && !offer.IsInference() && !offer.IsAgent() {
-		return openAPIPathsForRouteTable(offer)
+		return annotateAsyncPaths(offer, openAPIPathsForRouteTable(offer))
 	}
 	switch {
 	case offer.IsInference(), offer.IsAgent():
@@ -344,7 +344,7 @@ func openAPIPathsForOffer(offer *monetizeapi.ServiceOffer) map[string]map[string
 			},
 		}
 	default:
-		return map[string]map[string]any{
+		return annotateAsyncPaths(offer, map[string]map[string]any{
 			"": {
 				"post": openAPIOperation(offer, openAPIOperationOptions{
 					summary:     "Invoke " + offer.Name,
@@ -356,8 +356,69 @@ func openAPIPathsForOffer(offer *monetizeapi.ServiceOffer) map[string]map[string
 					successResponse: openAPIGenericSuccessResponse("Upstream response (shape is operator-defined)."),
 				}),
 			},
+		})
+	}
+}
+
+// annotateAsyncPaths marks the paid operations of an async offer and adds
+// the /jobs surface, so buyers learn the 202→poll→result dance from the
+// document alone.
+func annotateAsyncPaths(offer *monetizeapi.ServiceOffer, paths map[string]map[string]any) map[string]map[string]any {
+	if !offer.Spec.Async.Enabled {
+		return paths
+	}
+	for _, item := range paths {
+		for _, rawOp := range item {
+			op, ok := rawOp.(map[string]any)
+			if !ok {
+				continue
+			}
+			if _, paid := op["x-payment-info"]; !paid {
+				continue
+			}
+			op["x-async"] = true
+			if responses, ok := op["responses"].(map[string]any); ok {
+				responses["202"] = map[string]any{
+					"description": "Job accepted; payment settled. The body carries {jobId, statusUrl, resultUrl, jobToken}; Location points at the free status page. Poll statusUrl until state=complete, then GET resultUrl authenticated as the paying wallet (SIWX) or with `Authorization: Bearer <jobToken>`. Optional: include {\"callbackUrl\": \"...\"} in a JSON submit body for a completion webhook.",
+				}
+				delete(responses, "200")
+			}
 		}
 	}
+	paths["/jobs/{jobId}"] = map[string]any{
+		"get": map[string]any{
+			"summary":     offer.Name + " — job status (free)",
+			"description": "Free async job status: JSON for pollers, an auto-refreshing HTML page for browsers. `Prefer: redirect` returns 303 to the result once complete.",
+			"operationId": openAPIOperationID(offer) + "-job-status",
+			"tags":        operationTagsForOffer(offer),
+			"security":    []any{},
+			"x-gate":      "free",
+			"responses": map[string]any{
+				"200": openAPIGenericSuccessResponse("Job state: {jobId, state, createdAt, expiresAt, resultUrl?, error?}."),
+				"410": map[string]any{"description": "Retention window elapsed; the job record and result were deleted."},
+			},
+		},
+	}
+	access := "Access: the paying wallet (SIWX) or the jobToken from the 202 body."
+	if offer.Spec.Async.EffectiveResultVisibility() == monetizeapi.ResultVisibilityPublic {
+		access = "This offer publishes results publicly — the unguessable job id is the capability."
+	}
+	paths["/jobs/{jobId}/result"] = map[string]any{
+		"get": map[string]any{
+			"summary":     offer.Name + " — job result",
+			"description": "The stored upstream response, served verbatim once state=complete. " + access,
+			"operationId": openAPIOperationID(offer) + "-job-result",
+			"tags":        operationTagsForOffer(offer),
+			"security":    []any{},
+			"responses": map[string]any{
+				"200": openAPIGenericSuccessResponse("The stored upstream response (original content type)."),
+				"401": map[string]any{"description": "Not the paying wallet and no valid jobToken."},
+				"409": map[string]any{"description": "Job still running; poll the status URL."},
+				"502": map[string]any{"description": "The job failed. Payment settled at acceptance — report via info.contact."},
+			},
+		},
+	}
+	return paths
 }
 
 // openAPIPathsForRouteTable renders one operation per declared route.

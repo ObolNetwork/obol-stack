@@ -2478,6 +2478,34 @@ def cmd_siwx(url, fetch=False, method="GET"):
 # Pay (single-shot HTTP/x402 purchase)
 # ---------------------------------------------------------------------------
 
+def _print_async_job_guidance(request_url, body_text):
+    """A 202 means the seller runs async delivery: payment settled at
+    acceptance, the work continues server-side. Tell the caller exactly how
+    to collect the result instead of leaving them staring at a job id."""
+    try:
+        accepted = json.loads(body_text)
+    except (ValueError, TypeError):
+        return
+    status_url = accepted.get("statusUrl", "")
+    result_url = accepted.get("resultUrl", "")
+    token = accepted.get("jobToken", "")
+    if not status_url:
+        return
+    origin = "{0.scheme}://{0.netloc}".format(urllib.parse.urlparse(request_url))
+    if status_url.startswith("/"):
+        status_url = origin + status_url
+    if result_url.startswith("/"):
+        result_url = origin + result_url
+    print("Async job accepted (payment settled). To collect the result:")
+    print(f"  1. Poll (free, no payment):  curl {status_url}")
+    print("     ... until \"state\": \"complete\" (or \"failed\").")
+    if token:
+        print(f"  2. Fetch:  curl -H 'Authorization: Bearer {token}' {result_url}")
+        print("     (or sign in with the wallet that paid: buy.py siwx <resultUrl> --fetch)")
+    else:
+        print(f"  2. Fetch:  curl {result_url}")
+
+
 def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=None, token=None, payment_option=None):
     """Single-shot paid HTTP request: probe → pre-sign one auth → send with X-PAYMENT.
 
@@ -2599,6 +2627,8 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=Non
                 print(f"X-PAYMENT-RESPONSE: {settle}")
             print()
             print(body)
+            if resp.status == 202:
+                _print_async_job_guidance(url, body)
             return 0
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace") if e.fp else ""

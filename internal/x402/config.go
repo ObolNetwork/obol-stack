@@ -179,6 +179,29 @@ type RouteRule struct {
 	// without leaking the internal path prefix.
 	Hostname string `yaml:"hostname,omitempty"`
 
+	// Async marks a rule whose verified+settled requests are handed to the
+	// job broker instead of the upstream: the broker snapshots the
+	// request, answers 202 with a job id, and replays it upstream with no
+	// client-facing deadline. Set on the paid rules of spec.async offers
+	// AND on their synthesized free /jobs/* rules (both proxy to the
+	// broker; the broker tells submits from job lookups by path).
+	Async bool `yaml:"async,omitempty"`
+
+	// BrokerURL is the job broker base URL for async rules.
+	BrokerURL string `yaml:"brokerURL,omitempty"`
+
+	// AsyncTTL is the job retention window advertised to the broker
+	// (Go duration string, e.g. "72h").
+	AsyncTTL string `yaml:"asyncTTL,omitempty"`
+
+	// AsyncVisibility is the result-access mode: "payer" or "public".
+	AsyncVisibility string `yaml:"asyncVisibility,omitempty"`
+
+	// FreeQuota grants each SIWX-verified wallet this many free calls per
+	// UTC day on a paid route before the 402 applies. Verifier-local
+	// counters (reset on restart) — a giveaway, not a ledger.
+	FreeQuota int64 `yaml:"freeQuota,omitempty"`
+
 	// Gate is the route's gate class from the originating ServiceOffer's
 	// route table: "paid" (default when empty — fail closed), "free", or
 	// "auth". Free rules pass the payment gate entirely: HandleVerify

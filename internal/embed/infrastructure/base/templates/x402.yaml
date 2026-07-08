@@ -456,3 +456,100 @@ spec:
       path: /metrics
       interval: 30s
       scrapeTimeout: 10s
+
+---
+# job-broker: async delivery for spec.async ServiceOffers. The verifier
+# proxies verified+settled paid requests here instead of the upstream; the
+# broker answers 202 with a job id, replays the request upstream with no
+# client-facing deadline, and serves the free /jobs/* status pages plus
+# payer/token-gated results. One per stack; jobs live in SQLite on the PVC.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: job-broker-data
+  namespace: x402
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: job-broker
+  namespace: x402
+  labels:
+    app: job-broker
+spec:
+  # Single replica by design: SQLite single-writer, local-path PV pins to
+  # one node anyway. Recreate avoids two writers during a roll.
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: job-broker
+  template:
+    metadata:
+      labels:
+        app: job-broker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: job-broker
+          image: ghcr.io/obolnetwork/job-broker:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          args:
+            - --listen=:8090
+            - --db=/data/jobs.db
+          ports:
+            - name: http
+              containerPort: 8090
+              protocol: TCP
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8090
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: job-broker-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: job-broker
+  namespace: x402
+  labels:
+    app: job-broker
+spec:
+  selector:
+    app: job-broker
+  ports:
+    - name: http
+      port: 8090
+      targetPort: 8090

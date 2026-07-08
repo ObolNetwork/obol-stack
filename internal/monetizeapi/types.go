@@ -176,6 +176,15 @@ type ServiceOfferSpec struct {
 	// AgentRegistration document schema (ERC-8004 spec).
 	Registration ServiceOfferRegistration `json:"registration,omitempty"`
 
+	// Async turns the offer's paid routes into accepted jobs: payment
+	// settles at acceptance, the request is replayed against the upstream
+	// with no client-facing deadline by the job broker, and the buyer
+	// polls a free status page (202 + Location: <offer>/jobs/<id>).
+	Async ServiceOfferAsync `json:"async,omitempty"`
+
+	// Limits renders Traefik middleware in front of the offer's routes.
+	Limits ServiceOfferLimits `json:"limits,omitempty"`
+
 	// DrainAt marks the offer as draining when non-nil. While the offer
 	// is in the drain window, discovery surfaces (/skill.md and
 	// /.well-known/agent-registration.json) advertise the offer with
@@ -260,6 +269,62 @@ type ServiceOfferPayment struct {
 	Price ServiceOfferPriceTable `json:"price"`
 }
 
+// Result visibility modes for async offers.
+const (
+	ResultVisibilityPayer  = "payer"
+	ResultVisibilityPublic = "public"
+)
+
+// DefaultJobTTL is how long job records + stored results live when
+// spec.async.ttl is unset.
+const DefaultJobTTL = 72 * time.Hour
+
+// ServiceOfferAsync configures broker-mediated async delivery.
+type ServiceOfferAsync struct {
+	// Enabled routes the offer's paid requests through the job broker.
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled,omitempty"`
+	// ResultVisibility gates GET <offer>/jobs/<id>/result. "payer"
+	// (default) requires the paying wallet (SIWX) or the capability
+	// jobToken returned in the 202 body; "public" makes the unguessable
+	// job id the capability (shareable results).
+	// +kubebuilder:default="payer"
+	// +kubebuilder:validation:Enum=payer;public
+	ResultVisibility string `json:"resultVisibility,omitempty"`
+	// TTL is how long job records + stored results are retained.
+	// Defaults to 72h. Status pages return 410 Gone afterwards.
+	TTL *metav1.Duration `json:"ttl,omitempty"`
+}
+
+// EffectiveResultVisibility defaults to payer — fail closed on paid work.
+func (a *ServiceOfferAsync) EffectiveResultVisibility() string {
+	if a.ResultVisibility == ResultVisibilityPublic {
+		return ResultVisibilityPublic
+	}
+	return ResultVisibilityPayer
+}
+
+// EffectiveTTL returns the configured retention or the default.
+func (a *ServiceOfferAsync) EffectiveTTL() time.Duration {
+	if a.TTL != nil && a.TTL.Duration > 0 {
+		return a.TTL.Duration
+	}
+	return DefaultJobTTL
+}
+
+// ServiceOfferLimits renders Traefik protection middleware for the offer.
+type ServiceOfferLimits struct {
+	// MaxInFlight caps concurrent in-flight requests (Traefik inFlightReq).
+	// 0 = no cap. The unbounded-concurrency hole on paid agents is
+	// pentest-proven; paid agent offers should set a small value.
+	// +kubebuilder:validation:Minimum=0
+	MaxInFlight int64 `json:"maxInFlight,omitempty"`
+	// RPS caps average requests/second (Traefik rateLimit; burst 2x).
+	// 0 = no cap.
+	// +kubebuilder:validation:Minimum=0
+	RPS int64 `json:"rps,omitempty"`
+}
+
 // Gate classes for ServiceOfferRoute.
 const (
 	GatePaid = "paid"
@@ -305,6 +370,12 @@ type ServiceOfferRoute struct {
 	// operation summary, skill.md route list).
 	// +kubebuilder:validation:MaxLength=300
 	Summary string `json:"summary,omitempty"`
+	// FreeQuota grants each SIWX-verified wallet this many free calls per
+	// UTC day on a paid route before the 402 applies (the x402scan-style
+	// free tier). Counters are verifier-local and reset on verifier
+	// restart — a giveaway mechanism, not an entitlement ledger. 0 = none.
+	// +kubebuilder:validation:Minimum=0
+	FreeQuota int64 `json:"freeQuota,omitempty"`
 }
 
 // EffectiveGate returns the route's gate class, defaulting to paid so a

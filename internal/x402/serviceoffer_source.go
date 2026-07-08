@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -149,14 +150,22 @@ func routeRulesFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (
 		return nil, err
 	}
 
+	async := offer.Spec.Async.Enabled
 	specRoutes := offer.EffectiveRoutes()
-	rules := make([]RouteRule, 0, len(specRoutes))
+	rules := make([]RouteRule, 0, len(specRoutes)+1)
 	for _, rt := range specRoutes {
 		rule := base
 		rule.Pattern = joinRoutePattern(offer.EffectivePath(), rt.Path)
 		rule.Gate = rt.EffectiveGate()
+		rule.FreeQuota = rt.FreeQuota
 		if rt.Summary != "" {
 			rule.Description = rt.Summary
+		}
+		if async && rt.EffectiveGate() == monetizeapi.GatePaid {
+			rule.Async = true
+			rule.BrokerURL = brokerBaseURL()
+			rule.AsyncTTL = offer.Spec.Async.EffectiveTTL().String()
+			rule.AsyncVisibility = offer.Spec.Async.EffectiveResultVisibility()
 		}
 
 		switch {
@@ -187,7 +196,33 @@ func routeRulesFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (
 		rules = append(rules, rule)
 	}
 
+	// Async offers auto-publish <offer>/jobs/* — free status pages, gated
+	// results, wallet-scoped listing — all served by the broker (which
+	// tells job lookups from submits by path). No routes[] entry needed;
+	// declaring one anyway is a path conflict the specificity sort resolves
+	// in the declared route's favor.
+	if async {
+		jobs := base
+		jobs.Pattern = joinRoutePattern(offer.EffectivePath(), "/jobs/*")
+		jobs.Gate = "free"
+		jobs.Price = "0"
+		jobs.Payments = nil
+		jobs.Async = true
+		jobs.BrokerURL = brokerBaseURL()
+		jobs.Description = "Async job status, results, and wallet-scoped listing"
+		rules = append(rules, jobs)
+	}
+
 	return rules, nil
+}
+
+// brokerBaseURL is the in-cluster job broker; JOB_BROKER_URL overrides for
+// tests and out-of-cluster runs.
+func brokerBaseURL() string {
+	if v := os.Getenv("JOB_BROKER_URL"); v != "" {
+		return v
+	}
+	return "http://job-broker.x402.svc.cluster.local:8090"
 }
 
 // joinRoutePattern anchors a route-table path (relative to the offer's

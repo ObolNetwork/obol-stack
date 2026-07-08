@@ -80,11 +80,32 @@ func publicPrefix(rule *RouteRule, host string) string {
 	return strings.TrimSuffix(rule.StripPrefix, "/")
 }
 
-// stripIdentityHeaders removes client-supplied identity headers. Called on
-// every proxied request before the verifier decides whether to set its own.
+// Broker contract headers (mirrors internal/jobbroker — see the comment on
+// buildUpstreamProxy for why they aren't imported).
+const (
+	headerBrokerUpstreamURL  = "X-Obol-Upstream-Url"
+	headerBrokerOffer        = "X-Obol-Offer"
+	headerBrokerPayTo        = "X-Obol-Pay-To"
+	headerBrokerJobTTL       = "X-Obol-Job-Ttl"
+	headerBrokerVisibility   = "X-Obol-Result-Visibility"
+	headerBrokerPublicPrefix = "X-Obol-Public-Prefix"
+	headerBrokerUpstreamAuth = "X-Obol-Upstream-Auth"
+)
+
+// stripIdentityHeaders removes client-supplied identity and broker-contract
+// headers. Called on every proxied request before the verifier decides
+// whether to set its own — the downstream components trust these headers
+// BECAUSE this ran.
 func stripIdentityHeaders(h http.Header) {
 	h.Del(HeaderVerifiedWallet)
 	h.Del(HeaderPaymentPayer)
+	h.Del(headerBrokerUpstreamURL)
+	h.Del(headerBrokerOffer)
+	h.Del(headerBrokerPayTo)
+	h.Del(headerBrokerJobTTL)
+	h.Del(headerBrokerVisibility)
+	h.Del(headerBrokerPublicPrefix)
+	h.Del(headerBrokerUpstreamAuth)
 }
 
 // authPageSuffix/authVerifySuffix are the verifier-served sign-in endpoints
