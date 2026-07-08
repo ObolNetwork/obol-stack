@@ -427,9 +427,21 @@ func annotateAsyncPaths(offer *monetizeapi.ServiceOffer, paths map[string]map[st
 // payments). Free routes carry neither — they are advertised as plainly
 // callable, marked with x-gate: free so indexers don't misread the absence
 // of payment metadata as an omission.
+//
+// openAPIRelPathForRoute collapses an exact path and its own "/*" wildcard
+// sibling onto the same {key, method} slot (e.g. "/jobs" and "/jobs/*" both
+// key as "/jobs"). The verifier resolves that overlap by specificity, not
+// declaration order (sortRoutesBySpecificity in internal/x402/matcher.go) —
+// exact beats wildcard. We sort a copy of the route table the same way
+// before rendering, and skip a method that a more specific route already
+// wrote, so the collapsed operation always reflects the route the verifier
+// will actually select instead of whichever was declared last.
 func openAPIPathsForRouteTable(offer *monetizeapi.ServiceOffer) map[string]map[string]any {
+	routes := append([]monetizeapi.ServiceOfferRoute(nil), offer.EffectiveRoutes()...)
+	sortRouteTableBySpecificity(routes)
+
 	paths := map[string]map[string]any{}
-	for _, rt := range offer.EffectiveRoutes() {
+	for _, rt := range routes {
 		rel := openAPIRelPathForRoute(rt.Path)
 		item := paths[rel]
 		if item == nil {
@@ -464,6 +476,12 @@ func openAPIPathsForRouteTable(offer *monetizeapi.ServiceOffer) map[string]map[s
 		}
 
 		for _, method := range methods {
+			// routes is sorted most-specific-first: if a more specific
+			// route already claimed this method at this collapsed key,
+			// it wins — matching the verifier's resolution.
+			if _, claimed := item[strings.ToLower(method)]; claimed {
+				continue
+			}
 			op := map[string]any{
 				"summary":     summary,
 				"description": description,
@@ -509,6 +527,41 @@ func openAPIPathsForRouteTable(offer *monetizeapi.ServiceOffer) map[string]map[s
 		}
 	}
 	return paths
+}
+
+// sortRouteTableBySpecificity orders a copy of the route table
+// most-specific-first: exact patterns before wildcards, then longer literal
+// prefix, then deeper (more path segments) — the same rule
+// sortRoutesBySpecificity (internal/x402/matcher.go) applies to the
+// verifier's RouteRules. All routes in a table share the offer's prefix, so
+// comparing the relative rt.Path is equivalent to comparing the full
+// verifier pattern. sort.SliceStable so equally-specific routes keep their
+// declared order.
+func sortRouteTableBySpecificity(routes []monetizeapi.ServiceOfferRoute) {
+	sort.SliceStable(routes, func(i, j int) bool {
+		ei, li := routePatternSpecificity(routes[i].Path)
+		ej, lj := routePatternSpecificity(routes[j].Path)
+		if ei != ej {
+			return ei // exact before wildcard
+		}
+		if li != lj {
+			return li > lj // longer literal prefix first
+		}
+		si := strings.Count(routes[i].Path, "/")
+		sj := strings.Count(routes[j].Path, "/")
+		return si > sj // deeper pattern first
+	})
+}
+
+// routePatternSpecificity mirrors patternSpecificity in
+// internal/x402/matcher.go: whether the path is an exact match (no
+// wildcards) and the length of its literal prefix before the first "*".
+func routePatternSpecificity(routePath string) (exact bool, literalLen int) {
+	i := strings.IndexByte(routePath, '*')
+	if i < 0 {
+		return true, len(routePath)
+	}
+	return false, i
 }
 
 // openAPIRelPathForRoute converts a route-table path into an OpenAPI paths

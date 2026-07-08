@@ -153,6 +153,97 @@ func TestRouteSurface_Golden_SkillMDListsEveryRoute(t *testing.T) {
 	}
 }
 
+// TestRouteSurface_Golden_ExactBeatsWildcardRegardlessOfDeclarationOrder is
+// the regression test for finding F6: an exact PAID route and a free
+// wildcard route can collapse onto the same OpenAPI {path, method} slot
+// (openAPIRelPathForRoute strips "/jobs/*" down to "/jobs", same as the
+// exact "/jobs"). The verifier always resolves that overlap by specificity
+// — exact beats wildcard — regardless of spec.routes declaration order
+// (sortRoutesBySpecificity, internal/x402/matcher.go). The OpenAPI builder
+// must resolve the same way, or discovery can advertise a route as free
+// while the verifier charges it. Here the exact PAID route is declared
+// FIRST, free wildcard SECOND: a buggy "last route in spec.routes wins"
+// render lets the later free wildcard clobber the paid route's operation
+// at the collapsed "/jobs" key.
+func TestRouteSurface_Golden_ExactBeatsWildcardRegardlessOfDeclarationOrder(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "audit", Namespace: "sec"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type:     "http",
+			Upstream: monetizeapi.ServiceOfferUpstream{Service: "auditd", Namespace: "sec", Port: 8080},
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base-sepolia",
+				PayTo:   "0x1111111111111111111111111111111111111111",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.1"},
+			},
+			Routes: []monetizeapi.ServiceOfferRoute{
+				// Exact PAID route declared FIRST, free wildcard SECOND.
+				{Path: "/jobs", Methods: []string{"GET"}, Gate: monetizeapi.GatePaid,
+					Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.5"}},
+				{Path: "/jobs/*", Methods: []string{"GET"}, Gate: monetizeapi.GateFree},
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{
+				{Type: "ModelReady", Status: "True"},
+				{Type: "UpstreamHealthy", Status: "True"},
+				{Type: "PaymentGateReady", Status: "True"},
+				{Type: "RoutePublished", Status: "True"},
+			},
+		},
+	}
+
+	rules, err := x402.RouteRulesForOffer(offer, "")
+	if err != nil {
+		t.Fatalf("RouteRulesForOffer: %v", err)
+	}
+	if len(rules) != 2 {
+		t.Fatalf("len(rules) = %d, want 2", len(rules))
+	}
+	// The verifier resolves the "/jobs" vs "/jobs/*" overlap by specificity
+	// (sortRoutesBySpecificity, internal/x402/matcher.go:63-93): exact
+	// beats wildcard, regardless of spec.routes declaration order. Find the
+	// exact rule directly rather than re-deriving the verifier's matching —
+	// this test only needs to know what that rule enforces.
+	var exactRule *x402.RouteRule
+	for i := range rules {
+		if !strings.HasSuffix(rules[i].Pattern, "/*") {
+			exactRule = &rules[i]
+		}
+	}
+	if exactRule == nil {
+		t.Fatalf("no exact rule among %v — fixture no longer reproduces F6", rules)
+	}
+	if exactRule.IsFree() {
+		t.Fatalf("exact rule %q is free — fixture no longer reproduces F6 (expected the paid override)", exactRule.Pattern)
+	}
+	if exactRule.Price != "0.5" {
+		t.Fatalf("exact rule %q price = %q, want \"0.5\"", exactRule.Pattern, exactRule.Price)
+	}
+
+	paths := buildOpenAPIPaths([]*monetizeapi.ServiceOffer{offer})
+	const key = "/services/audit/jobs"
+	item, ok := paths[key].(map[string]any)
+	if !ok {
+		t.Fatalf("OpenAPI has no %s path (keys: %v)", key, mapKeys(paths))
+	}
+	op, ok := item["get"].(map[string]any)
+	if !ok {
+		t.Fatalf("OpenAPI %s has no GET operation: %v", key, item)
+	}
+	if op["x-gate"] == "free" {
+		t.Errorf("OpenAPI advertises GET %s as free, but the verifier charges it (per-route price override 0.5): %v", key, op)
+	}
+	info, hasPayment := op["x-payment-info"].(map[string]any)
+	if !hasPayment {
+		t.Fatalf("OpenAPI GET %s is missing x-payment-info; the verifier gates it paid at the override price", key)
+	}
+	price, _ := info["price"].(map[string]any)
+	if got := price["amount"]; got != exactRule.Price {
+		t.Errorf("GET %s: advertised amount %v != enforced price %q", key, got, exactRule.Price)
+	}
+}
+
 func mapKeys(m map[string]any) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
