@@ -11,6 +11,8 @@ import { EmptyMessage } from '@/components/atoms/EmptyMessage';
 import { Pagination } from '@/components/atoms/Pagination';
 import { CopyButton } from '@/components/atoms/CopyButton';
 import { useMarketplaceCatalog } from '@/hooks/useMarketplaceCatalog';
+import { useTunnelURL } from '@/hooks/useAgents';
+import { publicStorefrontUrl } from '@/lib/services/public-storefront';
 import { isStackUnreachable } from '@/lib/marketplace/errors';
 import type {
   MarketplaceFilters,
@@ -179,6 +181,11 @@ export function MarketplacePage({
   const { data, isLoading, isError, error, refetch } =
     useMarketplaceCatalog(filters);
 
+  // Public storefront root — the footer CTA on each card opens it in a new
+  // tab. Resolves to the operator's tunnel URL, or the local controller.
+  const { tunnelURL } = useTunnelURL();
+  const storefrontUrl = publicStorefrontUrl(tunnelURL);
+
   const sourceBreakdown = useMemo(() => {
     const buckets = data?.facets?.source ?? [];
     if (buckets.length === 0) return '';
@@ -296,9 +303,14 @@ export function MarketplacePage({
                   setFilters(prev => ({ ...prev, sort, page: 1 }))
                 }
                 onDetails={onDetails}
+                storefrontUrl={storefrontUrl}
               />
             ) : (
-              <MarketplaceGrid items={data.items} onDetails={onDetails} />
+              <MarketplaceGrid
+                items={data.items}
+                onDetails={onDetails}
+                storefrontUrl={storefrontUrl}
+              />
             )}
             {data && data.total > 0 ? (
               <PaginationRow>

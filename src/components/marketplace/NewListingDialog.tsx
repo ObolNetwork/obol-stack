@@ -454,7 +454,9 @@ export function NewListingDialog({ open, onClose }: NewListingDialogProps) {
             <Box
               css={{
                 display: 'grid',
-                gridTemplateColumns: '1.2fr 110px 140px',
+                // Toggles size to their labels (USDC/OBOL, / req · / Mtok · / hr);
+                // the amount input flexes into whatever's left so nothing clips.
+                gridTemplateColumns: 'minmax(120px, 1fr) auto auto',
                 gap: 8,
               }}
             >

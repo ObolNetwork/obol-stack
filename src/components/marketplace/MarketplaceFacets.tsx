@@ -147,46 +147,191 @@ const Count = styled(Text, {
   fontFamily: 'monospace',
 });
 
-// Visual price-range slider — decorative, matches the canvas 1:1.
-// Functional drag handles are a follow-up; for now this shows the
-// current min/max as percentage thumbs on a track that always spans
-// $0 → maximum-seen-price, with the labels reflecting filter state.
-const SliderTrack = styled(Box, {
+// Functional dual-thumb price-range slider — two native range inputs stacked
+// over a shared track, log-spaced stops so sub-cent and dollar prices both get
+// room. Writes minPrice/maxPrice (decimal strings) which filterItems honours.
+const PriceHeader = styled(Flex, {
+  alignItems: 'center',
+});
+
+const ResetButton = styled('button', {
+  background: 'transparent',
+  border: 0,
+  padding: 0,
+  cursor: 'pointer',
+  color: '$obolGreen',
+  fontSize: '$1',
+  fontFamily: '$fonts$body',
+});
+
+const RangeWrap = styled(Box, {
   position: 'relative',
-  height: 6,
-  background: '$bg03',
-  borderRadius: 999,
-  marginTop: 6,
-  border: '1px solid $stroke',
+  height: 20,
+  margin: '2px 8px',
 });
 
-const SliderFill = styled(Box, {
+const RangeBase = styled(Box, {
   position: 'absolute',
-  top: 0,
-  bottom: 0,
+  top: '50%',
+  left: 0,
+  right: 0,
+  height: 4,
+  transform: 'translateY(-50%)',
+  background: '$bg04',
+  borderRadius: 999,
+});
+
+const RangeFill = styled(Box, {
+  position: 'absolute',
+  top: '50%',
+  height: 4,
+  transform: 'translateY(-50%)',
   background: '$obolGreen',
   borderRadius: 999,
-  opacity: 0.5,
 });
 
-const SliderThumb = styled(Box, {
+const RangeInput = styled('input', {
+  WebkitAppearance: 'none',
+  appearance: 'none',
   position: 'absolute',
-  top: -5,
-  width: 14,
-  height: 14,
-  borderRadius: 999,
-  background: '$obolGreen',
-  transform: 'translateX(-50%)',
-  border: '2px solid $bg02',
+  left: 0,
+  right: 0,
+  width: '100%',
+  height: 20,
+  margin: 0,
+  background: 'transparent',
+  pointerEvents: 'none',
+
+  '&::-webkit-slider-thumb': {
+    WebkitAppearance: 'none',
+    appearance: 'none',
+    width: 15,
+    height: 15,
+    borderRadius: '50%',
+    background: '$obolGreen',
+    border: '2px solid $bg02',
+    cursor: 'pointer',
+    pointerEvents: 'auto',
+    boxShadow: '0 1px 2px rgba(0,0,0,0.35)',
+  },
+  '&::-moz-range-thumb': {
+    width: 15,
+    height: 15,
+    borderRadius: '50%',
+    background: '$obolGreen',
+    border: '2px solid $bg02',
+    cursor: 'pointer',
+    pointerEvents: 'auto',
+  },
+  '&::-webkit-slider-runnable-track': { background: 'transparent' },
+  '&::-moz-range-track': { background: 'transparent' },
+  '&:focus': { outline: 'none' },
 });
 
-const SliderLabels = styled(Flex, {
+const RangeLabels = styled(Flex, {
   justifyContent: 'space-between',
   fontSize: '$1',
   color: '$body',
   fontFamily: 'monospace',
   marginTop: 4,
 });
+
+// Log-spaced stops: index 0 means "no lower bound", the last index means
+// "no upper bound", so a full-width slider clears the price filter.
+const PRICE_STOPS = [
+  0.0001, 0.0005, 0.001, 0.002, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2.5,
+] as const;
+const PRICE_MAX_IDX = PRICE_STOPS.length - 1;
+
+function fmtPrice(v: number): string {
+  return v < 0.01 ? v.toFixed(4) : v.toFixed(2);
+}
+
+// Snap a decimal-string bound to the nearest slider stop index.
+function stopIndex(value: string | undefined, fallback: number): number {
+  if (!value) return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  let best = fallback;
+  let bestDist = Infinity;
+  PRICE_STOPS.forEach((s, i) => {
+    const d = Math.abs(s - n);
+    if (d < bestDist) {
+      bestDist = d;
+      best = i;
+    }
+  });
+  return best;
+}
+
+function PriceRange({
+  token,
+  minPrice,
+  maxPrice,
+  onCommit,
+}: {
+  token: string;
+  minPrice?: string;
+  maxPrice?: string;
+  onCommit: (min: string | undefined, max: string | undefined) => void;
+}) {
+  const lo = stopIndex(minPrice, 0);
+  const hi = stopIndex(maxPrice, PRICE_MAX_IDX);
+  const active = !(lo === 0 && hi === PRICE_MAX_IDX);
+  const pct = (i: number) => (i / PRICE_MAX_IDX) * 100;
+  const commit = (nlo: number, nhi: number) =>
+    onCommit(
+      nlo === 0 ? undefined : String(PRICE_STOPS[nlo]),
+      nhi === PRICE_MAX_IDX ? undefined : String(PRICE_STOPS[nhi])
+    );
+
+  return (
+    <Group>
+      <PriceHeader>
+        <FieldLabel>Price range ({token})</FieldLabel>
+        <Box css={{ flex: 1 }} />
+        {active ? (
+          <ResetButton
+            type="button"
+            onClick={() => onCommit(undefined, undefined)}
+          >
+            Reset
+          </ResetButton>
+        ) : null}
+      </PriceHeader>
+      <RangeWrap>
+        <RangeBase />
+        <RangeFill css={{ left: `${pct(lo)}%`, right: `${100 - pct(hi)}%` }} />
+        <RangeInput
+          type="range"
+          min={0}
+          max={PRICE_MAX_IDX}
+          step={1}
+          value={lo}
+          aria-label="Minimum price"
+          onChange={(e: ChangeEvent<HTMLInputElement>) =>
+            commit(Math.min(Number(e.target.value), hi), hi)
+          }
+        />
+        <RangeInput
+          type="range"
+          min={0}
+          max={PRICE_MAX_IDX}
+          step={1}
+          value={hi}
+          aria-label="Maximum price"
+          onChange={(e: ChangeEvent<HTMLInputElement>) =>
+            commit(lo, Math.max(Number(e.target.value), lo))
+          }
+        />
+      </RangeWrap>
+      <RangeLabels>
+        <span>{fmtPrice(PRICE_STOPS[lo])}</span>
+        <span>{fmtPrice(PRICE_STOPS[hi])}</span>
+      </RangeLabels>
+    </Group>
+  );
+}
 
 // Registry tabs — same two-button "tablist" group the canvas uses,
 // rendered at the bottom of the rail.
@@ -277,13 +422,6 @@ export function MarketplaceFacets({
   // as a first row alongside the bucketed facets, per the design.
   const typeAllActive = !filters.type?.length;
   const sourceAllActive = !filters.source?.length;
-
-  // Visual slider geometry. minPrice/maxPrice live in filters as
-  // decimal strings; map onto a 0–1 fraction for the thumb positions.
-  // If no bound is set, default to the canvas's 8%/68% placeholder so
-  // the slider looks alive even with empty filters.
-  const minFrac = priceFraction(filters.minPrice, 0.08);
-  const maxFrac = priceFraction(filters.maxPrice, 0.68);
 
   return (
     <Panel as="aside">
@@ -441,23 +579,12 @@ export function MarketplaceFacets({
             </Items>
           </Group>
 
-          <Group>
-            <FieldLabel>Price range ({primaryToken(facets)})</FieldLabel>
-            <SliderTrack>
-              <SliderFill
-                css={{
-                  left: `${(minFrac * 100).toFixed(0)}%`,
-                  right: `${((1 - maxFrac) * 100).toFixed(0)}%`,
-                }}
-              />
-              <SliderThumb css={{ left: `${(minFrac * 100).toFixed(0)}%` }} />
-              <SliderThumb css={{ left: `${(maxFrac * 100).toFixed(0)}%` }} />
-            </SliderTrack>
-            <SliderLabels>
-              <span>{filters.minPrice ? filters.minPrice : '$0.0001'}</span>
-              <span>{filters.maxPrice ? filters.maxPrice : '$2.50'}</span>
-            </SliderLabels>
-          </Group>
+          <PriceRange
+            token={primaryToken(facets)}
+            minPrice={filters.minPrice}
+            maxPrice={filters.maxPrice}
+            onCommit={(minPrice, maxPrice) => patch({ minPrice, maxPrice })}
+          />
         </>
       )}
 
@@ -483,18 +610,6 @@ export function MarketplaceFacets({
       </Group>
     </Panel>
   );
-}
-
-function priceFraction(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
-  const n = Number(value);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  // Clamp to the same logarithmic range the slider visualizes
-  // ($0.0001 .. $2.50). Anything outside snaps to the edge.
-  const min = -4; // log10(0.0001)
-  const max = Math.log10(2.5);
-  const v = Math.log10(n);
-  return Math.min(1, Math.max(0, (v - min) / (max - min)));
 }
 
 function primaryToken(facets: Facets): string {
