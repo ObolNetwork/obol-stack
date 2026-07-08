@@ -54,7 +54,8 @@ Commands split into two scopes:
   The storefront (the whole shop)
     info        Preview the storefront and everything on sale, as buyers see it
     info set    Set the storefront's branding (name, tagline, logo)
-    register    Publish the seller's identity to a distribution channel (ERC-8004)
+    register    Publish the seller to a distribution channel (ERC-8004 on-chain,
+                'register x402scan' for the x402scan discovery index)
     identity    Manage the durable on-chain identity record
     list        List every offer (raw)
     resume      Re-publish all offers (e.g. after a restart)
@@ -3193,11 +3194,11 @@ Reloads the payment verifier when configuration is changed.`,
 func sellRegisterCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "register",
-		Usage: "Publish the seller's identity to a distribution channel (ERC-8004)",
+		Usage: "Publish the seller's identity to a distribution channel (ERC-8004, x402scan)",
 		Description: `Publishes the seller's agent identity to a distribution channel so buyers can
-discover it. Today the only channel is the ERC-8004 Agent Registry (on-chain);
-more channels may follow, so this command is framed around "where do I
-advertise" rather than a single registry.
+discover it. The default (no subcommand) registers on the ERC-8004 Agent
+Registry (on-chain); 'register x402scan' submits the storefront origin to the
+x402scan.com discovery index instead.
 
 Registers an AgentIdentity on the ERC-8004 Agent Registry for one chain.
 The on-chain register tx is signed and broadcast by the Hermes remote-signer
@@ -3207,7 +3208,11 @@ the target chain (~$0.20–$0.50 of native gas typically suffices).
 Examples:
   obol sell register                                    # defaults to mainnet
   obol sell register --network base                       # register on base
-  obol sell register --network base-sepolia               # add a Base Sepolia registration`,
+  obol sell register --network base-sepolia               # add a Base Sepolia registration
+  obol sell register x402scan                             # list in the x402scan index (no gas)`,
+		Commands: []*cli.Command{
+			sellRegisterX402scanCommand(cfg),
+		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "network",

@@ -157,7 +157,9 @@ Port-forward to `x402-verifier` and calling `/verify` directly: MUST set `X-Forw
 
 **PurchaseRequest status caveat**: `PurchaseRequest.status` (`conditions[].message`, `remaining`, `spent`) is controller's last reconciled snapshot, NOT live per-request counter. For real-time auth pool + refill decisions, always query `x402-buyer` `GET /status` in litellm pod.
 
-**CLI**: `obol sell pricing --pay-to --chain`, `obol sell inference <name> --model --pay-to --price|--per-mtok [--token USDC|OBOL]`, `obol sell http <name> --pay-to --chain --price|--per-request|--per-mtok --upstream --port --namespace --health-path [--token USDC|OBOL]`, `obol sell list|status|stop|delete`, `obol sell register --chain [--name]`.
+**CLI**: `obol sell pricing --pay-to --chain`, `obol sell inference <name> --model --pay-to --price|--per-mtok [--token USDC|OBOL]`, `obol sell http <name> --pay-to --chain --price|--per-request|--per-mtok --upstream --port --namespace --health-path [--token USDC|OBOL]`, `obol sell list|status|stop|delete`, `obol sell register --chain [--name]`, `obol sell register x402scan [--origin]`.
+
+**x402scan registration** (`obol sell register x402scan`, `internal/x402scan/`): submits the storefront origin to the x402scan.com discovery index via `POST /api/x402/registry/register-origin`. Auth is SIWX (EIP-4361/SIWE challenge in the 402 body, signed EIP-191 by the agent's remote-signer via `POST /api/v1/sign/{addr}/message`, retried with the payload base64-encoded in the `SIGN-IN-WITH-X` header). x402scan crawls the origin's `/openapi.json` (already published with `x-payment-info` per paid op) and live-probes each endpoint for a real 402. Rejects `obol.stack`/localhost and `*.trycloudflare.com` quick-tunnels locally — needs a permanent tunnel hostname. Idempotent; stale offers are deprecated server-side.
 
 **`obol sell http` flag reference** (common mistakes: `--model`, `--network` do NOT exist; `--wallet` is a deprecated alias for `--pay-to`):
 ```
