@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"html/template"
 	"math/big"
+	"net"
 	"net/http"
 	"regexp"
 	"strings"
 
-	x402types "github.com/x402-foundation/x402/go/types"
+	x402types "github.com/x402-foundation/x402/go/v2/types"
+
+	"github.com/ObolNetwork/obol-stack/internal/buyprompts"
 )
 
 // displayTokenRe is the allowed charset for ServiceOffer-sourced strings
@@ -35,6 +38,14 @@ func sanitizeDisplayToken(s, placeholder string) string {
 	}
 	return s
 }
+
+// defaultAgentTaskExample is the concrete sample task baked into the
+// agent-type copy so a buyer can paste the pay-agent command (or the
+// chat-completions body) and have it run as-is, then edit the message.
+// Aliased from buyprompts (the single authoring point for buyer copy) so the
+// public storefront, /api/services.json, and the 402 page hand out the same
+// example.
+const defaultAgentTaskExample = buyprompts.DefaultTaskExample
 
 //go:embed templates/payment_required.html
 var paymentRequiredHTMLSrc string
@@ -157,16 +168,42 @@ func prefersHTML(accept string) bool {
 // incoming request. Mirrors buildResourceURL but keeps just the origin so
 // rendered HTML can reference sibling routes (storefront, OG image) on the
 // same tunnel host the scraper or browser is currently hitting.
+//
+// Scheme resolution defaults to https and only downgrades to http for the
+// hosts the stack serves locally over plain HTTP (obol.stack, loopback,
+// *.localhost/*.local). This matters because the public 402 page is served
+// over the Cloudflare tunnel, which terminates TLS at the edge and forwards
+// plaintext to cloudflared -> Traefik -> verifier: the X-Forwarded-Proto we
+// observe on the ForwardAuth hop is "http", so keying off it alone rendered
+// http:// tunnel links (broken/mixed-content in the copy-paste prompts and
+// OG/asset URLs). An explicit https signal (direct TLS or X-Forwarded-Proto:
+// https) still forces https for any host.
 func resolveSiteURL(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
-		scheme = "https"
-	}
 	host := r.Host
 	if forwarded := r.Header.Get("X-Forwarded-Host"); forwarded != "" {
 		host = forwarded
 	}
+	scheme := "https"
+	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "https" && isLocalHost(host) {
+		scheme = "http"
+	}
 	return scheme + "://" + host
+}
+
+// isLocalHost reports whether host (optionally with :port) is one the stack
+// serves locally over plain HTTP: obol.stack, loopback, or a developer
+// *.localhost/*.local name. Any other host is treated as a public tunnel
+// hostname (https).
+func isLocalHost(host string) bool {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.ToLower(strings.Trim(strings.TrimSuffix(host, "."), "[]"))
+	switch host {
+	case "obol.stack", "localhost", "127.0.0.1", "::1", "0.0.0.0":
+		return true
+	}
+	return strings.HasSuffix(host, ".localhost") || strings.HasSuffix(host, ".local")
 }
 
 // sendPaymentRequiredHTML writes a 402 status with an HTML body that includes
@@ -353,14 +390,7 @@ func buildTypeCopy(siteURL, endpoint string, d PaymentDisplay) typeCopy {
 // learn how to pay. siteURL is the public origin (scheme://host); when empty
 // the prompt degrades to a generic x402 mention.
 func x402GuideRef(siteURL string) string {
-	siteURL = strings.TrimRight(siteURL, "/")
-	if siteURL == "" {
-		return "x402 micropayments (see https://www.x402.org)"
-	}
-	return fmt.Sprintf(
-		"x402 micropayments — read %s/skill.md for the full payment flow and %s/openapi.json for the exact request shapes",
-		siteURL, siteURL,
-	)
+	return buyprompts.GuideRef(siteURL)
 }
 
 // normalizeOfferType collapses the spec.type values into the three render
@@ -385,27 +415,12 @@ func normalizeOfferType(t string) string {
 // raw-JSON paths, but reframed so users understand they're buying remote
 // model time, not an agent with tools/memory.
 func inferenceCopy(url, siteURL string, d PaymentDisplay) typeCopy {
-	model := sanitizeDisplayToken(d.Model, "<model-id>")
-
-	// Positional seller URL, no required --model/--budget. Identity check
-	// is opt-in via --expected-agent-id, so the copy stays clean.
-	cmd := fmt.Sprintf("obol buy inference %s", url)
-
-	prompt := fmt.Sprintf(
-		"There's an Obol paid-inference service at %s offering the %s model. "+
-			"Explain to me how it works, then — if I'm interested — run "+
-			"`obol buy inference %s` from this host to pre-authorize it and wire "+
-			"`paid/%s` into our local LiteLLM gateway. After it lands, switch "+
-			"yourself over to the new model and confirm.",
-		url, model, url, model,
-	)
-
-	other := fmt.Sprintf(
-		"I want to use the remote LLM at %s (model %s) as a paid OpenAI-compatible "+
-			"chat-completions endpoint, paid with %s. Pre-sign a budget of EIP-3009/Permit2 "+
-			"authorizations and POST chat-completions bodies with the X-PAYMENT header attached.",
-		url, model, x402GuideRef(siteURL),
-	)
+	block := buyprompts.Build(buyprompts.Input{
+		Type:    "inference",
+		URL:     url,
+		SiteURL: siteURL,
+		Model:   sanitizeDisplayToken(d.Model, ""),
+	})
 
 	return typeCopy{
 		Lede: template.HTML(
@@ -414,24 +429,17 @@ func inferenceCopy(url, siteURL string, d PaymentDisplay) typeCopy {
 				"pre-authorizes the provider through your agent's wallet and registers the model as " +
 				"<code>paid/&lt;model&gt;</code> in your local LiteLLM gateway, so every agent in your stack " +
 				"can call it like any other OpenAI-compatible model."),
-		ShowPrimary:    true,
-		PrimaryTitle:   "Use this service for your Obol Agent's model",
-		PrimaryLede:    "Run this from your obol-stack host. The CLI walks `/api/services.json`, prompts for auto-refill + a request count, and pre-signs the authorizations from your master agent's wallet. Pass `--yes --count <N>` for non-interactive runs.",
-		PrimaryIsCode:  true,
-		PrimaryPayload: cmd,
-		PromptObol:     prompt,
-		PromptOther:    other,
+		ShowPrimary:   true,
+		PrimaryTitle:  "Use this service for your Obol Agent's model",
+		PrimaryLede:   "Run this from your obol-stack host. The CLI walks `/api/services.json`, prompts for auto-refill + a request count, and pre-signs the authorizations from your master agent's wallet. Pass `--yes --count <N>` for non-interactive runs.",
+		PrimaryIsCode: true,
+		// Positional seller URL, no required --model/--budget. Identity check
+		// is opt-in via --expected-agent-id, so the copy stays clean.
+		PrimaryPayload:      block.Prompts[buyprompts.PromptCLI],
+		PromptObol:          block.Prompts[buyprompts.PromptObolAgent],
+		PromptOther:         block.Prompts[buyprompts.PromptGenericLLM],
 		ChatCompletionsNote: "Direct HTTP buyers use OpenAI-style chat-completions. A minimal paid request looks like:",
-		ChatCompletionsBody: fmt.Sprintf(`POST %s/v1/chat/completions
-Content-Type: application/json
-X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
-
-{
-  "model": "%s",
-  "messages": [
-    {"role": "user", "content": "<your prompt>"}
-  ]
-}`, strings.TrimSuffix(url, "/"), model),
+		ChatCompletionsBody: block.Example,
 	}
 }
 
@@ -442,40 +450,17 @@ X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
 // example sits next to the raw x402 JSON in the Pay-manually card to
 // make the wire shape obvious to readers walking the spec by hand.
 func agentCopy(url, siteURL string, d PaymentDisplay) typeCopy {
-	model := sanitizeDisplayToken(d.Model, "")
-	modelClause := ""
-	modelLine := ""
-	if model != "" {
-		modelClause = fmt.Sprintf(`"model": "%s",`, model)
-		modelLine = " (running " + model + ")"
-	}
-
-	body := fmt.Sprintf(`POST %s
-Content-Type: application/json
-X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
-
-{
-  %s
-  "messages": [
-    {"role": "user", "content": "<your prompt to this agent goes here>"}
-  ]
-}`, url, modelClause)
-
-	modelFlag := sanitizeDisplayToken(d.Model, "<model-id>")
-	prompt := fmt.Sprintf(
-		"Use the buy-x402 skill's `pay-agent` command to buy one round of work from this Obol Agent%s. "+
-			"This is an *agent*, not a raw model — it has its own skills, tools, and memory. Example:\n\n"+
-			"pay-agent %s --model %s --message \"<your prompt to this agent goes here>\"",
-		modelLine, url, modelFlag,
-	)
-
-	other := fmt.Sprintf(
-		"Help me call the Obol Agent at %s%s — it's an autonomous agent (tools + skills + memory), "+
-			"not a raw LLM. It's gated by %s. POST OpenAI-style chat-completions JSON with a real "+
-			"prompt in `messages`, attach a signed EIP-3009/Permit2 authorization as `X-PAYMENT`, "+
-			"and report what the agent does.",
-		url, modelLine, x402GuideRef(siteURL),
-	)
+	// pay-agent requires a --model value, but an agent runs its own pinned
+	// model server-side and ignores the field, so we don't editorialize about
+	// which model the seller uses — buyprompts fills the required flag (the
+	// seller's model when known, a placeholder otherwise) and hands the buyer
+	// a command that runs as-is with a concrete example task they can edit.
+	block := buyprompts.Build(buyprompts.Input{
+		Type:    "agent",
+		URL:     url,
+		SiteURL: siteURL,
+		Model:   sanitizeDisplayToken(d.Model, ""),
+	})
 
 	return typeCopy{
 		Lede: template.HTML(
@@ -489,42 +474,24 @@ X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
 		// Primary card is suppressed for agents — the actionable
 		// example lives next to the raw x402 JSON instead.
 		ShowPrimary:         false,
-		PromptObol:          prompt,
-		PromptOther:         other,
+		PromptObol:          block.Prompts[buyprompts.PromptObolAgent],
+		PromptOther:         block.Prompts[buyprompts.PromptGenericLLM],
 		ChatCompletionsNote: "Obol Agents accept OpenAI-style chat-completions bodies. A request like the following will get you an answer:",
-		ChatCompletionsBody: body,
+		ChatCompletionsBody: block.Example,
 	}
 }
 
 // httpCopy: legacy default. Stateless single-shot pay; no model, no
 // pre-payment, no LiteLLM mounting. Matches the pre-existing copy.
 func httpCopy(url, siteURL string, d PaymentDisplay) typeCopy {
-	priceClause := ""
-	if d.PriceDisplay != "" {
-		priceClause = " Pay " + d.PriceDisplay + "."
-	}
-	netClause := ""
-	if d.NetworkLabel != "" {
-		netClause = " Network: " + d.NetworkLabel + "."
-	}
-	prompt := fmt.Sprintf(
-		"Use the buy-x402 skill's `pay` command to call %s once.%s%s "+
-			"Use the method and payload the seller documents.",
-		url, priceClause, netClause)
-
-	priceWord := "the listed price"
-	if d.PriceDisplay != "" {
-		priceWord = d.PriceDisplay
-	}
-	onNet := ""
-	if d.NetworkLabel != "" {
-		onNet = " on " + d.NetworkLabel
-	}
-	other := fmt.Sprintf(
-		"Help me buy access to %s for %s%s, paid with %s. Sign the EIP-3009 or Permit2 "+
-			"authorization and call the endpoint with the X-PAYMENT header.",
-		url, priceWord, onNet, x402GuideRef(siteURL),
-	)
+	block := buyprompts.Build(buyprompts.Input{
+		Type:         "http",
+		URL:          url,
+		SiteURL:      siteURL,
+		PriceDisplay: d.PriceDisplay,
+		NetworkLabel: d.NetworkLabel,
+	})
+	prompt := block.Prompts[buyprompts.PromptObolAgent]
 
 	return typeCopy{
 		Lede:          template.HTML("This is a paid HTTP endpoint gated by x402 micropayments. Each call is a one-shot purchase — no subscription, no pre-authorization, no LLM model behind it."),
@@ -537,7 +504,7 @@ func httpCopy(url, siteURL string, d PaymentDisplay) typeCopy {
 		// "Pay with another AI agent" card still renders.
 		PrimaryPayload: prompt,
 		PromptObol:     prompt,
-		PromptOther:    other,
+		PromptOther:    block.Prompts[buyprompts.PromptGenericLLM],
 	}
 }
 

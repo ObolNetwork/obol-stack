@@ -55,9 +55,9 @@ func TestEndpointPath(t *testing.T) {
 		"/services/aeon/chat/completions":         "/services/aeon",
 		"https://x.example/services/aeon":         "/services/aeon",
 		"https://x.example/services/aeon/v1/chat": "/services/aeon", // trailing chat is not stripped fully but path still picks aeon
-		"":                                        "",
-		"/":                                       "",
-		"/something-else":                         "",
+		"":                "",
+		"/":               "",
+		"/something-else": "",
 	}
 	for in, want := range cases {
 		got := endpointPath(in)
@@ -102,9 +102,14 @@ func TestFetchServiceCatalog(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode([]CatalogEntry{
-			{Name: "aeon", Type: "inference", Model: "aeon7", Endpoint: "/services/aeon/v1/chat/completions"},
-			{Name: "http-thing", Type: "http", Endpoint: "/services/http-thing"},
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"displayName": "Seller",
+			"tagline":     "Paid APIs",
+			"logoUrl":     "https://example/logo.png",
+			"services": []CatalogEntry{
+				{Name: "aeon", Type: "inference", Model: "aeon7", Endpoint: "/services/aeon/v1/chat/completions"},
+				{Name: "http-thing", Type: "http", Endpoint: "/services/http-thing"},
+			},
 		})
 	}))
 	defer srv.Close()

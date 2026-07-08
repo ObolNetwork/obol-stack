@@ -75,6 +75,7 @@ func ProvisionWithToken(cfg *config.Config, u *ui.UI, opts TokenProvisionOptions
 	st.ManagementMode = tunnelManagementRemote
 	st.TransportProtocol = transportProtocol
 	st.Hostname = hostname
+	st.Hostnames = []string{hostname}
 	st.AccountID = claims.AccountTag
 	st.ZoneID = "" // DNS is managed in the dashboard, not by us.
 	st.TunnelID = claims.TunnelID

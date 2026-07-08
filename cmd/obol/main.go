@@ -16,6 +16,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/network"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
+	"github.com/ObolNetwork/obol-stack/internal/storefront"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/urfave/cli/v3"
@@ -215,6 +216,13 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 							// agent-backed ServiceOffers resolve agent.ref and
 							// would dangle without their Agent. Best-effort.
 							agentcrd.ResumeAll(cfg, u)
+							// Replay recorded storefront branding into the
+							// (fresh) x402/obol-storefront-profile ConfigMap
+							// BEFORE offers republish, so the controller's first
+							// catalog rebuild carries the operator's branding.
+							// Best-effort. No-op when `obol sell info set` was
+							// never used.
+							storefront.ReconcileRecorded(cfg, u)
 							// Re-apply cluster-side state for locally-persisted
 							// `obol sell *` offers. ServiceOffer CRs and the
 							// Service/Endpoints that route to the host gateway

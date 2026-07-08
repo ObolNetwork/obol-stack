@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,7 +23,6 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentcrd"
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/enclave"
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/images"
@@ -47,7 +45,25 @@ import (
 func sellCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "sell",
-		Usage: "Sell access to services via x402 micropayments",
+		Usage: "Sell access to agents and services using digital payments",
+		Description: `Sell access to agents and services using digital payments (x402).
+
+Commands split into two scopes:
+
+  The storefront (the whole shop)
+    info        Preview the storefront and everything on sale, as buyers see it
+    info set    Set the storefront's branding (name, tagline, logo)
+    register    Publish the seller's identity to a distribution channel (ERC-8004)
+    identity    Manage the durable on-chain identity record
+    list        List every offer (raw)
+    resume      Re-publish all offers (e.g. after a restart)
+
+  A single service (one item on the shelf)
+    inference | http | agent | mcp | demo   Put a service up for sale
+    status      Operator health and conditions for an offer
+    update      Change an offer's price or payout wallet in place
+    stop        Stop selling an offer without deleting it
+    delete      Stop selling an offer and remove it`,
 		Commands: []*cli.Command{
 			sellInferenceCommand(cfg),
 			sellHTTPCommand(cfg),
@@ -667,6 +683,14 @@ func sellHTTPCommand(cfg *config.Config) *cli.Command {
 		Name:      "http",
 		Usage:     "Sell any local HTTP service with x402 payments",
 		ArgsUsage: "<name>",
+		// --accept carries a comma-separated key=value list per option
+		// (token=USDC,network=base,price=1). cli/v3 slice flags split on ","
+		// by default, which would shred one option into several fragments and
+		// fail with "network is required". Disable the separator so each
+		// --accept is one whole value; parseAcceptKV does its own "," split.
+		// The repeatable --register-skills/-domains/-metadata flags are
+		// unaffected in practice (each value is a single token / key=value).
+		DisableSliceFlagSeparator: true,
 		Description: `Publishes a payment gated HTTP API to any service within the stack.
 By default it also registers the seller agent on ERC-8004 after the route is live.
 Use --no-register to skip the on-chain registration step.
@@ -2628,7 +2652,7 @@ Examples:
 func sellStopCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "stop",
-		Usage:     "Drain a ServiceOffer gracefully (advertises wind-down via discovery, then tears down the route)",
+		Usage:     "Stop selling a service without deleting it",
 		ArgsUsage: "<name>",
 		Description: `Marks a ServiceOffer as draining. While draining:
   - The offer stays in /skill.md and /.well-known/agent-registration.json
@@ -2732,6 +2756,9 @@ func sellUpdateCommand(cfg *config.Config) *cli.Command {
 		Name:      "update",
 		Usage:     "Update pricing or wallet on an existing ServiceOffer in place",
 		ArgsUsage: "<name>",
+		// See sell http: keep one --accept value intact (no cli/v3 "," split)
+		// so multi-currency updates parse. parseAcceptKV splits internally.
+		DisableSliceFlagSeparator: true,
 		Description: `Patches a live ServiceOffer without deleting it. Only the fields you pass
 are changed; everything else is preserved. The serviceoffer-controller will
 reconcile the new payment config automatically.
@@ -2873,7 +2900,7 @@ Examples:
 func sellDeleteCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "delete",
-		Usage:     "Delete the sale of a service entirely and deactivate its ERC-8004 agent registration",
+		Usage:     "Stop selling a service and remove it (also deactivates any registrations)",
 		ArgsUsage: "<name>",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -3053,8 +3080,13 @@ Reloads the payment verifier when configuration is changed.`,
 func sellRegisterCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "register",
-		Usage: "Register a service on the ERC-8004 Agent Registry",
-		Description: `Registers an AgentIdentity on the ERC-8004 Agent Registry for one chain.
+		Usage: "Publish the seller's identity to a distribution channel (ERC-8004)",
+		Description: `Publishes the seller's agent identity to a distribution channel so buyers can
+discover it. Today the only channel is the ERC-8004 Agent Registry (on-chain);
+more channels may follow, so this command is framed around "where do I
+advertise" rather than a single registry.
+
+Registers an AgentIdentity on the ERC-8004 Agent Registry for one chain.
 The on-chain register tx is signed and broadcast by the Hermes remote-signer
 and pays gas from the agent's wallet — make sure it has a small balance on
 the target chain (~$0.20–$0.50 of native gas typically suffices).
@@ -3556,91 +3588,6 @@ func (pf *signerPortForwarder) Stop() {
 		if pf.cmd.Process != nil {
 			pf.cmd.Process.Kill()
 		}
-	}
-}
-
-// sellInfoCommand returns info about a local inference gateway deployment.
-// Kept for the enclave pubkey functionality.
-func sellInfoCommand(cfg *config.Config) *cli.Command {
-	return &cli.Command{
-		Name:      "info",
-		Usage:     "Show inference gateway deployment details and encryption key",
-		ArgsUsage: "<name>",
-		Flags: []cli.Flag{
-			&cli.BoolFlag{
-				Name:    "json",
-				Aliases: []string{"j"},
-				Usage:   "Output as JSON",
-			},
-		},
-		Action: func(ctx context.Context, cmd *cli.Command) error {
-			u := getUI(cmd)
-			name := cmd.Args().First()
-			if name == "" {
-				return fmt.Errorf("usage: obol sell info <name>")
-			}
-
-			store := inference.NewStore(cfg.ConfigDir)
-			d, err := store.Get(name)
-			if err != nil {
-				return err
-			}
-
-			var k enclave.Key
-			var keyErr error
-			if d.TEEType != "" {
-				k, keyErr = tee.NewKey(d.EnclaveTag, d.ModelHash)
-			} else {
-				k, keyErr = enclave.NewKey(d.EnclaveTag)
-			}
-
-			if u.IsJSON() || cmd.Bool("json") {
-				out := map[string]any{
-					"name":                      d.Name,
-					"enclave_tag":               d.EnclaveTag,
-					"listen_addr":               d.ListenAddr,
-					"upstream_url":              d.UpstreamURL,
-					"wallet_address":            d.WalletAddress,
-					"price_per_request":         d.PricePerRequest,
-					"price_per_mtok":            d.PricePerMTok,
-					"approx_tokens_per_request": d.ApproxTokensPerRequest,
-					"chain":                     d.Chain,
-					"facilitator_url":           d.FacilitatorURL,
-					"created_at":                d.CreatedAt,
-					"updated_at":                d.UpdatedAt,
-					"algorithm":                 "ECIES-P256-HKDF-SHA256-AES256GCM",
-				}
-				if keyErr == nil {
-					out["pubkey"] = hex.EncodeToString(k.PublicKeyBytes())
-					out["persistent"] = k.Persistent()
-				} else {
-					out["pubkey_error"] = keyErr.Error()
-				}
-				return u.JSON(out)
-			}
-
-			u.Printf("Name:         %s", d.Name)
-			u.Printf("Enclave tag:  %s", d.EnclaveTag)
-			u.Printf("Algorithm:    ECIES-P256-HKDF-SHA256-AES256GCM")
-			if keyErr == nil {
-				u.Printf("Pubkey:       %s", hex.EncodeToString(k.PublicKeyBytes()))
-				u.Printf("Persistent:   %v", k.Persistent())
-			} else {
-				u.Printf("Pubkey:       (unavailable: %v)", keyErr)
-			}
-			u.Blank()
-			u.Printf("Listen:       %s", d.ListenAddr)
-			u.Printf("Upstream:     %s", d.UpstreamURL)
-			u.Printf("Wallet:       %s", d.WalletAddress)
-			u.Printf("Price:        %s", formatInferencePriceSummary(d, ""))
-			u.Printf("Chain:        %s", d.Chain)
-			u.Printf("Facilitator:  %s", d.FacilitatorURL)
-			u.Printf("Created:      %s", d.CreatedAt)
-			if d.UpdatedAt != "" {
-				u.Printf("Updated:      %s", d.UpdatedAt)
-			}
-			return nil
-		},
 	}
 }
 

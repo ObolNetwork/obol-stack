@@ -31,10 +31,10 @@ import (
 	"time"
 
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
-	x402 "github.com/x402-foundation/x402/go"
-	x402mcp "github.com/x402-foundation/x402/go/mcp"
-	exactclient "github.com/x402-foundation/x402/go/mechanisms/evm/exact/client"
-	evmsigner "github.com/x402-foundation/x402/go/signers/evm"
+	x402 "github.com/x402-foundation/x402/go/v2"
+	x402mcp "github.com/x402-foundation/x402/go/v2/mcp"
+	exactclient "github.com/x402-foundation/x402/go/v2/mechanisms/evm/exact/client"
+	evmsigner "github.com/x402-foundation/x402/go/v2/signers/evm"
 )
 
 func main() {

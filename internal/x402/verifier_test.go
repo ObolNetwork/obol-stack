@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	x402types "github.com/x402-foundation/x402/go/types"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	x402types "github.com/x402-foundation/x402/go/v2/types"
 )
 
 // ── Mock facilitator ────────────────────────────────────────────────────────
@@ -479,6 +479,93 @@ func TestVerifier_HandleProxy_ValidPayment_SettlesAndStripsPrefix(t *testing.T) 
 	}
 	if w.Header().Get("X-PAYMENT-RESPONSE") == "" {
 		t.Fatal("expected X-PAYMENT-RESPONSE header on successful settlement")
+	}
+}
+
+// TestVerifier_HandleProxy_TolerantChatPathRewrite covers the forgiving path
+// normalization for chat-completions-shaped offers: buyers who POST to the
+// bare service base (as older 402-page prompts instructed) or to
+// /chat/completions must still land on the upstream's /v1/chat/completions
+// instead of paying for a 404. Non-chat offers and non-tolerated sub-paths
+// must pass through untouched.
+func TestVerifier_HandleProxy_TolerantChatPathRewrite(t *testing.T) {
+	cases := []struct {
+		name         string
+		offerType    string
+		requestPath  string
+		wantUpstream string
+	}{
+		{"agent bare base", "agent", "/services/demo", "/v1/chat/completions"},
+		{"agent trailing slash", "agent", "/services/demo/", "/v1/chat/completions"},
+		{"agent missing v1", "agent", "/services/demo/chat/completions", "/v1/chat/completions"},
+		{"agent canonical", "agent", "/services/demo/v1/chat/completions", "/v1/chat/completions"},
+		{"inference bare base", "inference", "/services/demo", "/v1/chat/completions"},
+		{"inference other v1 route untouched", "inference", "/services/demo/v1/embeddings", "/v1/embeddings"},
+		{"http bare base untouched", "http", "/services/demo", "/"},
+		{"http sub-path untouched", "http", "/services/demo/run", "/run"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fac := newMockFacilitator(t, mockFacilitatorOpts{})
+			var seenPath string
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				seenPath = r.URL.Path
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"ok":true}`))
+			}))
+			defer upstream.Close()
+
+			v := newTestVerifier(t, fac.URL, []RouteRule{{
+				Pattern:     "/services/demo/*",
+				Price:       "0.0001",
+				UpstreamURL: upstream.URL,
+				StripPrefix: "/services/demo",
+				OfferType:   tc.offerType,
+			}})
+
+			req := httptest.NewRequest(http.MethodPost, tc.requestPath, strings.NewReader(`{}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+			w := httptest.NewRecorder()
+			v.HandleProxy(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d (body %q)", w.Code, w.Body.String())
+			}
+			if seenPath != tc.wantUpstream {
+				t.Fatalf("upstream path = %q, want %q", seenPath, tc.wantUpstream)
+			}
+		})
+	}
+}
+
+// GET requests must never be rewritten — the tolerant rewrite is only for
+// POSTed chat bodies.
+func TestVerifier_HandleProxy_TolerantRewrite_SkipsGET(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	var seenPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	v := newTestVerifier(t, fac.URL, []RouteRule{{
+		Pattern:     "/services/demo/*",
+		Price:       "0.0001",
+		UpstreamURL: upstream.URL,
+		StripPrefix: "/services/demo",
+		OfferType:   "agent",
+	}})
+
+	req := httptest.NewRequest(http.MethodGet, "/services/demo", nil)
+	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	w := httptest.NewRecorder()
+	v.HandleProxy(w, req)
+
+	if seenPath != "/" {
+		t.Fatalf("upstream path = %q, want / (GET must not be rewritten)", seenPath)
 	}
 }
 

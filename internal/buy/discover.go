@@ -205,11 +205,11 @@ func FetchServiceCatalog(ctx context.Context, sellerURL string) ([]CatalogEntry,
 		return nil, fmt.Errorf("read catalog body: %w", err)
 	}
 
-	var entries []CatalogEntry
-	if err := json.Unmarshal(body, &entries); err != nil {
+	var catalog schemas.ServiceCatalog
+	if err := json.Unmarshal(body, &catalog); err != nil {
 		return nil, fmt.Errorf("parse catalog JSON: %w", err)
 	}
-	return entries, nil
+	return catalog.Services, nil
 }
 
 // PickCatalogEntry picks the entry whose endpoint matches sellerURL.

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -55,7 +56,7 @@ func dig(t *testing.T, m map[string]any, keys ...string) any {
 }
 
 func TestBuildOpenAPIDocument_EmptyCluster(t *testing.T) {
-	out := buildOpenAPIDocument(nil, "https://tunnel.example")
+	out := buildOpenAPIDocument(nil, "https://tunnel.example", schemas.StorefrontProfile{})
 	doc := parseOpenAPI(t, out)
 
 	if got := doc["openapi"]; got != openAPISpecVersion {
@@ -99,10 +100,27 @@ func TestBuildOpenAPIDocument_EmptyCluster(t *testing.T) {
 	if c := dig(t, doc, "info", "contact", "url"); c != "https://github.com/ObolNetwork/obol-stack" {
 		t.Errorf("info.contact.url = %v, want obol-stack repo", c)
 	}
+	if dig(t, doc, "info", "contact", "email") != nil {
+		t.Error("info.contact.email should be omitted when unset")
+	}
+}
+
+func TestBuildOpenAPIDocument_ContactEmail(t *testing.T) {
+	profile := schemas.StorefrontProfile{
+		DisplayName:  "Acme Labs",
+		ContactEmail: "ops@acme.example",
+	}
+	doc := parseOpenAPI(t, buildOpenAPIDocument(nil, "https://tunnel.example", profile))
+	if e := dig(t, doc, "info", "contact", "email"); e != "ops@acme.example" {
+		t.Errorf("info.contact.email = %v, want ops@acme.example", e)
+	}
+	if n := dig(t, doc, "info", "contact", "name"); n != "Acme Labs" {
+		t.Errorf("info.contact.name = %v, want Acme Labs", n)
+	}
 }
 
 func TestBuildOpenAPIDocument_NoTunnelOmitsTunnelServer(t *testing.T) {
-	doc := parseOpenAPI(t, buildOpenAPIDocument(nil, ""))
+	doc := parseOpenAPI(t, buildOpenAPIDocument(nil, "", schemas.StorefrontProfile{}))
 	servers, _ := doc["servers"].([]any)
 	if len(servers) != 1 {
 		t.Fatalf("servers = %d entries, want only local fallback", len(servers))
@@ -130,7 +148,7 @@ func TestBuildOpenAPIDocument_InferenceOffer(t *testing.T) {
 		},
 	})
 
-	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, "https://tunnel.example"))
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, "https://tunnel.example", schemas.StorefrontProfile{}))
 
 	want := "/services/llama-3/v1/chat/completions"
 	op := dig(t, doc, "paths", want, "post")
@@ -201,6 +219,57 @@ func TestBuildOpenAPIDocument_InferenceOffer(t *testing.T) {
 // multi-currency x-payment-info contract: `price` stays the primary option
 // (for single-price indexers), and `accepts[]` lists every option with its
 // currency and CAIP-2 network so indexers can surface the cheapest.
+// TestBuildOpenAPIDocument_AcceptsCarrySigningMetadata pins that every
+// x-payment-info advertises accepts[] (single-payment offers included) with
+// the full signing recipe — payTo, CAIP-2 network, atomic amount, and the
+// asset's EIP-712 domain — so an OpenAPI-only client can construct a valid
+// X-PAYMENT without a second fetch of /api/services.json.
+func TestBuildOpenAPIDocument_AcceptsCarrySigningMetadata(t *testing.T) {
+	offer := readyOfferWithSpec("solo", "svc", monetizeapi.ServiceOfferSpec{
+		Type:     "inference",
+		Model:    monetizeapi.ServiceOfferModel{Name: "m1"},
+		Upstream: monetizeapi.ServiceOfferUpstream{Service: "up", Port: 8000},
+		Payment: monetizeapi.ServiceOfferPayment{
+			Network: "base-sepolia",
+			PayTo:   "0x2222222222222222222222222222222222222222",
+			Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"},
+		},
+	})
+
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, "https://tunnel.example", schemas.StorefrontProfile{}))
+	op := dig(t, doc, "paths", "/services/solo/v1/chat/completions", "post")
+	info, _ := op.(map[string]any)["x-payment-info"].(map[string]any)
+	if info == nil {
+		t.Fatalf("x-payment-info missing")
+	}
+
+	accepts, ok := info["accepts"].([]any)
+	if !ok || len(accepts) != 1 {
+		t.Fatalf("accepts = %#v, want exactly 1 entry for a single-payment offer", info["accepts"])
+	}
+	entry := accepts[0].(map[string]any)
+	if entry["payTo"] != "0x2222222222222222222222222222222222222222" {
+		t.Errorf("payTo = %v", entry["payTo"])
+	}
+	if entry["network"] != "eip155:84532" {
+		t.Errorf("network = %v, want CAIP-2 eip155:84532", entry["network"])
+	}
+	if entry["amountAtomicUnits"] != "1000" {
+		t.Errorf("amountAtomicUnits = %v, want 1000 (0.001 USDC)", entry["amountAtomicUnits"])
+	}
+	asset, ok := entry["asset"].(map[string]any)
+	if !ok {
+		t.Fatalf("asset missing: %#v", entry)
+	}
+	domain, ok := asset["eip712Domain"].(map[string]any)
+	if !ok {
+		t.Fatalf("asset.eip712Domain missing: %#v (wrong-domain signing is the top silent buyer killer)", asset)
+	}
+	if domain["name"] == "" || domain["version"] == "" {
+		t.Errorf("eip712Domain incomplete: %#v", domain)
+	}
+}
+
 func TestBuildOpenAPIDocument_MultiPaymentAdvertisesAllOptions(t *testing.T) {
 	offer := readyOfferWithSpec("dual", "llm", monetizeapi.ServiceOfferSpec{
 		Type: "inference",
@@ -221,7 +290,7 @@ func TestBuildOpenAPIDocument_MultiPaymentAdvertisesAllOptions(t *testing.T) {
 		},
 	})
 
-	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, ""))
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, "", schemas.StorefrontProfile{}))
 	op := dig(t, doc, "paths", "/services/dual/v1/chat/completions", "post")
 	xpay, _ := op.(map[string]any)["x-payment-info"].(map[string]any)
 	if xpay == nil {
@@ -260,7 +329,7 @@ func TestBuildOpenAPIDocument_AgentOfferSameShapeAsInference(t *testing.T) {
 	})
 	offer.Status.AgentResolution = &monetizeapi.ServiceOfferAgentResolution{Model: "qwen3.5:9b"}
 
-	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, ""))
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, "", schemas.StorefrontProfile{}))
 
 	if op := dig(t, doc, "paths", "/services/hermes-agent/v1/chat/completions", "post"); op == nil {
 		t.Fatalf("agent offer missing /v1/chat/completions endpoint, paths = %v", doc["paths"])
@@ -283,7 +352,7 @@ func TestBuildOpenAPIDocument_HTTPOffer(t *testing.T) {
 		},
 	})
 
-	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, ""))
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, "", schemas.StorefrontProfile{}))
 
 	op := dig(t, doc, "paths", "/services/echo", "post")
 	if op == nil {
@@ -310,7 +379,7 @@ func TestBuildOpenAPIDocument_FineTuningOffer(t *testing.T) {
 		},
 	})
 
-	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, ""))
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, "", schemas.StorefrontProfile{}))
 
 	op := dig(t, doc, "paths", "/services/train", "post")
 	if op == nil {
@@ -332,7 +401,7 @@ func TestBuildOpenAPIDocument_ExcludesNotReadyAndDrained(t *testing.T) {
 		Status:     monetizeapi.ServiceOfferStatus{Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "False"}}},
 	}
 
-	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{ready, notReady}, ""))
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{ready, notReady}, "", schemas.StorefrontProfile{}))
 	paths, _ := doc["paths"].(map[string]any)
 	if len(paths) != 1 {
 		t.Fatalf("paths = %d entries, want only the ready offer: %v", len(paths), paths)
@@ -346,7 +415,7 @@ func TestBuildOpenAPIDocument_ExcludesNotReadyAndDrained(t *testing.T) {
 // safety check buildServiceCatalogJSON has — a stray trailing slash on
 // the configmap value should not produce a `//` in the spec servers[].
 func TestBuildOpenAPIDocument_TunnelURLTrailingSlash(t *testing.T) {
-	doc := parseOpenAPI(t, buildOpenAPIDocument(nil, "https://tunnel.example/"))
+	doc := parseOpenAPI(t, buildOpenAPIDocument(nil, "https://tunnel.example/", schemas.StorefrontProfile{}))
 	servers, _ := doc["servers"].([]any)
 	first := servers[0].(map[string]any)
 	if first["url"] != "https://tunnel.example" {
@@ -369,7 +438,7 @@ func TestBuildOpenAPIDocument_MultipleOffersPathsDistinct(t *testing.T) {
 		Payment: monetizeapi.ServiceOfferPayment{Network: "base", PayTo: "0xbb", Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "0.001"}},
 	})
 
-	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{a, b}, ""))
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{a, b}, "", schemas.StorefrontProfile{}))
 	paths, _ := doc["paths"].(map[string]any)
 	if _, ok := paths["/services/a/v1/chat/completions"]; !ok {
 		t.Errorf("offer a missing")
@@ -399,7 +468,7 @@ func TestBuildOpenAPIDocument_AggregateTags(t *testing.T) {
 		},
 	})
 
-	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{a, b}, ""))
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{a, b}, "", schemas.StorefrontProfile{}))
 	tags, _ := doc["tags"].([]any)
 	names := map[string]struct{}{}
 	for _, t := range tags {

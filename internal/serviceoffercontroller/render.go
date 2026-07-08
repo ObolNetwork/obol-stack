@@ -11,9 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ObolNetwork/obol-stack/internal/buyprompts"
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/ObolNetwork/obol-stack/internal/storefront"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -899,8 +901,9 @@ func offerPublishedForRegistration(offer *monetizeapi.ServiceOffer) bool {
 		isConditionTrue(offer.Status, "RoutePublished")
 }
 
-func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL string) string {
+func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL string, explicit *schemas.StorefrontProfile) string {
 	baseURL = strings.TrimRight(baseURL, "/")
+	profile := storefront.ResolvePublished(explicit, baseURL)
 
 	// Same operationally-ready filter as buildServiceCatalogJSON — keep the
 	// two surfaces consistent. An offer that's usable for x402 payments
@@ -933,7 +936,7 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 	})
 
 	lines := []string{
-		"# Obol Stack Service Catalog",
+		fmt.Sprintf("# %s Service Catalog", profile.DisplayName),
 		"",
 		fmt.Sprintf("> Generated from %d ready ServiceOffer(s). Every service below is gated by [x402](https://www.x402.org) micropayments — no API key, no signup, no subscription.", len(ready)),
 		"",
@@ -982,6 +985,13 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 		lines = append(lines, fmt.Sprintf("### %s", offer.Name))
 		lines = append(lines, fmt.Sprintf("- **Endpoint**: `%s`", endpoint))
 		lines = append(lines, fmt.Sprintf("- **Call**: %s", offerCallHint(offer, endpoint)))
+		if anchor := openAPIDocsAnchorForOffer(offer); anchor != "" {
+			lines = append(lines, fmt.Sprintf(
+				"- **API docs**: [%s%s](%s%s) — schema path `%s` in [openapi.json](%s/openapi.json)",
+				baseURL, anchor, baseURL, anchor,
+				openAPIPrimaryPathForOffer(offer), baseURL,
+			))
+		}
 		lines = append(lines, fmt.Sprintf("- **Type**: %s", fallbackOfferType(offer)))
 		if modelName != "" {
 			lines = append(lines, fmt.Sprintf("- **Model**: %s", modelName))
@@ -1117,8 +1127,8 @@ func offerAwaitingRegistration(offer *monetizeapi.ServiceOffer) bool {
 	return false
 }
 
-// buildServiceCatalogJSON returns a JSON array of operationally-ready
-// ServiceOffers for the public storefront feed (/api/services.json).
+// buildServiceCatalogJSON returns the public /api/services.json envelope:
+// seller branding plus operationally-ready ServiceOffers.
 //
 // The filter is operationally-ready (route published, payment gate
 // active, upstream healthy) rather than the stricter controller
@@ -1128,8 +1138,9 @@ func offerAwaitingRegistration(offer *monetizeapi.ServiceOffer) bool {
 // up` until they funded the agent wallet and ran `obol sell register`.
 // That UX failed the "all paid services come back automatically" promise
 // of the stack-up resume feature.
-func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string) string {
+func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string, explicit *schemas.StorefrontProfile) string {
 	baseURL = strings.TrimRight(baseURL, "/")
+	profile := storefront.ResolvePublished(explicit, baseURL)
 
 	now := time.Now()
 	var ready []*monetizeapi.ServiceOffer
@@ -1225,12 +1236,53 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string)
 		// flat fields above). The storefront renders one pay-row per option.
 		svc.Payments = buildCatalogPayments(offer)
 
+		// Canonical buyer instructions — generated once here and rendered
+		// verbatim by the storefront (and any other consumer) so how-to-buy
+		// copy cannot drift between surfaces. The 402 paywall page builds
+		// its prompt cards from the same buyprompts package.
+		buy := buyprompts.Build(buyprompts.Input{
+			Type:         fallbackOfferType(offer),
+			URL:          svc.Endpoint,
+			SiteURL:      baseURL,
+			Model:        modelName,
+			PriceDisplay: svc.Price,
+			NetworkLabel: offer.Spec.Payment.Network,
+		})
+		svc.Buy = &buy
+		svc.OpenAPIPath = openAPIPrimaryPathForOffer(offer)
+		svc.DocsPath = openAPIDocsAnchorForOffer(offer)
+
 		services = append(services, svc)
 	}
 
-	out, err := json.MarshalIndent(services, "", "  ")
+	catalog := schemas.ServiceCatalog{
+		DisplayName: profile.DisplayName,
+		Tagline:     profile.Tagline,
+		LogoURL:     profile.LogoURL,
+		Services:    services,
+	}
+	if catalog.Services == nil {
+		catalog.Services = []schemas.ServiceCatalogEntry{}
+	}
+
+	out, err := json.MarshalIndent(catalog, "", "  ")
 	if err != nil {
-		return "[]"
+		return fallbackServiceCatalogJSON(baseURL)
+	}
+	return string(out)
+}
+
+func fallbackServiceCatalogJSON(baseURL string) string {
+	profile := storefront.ResolvePublished(nil, baseURL)
+	catalog := schemas.ServiceCatalog{
+		DisplayName: profile.DisplayName,
+		Tagline:     profile.Tagline,
+		LogoURL:     profile.LogoURL,
+		Services:    []schemas.ServiceCatalogEntry{},
+	}
+	out, err := json.MarshalIndent(catalog, "", "  ")
+	if err != nil {
+		return `{"displayName":"Obol Stack","tagline":"Unlock Agent and API services with digital payments.","logoUrl":"/obol-stack-logo.png","services":[]}`
 	}
 	return string(out)
 }

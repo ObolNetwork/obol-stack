@@ -34,5 +34,10 @@ jobs:
           RENOVATE_DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && 'full' || '' }}
           RENOVATE_REPOSITORIES: ${{ github.repository }}
           RENOVATE_BASE_BRANCHES: ${{ github.ref_name }}
+          # Allow-list for postUpgradeTasks (renovate.json). Only the Scalar
+          # SRI refresh is permitted: the @scalar/api-reference bump must
+          # rewrite the SRI hash in the same commit or the /api docs page
+          # ships a browser-blocked script tag.
+          RENOVATE_ALLOWED_COMMANDS: '["bash scripts/update-scalar-sri.sh"]'
         with:
           token: ${{ secrets.GITHUB_TOKEN }}

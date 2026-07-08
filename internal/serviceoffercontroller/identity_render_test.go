@@ -1,11 +1,13 @@
 package serviceoffercontroller
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -246,5 +248,42 @@ func TestBuildIdentityRegistrationDocument_DescriptionPrecedence(t *testing.T) {
 				t.Errorf("Description = %q, want %q", doc.Description, tc.wantDoc)
 			}
 		})
+	}
+}
+
+func TestBuildServiceCatalogJSON_UsesExplicitProfile(t *testing.T) {
+	explicit := &schemas.StorefrontProfile{
+		DisplayName: "Acme Inference",
+		Tagline:     "Custom seller tagline",
+		LogoURL:     "https://cdn.example/logo.png",
+	}
+
+	jsonStr := buildServiceCatalogJSON(nil, "https://seller.example", explicit)
+	catalog := decodeServiceCatalog(t, jsonStr)
+	if catalog.DisplayName != "Acme Inference" {
+		t.Fatalf("DisplayName = %q", catalog.DisplayName)
+	}
+	if catalog.Tagline != "Custom seller tagline" {
+		t.Fatalf("Tagline = %q", catalog.Tagline)
+	}
+	if catalog.LogoURL != "https://cdn.example/logo.png" {
+		t.Fatalf("LogoURL = %q", catalog.LogoURL)
+	}
+}
+
+func TestBuildServiceCatalogJSON_DefaultBranding(t *testing.T) {
+	jsonStr := buildServiceCatalogJSON(nil, "https://seller.example", nil)
+	var catalog schemas.ServiceCatalog
+	if err := json.Unmarshal([]byte(jsonStr), &catalog); err != nil {
+		t.Fatalf("unmarshal catalog: %v", err)
+	}
+	if catalog.DisplayName != "Obol Stack" {
+		t.Fatalf("DisplayName = %q", catalog.DisplayName)
+	}
+	if catalog.Tagline == "" {
+		t.Fatal("Tagline empty")
+	}
+	if catalog.LogoURL != "https://seller.example/obol-stack-logo.png" {
+		t.Fatalf("LogoURL = %q", catalog.LogoURL)
 	}
 }

@@ -5,7 +5,7 @@ import (
 	"math/big"
 	"strings"
 
-	x402types "github.com/x402-foundation/x402/go/types"
+	x402types "github.com/x402-foundation/x402/go/v2/types"
 )
 
 // ChainInfo holds chain-specific configuration for x402 payment gating.
@@ -52,7 +52,7 @@ type AssetInfo struct {
 	EIP2612GasSponsoring bool
 }
 
-// Chain constants — USDC addresses verified against x402-foundation/x402/go (formerly coinbase/x402) v2.7.0
+// Chain constants — USDC addresses verified against x402-foundation/x402/go/v2 (formerly coinbase/x402) v2.7.0
 // mechanisms/evm/constants.go and on-chain contract deployments.
 var (
 	ChainBaseMainnet = ChainInfo{
@@ -66,12 +66,16 @@ var (
 	}
 
 	ChainBaseSepolia = ChainInfo{
-		Name:           "base-sepolia",
-		NetworkID:      "base-sepolia",
-		CAIP2Network:   "eip155:84532",
-		USDCAddress:    "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
-		Decimals:       6,
-		EIP3009Name:    "USD Coin",
+		Name:         "base-sepolia",
+		NetworkID:    "base-sepolia",
+		CAIP2Network: "eip155:84532",
+		USDCAddress:  "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+		Decimals:     6,
+		// Base-Sepolia USDC is FiatTokenV2_2 whose EIP-712 domain name is
+		// "USDC", NOT the mainnet "USD Coin". Advertising "USD Coin" makes a
+		// real facilitator reject otherwise-valid signatures — the recurring
+		// base-sepolia "name" bug that a stub facilitator silently masks.
+		EIP3009Name:    "USDC",
 		EIP3009Version: "2",
 	}
 

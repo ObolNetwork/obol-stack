@@ -3,9 +3,33 @@
   "$id": "https://obol.org/schemas/service-catalog.schema.json",
   "title": "Obol Service Catalog",
   "description": "Public /api/services.json catalog served by x402 sellers.",
-  "type": "array",
-  "items": {
-    "$ref": "#/$defs/service"
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "displayName",
+    "tagline",
+    "logoUrl",
+    "services"
+  ],
+  "properties": {
+    "displayName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tagline": {
+      "type": "string",
+      "minLength": 1
+    },
+    "logoUrl": {
+      "type": "string",
+      "minLength": 1
+    },
+    "services": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/service"
+      }
+    }
   },
   "$defs": {
     "evmAddress": {
@@ -225,6 +249,75 @@
           "type": "string",
           "format": "date-time",
           "description": "RFC3339 timestamp at which the offer's HTTPRoute will be torn down. Set only when the offer is draining. Catalog consumers should detect drain via the presence of this field."
+        },
+        "buy": {
+          "$ref": "#/$defs/buyBlock"
+        },
+        "openapiPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "This offer's key in the /openapi.json paths object (e.g. \"/services/foo/v1/chat/completions\"), for jumping straight to its request/response schema."
+        },
+        "docsPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Site-relative deep link into the human API docs UI for this offer's operation (e.g. \"/api#tag/agent/POST/services/foo/v1/chat/completions\")."
+        }
+      }
+    },
+    "buyBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "callShape",
+        "prompts"
+      ],
+      "description": "Canonical buyer instructions, generated in one place (internal/buyprompts) and rendered verbatim by every surface so they cannot drift.",
+      "properties": {
+        "callShape": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "bodyKind"
+          ],
+          "properties": {
+            "method": {
+              "type": "string",
+              "enum": [
+                "GET",
+                "POST"
+              ]
+            },
+            "path": {
+              "type": "string",
+              "description": "Request path relative to the service base URL; absent means the base itself."
+            },
+            "bodyKind": {
+              "type": "string",
+              "enum": [
+                "openai-chat",
+                "json",
+                "multipart",
+                "none"
+              ]
+            },
+            "streaming": {
+              "type": "boolean"
+            }
+          }
+        },
+        "prompts": {
+          "type": "object",
+          "description": "Copy-paste prompts keyed by buyer-software kind (obol-agent, generic-llm, cli, ...). Additional keys are additive.",
+          "additionalProperties": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "example": {
+          "type": "string",
+          "description": "Copy-pasteable wire example of one paid request."
         }
       }
     }

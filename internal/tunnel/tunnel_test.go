@@ -87,7 +87,7 @@ func TestParseQuickTunnelURL_PicksLatest(t *testing.T) {
 }
 
 func TestBuildLocalManagedConfigYAMLRoutesOnlyRequestedHostname(t *testing.T) {
-	out := string(buildLocalManagedConfigYAML("stack.example.com", "00000000-0000-0000-0000-000000000000"))
+	out := string(buildLocalManagedConfigYAML([]string{"stack.example.com"}, "00000000-0000-0000-0000-000000000000"))
 
 	for _, want := range []string{
 		"tunnel: 00000000-0000-0000-0000-000000000000",
@@ -107,6 +107,51 @@ func TestBuildLocalManagedConfigYAMLRoutesOnlyRequestedHostname(t *testing.T) {
 		if strings.Contains(out, unexpected) {
 			t.Fatalf("persistent tunnel config exposes local agent hostname %q:\n%s", unexpected, out)
 		}
+	}
+}
+
+// TestBuildLocalManagedConfigYAMLMultiHostname proves two domains coexist in a
+// single connector ingress: one rule per hostname, both to the same Traefik
+// service, terminated by exactly one catch-all (last). This is the core "deploy
+// one domain, then another" invariant for local-managed tunnels.
+func TestBuildLocalManagedConfigYAMLMultiHostname(t *testing.T) {
+	out := string(buildLocalManagedConfigYAML(
+		[]string{"a.example.com", "b.example.com"},
+		"00000000-0000-0000-0000-000000000000",
+	))
+
+	for _, want := range []string{"- hostname: a.example.com", "- hostname: b.example.com", "- service: http_status:404"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("multi-hostname config missing %q:\n%s", want, out)
+		}
+	}
+	if got := strings.Count(out, "hostname:"); got != 2 {
+		t.Fatalf("expected exactly 2 hostname rules, got %d:\n%s", got, out)
+	}
+	if got := strings.Count(out, "http_status:404"); got != 1 {
+		t.Fatalf("expected exactly one catch-all rule, got %d:\n%s", got, out)
+	}
+	if !strings.HasSuffix(strings.TrimRight(out, "\n"), "service: http_status:404") {
+		t.Fatalf("catch-all rule must be last:\n%s", out)
+	}
+	if got := strings.Count(out, "service: http://traefik.traefik.svc.cluster.local:80"); got != 2 {
+		t.Fatalf("expected both hostnames to route to Traefik, got %d service rules:\n%s", got, out)
+	}
+}
+
+// TestBuildLocalManagedConfigYAMLDeduplicates ensures duplicate/empty/mixed-case
+// hostnames are normalized so a re-add or casing slip cannot produce two
+// conflicting ingress rules for the same name.
+func TestBuildLocalManagedConfigYAMLDeduplicates(t *testing.T) {
+	out := string(buildLocalManagedConfigYAML(
+		[]string{"A.Example.com", "", "a.example.com", "https://a.example.com/path"},
+		"00000000-0000-0000-0000-000000000000",
+	))
+	if got := strings.Count(out, "hostname:"); got != 1 {
+		t.Fatalf("expected duplicates/empties collapsed to 1 hostname rule, got %d:\n%s", got, out)
+	}
+	if !strings.Contains(out, "- hostname: a.example.com") {
+		t.Fatalf("expected normalized lowercase hostname:\n%s", out)
 	}
 }
 

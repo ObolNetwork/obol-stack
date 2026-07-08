@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 
 	"github.com/prometheus/client_golang/prometheus"
-	x402types "github.com/x402-foundation/x402/go/types"
+	x402types "github.com/x402-foundation/x402/go/v2/types"
 )
 
 // Verifier is a ForwardAuth-compatible HTTP handler that enforces x402
@@ -203,6 +203,9 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		Extensions:          mr.extensions,
 		SendPaymentRequired: NewHTMLAwarePaymentRequired(display),
 		OnPaymentMatched:    func(req x402types.PaymentRequirements) { matchedLabels = mr.labelsForMatched(req) },
+		OnPaymentFailure: func(reason string) {
+			v.metrics.paymentFailureReasons.With(withReason(matchedLabels, reason)).Inc()
+		},
 	}, mr.requirements)
 
 	upstreamAuth := mr.rule.UpstreamAuth
@@ -255,6 +258,7 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	display := buildPaymentDisplay(mr.rule, mr.chain, mr.asset, primary.PayTo, primary.Amount)
 
 	matchedLabels := primaryLabels
+	paymentFailed := false
 	middleware := NewForwardAuthMiddleware(ForwardAuthConfig{
 		FacilitatorURL: cfg.FacilitatorURL,
 		// HandleProxy is the in-process seller gateway: it proxies to the real
@@ -266,9 +270,16 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		Extensions:          mr.extensions,
 		SendPaymentRequired: NewHTMLAwarePaymentRequired(display),
 		OnPaymentMatched:    func(req x402types.PaymentRequirements) { matchedLabels = mr.labelsForMatched(req) },
+		OnPaymentFailure: func(reason string) {
+			paymentFailed = true
+			v.metrics.paymentFailureReasons.With(withReason(matchedLabels, reason)).Inc()
+		},
 	}, mr.requirements)
 
-	hadPayment := r.Header.Get("X-PAYMENT") != ""
+	// A payment can arrive under either wire header: X-PAYMENT (v1) or
+	// PAYMENT-SIGNATURE (v2). Gate the funnel metrics on both, else every
+	// successful v2 payment (the cohort #689 unblocked) goes unmetered.
+	hadPayment := r.Header.Get("X-PAYMENT") != "" || r.Header.Get("PAYMENT-SIGNATURE") != ""
 	tracker := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	middleware(proxy).ServeHTTP(tracker, r)
 
@@ -283,6 +294,10 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 			v.metrics.chargedRequests.With(matchedLabels).Inc()
 			v.metrics.lastPaymentSuccess.With(matchedLabels).SetToCurrentTime()
 		}
+	case tracker.status >= http.StatusBadRequest && hadPayment && !paymentFailed:
+		// Payment verified, upstream errored, no settlement — the buyer was
+		// bounced by the seller's own service, not by the payment flow.
+		v.metrics.upstreamFailedAfterVerify.With(matchedLabels).Inc()
 	}
 }
 
@@ -330,6 +345,17 @@ type matchedRoute struct {
 	chain        ChainInfo
 	asset        AssetInfo
 	labels       prometheus.Labels
+}
+
+// withReason copies a route's metric labels and adds the failure-stage
+// reason label for the paymentFailureReasons counter.
+func withReason(labels prometheus.Labels, reason string) prometheus.Labels {
+	out := make(prometheus.Labels, len(labels)+1)
+	for k, v := range labels {
+		out[k] = v
+	}
+	out["reason"] = reason
+	return out
 }
 
 // labelsForMatched returns the metric labels for the payment option the buyer
@@ -576,6 +602,7 @@ func buildUpstreamProxy(rule *RouteRule) (http.Handler, error) {
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
 			strippedPath := stripRoutePrefix(rule.StripPrefix, pr.In.URL.Path)
+			strippedPath = normalizeChatCompletionsPath(rule.OfferType, pr.In.Method, strippedPath)
 			pr.Out.URL.Path = singleJoiningSlash(target.Path, strippedPath)
 			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 			pr.Out.Host = target.Host
@@ -589,6 +616,34 @@ func buildUpstreamProxy(rule *RouteRule) (http.Handler, error) {
 		},
 	}
 	return proxy, nil
+}
+
+// chatCompletionsPath is the OpenAI-compatible path served by inference and
+// agent upstreams (LiteLLM, Hermes).
+const chatCompletionsPath = "/v1/chat/completions"
+
+// normalizeChatCompletionsPath forgives the common wrong-path shapes buyers
+// send to chat-completions offers. External x402 clients (and the prompts on
+// older 402 pages) frequently POST to the bare service base or to
+// /chat/completions; the upstream only serves /v1/chat/completions, so a
+// verified, paid request would otherwise 404. For inference/agent offers the
+// tolerated shapes are rewritten to the canonical path; every other sub-path
+// (e.g. /v1/embeddings) passes through untouched, as do all non-POST methods
+// and non-chat offer types.
+func normalizeChatCompletionsPath(offerType, method, stripped string) string {
+	if method != http.MethodPost {
+		return stripped
+	}
+	switch offerType {
+	case "inference", "agent":
+	default:
+		return stripped
+	}
+	switch strings.TrimSuffix(stripped, "/") {
+	case "", "/v1", "/chat/completions":
+		return chatCompletionsPath
+	}
+	return stripped
 }
 
 func stripRoutePrefix(prefix, requestPath string) string {

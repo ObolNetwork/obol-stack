@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	x402types "github.com/x402-foundation/x402/go/types"
+	x402types "github.com/x402-foundation/x402/go/v2/types"
 )
 
 const (
@@ -443,4 +443,65 @@ func TestInferenceCopy_StripsShellMetacharsFromCommand(t *testing.T) {
 	// Falls back to the safe placeholder for the model in the prompt.
 	mustContain(t, c.PromptObol, "<model-id>")
 	mustContain(t, c.PrimaryPayload, "obol buy inference https://agent.example.tunnel.dev/services/x")
+}
+
+// The public 402 page is served over the Cloudflare tunnel, which terminates
+// TLS at the edge and forwards plaintext inward — so the ForwardAuth hop sees
+// X-Forwarded-Proto: http even though the buyer's browser is on https. Tunnel
+// (public) hosts must therefore default to https so the copy-paste prompt URLs
+// and OG/asset links are not broken http:// links; only local hosts stay http.
+func TestResolveSiteURL_Scheme(t *testing.T) {
+	cases := []struct {
+		name   string
+		host   string
+		xfHost string
+		xfp    string
+		want   string
+	}{
+		{"public tunnel host defaults to https", "agent.example.tunnel.dev", "", "", "https://agent.example.tunnel.dev"},
+		{"forwarded public host defaults to https", "10.42.0.5:8000", "agent.example.tunnel.dev", "", "https://agent.example.tunnel.dev"},
+		{"public host with xfp http still https", "agent.example.tunnel.dev", "", "http", "https://agent.example.tunnel.dev"},
+		{"local obol.stack stays http", "obol.stack:8080", "", "", "http://obol.stack:8080"},
+		{"localhost stays http", "localhost:3000", "", "", "http://localhost:3000"},
+		{"local host but explicit https honored", "obol.stack:8080", "", "https", "https://obol.stack:8080"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "/services/x", nil)
+			r.Host = tc.host
+			if tc.xfHost != "" {
+				r.Header.Set("X-Forwarded-Host", tc.xfHost)
+			}
+			if tc.xfp != "" {
+				r.Header.Set("X-Forwarded-Proto", tc.xfp)
+			}
+			if got := resolveSiteURL(r); got != tc.want {
+				t.Errorf("resolveSiteURL() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The agent-type copy must NOT editorialize which model the seller runs (an
+// agent runs its own pinned model and ignores the request's model field), and
+// the pay-agent command must be runnable on paste — a concrete example task,
+// not a "<your prompt here>" placeholder the buyer has to notice and replace.
+func TestAgentCopy_NoModelProseAndRunnableExample(t *testing.T) {
+	d := PaymentDisplay{OfferType: "agent", Model: "qwen3.5:9b"}
+	c := agentCopy("https://agent.example.tunnel.dev/services/quant", "https://agent.example.tunnel.dev", d)
+
+	// No "(running <model>)" editorializing in either prompt.
+	for _, p := range []string{c.PromptObol, c.PromptOther} {
+		if strings.Contains(p, "running qwen3.5:9b") || strings.Contains(p, "(running") {
+			t.Errorf("agent prompt should not editorialize the seller model: %q", p)
+		}
+	}
+	// Runnable pay-agent command with a concrete task, not a placeholder.
+	mustContain(t, c.PromptObol, "pay-agent https://agent.example.tunnel.dev/services/quant")
+	mustContain(t, c.PromptObol, defaultAgentTaskExample)
+	if strings.Contains(c.PromptObol, "your prompt to this agent goes here") {
+		t.Errorf("agent prompt still uses the non-runnable placeholder: %q", c.PromptObol)
+	}
+	// The "other AI agent" prompt embeds the concrete message too.
+	mustContain(t, c.PromptOther, defaultAgentTaskExample)
 }

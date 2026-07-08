@@ -9,12 +9,24 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
 )
 
-const x402FacilitatorImage = "ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9"
+const defaultX402FacilitatorImage = "ghcr.io/obolnetwork/x402-facilitator-prometheus-overlay:1.4.9"
+
+// x402FacilitatorImage resolves the facilitator image, honoring the same
+// X402_FACILITATOR_IMAGE override the shell flows use (flows/lib.sh) so a
+// locally-built facilitator (e.g. an upstream-sync candidate) can be smoked
+// through the Go integration path without editing the pin.
+func x402FacilitatorImage() string {
+	if img := os.Getenv("X402_FACILITATOR_IMAGE"); img != "" {
+		return img
+	}
+	return defaultX402FacilitatorImage
+}
 
 // RealFacilitator wraps a running x402-rs facilitator process.
 // Unlike MockFacilitator, this validates real EIP-712 signatures against
@@ -54,9 +66,16 @@ func StartRealFacilitatorWithOptions(t *testing.T, anvil *AnvilFork, opts RealFa
 	port := l.Addr().(*net.TCPAddr).Port
 	l.Close()
 
-	// The facilitator runs on the host, so it needs the localhost Anvil URL
-	// (not host.docker.internal which only resolves inside Docker/k3d).
-	anvilLocalURL := fmt.Sprintf("http://127.0.0.1:%d", anvil.Port)
+	// The facilitator runs in a Docker container. On Linux it gets
+	// `--network host`, so the host loopback works for the Anvil URL. On
+	// macOS, Docker Desktop's host networking does not share the Mac
+	// loopback — mirror flows/lib.sh::start_x402_facilitator_container:
+	// publish the port with -p and reach Anvil via host.docker.internal.
+	anvilHost := "127.0.0.1"
+	if runtime.GOOS == "darwin" {
+		anvilHost = "host.docker.internal"
+	}
+	anvilLocalURL := fmt.Sprintf("http://%s:%d", anvilHost, anvil.Port)
 
 	// Generate config file.
 	configPath := writeRealFacilitatorConfig(t, port, anvilLocalURL, anvil.Accounts[0].PrivateKey, opts)
@@ -64,14 +83,23 @@ func StartRealFacilitatorWithOptions(t *testing.T, anvil *AnvilFork, opts RealFa
 	ctx, cancel := context.WithCancel(context.Background())
 	containerName := fmt.Sprintf("obol-test-x402-facilitator-%d", time.Now().UnixNano())
 
-	cmd := exec.CommandContext(ctx,
-		"docker", "run", "--rm",
+	// Linux: host networking, the facilitator binds the host port directly.
+	// macOS: publish the port instead — Docker Desktop's host networking
+	// does not share the Mac loopback (same split as flows/lib.sh).
+	netArgs := []string{"--network", "host"}
+	if runtime.GOOS == "darwin" {
+		netArgs = []string{"-p", fmt.Sprintf("%d:%d", port, port)}
+	}
+	args := append([]string{
+		"run", "--rm",
 		"--name", containerName,
-		"--network", "host",
+	}, netArgs...)
+	args = append(args,
 		"-v", configPath+":/config.json:ro",
-		x402FacilitatorImage,
+		x402FacilitatorImage(),
 		"--config", "/config.json",
 	)
+	cmd := exec.CommandContext(ctx, "docker", args...)
 
 	var stderr bytes.Buffer
 
@@ -110,21 +138,29 @@ func StartRealFacilitatorWithOptions(t *testing.T, anvil *AnvilFork, opts RealFa
 	return rf
 }
 
-// requireFacilitatorImage verifies the pinned facilitator image is available.
+// requireFacilitatorImage verifies the facilitator image is available.
 // Local facilitator experiments should be packaged as a Docker image instead of
-// depending on host checkout paths.
+// depending on host checkout paths: build + tag the image, then point
+// X402_FACILITATOR_IMAGE at it. An image already present locally is used as-is
+// (never pulled), mirroring flows/lib.sh::docker_pull_public_image.
 func requireFacilitatorImage(t *testing.T) {
 	t.Helper()
 
+	image := x402FacilitatorImage()
 	if _, err := exec.LookPath("docker"); err != nil {
-		t.Fatalf("docker not installed; cannot run %s", x402FacilitatorImage)
+		t.Fatalf("docker not installed; cannot run %s", image)
 	}
 
-	pull := exec.Command("docker", "pull", x402FacilitatorImage)
-	if out, err := pull.CombinedOutput(); err != nil {
-		t.Fatalf("pull %s: %v\n%s", x402FacilitatorImage, err, out)
+	if err := exec.Command("docker", "image", "inspect", image).Run(); err == nil {
+		t.Logf("using local x402 facilitator image %s", image)
+		return
 	}
-	t.Logf("using x402 facilitator image %s", x402FacilitatorImage)
+
+	pull := exec.Command("docker", "pull", image)
+	if out, err := pull.CombinedOutput(); err != nil {
+		t.Fatalf("pull %s: %v\n%s", image, err, out)
+	}
+	t.Logf("using x402 facilitator image %s", image)
 }
 
 // writeRealFacilitatorConfig writes a temporary config-test.json for the facilitator.

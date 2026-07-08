@@ -27,7 +27,7 @@ const (
 	hermesDataPVC      = "hermes-data"
 	hermesAPIPath      = "/health"
 	// renovate: datasource=docker depName=nousresearch/hermes-agent
-	defaultHermesImage = "nousresearch/hermes-agent:v2026.6.5"
+	defaultHermesImage = "nousresearch/hermes-agent:v2026.6.19"
 )
 
 // agentLabels returns the standard label set we attach to every primitive
@@ -100,6 +100,23 @@ func agentManifests(agent *monetizeapi.Agent, litellmKey, apiKey string) ([]*uns
 // operation can outlive the session. max_turns and reasoning_effort cap
 // chattiness, and disabled_toolsets drops Hermes tool families that aren't
 // useful in a paid-service context (memory persistence, web search).
+//
+// approvals.mode: off is required for a paid sub-agent. It is served
+// headless (`hermes gateway run`, OpenAI-compatible API only) with no chat
+// platform wired, so the buyer paying over x402 has no interactive channel
+// to answer a dangerous-command / execute_code approval prompt. Left on the
+// default (manual), a benign tool call (e.g. execute_code making an HTTP
+// request) enqueues a pending approval no one can answer and the paid,
+// streaming request stalls until the tunnel drops — the buyer pays and gets
+// nothing. "off" (== HERMES_YOLO_MODE) is deliberately scoped to these
+// sandboxed sub-agents, NOT the master agent (whose operator is present to
+// approve). It is not "unrestricted": Hermes' unconditional HARDLINE floor
+// still blocks catastrophic host commands (rm -rf /, mkfs, dd to a raw
+// device, shutdown/reboot, fork bomb, kill -1) even under off, and the
+// pod is already boxed in — non-root UID 1000, ephemeral 5Gi PVC, and the
+// agent-isolation NetworkPolicy (cluster-closed, cloud-IMDS blocked). Quote
+// "off" so the YAML parser keeps it the string "off" and never folds it to
+// the boolean false.
 func renderHermesConfig(model, litellmKey string) string {
 	return fmt.Sprintf(`model:
   default: %q
@@ -118,6 +135,8 @@ agent:
   disabled_toolsets:
     - memory
     - web
+approvals:
+  mode: "off"
 skills:
   external_dirs:
     - /data/.hermes/obol-skills
