@@ -243,6 +243,24 @@ main() {
         # no cluster of its own, so it sits at the end of the baseline group
         # while anvil + the facilitator are still up.
         "$SCRIPT_DIR/flow-17-sell-mcp.sh"
+        # flow-19 is the only live coverage of SIWx identity-gated routes
+        # (gate=auth): it asserts the 401 challenge advertises the
+        # sign-in-with-x extension and that a wallet-signed credential
+        # (minted by the buy-x402 skill via the agent's remote-signer) is
+        # accepted. No payment/anvil dependency — only the baseline stack +
+        # the flow-04 agent's remote-signer.
+        "$SCRIPT_DIR/flow-19-sell-auth.sh"
+        # flow-20 is the only live coverage of async job offers (the
+        # verifier→job-broker hand-off): submit → 402 → pay → 202 with a job
+        # handle → poll to completion → jobToken-gated result retrieval. It
+        # reuses flow-10's anvil fork + facilitator (still up here) for the
+        # paid submit, exactly like flow-17.
+        "$SCRIPT_DIR/flow-20-async-job.sh"
+        # flow-21 is the only live coverage of multi-route gate classes
+        # (spec.routes[] free/paid/undeclared-fail-closed) and per-offer
+        # hostname binding (P1b), on a self-contained throwaway offer. gate
+        # enforcement needs no facilitator, so it also sits in this group.
+        "$SCRIPT_DIR/flow-21-route-surface.sh"
     )
 
     for flow in "${flows[@]}"; do
