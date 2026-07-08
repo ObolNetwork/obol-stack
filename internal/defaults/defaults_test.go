@@ -41,10 +41,20 @@ func TestCopyInfrastructure_DevModeRewritesDigestPins(t *testing.T) {
 	for _, base := range []string{
 		"ghcr.io/obolnetwork/x402-verifier",
 		"ghcr.io/obolnetwork/serviceoffer-controller",
+		// job-broker ships as :latest (unpublished to ghcr, so no digest for
+		// the release pipeline to stamp). The dev rewrite must still repoint
+		// it at the local build's :dev-<sha> tag, or the pod ImagePullBackOffs
+		// on the missing :latest ref. Regression guard for the smoke-surfaced
+		// bug where the pin regex matched only digest/short-SHA forms.
+		"ghcr.io/obolnetwork/job-broker",
 	} {
 		want := base + ":" + devTag
 		if !strings.Contains(out, want) {
 			t.Errorf("dev mode did not rewrite to %q in %s", want, x402Path)
+		}
+		// And no stale :latest ref for a locally-built base must survive.
+		if strings.Contains(out, base+":latest") {
+			t.Errorf("dev mode left an unrewritten %s:latest in %s", base, x402Path)
 		}
 	}
 
