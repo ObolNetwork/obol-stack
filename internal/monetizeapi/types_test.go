@@ -32,6 +32,39 @@ func TestEffectivePayments(t *testing.T) {
 	}
 }
 
+// TestEffectiveRoutes covers the route-table fallback: an offer without
+// spec.routes synthesizes the pre-route-table single paid catch-all, so the
+// verifier and discovery surfaces can treat every offer as route-driven.
+func TestEffectiveRoutes(t *testing.T) {
+	legacy := &ServiceOffer{}
+	got := legacy.EffectiveRoutes()
+	if len(got) != 1 || got[0].Path != "/*" || got[0].EffectiveGate() != GatePaid {
+		t.Fatalf("legacy fallback = %+v, want single paid catch-all /*", got)
+	}
+
+	declared := &ServiceOffer{Spec: ServiceOfferSpec{Routes: []ServiceOfferRoute{
+		{Path: "/audit", Methods: []string{"POST"}, Gate: GatePaid, Price: ServiceOfferPriceTable{PerRequest: "0.5"}},
+		{Path: "/healthz", Gate: GateFree},
+	}}}
+	got = declared.EffectiveRoutes()
+	if len(got) != 2 || got[0].Path != "/audit" || got[1].EffectiveGate() != GateFree {
+		t.Fatalf("declared routes = %+v, want the two spec entries verbatim", got)
+	}
+	if !got[0].HasPriceOverride() || got[1].HasPriceOverride() {
+		t.Fatalf("price override detection wrong: %+v", got)
+	}
+}
+
+// TestEffectiveGate_DefaultsPaid guards the fail-closed default: a
+// zero-valued route (e.g. a hand-written CR that omitted gate, bypassing
+// the CRD default) must never open a free path.
+func TestEffectiveGate_DefaultsPaid(t *testing.T) {
+	r := ServiceOfferRoute{Path: "/x"}
+	if r.EffectiveGate() != GatePaid {
+		t.Fatalf("EffectiveGate() = %q, want %q", r.EffectiveGate(), GatePaid)
+	}
+}
+
 // TestPurchaseAutoRefill_JSONRoundTrip asserts every field on
 // PurchaseAutoRefill marshals to JSON and unmarshals back without loss. The
 // MaxTotal + MaxSpendPerDay fields were added to match the CRD spec; this test
@@ -131,5 +164,36 @@ func TestPurchaseAutoRefill_UnmarshalAcceptsCRDForm(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("unmarshal mismatch:\n got: %+v\nwant: %+v", got, want)
+	}
+}
+
+// TestReservedPathConflict pins the platform-path denylist: offer paths may
+// never claim or nest under shared-origin discovery/routing surfaces, and
+// may not blanket "/" or the bare "/services" prefix. Regular
+// /services/<name> paths (including nested sub-paths) stay allowed.
+func TestReservedPathConflict(t *testing.T) {
+	tests := []struct{ path, wantRoot string }{
+		{"/services/my-offer", ""},
+		{"/services/my-offer/", ""},
+		{"/services/my-offer/v1", ""},
+		{"/custom-prefix", ""},
+		{"/", "/"},
+		{"/services", "/"},
+		{"/services/", "/"},
+		{"/api", "/api"},
+		{"/api/services.json", "/api"},
+		{"/openapi.json", "/openapi.json"},
+		{"/skill.md", "/skill.md"},
+		{"/rpc", "/rpc"},
+		{"/rpc/mainnet", "/rpc"},
+		{"/.well-known", "/.well-known"},
+		{"/.well-known/x402", "/.well-known"},
+		{"/apiary", ""}, // prefix must respect segment boundaries
+		{"/rpcx", ""},
+	}
+	for _, tt := range tests {
+		if got := ReservedPathConflict(tt.path); got != tt.wantRoot {
+			t.Errorf("ReservedPathConflict(%q) = %q, want %q", tt.path, got, tt.wantRoot)
+		}
 	}
 }

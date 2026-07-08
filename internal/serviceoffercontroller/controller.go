@@ -514,7 +514,19 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		return err
 	}
 
-	if conflict := c.findPathConflict(offer); conflict != "" {
+	if root := monetizeapi.ReservedPathConflict(offer.EffectivePath()); root != "" {
+		// Reserved shared-origin surface (discovery docs, /rpc, /.well-known,
+		// the storefront root): publishing would shadow platform routes.
+		// Same teardown + no-route treatment as an offer-vs-offer conflict.
+		msg := fmt.Sprintf("path %s collides with the reserved platform path %s — set a different spec.path", offer.EffectivePath(), root)
+		log.Printf("serviceoffer-controller: %s/%s reserved path: %s", offer.Namespace, offer.Name, msg)
+		if err := c.deleteRouteChildren(ctx, offer); err != nil {
+			return err
+		}
+		setCondition(&status, "Draining", "False", "Active", "Offer is active")
+		setCondition(&status, "PaymentGateReady", "False", "ReservedPath", msg)
+		setCondition(&status, "RoutePublished", "False", "ReservedPath", msg)
+	} else if conflict := c.findPathConflict(offer); conflict != "" {
 		// First-claimant-wins: an older offer holds this path. Publishing
 		// anyway would silently shadow one of the two offers in the
 		// verifier's first-match route table. Tear down any children we

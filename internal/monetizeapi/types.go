@@ -138,6 +138,16 @@ type ServiceOfferSpec struct {
 	// affect routing, pricing, or payment.
 	Listing ServiceOfferListing `json:"listing,omitempty"`
 
+	// Routes declares the offer's route table: per-path gate classes (paid
+	// or free) and optional per-route price overrides, all relative to the
+	// offer's effective path. It is the single source of truth for the
+	// x402 verifier's route rules and for discovery surfaces (openapi,
+	// skill.md, services.json, buy prompts). Empty means the pre-route-table
+	// behavior: one paid catch-all covering everything under the offer path.
+	// See EffectiveRoutes.
+	// +kubebuilder:validation:MaxItems=128
+	Routes []ServiceOfferRoute `json:"routes,omitempty"`
+
 	// URL path prefix for the HTTPRoute, defaults to /services/<name>.
 	// +kubebuilder:validation:Pattern=`^/[a-zA-Z0-9/_.-]*$`
 	Path string `json:"path,omitempty"`
@@ -233,6 +243,64 @@ type ServiceOfferPayment struct {
 	// Which fields are applicable depends on the workload type.
 	// +kubebuilder:validation:Required
 	Price ServiceOfferPriceTable `json:"price"`
+}
+
+// Gate classes for ServiceOfferRoute. GateAuth (SIWX-verified wallet) is
+// planned for the identity milestone and intentionally absent from the CRD
+// enum until the verifier can enforce it — fail closed, never advertise a
+// gate that isn't enforced.
+const (
+	GatePaid = "paid"
+	GateFree = "free"
+)
+
+// ServiceOfferRoute is one entry in an offer's route table. Path is
+// interpreted relative to the offer's effective path (the public prefix),
+// so route tables survive a future move to per-offer hostnames unchanged.
+type ServiceOfferRoute struct {
+	// Path relative to the offer's effective path. Must start with "/".
+	// Supports the verifier's pattern syntax: exact ("/healthz"), greedy
+	// prefix ("/v1/*"), and segment globs ("/models-*/info").
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^/[a-zA-Z0-9/_.*-]*$`
+	// +kubebuilder:validation:MaxLength=512
+	Path string `json:"path"`
+	// HTTP methods this route serves. Discovery metadata only in phase 1 —
+	// the payment gate applies to every method on a matched path. Empty
+	// means all methods.
+	// +kubebuilder:validation:MaxItems=9
+	// +kubebuilder:validation:items:Enum=GET;POST;PUT;PATCH;DELETE;HEAD;OPTIONS
+	Methods []string `json:"methods,omitempty"`
+	// Gate class. "paid" gates the route with x402 (default); "free" passes
+	// the payment gate entirely (health checks, job status pages, per-offer
+	// discovery documents).
+	// +kubebuilder:default="paid"
+	// +kubebuilder:validation:Enum=paid;free
+	Gate string `json:"gate,omitempty"`
+	// Price override for a paid route. When set, it replaces the offer's
+	// primary payment option price for this route and the route becomes
+	// single-payment (multi-currency price overrides are not supported —
+	// secondary spec.payments[] options are not advertised on overridden
+	// routes). Empty means the offer's payment pricing applies.
+	Price ServiceOfferPriceTable `json:"price,omitempty"`
+	// Human-readable one-line summary surfaced in discovery (openapi
+	// operation summary, skill.md route list).
+	// +kubebuilder:validation:MaxLength=300
+	Summary string `json:"summary,omitempty"`
+}
+
+// EffectiveGate returns the route's gate class, defaulting to paid so a
+// zero-valued route never opens a free path by accident.
+func (r *ServiceOfferRoute) EffectiveGate() string {
+	if r.Gate == "" {
+		return GatePaid
+	}
+	return r.Gate
+}
+
+// HasPriceOverride reports whether any price slot is set on the route.
+func (r *ServiceOfferRoute) HasPriceOverride() bool {
+	return r.Price != (ServiceOfferPriceTable{})
 }
 
 // ServiceOfferListing carries storefront presentation hints. Both fields
@@ -439,6 +507,43 @@ func (o *ServiceOffer) EffectivePath() string {
 		return o.Spec.Path
 	}
 	return fmt.Sprintf("/services/%s", o.Name)
+}
+
+// reservedPathRoots are shared-origin surfaces an offer path may never
+// claim or nest under: the discovery documents, the Scalar API reference,
+// the eRPC gateway, and .well-known. Claiming one would shadow it in the
+// verifier's first-match route table (or in Traefik, depending on route
+// specificity) with no signal to the operator.
+var reservedPathRoots = []string{"/api", "/openapi.json", "/skill.md", "/rpc", "/.well-known"}
+
+// ReservedPathConflict returns the reserved root an offer path collides
+// with, or "". "/" and the bare "/services" are reserved exactly (they
+// would blanket the storefront root / every sibling offer); the roots in
+// reservedPathRoots are reserved along with everything nested under them.
+// Trailing slashes are ignored.
+func ReservedPathConflict(path string) string {
+	p := strings.TrimSuffix(path, "/")
+	if p == "" || p == "/services" {
+		return "/"
+	}
+	for _, root := range reservedPathRoots {
+		if p == root || strings.HasPrefix(p, root+"/") {
+			return root
+		}
+	}
+	return ""
+}
+
+// EffectiveRoutes returns the offer's declared route table, or the
+// synthesized pre-route-table equivalent when spec.routes is empty: a
+// single paid catch-all ("/*") covering everything under the offer's
+// effective path. Callers can therefore treat every offer as route-table
+// driven. The result is never empty.
+func (o *ServiceOffer) EffectiveRoutes() []ServiceOfferRoute {
+	if len(o.Spec.Routes) > 0 {
+		return o.Spec.Routes
+	}
+	return []ServiceOfferRoute{{Path: "/*", Gate: GatePaid}}
 }
 
 // EffectivePayments returns every accepted payment option for the offer.

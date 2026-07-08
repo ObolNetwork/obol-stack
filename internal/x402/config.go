@@ -36,19 +36,19 @@ type PricingConfig struct {
 // RouteRule so a single-payment route synthesizes one of these from its
 // inline fields (see RouteRule.PaymentOptions).
 type RoutePayment struct {
-	Price               string `yaml:"price"`
-	PayTo               string `yaml:"payTo,omitempty"`
-	Network             string `yaml:"network,omitempty"`
-	AssetAddress        string `yaml:"assetAddress,omitempty"`
-	AssetSymbol         string `yaml:"assetSymbol,omitempty"`
-	AssetDecimals       int    `yaml:"assetDecimals,omitempty"`
-	AssetTransferMethod string `yaml:"assetTransferMethod,omitempty"`
-	EIP712Name          string `yaml:"eip712Name,omitempty"`
-	EIP712Version       string `yaml:"eip712Version,omitempty"`
-	PriceModel          string `yaml:"priceModel,omitempty"`
-	PerMTok             string `yaml:"perMTok,omitempty"`
-	ApproxTokensPerRequest int `yaml:"approxTokensPerRequest,omitempty"`
-	MaxTimeoutSeconds   int64  `yaml:"maxTimeoutSeconds,omitempty"`
+	Price                  string `yaml:"price"`
+	PayTo                  string `yaml:"payTo,omitempty"`
+	Network                string `yaml:"network,omitempty"`
+	AssetAddress           string `yaml:"assetAddress,omitempty"`
+	AssetSymbol            string `yaml:"assetSymbol,omitempty"`
+	AssetDecimals          int    `yaml:"assetDecimals,omitempty"`
+	AssetTransferMethod    string `yaml:"assetTransferMethod,omitempty"`
+	EIP712Name             string `yaml:"eip712Name,omitempty"`
+	EIP712Version          string `yaml:"eip712Version,omitempty"`
+	PriceModel             string `yaml:"priceModel,omitempty"`
+	PerMTok                string `yaml:"perMTok,omitempty"`
+	ApproxTokensPerRequest int    `yaml:"approxTokensPerRequest,omitempty"`
+	MaxTimeoutSeconds      int64  `yaml:"maxTimeoutSeconds,omitempty"`
 }
 
 // RouteRule maps a URL pattern to x402 payment requirements.
@@ -170,6 +170,22 @@ type RouteRule struct {
 	// Payments[0] mirrors the inline fields above (the primary option).
 	// Empty means a single-payment route described by the inline fields.
 	Payments []RoutePayment `yaml:"payments,omitempty"`
+
+	// Gate is the route's gate class from the originating ServiceOffer's
+	// route table: "paid" (default when empty — fail closed) or "free".
+	// Free rules pass the payment gate entirely: HandleVerify allows the
+	// request through and HandleProxy proxies to the upstream without the
+	// payment middleware. They exist so an offer can carve out health
+	// checks, job status pages, and per-offer discovery documents from an
+	// otherwise paid prefix.
+	Gate string `yaml:"gate,omitempty"`
+}
+
+// IsFree reports whether this rule passes the payment gate. Only an
+// explicit "free" gate is free — empty and unknown values gate as paid so
+// a malformed rule never opens a free path.
+func (r *RouteRule) IsFree() bool {
+	return r.Gate == "free"
 }
 
 // PaymentOptions returns the route's accepted payment options. When the

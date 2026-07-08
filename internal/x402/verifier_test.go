@@ -1725,3 +1725,119 @@ func TestVerifier_PruneSeriesNotIn_DistinguishesAssetSymbol(t *testing.T) {
 		t.Errorf("OBOL charged series was pruned along with USDC — asset_symbol was ignored in prune key")
 	}
 }
+
+// TestVerifier_QueryString_DoesNotBypassPaidRule pins the query-string fix:
+// Traefik forwards the full request URI, so "/rpc?method=x" must still hit
+// the "/rpc/*" rule instead of free-passing around it (ForwardAuth 200
+// means "allow").
+func TestVerifier_QueryString_DoesNotBypassPaidRule(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	v := newTestVerifier(t, fac.URL, []RouteRule{
+		{Pattern: "/rpc/*", Price: "0.0001"},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/rpc?method=eth_sendRawTransaction")
+	req.Header.Set("X-Forwarded-Host", "obol.stack")
+	w := httptest.NewRecorder()
+	v.HandleVerify(w, req)
+
+	if w.Code != http.StatusPaymentRequired {
+		t.Errorf("expected 402 for paid route with query string, got %d", w.Code)
+	}
+}
+
+// TestVerifier_FreeGateRule_AllowsAndInjectsUpstreamAuth covers the
+// route-table free carve-out in ForwardAuth mode: the request is allowed
+// through without touching the facilitator, and the upstream bearer is
+// still injected so authenticated upstreams serve the free path.
+func TestVerifier_FreeGateRule_AllowsAndInjectsUpstreamAuth(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	v := newTestVerifier(t, fac.URL, []RouteRule{
+		{Pattern: "/services/foo/healthz", Gate: "free", UpstreamAuth: "Bearer sk-free"},
+		{Pattern: "/services/foo/*", Price: "0.5"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/services/foo/healthz")
+	w := httptest.NewRecorder()
+	v.HandleVerify(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for free carve-out, got %d", w.Code)
+	}
+	if got := w.Header().Get("Authorization"); got != "Bearer sk-free" {
+		t.Errorf("Authorization = %q, want upstream auth injected", got)
+	}
+	if fac.verifyCalls.Load() != 0 {
+		t.Error("facilitator must not be called for free carve-outs")
+	}
+
+	// The paid sibling stays gated.
+	req = httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/services/foo/run")
+	req.Header.Set("X-Forwarded-Host", "obol.stack")
+	w = httptest.NewRecorder()
+	v.HandleVerify(w, req)
+	if w.Code != http.StatusPaymentRequired {
+		t.Errorf("expected 402 for paid sibling, got %d", w.Code)
+	}
+}
+
+// TestVerifier_HandleProxy_FreeGateRule_ProxiesWithoutPayment covers the
+// free carve-out on the in-process seller gateway: the request reaches the
+// upstream (prefix-stripped, auth-injected) with zero facilitator calls,
+// while the sibling paid route still returns 402.
+func TestVerifier_HandleProxy_FreeGateRule_ProxiesWithoutPayment(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+
+	var gotPath, gotAuth string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, `{"jobs":"ok"}`)
+	}))
+	defer upstream.Close()
+
+	v := newTestVerifier(t, fac.URL, []RouteRule{
+		{
+			Pattern:      "/services/foo/jobs/*",
+			Gate:         "free",
+			UpstreamURL:  upstream.URL,
+			StripPrefix:  "/services/foo",
+			UpstreamAuth: "Bearer sk-free",
+		},
+		{
+			Pattern:     "/services/foo/*",
+			Price:       "0.5",
+			UpstreamURL: upstream.URL,
+			StripPrefix: "/services/foo",
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/services/foo/jobs/123", nil)
+	w := httptest.NewRecorder()
+	v.HandleProxy(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 from upstream via free route, got %d (%s)", w.Code, w.Body.String())
+	}
+	if gotPath != "/jobs/123" {
+		t.Errorf("upstream path = %q, want /jobs/123 (prefix stripped)", gotPath)
+	}
+	if gotAuth != "Bearer sk-free" {
+		t.Errorf("upstream Authorization = %q, want injected bearer", gotAuth)
+	}
+	if fac.verifyCalls.Load() != 0 || fac.settleCalls.Load() != 0 {
+		t.Error("facilitator must not be called for free carve-outs")
+	}
+
+	// Sibling paid route still gates.
+	req = httptest.NewRequest(http.MethodPost, "/services/foo/run", strings.NewReader(`{}`))
+	w = httptest.NewRecorder()
+	v.HandleProxy(w, req)
+	if w.Code != http.StatusPaymentRequired {
+		t.Errorf("expected 402 for paid sibling, got %d", w.Code)
+	}
+}

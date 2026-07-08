@@ -1068,6 +1068,7 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 				lines = append(lines, fmt.Sprintf("  %d. %s", i+1, describePaymentDetail(payments[i])))
 			}
 		}
+		lines = append(lines, skillCatalogRouteLines(offer, endpoint)...)
 		if offer.IsDraining() {
 			lines = append(lines, fmt.Sprintf("- **Drain ends at**: %s", offer.DrainEndsAt().UTC().Format(time.RFC3339)))
 		}
@@ -1144,19 +1145,26 @@ func catalogModelName(offer *monetizeapi.ServiceOffer) string {
 // /api/services.json publishes in the entry's buy.example — so the two
 // surfaces cannot drift. Agent buyers convert off copy-paste, not prose.
 func skillCatalogTryIt(offer *monetizeapi.ServiceOffer, endpoint string) []string {
+	// Route-table offers: probe + pay against the primary paid route, not
+	// the offer root (which may not be served at all when the table has no
+	// catch-all).
+	target := endpoint
+	if rt, ok := primaryPaidRoute(offer); ok {
+		target = endpoint + openAPIRelPathForRoute(rt.Path)
+	}
 	lines := []string{
 		"#### Try it",
 		"",
 		"Probe the price (no payment; the `402` body carries the signable `accepts[]` requirements):",
 		"",
 		"```bash",
-		fmt.Sprintf("curl -i %s", endpoint),
+		fmt.Sprintf("curl -i %s", target),
 		"```",
 		"",
 	}
 	block := buyprompts.Build(buyprompts.Input{
 		Type:  fallbackOfferType(offer),
-		URL:   endpoint,
+		URL:   target,
 		Model: catalogModelName(offer),
 	})
 	if block.Example != "" {
@@ -1361,9 +1369,15 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string,
 		// verbatim by the storefront (and any other consumer) so how-to-buy
 		// copy cannot drift between surfaces. The 402 paywall page builds
 		// its prompt cards from the same buyprompts package.
+		buyURL := svc.Endpoint
+		if rt, ok := primaryPaidRoute(offer); ok {
+			// Route-table offers: teach buyers the primary paid route, not
+			// the offer root. svc.Endpoint stays the base (public contract).
+			buyURL = svc.Endpoint + openAPIRelPathForRoute(rt.Path)
+		}
 		buy := buyprompts.Build(buyprompts.Input{
 			Type:         fallbackOfferType(offer),
-			URL:          svc.Endpoint,
+			URL:          buyURL,
 			SiteURL:      baseURL,
 			Model:        modelName,
 			PriceDisplay: svc.Price,
@@ -1650,6 +1664,49 @@ func describePaymentDetail(p monetizeapi.ServiceOfferPayment) string {
 		}
 	}
 	return b.String()
+}
+
+// skillCatalogRouteLines renders the per-route list for offers with a
+// declared route table (spec.routes). One line per route: methods, full
+// URL, gate/price, and the route summary. Offers without a route table
+// contribute nothing — their single implicit catch-all is already fully
+// described by the Endpoint/Payment lines above.
+func skillCatalogRouteLines(offer *monetizeapi.ServiceOffer, endpoint string) []string {
+	if len(offer.Spec.Routes) == 0 {
+		return nil
+	}
+	lines := []string{"- **Routes** (per-route gating; paths outside this table are not served):"}
+	for _, rt := range offer.EffectiveRoutes() {
+		free := rt.EffectiveGate() == monetizeapi.GateFree
+		methods := strings.Join(rt.Methods, "|")
+		if methods == "" {
+			if free {
+				methods = "GET"
+			} else {
+				methods = "POST"
+			}
+		}
+		var cost string
+		switch {
+		case free:
+			cost = "free"
+		case rt.HasPriceOverride():
+			p := offer.EffectivePayments()[0]
+			p.Price = rt.Price
+			cost = describePaymentPrice(p)
+		default:
+			cost = describeOfferPrice(offer)
+		}
+		line := fmt.Sprintf("  - `%s %s%s` — %s", methods, endpoint, strings.TrimSuffix(rt.Path, "/*"), cost)
+		if strings.HasSuffix(rt.Path, "/*") {
+			line += " (covers sub-paths)"
+		}
+		if rt.Summary != "" {
+			line += " — " + rt.Summary
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 // offerCallHint returns a one-line "how to invoke" hint for the service

@@ -2,6 +2,7 @@ package serviceoffercontroller
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -203,7 +204,35 @@ func openAPIPrimaryPathForOffer(offer *monetizeapi.ServiceOffer) string {
 	if offer.IsInference() || offer.IsAgent() {
 		return joinOpenAPIPath(offer.EffectivePath(), "/v1/chat/completions")
 	}
+	if rt, ok := primaryPaidRoute(offer); ok {
+		return joinOpenAPIPath(offer.EffectivePath(), openAPIRelPathForRoute(rt.Path))
+	}
 	return joinOpenAPIPath(offer.EffectivePath(), "")
+}
+
+// primaryPaidRoute returns the first paid entry of a DECLARED route table.
+// ok=false for offers without spec.routes — callers keep the legacy
+// offer-root behavior — and for (misconfigured) all-free tables.
+func primaryPaidRoute(offer *monetizeapi.ServiceOffer) (monetizeapi.ServiceOfferRoute, bool) {
+	if len(offer.Spec.Routes) == 0 {
+		return monetizeapi.ServiceOfferRoute{}, false
+	}
+	for _, rt := range offer.EffectiveRoutes() {
+		if rt.EffectiveGate() == monetizeapi.GatePaid {
+			return rt, true
+		}
+	}
+	return monetizeapi.ServiceOfferRoute{}, false
+}
+
+// primaryPaidMethod is the HTTP method advertised for the offer's primary
+// paid operation: the first declared method on the primary paid route, or
+// POST (the phase-1 default emission everywhere else).
+func primaryPaidMethod(offer *monetizeapi.ServiceOffer) string {
+	if rt, ok := primaryPaidRoute(offer); ok && len(rt.Methods) > 0 {
+		return strings.ToUpper(rt.Methods[0])
+	}
+	return "POST"
 }
 
 // openAPIDocsAnchorForOffer returns the site-relative Scalar deep link for
@@ -217,8 +246,7 @@ func openAPIDocsAnchorForOffer(offer *monetizeapi.ServiceOffer) string {
 	if path == "" {
 		return ""
 	}
-	// Every operation emitted today is a POST (see openAPIPathsForOffer).
-	return "/api#tag/" + fallbackOfferType(offer) + "/POST" + path
+	return "/api#tag/" + fallbackOfferType(offer) + "/" + primaryPaidMethod(offer) + path
 }
 
 // openAPIPathsForOffer returns the set of {path → pathItem} entries this
@@ -237,6 +265,13 @@ func openAPIDocsAnchorForOffer(offer *monetizeapi.ServiceOffer) string {
 func openAPIPathsForOffer(offer *monetizeapi.ServiceOffer) map[string]map[string]any {
 	if offer == nil {
 		return nil
+	}
+	// Declared route tables drive the emission for http/fine-tuning offers:
+	// one operation per route, with per-route gate + price. Inference/agent
+	// offers keep the chat-completions synthesis (their wire shape is fixed
+	// by the OpenAI contract regardless of route carve-outs).
+	if len(offer.Spec.Routes) > 0 && !offer.IsInference() && !offer.IsAgent() {
+		return openAPIPathsForRouteTable(offer)
 	}
 	switch {
 	case offer.IsInference(), offer.IsAgent():
@@ -292,6 +327,126 @@ func openAPIPathsForOffer(offer *monetizeapi.ServiceOffer) map[string]map[string
 				}),
 			},
 		}
+	}
+}
+
+// openAPIPathsForRouteTable renders one operation per declared route.
+// Paid routes carry the shared 402 reference and an x-payment-info built
+// from the route's effective price (per-route override or the offer's
+// payments). Free routes carry neither — they are advertised as plainly
+// callable, marked with x-gate: free so indexers don't misread the absence
+// of payment metadata as an omission.
+func openAPIPathsForRouteTable(offer *monetizeapi.ServiceOffer) map[string]map[string]any {
+	paths := map[string]map[string]any{}
+	for _, rt := range offer.EffectiveRoutes() {
+		rel := openAPIRelPathForRoute(rt.Path)
+		item := paths[rel]
+		if item == nil {
+			item = map[string]any{}
+			paths[rel] = item
+		}
+		free := rt.EffectiveGate() == monetizeapi.GateFree
+
+		summary := rt.Summary
+		if summary == "" {
+			if free {
+				summary = fmt.Sprintf("%s — %s (free)", offer.Name, rt.Path)
+			} else {
+				summary = fmt.Sprintf("Invoke %s — %s", offer.Name, rt.Path)
+			}
+		}
+		description := offerDescription(offer, "x402 payment-gated HTTP service.")
+		if strings.HasSuffix(rt.Path, "/*") {
+			description += " This operation covers every sub-path under " + rt.Path + "."
+		}
+
+		methods := rt.Methods
+		if len(methods) == 0 {
+			if free {
+				methods = []string{"GET"}
+			} else {
+				methods = []string{"POST"}
+			}
+		}
+
+		for _, method := range methods {
+			op := map[string]any{
+				"summary":     summary,
+				"description": description,
+				"operationId": openAPIRouteOperationID(offer, method, rt.Path),
+				"tags":        operationTagsForOffer(offer),
+				"security":    []any{},
+			}
+			if free {
+				op["responses"] = map[string]any{
+					"200": openAPIGenericSuccessResponse("Upstream response (shape is operator-defined)."),
+				}
+				op["x-gate"] = "free"
+			} else {
+				op["responses"] = map[string]any{
+					"200": openAPIGenericSuccessResponse("Upstream response (shape is operator-defined)."),
+					"402": map[string]any{"$ref": "#/components/responses/PaymentRequired"},
+				}
+				op["x-payment-info"] = routePaymentInfoExtension(offer, rt)
+				if strings.EqualFold(method, "POST") || strings.EqualFold(method, "PUT") || strings.EqualFold(method, "PATCH") {
+					op["requestBody"] = openAPIJSONRequestBody(
+						"",
+						"Operator-defined JSON payload. Shape is not specified in phase 1.",
+					)
+				}
+			}
+			item[strings.ToLower(method)] = op
+		}
+	}
+	return paths
+}
+
+// openAPIRelPathForRoute converts a route-table path into an OpenAPI paths
+// key relative to the offer root: the catch-all "/*" is the offer root
+// itself (""), a trailing wildcard collapses to its literal prefix (the
+// operation description notes the sub-path coverage), exact paths pass
+// through verbatim.
+func openAPIRelPathForRoute(routePath string) string {
+	if routePath == "" || routePath == "/" || routePath == "/*" {
+		return ""
+	}
+	return strings.TrimSuffix(routePath, "/*")
+}
+
+// openAPIRouteOperationID derives a unique, stable operation id for one
+// route-table operation: the offer's base id plus method and sanitized path.
+func openAPIRouteOperationID(offer *monetizeapi.ServiceOffer, method, routePath string) string {
+	suffix := strings.Trim(strings.TrimSuffix(routePath, "/*"), "/")
+	suffix = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		default:
+			return '-'
+		}
+	}, suffix)
+	suffix = strings.Trim(suffix, "-")
+	if suffix == "" {
+		suffix = "root"
+	}
+	return openAPIOperationID(offer) + "-" + strings.ToLower(method) + "-" + suffix
+}
+
+// routePaymentInfoExtension is offerPaymentInfoExtension with the
+// route-table price semantics applied: a per-route price override replaces
+// the primary option's price and collapses the route to single-payment
+// (mirrors routeRulesFromOffer in the verifier's route source — the two
+// MUST agree or discovery advertises a price the gate doesn't charge).
+func routePaymentInfoExtension(offer *monetizeapi.ServiceOffer, rt monetizeapi.ServiceOfferRoute) map[string]any {
+	if !rt.HasPriceOverride() {
+		return offerPaymentInfoExtension(offer)
+	}
+	p := offer.EffectivePayments()[0]
+	p.Price = rt.Price
+	return map[string]any{
+		"price":     paymentInfoPrice(p),
+		"protocols": []any{map[string]any{"x402": map[string]any{}}},
+		"accepts":   []any{paymentInfoAccept(p)},
 	}
 }
 

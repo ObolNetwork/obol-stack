@@ -96,6 +96,12 @@ func (v *Verifier) load(cfg *PricingConfig) error {
 	// no rule matches (see isUnderPaidPrefix for the rationale).
 	prefixes := make([]string, 0, len(cfg.Routes))
 	for _, r := range cfg.Routes {
+		// Free carve-outs never establish a paid prefix: a wildcard free
+		// route (e.g. /services/foo/jobs/*) must not make unmatched
+		// siblings fail closed.
+		if r.IsFree() {
+			continue
+		}
 		prefix := patternToPrefix(r.Pattern)
 		if prefix != "" {
 			prefixes = append(prefixes, prefix)
@@ -149,10 +155,14 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Match on the path alone: Traefik forwards the full request URI, and
+	// "/rpc?method=x" must hit the "/rpc" rule, not free-pass around it.
+	uri = stripQueryFragment(uri)
+
 	cfg := v.config.Load()
 
-	mr, ok := v.matchPaidRouteFull(cfg, uri)
-	if !ok {
+	rule := matchRoute(cfg.Routes, uri)
+	if rule == nil {
 		// Check if this URI is under a tracked paid prefix. If yes,
 		// the route was supposed to match but didn't — fail closed
 		// rather than silently make it free (Traefik ForwardAuth 200
@@ -165,6 +175,26 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		}
 		// Not under any paid prefix — legitimately free route.
 		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// Declared free carve-out (offer route table, gate: free): allow the
+	// request through, still authenticating it with the upstream when the
+	// offer has upstream auth configured.
+	if rule.IsFree() {
+		if rule.UpstreamAuth != "" {
+			w.Header().Set("Authorization", rule.UpstreamAuth)
+		}
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	mr, ok := v.resolvePaidRoute(cfg, rule)
+	if !ok {
+		// A rule matched but none of its payment options resolve to a
+		// known chain — a paid route we cannot price. Fail closed.
+		log.Printf("x402-verifier: rule %q matched but no payment option resolves — fail closed", rule.Pattern)
+		http.Error(w, "route is payment-gated but has no resolvable payment option", http.StatusForbidden)
 		return
 	}
 
@@ -238,9 +268,34 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	cfg := v.config.Load()
 
-	mr, ok := v.matchPaidRouteFull(cfg, r.URL.Path)
-	if !ok {
+	rule := matchRoute(cfg.Routes, r.URL.Path)
+	if rule == nil {
 		http.NotFound(w, r)
+		return
+	}
+
+	// Declared free carve-out: proxy straight to the upstream, no payment
+	// middleware. buildUpstreamProxy still injects upstream auth and strips
+	// the offer's route prefix, so free and paid routes reach the upstream
+	// identically shaped.
+	if rule.IsFree() {
+		proxy, err := buildUpstreamProxy(rule)
+		if err != nil {
+			log.Printf("x402-verifier: build upstream proxy for %s/%s: %v", rule.OfferNamespace, rule.OfferName, err)
+			http.Error(w, "upstream unavailable", http.StatusInternalServerError)
+			return
+		}
+		proxy.ServeHTTP(&statusRecorder{ResponseWriter: w, status: http.StatusOK}, r)
+		return
+	}
+
+	mr, ok := v.resolvePaidRoute(cfg, rule)
+	if !ok {
+		// Paid route with no resolvable payment option — fail closed, and
+		// loudly: silently 404ing here is the CAIP-2/legacy chain-form
+		// mismatch failure mode (CLAUDE.md pitfall #10).
+		log.Printf("x402-verifier: rule %q matched but no payment option resolves — fail closed", rule.Pattern)
+		http.Error(w, "route is payment-gated but has no resolvable payment option", http.StatusForbidden)
 		return
 	}
 
@@ -371,15 +426,11 @@ func (m *matchedRoute) labelsForMatched(req x402types.PaymentRequirements) prome
 	return m.labels
 }
 
-// matchPaidRouteFull matches a URI to a paid route and resolves the full set
-// of accepted payment options into x402 PaymentRequirements. Returns nil,false
-// when no rule matches or none of its options resolve to a known chain.
-func (v *Verifier) matchPaidRouteFull(cfg *PricingConfig, uri string) (*matchedRoute, bool) {
-	rule := matchRoute(cfg.Routes, uri)
-	if rule == nil {
-		return nil, false
-	}
-
+// resolvePaidRoute resolves a matched paid rule's full set of accepted
+// payment options into x402 PaymentRequirements. Returns nil,false when none
+// of the rule's options resolve to a known chain — callers fail closed on
+// that (the route is declared paid but cannot be priced).
+func (v *Verifier) resolvePaidRoute(cfg *PricingConfig, rule *RouteRule) (*matchedRoute, bool) {
 	chains := v.chains.Load()
 	opts := rule.PaymentOptions()
 	reqs := make([]x402types.PaymentRequirements, 0, len(opts))

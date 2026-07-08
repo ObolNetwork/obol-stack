@@ -753,6 +753,15 @@ Examples:
 				Name:  "path",
 				Usage: "URL path prefix (default: /services/<name>)",
 			},
+			&cli.StringSliceFlag{
+				Name: "route",
+				Usage: "Declare one route in the offer's route table (repeatable). " +
+					"Format: path=/submit[,methods=POST|GET][,gate=paid|free][,price=0.5][,summary=...]. " +
+					"Paths are relative to the offer prefix; trailing /* covers sub-paths. " +
+					"When any --route is set, only declared routes are served (undeclared paths 404) — " +
+					"add path=/*,gate=paid for a catch-all. gate=free carves the route out of the " +
+					"payment gate; price overrides the offer price for that route.",
+			},
 			&cli.IntFlag{
 				Name:  "max-timeout",
 				Usage: "Payment validity window in seconds",
@@ -940,6 +949,17 @@ Examples:
 
 			if path := cmd.String("path"); path != "" {
 				spec["path"] = path
+			}
+
+			if routeVals := cmd.StringSlice("route"); len(routeVals) > 0 {
+				routes, hasPaid, err := parseRouteFlags(routeVals)
+				if err != nil {
+					return err
+				}
+				spec["routes"] = routes
+				if !hasPaid {
+					u.Warn("Route table has no paid route — every declared path is free and undeclared paths are not served. Add a paid route (e.g. --route path=/*,gate=paid) if this offer should charge.")
+				}
 			}
 
 			if pf := cmd.String("provenance-file"); pf != "" {
@@ -4717,6 +4737,78 @@ func sellOfferStorePath(cfg *config.Config, namespace, name string) string {
 	return filepath.Join(sellOfferStoreDir(cfg), namespace+"__"+name+".yaml")
 }
 
+// parseRouteFlags converts repeatable --route values into spec.routes
+// entries. Each value is a comma-separated key=value list; a segment
+// without "=" is folded into the previous value so free-text summaries may
+// contain commas (mirrors the --accept parsing approach). hasPaid reports
+// whether at least one route charges — an all-free table is legal but
+// almost certainly a mistake, so the caller warns.
+func parseRouteFlags(vals []string) (routes []map[string]any, hasPaid bool, err error) {
+	routes = make([]map[string]any, 0, len(vals))
+	for _, val := range vals {
+		route := map[string]any{}
+		var segments []string
+		for _, seg := range strings.Split(val, ",") {
+			if !strings.Contains(seg, "=") && len(segments) > 0 {
+				segments[len(segments)-1] += "," + seg
+				continue
+			}
+			segments = append(segments, seg)
+		}
+		gate := monetizeapi.GatePaid
+		for _, seg := range segments {
+			key, v, _ := strings.Cut(seg, "=")
+			key = strings.TrimSpace(key)
+			v = strings.TrimSpace(v)
+			switch key {
+			case "path":
+				if !strings.HasPrefix(v, "/") {
+					return nil, false, fmt.Errorf("--route %q: path must start with / (got %q)", val, v)
+				}
+				route["path"] = v
+			case "methods":
+				methods := []any{}
+				for _, m := range strings.Split(v, "|") {
+					m = strings.ToUpper(strings.TrimSpace(m))
+					switch m {
+					case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
+						methods = append(methods, m)
+					default:
+						return nil, false, fmt.Errorf("--route %q: unknown method %q", val, m)
+					}
+				}
+				route["methods"] = methods
+			case "gate":
+				switch v {
+				case monetizeapi.GatePaid, monetizeapi.GateFree:
+					gate = v
+				default:
+					return nil, false, fmt.Errorf("--route %q: gate must be paid or free (got %q)", val, v)
+				}
+			case "price":
+				route["price"] = map[string]any{"perRequest": v}
+			case "summary":
+				route["summary"] = v
+			default:
+				return nil, false, fmt.Errorf("--route %q: unknown key %q (want path, methods, gate, price, summary)", val, key)
+			}
+		}
+		if route["path"] == nil {
+			return nil, false, fmt.Errorf("--route %q: path is required", val)
+		}
+		route["gate"] = gate
+		if gate == monetizeapi.GateFree {
+			if route["price"] != nil {
+				return nil, false, fmt.Errorf("--route %q: a free route cannot carry a price", val)
+			}
+		} else {
+			hasPaid = true
+		}
+		routes = append(routes, route)
+	}
+	return routes, hasPaid, nil
+}
+
 // preflightOfferPathCollision fails fast when another live ServiceOffer
 // already claims the manifest's public path. The x402 verifier's route
 // table is first-match-wins, so a colliding offer would silently shadow
@@ -4734,6 +4826,12 @@ func preflightOfferPathCollision(cfg *config.Config, manifest map[string]any) er
 	path, _ := spec["path"].(string)
 	if path == "" {
 		path = "/services/" + name
+	}
+	// Static check first — reserved platform paths are rejected even when
+	// the cluster is unreachable (the controller backstops with
+	// RoutePublished=False/ReservedPath, but failing here is friendlier).
+	if root := monetizeapi.ReservedPathConflict(path); root != "" {
+		return fmt.Errorf("path %s collides with the reserved platform path %s (discovery/routing surface) — pass --path to pick a different public path", path, root)
 	}
 	bin, kubeconfig := kubectl.Paths(cfg)
 	out, err := kubectl.Output(bin, kubeconfig, "get", "serviceoffers.obol.org", "-A", "-o", "json")

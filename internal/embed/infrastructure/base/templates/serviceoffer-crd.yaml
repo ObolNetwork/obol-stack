@@ -385,6 +385,92 @@ spec:
                       type: string
                     type: array
                 type: object
+              routes:
+                description: |-
+                  Routes declares the offer's route table: per-path gate classes (paid
+                  or free) and optional per-route price overrides, all relative to the
+                  offer's effective path. It is the single source of truth for the
+                  x402 verifier's route rules and for discovery surfaces (openapi,
+                  skill.md, services.json, buy prompts). Empty means the pre-route-table
+                  behavior: one paid catch-all covering everything under the offer path.
+                  See EffectiveRoutes.
+                items:
+                  description: |-
+                    ServiceOfferRoute is one entry in an offer's route table. Path is
+                    interpreted relative to the offer's effective path (the public prefix),
+                    so route tables survive a future move to per-offer hostnames unchanged.
+                  properties:
+                    gate:
+                      default: paid
+                      description: |-
+                        Gate class. "paid" gates the route with x402 (default); "free" passes
+                        the payment gate entirely (health checks, job status pages, per-offer
+                        discovery documents).
+                      enum:
+                      - paid
+                      - free
+                      type: string
+                    methods:
+                      description: |-
+                        HTTP methods this route serves. Discovery metadata only in phase 1 —
+                        the payment gate applies to every method on a matched path. Empty
+                        means all methods.
+                      items:
+                        enum:
+                        - GET
+                        - POST
+                        - PUT
+                        - PATCH
+                        - DELETE
+                        - HEAD
+                        - OPTIONS
+                        type: string
+                      maxItems: 9
+                      type: array
+                    path:
+                      description: |-
+                        Path relative to the offer's effective path. Must start with "/".
+                        Supports the verifier's pattern syntax: exact ("/healthz"), greedy
+                        prefix ("/v1/*"), and segment globs ("/models-*/info").
+                      maxLength: 512
+                      pattern: ^/[a-zA-Z0-9/_.*-]*$
+                      type: string
+                    price:
+                      description: |-
+                        Price override for a paid route. When set, it replaces the offer's
+                        primary payment option price for this route and the route becomes
+                        single-payment (multi-currency price overrides are not supported —
+                        secondary spec.payments[] options are not advertised on overridden
+                        routes). Empty means the offer's payment pricing applies.
+                      properties:
+                        perEpoch:
+                          description: Per-training-epoch price in USDC. Fine-tuning
+                            only.
+                          type: string
+                        perHour:
+                          description: Per-compute-hour price in USDC. Fine-tuning
+                            only.
+                          type: string
+                        perMTok:
+                          description: Per-million-tokens price in USDC. Inference
+                            only.
+                          type: string
+                        perRequest:
+                          description: Flat per-request price in USDC. Applicable
+                            to all types.
+                          type: string
+                      type: object
+                    summary:
+                      description: |-
+                        Human-readable one-line summary surfaced in discovery (openapi
+                        operation summary, skill.md route list).
+                      maxLength: 300
+                      type: string
+                  required:
+                  - path
+                  type: object
+                maxItems: 128
+                type: array
               type:
                 default: http
                 description: |-

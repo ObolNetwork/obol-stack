@@ -167,3 +167,63 @@ func TestMatchPattern_GlobSegmentBoundary(t *testing.T) {
 		t.Error("expected /a-x/b/extra NOT to match /a-*/b (no trailing wildcard)")
 	}
 }
+
+func TestStripQueryFragment(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"/rpc", "/rpc"},
+		{"/rpc?method=eth_call", "/rpc"},
+		{"/services/foo/v1?a=1&b=2", "/services/foo/v1"},
+		{"/services/foo#frag", "/services/foo"},
+		{"/services/foo?x=1#frag", "/services/foo"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := stripQueryFragment(tt.in); got != tt.want {
+			t.Errorf("stripQueryFragment(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
+// TestSortRoutesBySpecificity pins the overlap-resolution contract for
+// ServiceOffer-derived rules: an offer's exact free carve-out must sort
+// before its own paid catch-all, and a nested offer's prefix must sort
+// before an enclosing offer's prefix — matchRoute is first-match-wins, so
+// order IS the semantics.
+func TestSortRoutesBySpecificity(t *testing.T) {
+	routes := []RouteRule{
+		{Pattern: "/services/foo/*", OfferName: "foo"},
+		{Pattern: "/services/foo/bar/*", OfferName: "foo-bar"},
+		{Pattern: "/services/foo/healthz", OfferName: "foo", Gate: "free"},
+		{Pattern: "/services/foo/v1/*", OfferName: "foo"},
+	}
+	sortRoutesBySpecificity(routes)
+
+	want := []string{
+		"/services/foo/healthz", // exact first
+		"/services/foo/bar/*",   // longer literal prefix
+		"/services/foo/v1/*",
+		"/services/foo/*", // enclosing catch-all last
+	}
+	for i, w := range want {
+		if routes[i].Pattern != w {
+			t.Fatalf("routes[%d].Pattern = %q, want %q (full order: %+v)", i, routes[i].Pattern, w, patterns(routes))
+		}
+	}
+
+	// The exact carve-out must actually win the match.
+	if r := matchRoute(routes, "/services/foo/healthz"); r == nil || !r.IsFree() {
+		t.Fatalf("matchRoute(/services/foo/healthz) = %+v, want the free exact rule", r)
+	}
+	// Nested offer's traffic must not be captured by the enclosing offer.
+	if r := matchRoute(routes, "/services/foo/bar/x"); r == nil || r.OfferName != "foo-bar" {
+		t.Fatalf("matchRoute(/services/foo/bar/x) matched %+v, want offer foo-bar", r)
+	}
+}
+
+func patterns(routes []RouteRule) []string {
+	out := make([]string, len(routes))
+	for i := range routes {
+		out[i] = routes[i].Pattern
+	}
+	return out
+}

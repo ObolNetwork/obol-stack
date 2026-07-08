@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"log"
-	"sort"
 	"strings"
 	"time"
 
@@ -115,24 +114,90 @@ func routesFromStore(offerItems, secretItems []any) ([]RouteRule, error) {
 		if offer.IsAgent() {
 			upstreamAuth = hermesAuthByNamespace[offer.Spec.Agent.Ref.Namespace]
 		}
-		rule, err := routeRuleFromOffer(&offer, upstreamAuth)
+		rules, err := routeRulesFromOffer(&offer, upstreamAuth)
 		if err != nil {
 			return nil, err
 		}
-		routes = append(routes, rule)
+		routes = append(routes, rules...)
 	}
 
-	sort.Slice(routes, func(i, j int) bool {
-		if routes[i].OfferNamespace != routes[j].OfferNamespace {
-			return routes[i].OfferNamespace < routes[j].OfferNamespace
-		}
-		if routes[i].OfferName != routes[j].OfferName {
-			return routes[i].OfferName < routes[j].OfferName
-		}
-		return routes[i].Pattern < routes[j].Pattern
-	})
+	// Most-specific-first so matchRoute's first-match-wins resolves
+	// overlaps correctly: an offer's free /healthz beats its own paid
+	// catch-all, and a nested offer's prefix beats an enclosing one.
+	sortRoutesBySpecificity(routes)
 
 	return routes, nil
+}
+
+// RouteRulesForOffer exposes the ServiceOffer→RouteRule rendering for
+// cross-package consistency tests: the discovery surfaces
+// (openapi/skill.md/services.json in internal/serviceoffercontroller) must
+// enumerate exactly the routes this package gates, at the same prices.
+// Not used on any production path outside this package.
+func RouteRulesForOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) ([]RouteRule, error) {
+	return routeRulesFromOffer(offer, upstreamAuth)
+}
+
+// routeRulesFromOffer renders one RouteRule per entry in the offer's route
+// table (spec.routes, or the synthesized paid catch-all for offers without
+// one). Every rule shares the offer's upstream wiring; per-route variation
+// is the pattern, the gate class, an optional price override, and the
+// discovery summary.
+func routeRulesFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) ([]RouteRule, error) {
+	base, err := routeRuleFromOffer(offer, upstreamAuth)
+	if err != nil {
+		return nil, err
+	}
+
+	specRoutes := offer.EffectiveRoutes()
+	rules := make([]RouteRule, 0, len(specRoutes))
+	for _, rt := range specRoutes {
+		rule := base
+		rule.Pattern = joinRoutePattern(offer.EffectivePath(), rt.Path)
+		rule.Gate = rt.EffectiveGate()
+		if rt.Summary != "" {
+			rule.Description = rt.Summary
+		}
+
+		switch {
+		case rule.IsFree():
+			// Free carve-out: no payment surface at all. Upstream wiring
+			// (UpstreamURL/StripPrefix/UpstreamAuth) stays so HandleProxy
+			// can serve it.
+			rule.Price = "0"
+			rule.Payments = nil
+		case rt.HasPriceOverride():
+			// Per-route price replaces the primary payment option's price
+			// and the route becomes single-payment (documented CRD
+			// semantics: multi-currency overrides are unsupported).
+			p := offer.EffectivePayments()[0]
+			p.Price = rt.Price
+			rp, err := routePaymentFromSpec(p)
+			if err != nil {
+				return nil, fmt.Errorf("route %s price override: %w", rt.Path, err)
+			}
+			rule.Price = rp.Price
+			rule.PriceModel = rp.PriceModel
+			rule.PerMTok = rp.PerMTok
+			rule.ApproxTokensPerRequest = rp.ApproxTokensPerRequest
+			rule.Payments = []RoutePayment{rp}
+		}
+
+		rules = append(rules, rule)
+	}
+
+	return rules, nil
+}
+
+// joinRoutePattern anchors a route-table path (relative to the offer's
+// public prefix) into a verifier match pattern. "/" means the offer root
+// itself (exact).
+func joinRoutePattern(offerPath, routePath string) string {
+	base := strings.TrimSuffix(offerPath, "/")
+	if routePath == "" || routePath == "/" {
+		return base
+	}
+	return base + routePath
 }
 
 func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (RouteRule, error) {
