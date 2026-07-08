@@ -1,0 +1,112 @@
+# goreleaser configuration for the obol CLI.
+#
+# Invariants that MUST hold (obolup.sh depends on them):
+#   - Release assets are raw binaries named obol_<os>_<arch>
+#     (obolup.sh download_release fetches them by that exact name).
+#   - The checksum file is named SHA256SUMS in `sha256sum` format
+#     ("<hash>  <filename>") — obolup.sh verify_release_checksum parses it.
+#   - CGO stays disabled: release binaries use the Secure-Enclave stub on
+#     darwin, same as the previous inline CI build.
+#
+# Publishing shape:
+#   - GitHub release: draft, GitHub-native generated notes. Rewrite the
+#     narrative body from .github/release-template.md before publishing,
+#     keeping the generated sections at the bottom.
+#   - deb/rpm packages attached to the release (no apt repo yet).
+#   - Homebrew formula pushed to ObolNetwork/homebrew-tap on stable
+#     releases only (skip_upload: auto skips prereleases). The release
+#     workflow passes --skip=homebrew when the tap token secret is absent.
+version: 2
+
+project_name: obol
+
+builds:
+  - id: obol
+    main: ./cmd/obol
+    binary: obol
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -X github.com/ObolNetwork/obol-stack/internal/version.Version={{ .Version }}
+      - -X github.com/ObolNetwork/obol-stack/internal/version.GitCommit={{ .ShortCommit }}
+      - -X github.com/ObolNetwork/obol-stack/internal/version.BuildTime={{ .Now.Format "20060102150405" }}
+      - -X github.com/ObolNetwork/obol-stack/internal/version.GitDirty=false
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  # Raw binaries, not tarballs — obolup.sh downloads these by name.
+  - id: binaries
+    formats: [binary]
+    name_template: "obol_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+nfpms:
+  - id: packages
+    package_name: obol
+    file_name_template: "obol_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    vendor: Obol
+    homepage: https://obol.org/stack
+    maintainer: Obol <platform@obol.tech>
+    description: |-
+      Obol Stack CLI — run an AI agent business from your own machine.
+      Sell inference, agents, and HTTP services via x402 micropayments;
+      buy from other sellers; run local blockchain infrastructure.
+    license: Apache-2.0
+    section: utils
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+
+# Homebrew cask (goreleaser deprecated formula-style `brews` in favor of
+# casks; casks are macOS-only — Linux brew users use the deb/rpm or the
+# install script instead).
+homebrew_casks:
+  - name: obol
+    repository:
+      owner: ObolNetwork
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: https://obol.org/stack
+    description: "Run an AI agent business from your own machine — sell and buy services via x402 micropayments"
+    # auto = publish the cask for stable tags only; rc/pre-release tags
+    # never move what `brew install` resolves to.
+    skip_upload: auto
+    commit_author:
+      name: obol-release-bot
+      email: platform@obol.tech
+    commit_msg_template: "chore: bump {{ .ProjectName }} to {{ .Tag }}"
+    caveats: |-
+      The obol CLI manages its own Kubernetes toolchain. To finish setup:
+        obol stack init
+        obol stack up
+      Docker must be installed and running.
+    # Release binaries are not signed/notarized; strip the Gatekeeper
+    # quarantine bit on install (the goreleaser-documented pattern for
+    # unsigned cask binaries).
+    hooks:
+      post:
+        install: |
+          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", staged_path]
+          end
+
+changelog:
+  # Same "What's Changed" body the previous softprops release step
+  # generated — the release-template rewrite flow is unchanged.
+  use: github-native
+
+release:
+  draft: true
+  prerelease: auto
+  name_template: "Release {{ .Tag }}"

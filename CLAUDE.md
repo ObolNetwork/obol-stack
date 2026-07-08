@@ -118,7 +118,7 @@ Payment-gated access to cluster services via x402 (HTTP 402 micropayments, Traef
 
 **Sell flow**: `obol sell http` -> ServiceOffer CR -> controller reconciles: ModelReady -> UpstreamHealthy -> PaymentGateReady (x402 Middleware) -> RoutePublished (HTTPRoute) -> Registered (RegistrationRequest + optional ERC-8004) -> Ready. Traefik routes `/services/<name>/*` through ForwardAuth to upstream.
 
-**Buy flow**: `buy.py probe` sees 402 pricing -> `buy.py buy` validates on-chain token contract -> pre-signs payment auths (ERC-3009 for USDC, Permit2 for OBOL) into `PurchaseRequest` CR in agent ns -> serviceoffer-controller writes buyer config/auth into `llm` ns, publishes `paid/<remote-model>` -> in-pod `x402-buyer` sidecar spends one auth per paid request. Agent-managed refill: `buy.py process --all`, NOT the controller.
+**Buy flow**: `buy.py probe` sees 402 pricing -> `buy.py buy` validates on-chain token contract -> pre-signs payment auths (ERC-3009 for USDC, Permit2 for OBOL) into `PurchaseRequest` CR in agent ns -> serviceoffer-controller writes buyer config/auth into `llm` ns, publishes `paid/<remote-model>` -> the `x402-buyer` Deployment spends one auth per paid request. Agent-managed refill: `buy.py process --all`, NOT the controller.
 
 **buy.py** at `${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py` (skill: `buy-x402`, not `buy`):
 ```
@@ -157,7 +157,9 @@ Port-forward to `x402-verifier` and calling `/verify` directly: MUST set `X-Forw
 
 **PurchaseRequest status caveat**: `PurchaseRequest.status` (`conditions[].message`, `remaining`, `spent`) is controller's last reconciled snapshot, NOT live per-request counter. For real-time auth pool + refill decisions, always query `x402-buyer` `GET /status` in litellm pod.
 
-**CLI**: `obol sell pricing --pay-to --chain`, `obol sell inference <name> --model --pay-to --price|--per-mtok [--token USDC|OBOL]`, `obol sell http <name> --pay-to --chain --price|--per-request|--per-mtok --upstream --port --namespace --health-path [--token USDC|OBOL]`, `obol sell list|status|stop|delete`, `obol sell register --chain [--name]`.
+**CLI**: `obol sell pricing --pay-to --chain`, `obol sell inference <name> --model --pay-to --price|--per-mtok [--token USDC|OBOL]`, `obol sell http <name> --pay-to --chain --price|--per-request|--per-mtok --upstream --port --namespace --health-path [--token USDC|OBOL]`, `obol sell list|status|stop|delete`, `obol sell register --chain [--name]`, `obol sell register x402scan [--origin]`.
+
+**x402scan registration** (`obol sell register x402scan`, `internal/x402scan/`): submits the storefront origin to the x402scan.com discovery index via `POST /api/x402/registry/register-origin`. Auth is SIWX (EIP-4361/SIWE challenge in the 402 body, signed EIP-191 by the agent's remote-signer via `POST /api/v1/sign/{addr}/message`, retried with the payload base64-encoded in the `SIGN-IN-WITH-X` header). x402scan crawls the origin's `/openapi.json` (already published with `x-payment-info` per paid op) and live-probes each endpoint for a real 402. Rejects `obol.stack`/localhost and `*.trycloudflare.com` quick-tunnels locally — needs a permanent tunnel hostname. Idempotent; stale offers are deprecated server-side.
 
 **`obol sell http` flag reference** (common mistakes: `--model`, `--network` do NOT exist; `--wallet` is a deprecated alias for `--pay-to`):
 ```
@@ -171,6 +173,29 @@ Port-forward to `x402-verifier` and calling `/verify` directly: MUST set `X-Forw
                                1. ServiceOffer CR namespace
                                2. upstream k8s service namespace
 --health-path /api/tags      Upstream health check path            [default: /health]
+--hostname    audit.acme.io  Dedicated public origin: offer routes rooted at "/" on that
+                             hostname (rewritten into /services/<name> before the gate),
+                             plus per-offer /openapi.json + /.well-known/x402 + landing page.
+                             One offer per origin (HostnameConflict). Storefront catch-all
+                             skips offer-bound hostnames. Bind later via
+                             `obol tunnel hostname add <host> --offer <ns>/<name>`.
+--async                      Broker-mediated delivery: paid call settles at acceptance → 202
+                             {jobId, statusUrl, jobToken}; broker (job-broker deploy, x402 ns,
+                             SQLite on PVC) replays upstream with no deadline. Free /jobs/<id>
+                             status (dual HTML/JSON); result gated to paying wallet (SIWX) or
+                             jobToken (--result-visibility public → id is the capability).
+                             --job-ttl (default 72h) → 410 after. No refunds (settle-at-accept).
+--max-in-flight/--rps        Traefik inFlightReq/rateLimit middleware on the offer routes.
+--route       path=/x,...    Repeatable route-table entry: path=/submit[,methods=POST|GET]
+                             [,gate=paid|free|auth][,price=0.5][,summary=...]. Declaring ANY
+                             route makes the table exhaustive (undeclared paths 404) — add
+                             path=/*,gate=paid for a catch-all. gate=free skips payment;
+                             gate=auth requires SIWX wallet sign-in (EIP-4361; verifier serves
+                             <offer>/auth + /auth/verify; upstream gets X-Verified-Wallet,
+                             paid routes get X-Payment-Payer — client-supplied copies are
+                             stripped). Reserved paths (/api, /openapi.json, /skill.md, /rpc,
+                             /.well-known, bare /services, /) are rejected.
+                             Full guide: docs/guides/route-gating-and-auth.md
 ```
 **Critical**: `--namespace` sets BOTH the ServiceOffer namespace and the upstream service namespace to the same value. Always pass the same `-n <namespace>` to every follow-up command (`sell status`, `sell stop`, `sell delete`). The CLI itself prints the correct namespace after creation.
 
@@ -273,14 +298,14 @@ Caveats:
 |---------|---------------------------|
 | Traefik ingress (frontend, eRPC, x402 routes) | `http://obol.stack:8080/...` |
 | LiteLLM (`llm` ns, port 4000) | `kubectl port-forward svc/litellm 14000:4000 -n llm` → `http://127.0.0.1:14000` |
-| x402-buyer sidecar (port 8402, no Service — pod only) | `kubectl port-forward -n llm <litellm-pod> 18402:8402` → `http://127.0.0.1:18402` |
+| x402-buyer (own Deployment + Service, port 8402) | `kubectl port-forward -n llm svc/x402-buyer 18402:8402` → `http://127.0.0.1:18402` |
 | OpenClaw instance | `kubectl port-forward -n openclaw-<id> svc/openclaw 18789:18789` |
 
 **Never call `http://obol.stack:8080/v1/...`** — Traefik has no `/v1` route, returns frontend 404.
 
-**x402-buyer sidecar is distroless** — no `wget`, `curl`, or shell. Use port-forward, not `kubectl exec`.
+**x402-buyer is distroless** — no `wget`, `curl`, or shell. Use port-forward (`svc/x402-buyer`), not `kubectl exec`.
 
-**LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy → Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). Auto-configured with Ollama models during `obol stack up` (no manual `obol model setup`). `ConfigureLiteLLM()` patches config + Secret + restarts or hot-adds via LiteLLM model API. Paid remote inference: Obol LiteLLM fork + `x402-buyer` sidecar, with static `paid/*` → `openai/*` → `http://127.0.0.1:8402` route (wildcard catch-all, requires >=1 concrete `paid/<model>` entry to be useful). Hermes uses provider `"custom"` pointed at `http://litellm.llm.svc.cluster.local:4000/v1`; optional OpenClaw instances reuse the `"openai"` provider slot (ollama slot disabled). Agent configs use `dangerouslyDisableDeviceAuth` for Traefik-proxied access.
+**LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy → Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). Auto-configured with Ollama models during `obol stack up` (no manual `obol model setup`). `ConfigureLiteLLM()` patches config + Secret + restarts or hot-adds via LiteLLM model API. Paid remote inference: Obol LiteLLM fork + standalone `x402-buyer` Deployment, with static `paid/*` → `openai/*` → `http://x402-buyer.llm.svc.cluster.local:8402/v1` route (wildcard catch-all, requires >=1 concrete `paid/<model>` entry to be useful). Hermes uses provider `"custom"` pointed at `http://litellm.llm.svc.cluster.local:4000/v1`; optional OpenClaw instances reuse the `"openai"` provider slot (ollama slot disabled). Agent configs use `dangerouslyDisableDeviceAuth` for Traefik-proxied access.
 
 **Auto-configuration**: `obol stack up` → `autoConfigureLLM()` detects host Ollama models, patches LiteLLM config. `obolup.sh` → `check_agent_model_api_key()` reads `~/.openclaw/openclaw.json`, resolves API key from `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` (Anthropic) or `OPENAI_API_KEY` (OpenAI), exports for downstream.
 
@@ -363,9 +388,9 @@ Key code: `internal/inference/{gateway,container,store}.go`, `internal/enclave/{
 
 **Remote-signer wallet**: `GenerateWallet()` in `internal/openclaw/wallet.go`. secp256k1 → Web3 V3 keystore → remote-signer REST API at port 9000 in same ns.
 
-## Buyer Sidecar
+## Buyer (x402-buyer)
 
-`x402-buyer` — lean Go sidecar for buy-side x402 payments using pre-signed ERC-3009 authorizations. Second container in `litellm` Deployment (no separate Service). Agent `buy.py` signs auths locally → `PurchaseRequest`; controller writes per-upstream buyer config/auth files into buyer ConfigMaps, keeps LiteLLM routes in sync. Endpoints: `/status`, `/healthz`, `/metrics`, `/admin/reload`; metrics scraped via `PodMonitor`. Zero signer access, bounded spending (max loss = N × price).
+`x402-buyer` — lean Go service for buy-side x402 payments using pre-signed ERC-3009 authorizations. Standalone Deployment + ClusterIP Service `x402-buyer.llm.svc:8402` (was a litellm sidecar; split out so LiteLLM stays stateless and rolls with `maxUnavailable: 0` — issue #321). Agent `buy.py` signs auths locally → `PurchaseRequest`; controller writes per-upstream buyer config/auth files into buyer ConfigMaps, keeps LiteLLM routes in sync. Endpoints: `/status`, `/healthz`, `/metrics`, `/admin/reload`; metrics scraped via `PodMonitor`. Zero signer access, bounded spending (max loss = N × price).
 
 Settlement lifecycle (cluster-routed paid flow):
 - Traefik/x402-verifier stays on the verify-only path (`verifyOnly: true`).
@@ -414,8 +439,8 @@ A registry digest pin instead of `:latest` on the verifier means your dev rewrit
 3. **ConfigMap propagation** — ~60-120s for k3d file watcher; force restart for immediate effect
 4. **ExternalName services** — do not work with Traefik Gateway API; use ClusterIP + Endpoints
 5. **eRPC `eth_call` cache** — default TTL is 10s for unfinalized reads; `buy.py balance` can lag behind an already-settled paid request for a few seconds
-6. **`/v1` required in `api_base` for `paid/*` route** — LiteLLM's OpenAI provider does NOT append `/v1` to a bare `api_base`. The buyer sidecar route must be `http://127.0.0.1:8402/v1`, not `http://127.0.0.1:8402`. Without `/v1`, LiteLLM calls `/chat/completions` on the buyer; the buyer's mux returns `404 page not found` (Go default), which LiteLLM surfaces as `OpenAIException - 404 page not found`.
-7. **LiteLLM restart is fallback, not the default buy path** — the validated happy path is `buy.py buy`/`process --all`/same-name top-up without a manual LiteLLM restart. Controller hot-add/hot-delete + buyer reload is expected to make `paid/<model>` appear and disappear in place. If a paid alias still fails after controller reconciliation and buyer sidecar reports the upstream, restart LiteLLM as a fallback investigation step. Since rc14, Reloader auto-restarts LiteLLM on `litellm-config` changes (e.g. a buy that adds a NEW provider); buyer CM writes (top-ups/refills) hot-reload via `/admin/reload` with no restart — do not add the buyer CMs to the Reloader annotation.
+6. **`/v1` required in `api_base` for `paid/*` route** — LiteLLM's OpenAI provider does NOT append `/v1` to a bare `api_base`. The buyer route must be `http://x402-buyer.llm.svc.cluster.local:8402/v1`, not `...:8402`. Without `/v1`, LiteLLM calls `/chat/completions` on the buyer; the buyer's mux returns `404 page not found` (Go default), which LiteLLM surfaces as `OpenAIException - 404 page not found`.
+7. **LiteLLM restart is fallback, not the default buy path** — the validated happy path is `buy.py buy`/`process --all`/same-name top-up without a manual LiteLLM restart. Controller hot-add/hot-delete + buyer reload is expected to make `paid/<model>` appear and disappear in place. If a paid alias still fails after controller reconciliation and buyer sidecar reports the upstream, restart LiteLLM as a fallback investigation step. Reloader watches ONLY `litellm-secrets` (key rotation needs a pod replacement; it rolls gaplessly via RollingUpdate maxUnavailable:0). It must NOT watch `litellm-config` — model_list changes are hot-applied via /model/new//model/delete and a CM-triggered rollout would gap inference (issue #321); `obol model status` surfaces CM-vs-router drift if a hot call silently failed. Buyer CM writes (top-ups/refills) hot-reload via `/admin/reload` with no restart — do not add the buyer CMs to any Reloader annotation.
 8. **x402-verifier CA bundle missing → TLS failure** — The `x402-verifier` image is distroless (no CA store). The `ca-certificates` ConfigMap in `x402` namespace must be populated from the host CA bundle or the verifier cannot TLS-verify calls to the facilitator (`https://x402.gcp.obol.tech`), causing `x509: certificate signed by unknown authority` on every payment. **Fixed**: `obol stack up` calls `x402verifier.PopulateCABundle` after infrastructure deployment; `obol sell http` calls it before creating the ServiceOffer. If `Payment verification failed` errors still occur, check verifier logs for the x509 error and repopulate manually: `kubectl create configmap ca-certificates -n x402 --from-file=ca-certificates.crt=/etc/ssl/cert.pem --dry-run=client -o yaml | kubectl replace -f -`
 9. **`EnsureVerifier` overwrites helmfile's image pin under `OBOL_DEVELOPMENT=true`** — `internal/x402/setup.go` reads embedded `x402.yaml` (hard-coded image pin) and `kubectl apply`s it. Without an in-memory rewrite this overwrites the helmfile-managed `:latest` deployment with the embedded pin → every source change to the verifier silently bypassed. Fix shipped in `5a10fb8` (rewrites pins in-memory before apply); structural regression test: `internal/x402/setup_structure_test.go` (`TestEnsureVerifier_NoInlineRegex`). **If you add a new component installed via `kubectl apply` of an embedded manifest**, give it the same dev-rewrite treatment.
 10. **CAIP-2 vs legacy chain id form mismatch** — `RouteRule.Network` is normalized to CAIP-2 (`eip155:84532`) at one boundary, but `internal/x402/chains.go::ResolveChainInfo` must know both that form and the legacy alias (`base-sepolia`). If only one is registered, `matchPaidRouteFull` returns 404 silently on every paid request. When adding a new chain, register both the legacy alias and `CAIP2Network` in every `case` arm.
@@ -472,7 +497,7 @@ The Cloudflare tunnel exposes the cluster to the public internet. Only x402-gate
 | `internal/enclave` | `enclave.go`, `enclave_darwin.go`, `enclave_stub.go` | Secure Enclave keys |
 | `internal/embed` | `embed.go` | Embedded assets (skills, infrastructure, networks) |
 
-**Embedded assets**: `internal/embed/infrastructure/` (K8s templates), `internal/embed/networks/` (ethereum, aztec), `internal/embed/skills/` (21 skills).
+**Embedded assets**: `internal/embed/infrastructure/` (K8s templates), `internal/embed/networks/` (ethereum, aztec), `internal/embed/skills/` (23 skills).
 
 **Tests**: `cmd/obol/sell_test.go` (CLI flags), `internal/x402/*_test.go` (verifier, config, matcher, E2E), `internal/erc8004/*_test.go` (ABI, client), `internal/embed/embed_crd_test.go` (CRD+RBAC validation), `internal/openclaw/integration_test.go` (full-cluster inference), `internal/openclaw/overlay_test.go`, `internal/inference/gateway_test.go`, `internal/serviceoffercontroller/*_test.go` (controller, render).
 

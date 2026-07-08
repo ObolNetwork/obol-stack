@@ -18,10 +18,12 @@ import (
 
 // InstallOptions contains options for the install command
 type InstallOptions struct {
-	Name    string // Optional app name override
-	Version string // Chart version (empty = latest for repo/chart, extracted for URL)
-	ID      string // Deployment ID (empty = generate petname)
-	Force   bool   // Overwrite existing deployment
+	Name        string   // Optional app name override
+	Version     string   // Chart version (empty = latest for repo/chart, extracted for URL)
+	ID          string   // Deployment ID (empty = generate petname)
+	Force       bool     // Overwrite existing deployment
+	ValuesFiles []string // Values files merged onto chart defaults (in order)
+	Set         []string // key.path=value overrides applied after values files
 }
 
 // ListOptions contains options for the list command
@@ -117,13 +119,20 @@ func Install(cfg *config.Config, u *ui.UI, chartRef string, opts InstallOptions)
 		return fmt.Errorf("failed to write values.yaml: %w", err)
 	}
 
-	// 9. Generate helmfile.yaml (references chart remotely)
+	// 9. Merge user overrides (--values files, then --set) into values.yaml
+	// so the deployment directory records exactly what will deploy.
+	if err := applyOverridesToFile(valuesPath, opts.ValuesFiles, opts.Set); err != nil {
+		os.RemoveAll(deploymentDir)
+		return fmt.Errorf("failed to apply value overrides: %w", err)
+	}
+
+	// 10. Generate helmfile.yaml (references chart remotely)
 	if err := generateRemoteHelmfile(deploymentDir, chart, appName, id); err != nil {
 		os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to generate helmfile: %w", err)
 	}
 
-	// 10. Print success message
+	// 11. Print success message
 	u.Blank()
 	u.Successf("Application installed successfully!")
 	u.Detail("Deployment", fmt.Sprintf("%s/%s", appName, id))

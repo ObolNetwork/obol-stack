@@ -466,6 +466,10 @@ func PatchLiteLLMEntries(cfg *config.Config, u *ui.UI, entries []ModelEntry) err
 }
 
 // RestartLiteLLM restarts the LiteLLM deployment and waits for rollout.
+// A rollout that does not converge within the timeout is an error — callers
+// must not report success while LiteLLM may be down or serving stale config
+// (issue #321: the old warn-and-succeed behavior silently left LiteLLM
+// broken after failed rollouts).
 func RestartLiteLLM(cfg *config.Config, u *ui.UI, provider string) error {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
@@ -480,12 +484,10 @@ func RestartLiteLLM(cfg *config.Config, u *ui.UI, provider string) error {
 	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
 		"rollout", "status", "deployment/"+deployName, "-n", namespace,
 		"--timeout=90s"); err != nil {
-		u.Warnf("LiteLLM rollout not confirmed: %v", err)
-		u.Print("The deployment may still be rolling out.")
-	} else {
-		u.Successf("LiteLLM configured with %s provider", provider)
+		return fmt.Errorf("LiteLLM rollout not confirmed within 90s: %w (check `obol kubectl get pods -n %s`)", err, namespace)
 	}
 
+	u.Successf("LiteLLM configured with %s provider", provider)
 	return nil
 }
 
@@ -838,10 +840,10 @@ func reorderModelList(entries []ModelEntry, names []string) ([]ModelEntry, bool,
 // Returns an error if any of the requested names is not present in the
 // current model_list — typos should be loud, not silent no-ops.
 //
-// LiteLLM has no model_list reorder API, so after the ConfigMap patch this
-// rolls the LiteLLM Deployment so the new order takes effect (the
-// /v1/models listing follows model_list order, and hermes/openclaw read
-// the ConfigMap directly via GetConfiguredModels for the agent primary).
+// ConfigMap-only operation: hermes/openclaw read the agent primary from the
+// ConfigMap via GetConfiguredModels, and LiteLLM's router does not use
+// model_list order for routing, so no pod restart is needed. The live
+// /v1/models listing keeps the old order until the next natural restart.
 func PreferModels(cfg *config.Config, u *ui.UI, names []string) error {
 	if len(names) == 0 {
 		return errors.New("at least one model name is required")
@@ -892,15 +894,12 @@ func PreferModels(cfg *config.Config, u *ui.UI, names []string) error {
 		return fmt.Errorf("failed to patch ConfigMap: %w", err)
 	}
 
-	// LiteLLM has no reorder API; restart the deployment so the new order
-	// takes effect (mostly cosmetic for /v1/models listings — agent primary
-	// is read from the ConfigMap directly via GetConfiguredModels, which is
-	// already correct after the patch above).
-	if err := RestartLiteLLM(cfg, u, "prefer"); err != nil {
-		u.Warnf("LiteLLM rollout failed: %v", err)
-		u.Dim("  The ConfigMap is updated; agent will pick up the new primary on next sync.")
-	}
-
+	// No LiteLLM restart: model_list order is an obol convention, not a
+	// LiteLLM routing input. The agent primary is read from the ConfigMap
+	// directly via GetConfiguredModels, which is already correct after the
+	// patch above. The live router's /v1/models listing keeps the old order
+	// until the next natural pod replacement — cosmetic only, and not worth
+	// an inference gap (issue #321).
 	return nil
 }
 

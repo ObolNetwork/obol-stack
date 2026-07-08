@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/agentcrd"
+	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
@@ -53,7 +54,8 @@ Commands split into two scopes:
   The storefront (the whole shop)
     info        Preview the storefront and everything on sale, as buyers see it
     info set    Set the storefront's branding (name, tagline, logo)
-    register    Publish the seller's identity to a distribution channel (ERC-8004)
+    register    Publish the seller to a distribution channel (ERC-8004 on-chain,
+                'register x402scan' for the x402scan discovery index)
     identity    Manage the durable on-chain identity record
     list        List every offer (raw)
     resume      Re-publish all offers (e.g. after a restart)
@@ -239,6 +241,7 @@ Examples:
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
+			warnOnClockSkew(ctx, u, cmd.String("facilitator"))
 			name := cmd.Args().First()
 			if name == "" {
 				if u.IsTTY() {
@@ -751,10 +754,52 @@ Examples:
 				Name:  "path",
 				Usage: "URL path prefix (default: /services/<name>)",
 			},
+			&cli.StringFlag{
+				Name: "hostname",
+				Usage: "Dedicated public origin for this offer (e.g. audit.example.com). The offer's " +
+					"routes answer at the hostname root with their own discovery bundle (/openapi.json, " +
+					"/.well-known/x402, landing page) so per-origin crawlers (x402scan, agentcash) list " +
+					"it as its own product. The /services/<name> path stays as an alias. Route the DNS " +
+					"via 'obol tunnel hostname add <host> --offer <ns>/<name>'.",
+			},
+			&cli.StringSliceFlag{
+				Name: "route",
+				Usage: "Declare one route in the offer's route table (repeatable). " +
+					"Format: path=/submit[,methods=POST|GET][,gate=paid|free|auth][,price=0.5][,summary=...]. " +
+					"Paths are relative to the offer prefix; trailing /* covers sub-paths. " +
+					"When any --route is set, only declared routes are served (undeclared paths 404) — " +
+					"add path=/*,gate=paid for a catch-all. gate=free carves the route out of the " +
+					"payment gate; gate=auth requires a SIWX wallet sign-in instead of payment; " +
+					"price overrides the offer price for that route.",
+			},
 			&cli.IntFlag{
 				Name:  "max-timeout",
 				Usage: "Payment validity window in seconds",
 				Value: 300,
+			},
+			&cli.BoolFlag{
+				Name: "async",
+				Usage: "Deliver paid requests as accepted jobs: payment settles at acceptance, the request " +
+					"replays upstream with no client-facing deadline (survives tunnel timeouts), and the buyer " +
+					"gets 202 + a free status page at <offer>/jobs/<id>. Results are gated to the paying " +
+					"wallet (SIWX) or the jobToken from the 202 body. NOTE: no refunds — a failed run was " +
+					"still paid for; set a contact via 'obol sell info set --contact-email'.",
+			},
+			&cli.StringFlag{
+				Name:  "result-visibility",
+				Usage: "Async result access: 'payer' (paying wallet or jobToken; default) or 'public' (the unguessable job id is the capability)",
+			},
+			&cli.StringFlag{
+				Name:  "job-ttl",
+				Usage: "Async job + result retention (Go duration, e.g. 72h); status pages return 410 afterwards",
+			},
+			&cli.IntFlag{
+				Name:  "max-in-flight",
+				Usage: "Cap concurrent in-flight requests to this offer (Traefik inFlightReq); 0 = uncapped",
+			},
+			&cli.IntFlag{
+				Name:  "rps",
+				Usage: "Cap average requests/second to this offer (Traefik rateLimit, burst 2x); 0 = uncapped",
 			},
 			// Registration flags
 			&cli.BoolFlag{
@@ -801,6 +846,7 @@ Examples:
 		}, acceptFlags()...),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
+			warnOnClockSkew(ctx, u, "")
 
 			// --from-json: read spec from file/stdin and apply directly.
 			if jsonPath := cmd.String("from-json"); jsonPath != "" {
@@ -937,6 +983,49 @@ Examples:
 
 			if path := cmd.String("path"); path != "" {
 				spec["path"] = path
+			}
+
+			if hostname := strings.ToLower(strings.TrimSpace(cmd.String("hostname"))); hostname != "" {
+				spec["hostname"] = hostname
+			}
+
+			if cmd.Bool("async") || cmd.String("result-visibility") != "" || cmd.String("job-ttl") != "" {
+				asyncBlock := map[string]any{"enabled": true}
+				if vis := cmd.String("result-visibility"); vis != "" {
+					if vis != monetizeapi.ResultVisibilityPayer && vis != monetizeapi.ResultVisibilityPublic {
+						return fmt.Errorf("--result-visibility must be payer or public (got %q)", vis)
+					}
+					asyncBlock["resultVisibility"] = vis
+				}
+				if ttl := cmd.String("job-ttl"); ttl != "" {
+					if _, err := time.ParseDuration(ttl); err != nil {
+						return fmt.Errorf("--job-ttl: %w", err)
+					}
+					asyncBlock["ttl"] = ttl
+				}
+				spec["async"] = asyncBlock
+			}
+
+			if cmd.Int("max-in-flight") > 0 || cmd.Int("rps") > 0 {
+				limits := map[string]any{}
+				if v := cmd.Int("max-in-flight"); v > 0 {
+					limits["maxInFlight"] = v
+				}
+				if v := cmd.Int("rps"); v > 0 {
+					limits["rps"] = v
+				}
+				spec["limits"] = limits
+			}
+
+			if routeVals := cmd.StringSlice("route"); len(routeVals) > 0 {
+				routes, hasPaid, err := parseRouteFlags(routeVals)
+				if err != nil {
+					return err
+				}
+				spec["routes"] = routes
+				if !hasPaid {
+					u.Warn("Route table has no paid route — every declared path is free and undeclared paths are not served. Add a paid route (e.g. --route path=/*,gate=paid) if this offer should charge.")
+				}
 			}
 
 			if pf := cmd.String("provenance-file"); pf != "" {
@@ -1434,6 +1523,11 @@ func serviceOfferStatusLines(namespace, name string, offer monetizeapi.ServiceOf
 	for _, cond := range offer.Status.Conditions {
 		lines = append(lines, formatConditionLine(cond))
 	}
+	if len(offer.Status.Conditions) > 0 {
+		lines = append(lines, "",
+			"Note: conditions are the controller's last reconciled snapshot — they update on",
+			"state changes, not per paid request. The chain is the canonical revenue record.")
+	}
 	return lines
 }
 
@@ -1538,7 +1632,27 @@ func formatConditionLine(cond monetizeapi.Condition) string {
 	if cond.Message != "" {
 		header = header + " — " + cond.Message
 	}
+	if !cond.LastTransitionTime.IsZero() {
+		header = header + fmt.Sprintf(" (changed %s)", humanAge(cond.LastTransitionTime.Time))
+	}
 	return fmt.Sprintf("  %s %s", icon, header)
+}
+
+// humanAge renders how long ago t was in the coarsest useful unit. Used
+// on condition lines so sellers can tell a fresh reconcile from a status
+// the controller last touched hours ago.
+func humanAge(t time.Time) string {
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
 
 // conditionIcon picks a glyph based on the condition's status + reason. The
@@ -3080,11 +3194,11 @@ Reloads the payment verifier when configuration is changed.`,
 func sellRegisterCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "register",
-		Usage: "Publish the seller's identity to a distribution channel (ERC-8004)",
+		Usage: "Publish the seller's identity to a distribution channel (ERC-8004, x402scan)",
 		Description: `Publishes the seller's agent identity to a distribution channel so buyers can
-discover it. Today the only channel is the ERC-8004 Agent Registry (on-chain);
-more channels may follow, so this command is framed around "where do I
-advertise" rather than a single registry.
+discover it. The default (no subcommand) registers on the ERC-8004 Agent
+Registry (on-chain); 'register x402scan' submits the storefront origin to the
+x402scan.com discovery index instead.
 
 Registers an AgentIdentity on the ERC-8004 Agent Registry for one chain.
 The on-chain register tx is signed and broadcast by the Hermes remote-signer
@@ -3094,7 +3208,11 @@ the target chain (~$0.20–$0.50 of native gas typically suffices).
 Examples:
   obol sell register                                    # defaults to mainnet
   obol sell register --network base                       # register on base
-  obol sell register --network base-sepolia               # add a Base Sepolia registration`,
+  obol sell register --network base-sepolia               # add a Base Sepolia registration
+  obol sell register x402scan                             # list in the x402scan index (no gas)`,
+		Commands: []*cli.Command{
+			sellRegisterX402scanCommand(cfg),
+		},
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:    "network",
@@ -3940,9 +4058,14 @@ Examples:
 			if err := waitForClusterAPI(ctx, cfg, u, 3*time.Minute); err != nil {
 				u.Warnf("cluster API not ready: %v (continuing — per-offer applies may fail)", err)
 			}
+			warnOnClockSkew(ctx, u, "")
 			// Recorded Agent CRs first: agent-backed offers resolve
 			// agent.ref and would dangle on a freshly-recreated cluster.
 			agentcrd.ResumeAll(cfg, u)
+			// Installed apps next: http offers can gate an app's Service
+			// as their upstream, so the Service must exist before the
+			// offer republishes. Best-effort.
+			app.ResumeAll(cfg, u)
 			if err := resumeSellOffers(ctx, cfg, u); err != nil {
 				return err
 			}
@@ -4080,6 +4203,35 @@ func installResumeBootUnit(cfg *config.Config, u *ui.UI) error {
 	return nil
 }
 
+// warnOnClockSkew is a best-effort seller preflight. EIP-3009 payment
+// authorizations anchor validAfter/validBefore to wall clocks, so a
+// drifted seller host makes the facilitator reject every buyer payment
+// ("authorization is not yet valid") while `sell status` still looks
+// healthy — revenue silently stops. Probes the facilitator's HTTP Date
+// header and warns above the threshold; probe failures stay silent
+// because the check must never block or delay selling.
+func warnOnClockSkew(ctx context.Context, u *ui.UI, facilitatorURL string) {
+	if facilitatorURL == "" {
+		facilitatorURL = x402verifier.DefaultFacilitatorURL
+	}
+
+	skew, err := x402verifier.MeasureClockSkew(ctx, facilitatorURL)
+	if err != nil {
+		return
+	}
+	if skew.Abs() <= x402verifier.ClockSkewWarnThreshold {
+		return
+	}
+
+	direction := "ahead of"
+	if skew < 0 {
+		direction = "behind"
+	}
+	u.Warnf("This machine's clock is %s %s the payment facilitator (%s). Buyer payment authorizations may be rejected (\"authorization is not yet valid\") and revenue silently stops.",
+		skew.Abs().Round(time.Second), direction, facilitatorURL)
+	u.Dim("  Fix: enable NTP time sync (macOS: Date & Time → set automatically; Linux: timedatectl set-ntp true).")
+}
+
 // resumeSellOffers re-applies the cluster-side artifacts (Service +
 // Endpoints + ServiceOffer) for every locally-persisted `obol sell
 // inference` deployment, and relaunches each offer's host gateway as a
@@ -4122,6 +4274,8 @@ func resumeSellOffers(ctx context.Context, cfg *config.Config, u *ui.UI) error {
 	}
 	deployments := activeInferenceDeployments(all)
 
+	var failed []string
+
 	if len(deployments) > 0 {
 		u.Blank()
 		u.Infof("Resuming %d locally-persisted sell-inference offer(s)...", len(deployments))
@@ -4130,6 +4284,7 @@ func resumeSellOffers(ctx context.Context, cfg *config.Config, u *ui.UI) error {
 		for _, d := range deployments {
 			if err := resumeOneInferenceOffer(cfg, u, d); err != nil {
 				u.Warnf("resume %s: %v", d.Name, err)
+				failed = append(failed, d.Name)
 				continue
 			}
 			resumed++
@@ -4146,8 +4301,21 @@ func resumeSellOffers(ctx context.Context, cfg *config.Config, u *ui.UI) error {
 	//    The two stores stay separate on disk because the inference
 	//    descriptor is rich (listen addr, asset, registration, gateway
 	//    PID) while the ledger holds only rendered ServiceOffer manifests.
-	if err := resumePersistedServiceOffers(cfg, u); err != nil {
+	persistedFailed, err := resumePersistedServiceOffers(cfg, u)
+	if err != nil {
 		u.Warnf("resume persisted sell offers: %v", err)
+	}
+	failed = append(failed, persistedFailed...)
+
+	// A seller who reboots and sees "stack up: OK" assumes their offers
+	// are live. Per-offer warnings scroll past; this summary — and a
+	// non-nil error that fails `obol sell resume` outright — makes a
+	// partial resume impossible to miss.
+	if len(failed) > 0 {
+		u.Blank()
+		u.Errorf("%d sell offer(s) failed to resume and are NOT live for buyers: %s", len(failed), strings.Join(failed, ", "))
+		u.Dim("  Retry with `obol sell resume`; inspect with `obol sell status <name> -n <namespace>`.")
+		return fmt.Errorf("%d sell offer(s) failed to resume: %s", len(failed), strings.Join(failed, ", "))
 	}
 
 	return nil
@@ -4639,6 +4807,82 @@ func sellOfferStorePath(cfg *config.Config, namespace, name string) string {
 	return filepath.Join(sellOfferStoreDir(cfg), namespace+"__"+name+".yaml")
 }
 
+// parseRouteFlags converts repeatable --route values into spec.routes
+// entries. Each value is a comma-separated key=value list; a segment
+// without "=" is folded into the previous value so free-text summaries may
+// contain commas (mirrors the --accept parsing approach). hasPaid reports
+// whether at least one route charges — an all-free table is legal but
+// almost certainly a mistake, so the caller warns.
+func parseRouteFlags(vals []string) (routes []map[string]any, hasPaid bool, err error) {
+	routes = make([]map[string]any, 0, len(vals))
+	for _, val := range vals {
+		route := map[string]any{}
+		var segments []string
+		for _, seg := range strings.Split(val, ",") {
+			if !strings.Contains(seg, "=") && len(segments) > 0 {
+				segments[len(segments)-1] += "," + seg
+				continue
+			}
+			segments = append(segments, seg)
+		}
+		gate := monetizeapi.GatePaid
+		for _, seg := range segments {
+			key, v, _ := strings.Cut(seg, "=")
+			key = strings.TrimSpace(key)
+			v = strings.TrimSpace(v)
+			switch key {
+			case "path":
+				if !strings.HasPrefix(v, "/") {
+					return nil, false, fmt.Errorf("--route %q: path must start with / (got %q)", val, v)
+				}
+				route["path"] = v
+			case "methods":
+				methods := []any{}
+				for _, m := range strings.Split(v, "|") {
+					m = strings.ToUpper(strings.TrimSpace(m))
+					switch m {
+					case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
+						methods = append(methods, m)
+					default:
+						return nil, false, fmt.Errorf("--route %q: unknown method %q", val, m)
+					}
+				}
+				route["methods"] = methods
+			case "gate":
+				switch v {
+				case monetizeapi.GatePaid, monetizeapi.GateFree, monetizeapi.GateAuth:
+					gate = v
+				default:
+					return nil, false, fmt.Errorf("--route %q: gate must be paid, free, or auth (got %q)", val, v)
+				}
+			case "price":
+				route["price"] = map[string]any{"perRequest": v}
+			case "freeQuota", "free-quota":
+				n, err := strconv.ParseInt(v, 10, 64)
+				if err != nil || n < 0 {
+					return nil, false, fmt.Errorf("--route %q: freeQuota must be a non-negative integer", val)
+				}
+				route["freeQuota"] = n
+			case "summary":
+				route["summary"] = v
+			default:
+				return nil, false, fmt.Errorf("--route %q: unknown key %q (want path, methods, gate, price, freeQuota, summary)", val, key)
+			}
+		}
+		if route["path"] == nil {
+			return nil, false, fmt.Errorf("--route %q: path is required", val)
+		}
+		route["gate"] = gate
+		if gate == monetizeapi.GatePaid {
+			hasPaid = true
+		} else if route["price"] != nil || route["freeQuota"] != nil {
+			return nil, false, fmt.Errorf("--route %q: price and freeQuota only apply to paid routes (gate=%s)", val, gate)
+		}
+		routes = append(routes, route)
+	}
+	return routes, hasPaid, nil
+}
+
 // preflightOfferPathCollision fails fast when another live ServiceOffer
 // already claims the manifest's public path. The x402 verifier's route
 // table is first-match-wins, so a colliding offer would silently shadow
@@ -4657,16 +4901,62 @@ func preflightOfferPathCollision(cfg *config.Config, manifest map[string]any) er
 	if path == "" {
 		path = "/services/" + name
 	}
+	hostname, _ := spec["hostname"].(string)
+	// Static check first — reserved platform paths are rejected even when
+	// the cluster is unreachable (the controller backstops with
+	// RoutePublished=False/ReservedPath, but failing here is friendlier).
+	if root := monetizeapi.ReservedPathConflict(path); root != "" {
+		return fmt.Errorf("path %s collides with the reserved platform path %s (discovery/routing surface) — pass --path to pick a different public path", path, root)
+	}
+	// F8: same static check, but over each declared spec.routes[].path
+	// entry rather than just the offer root. A route landing on "/auth" (or
+	// nested under it) would shadow the verifier's SIWX sign-in endpoints.
+	if routePath, root := reservedRoutePathCollision(spec); root != "" {
+		return fmt.Errorf("route path %s collides with the reserved platform path %s (discovery/routing surface) — pick a different route path", routePath, root)
+	}
 	bin, kubeconfig := kubectl.Paths(cfg)
 	out, err := kubectl.Output(bin, kubeconfig, "get", "serviceoffers.obol.org", "-A", "-o", "json")
 	if err != nil {
 		return nil //nolint:nilerr // best-effort preflight; the apply surfaces real errors
 	}
-	return offerPathCollisionInList([]byte(out), ns, name, path)
+	return offerPathCollisionInList([]byte(out), ns, name, path, hostname)
+}
+
+// reservedRoutePathCollision checks spec["routes"] against the route-level
+// reserved-path denylist and returns the first colliding route's path and
+// the reserved root it hit, or ("", "") when none collide. spec["routes"]
+// takes two shapes depending on how the manifest was built: []map[string]any
+// from parseRouteFlags (the --route flag path) or []any of
+// map[string]interface{} from json.Unmarshal (the --from-json path) — any
+// is an alias for interface{}, so both element types assert the same way.
+func reservedRoutePathCollision(spec map[string]any) (routePath, root string) {
+	var routes []any
+	switch rs := spec["routes"].(type) {
+	case []map[string]any:
+		for _, r := range rs {
+			routes = append(routes, r)
+		}
+	case []any:
+		routes = rs
+	}
+	for _, item := range routes {
+		rm, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		p, _ := rm["path"].(string)
+		if p == "" {
+			continue
+		}
+		if r := monetizeapi.ReservedRoutePathConflict(p); r != "" {
+			return p, r
+		}
+	}
+	return "", ""
 }
 
 // offerPathCollisionInList is the pure core of preflightOfferPathCollision.
-func offerPathCollisionInList(listJSON []byte, ns, name, path string) error {
+func offerPathCollisionInList(listJSON []byte, ns, name, path, hostname string) error {
 	var list struct {
 		Items []struct {
 			Metadata struct {
@@ -4675,7 +4965,8 @@ func offerPathCollisionInList(listJSON []byte, ns, name, path string) error {
 				DeletionTimestamp string `json:"deletionTimestamp"`
 			} `json:"metadata"`
 			Spec struct {
-				Path string `json:"path"`
+				Path     string `json:"path"`
+				Hostname string `json:"hostname"`
 			} `json:"spec"`
 		} `json:"items"`
 	}
@@ -4700,6 +4991,10 @@ func offerPathCollisionInList(listJSON []byte, ns, name, path string) error {
 		if strings.TrimSuffix(other, "/") == want {
 			return fmt.Errorf("path %s is already used by offer %s/%s — pass --path to pick a different public path, or delete the existing offer first",
 				path, item.Metadata.Namespace, item.Metadata.Name)
+		}
+		if hostname != "" && strings.EqualFold(item.Spec.Hostname, hostname) {
+			return fmt.Errorf("hostname %s is already used by offer %s/%s — one offer per origin; pass a different --hostname or delete the existing offer first",
+				hostname, item.Metadata.Namespace, item.Metadata.Name)
 		}
 	}
 	return nil
@@ -4856,18 +5151,18 @@ func removePersistedServiceOffersInNamespace(cfg *config.Config, ns string) (int
 // the cluster yet). Counts and announces what was reattached so the
 // operator sees the same "Resumed N offers" feedback they get for
 // inference.
-func resumePersistedServiceOffers(cfg *config.Config, u *ui.UI) error {
+func resumePersistedServiceOffers(cfg *config.Config, u *ui.UI) (failed []string, err error) {
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, statErr := os.Stat(kubeconfigPath); statErr != nil {
-		return nil // no cluster yet
+		return nil, nil // no cluster yet
 	}
 
 	manifests, err := loadPersistedServiceOffers(sellOfferStoreDir(cfg), u)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(manifests) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	u.Blank()
@@ -4875,11 +5170,12 @@ func resumePersistedServiceOffers(cfg *config.Config, u *ui.UI) error {
 	for _, m := range manifests {
 		if err := kubectlApply(cfg, m.Manifest); err != nil {
 			u.Warnf("resume %s %s/%s: %v", m.label(), m.Namespace, m.Name, err)
+			failed = append(failed, fmt.Sprintf("%s/%s", m.Namespace, m.Name))
 			continue
 		}
 		u.Successf("Resumed %s offer %s/%s", m.label(), m.Namespace, m.Name)
 	}
-	return nil
+	return failed, nil
 }
 
 // loadPersistedServiceOffers walks a ledger dir and parses every

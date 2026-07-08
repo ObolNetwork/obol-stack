@@ -73,6 +73,12 @@ spec:
     address: http://x402-verifier.x402.svc.cluster.local:8080/verify
     authResponseHeaders:
       - X-Payment-Response
+      # Identity facts set by the verifier. Listing them here makes Traefik
+      # overwrite any client-supplied value on the forwarded request — the
+      # verifier sets them (possibly empty) on every 200, so upstreams can
+      # trust them unconditionally.
+      - X-Payment-Payer
+      - X-Verified-Wallet
 
 ---
 # eRPC metadata ConfigMap for frontend discovery. `.Values.network`
@@ -98,3 +104,24 @@ data:
         }
       }
     }
+
+---
+# PodDisruptionBudget: eRPC is the single RPC front door for agents and the
+# frontend. The upstream ethereum/erpc chart (0.0.4) has no PDB template of
+# its own (its `podDisruptionBudget` value is unwired), so it lives here with
+# the other erpc-namespace resources. With one replica, minAvailable: 1 makes
+# voluntary evictions (multi-node drains, upgrades) require explicit operator
+# intent instead of silently gapping local RPC. Rollouts are unaffected — the
+# chart's RollingUpdate at 1 replica surges 0-unavailable behind its
+# readiness probe (`network add/remove` restarts stay gapless).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: erpc
+  namespace: erpc
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: erpc
+      app.kubernetes.io/instance: erpc

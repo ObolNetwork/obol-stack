@@ -138,9 +138,34 @@ type ServiceOfferSpec struct {
 	// affect routing, pricing, or payment.
 	Listing ServiceOfferListing `json:"listing,omitempty"`
 
+	// Routes declares the offer's route table: per-path gate classes (paid
+	// or free) and optional per-route price overrides, all relative to the
+	// offer's effective path. It is the single source of truth for the
+	// x402 verifier's route rules and for discovery surfaces (openapi,
+	// skill.md, services.json, buy prompts). Empty means the pre-route-table
+	// behavior: one paid catch-all covering everything under the offer path.
+	// See EffectiveRoutes.
+	// +kubebuilder:validation:MaxItems=128
+	Routes []ServiceOfferRoute `json:"routes,omitempty"`
+
 	// URL path prefix for the HTTPRoute, defaults to /services/<name>.
 	// +kubebuilder:validation:Pattern=`^/[a-zA-Z0-9/_.-]*$`
 	Path string `json:"path,omitempty"`
+
+	// Hostname gives the offer its own public origin: the controller
+	// renders an additional HTTPRoute answering on this hostname alone,
+	// with the offer's routes rooted at "/" (rewritten into the shared
+	// /services/<name> path-world before the payment gate) plus an
+	// offer-scoped discovery bundle (/openapi.json, /.well-known/x402,
+	// and a landing page at "/"). The shared-origin path keeps working as
+	// a back-compat alias. The x402 market is origin-keyed (x402scan,
+	// agentcash crawl per origin) — a dedicated hostname is what makes an
+	// offer list as its own product instead of leaking into one shared
+	// listing. DNS + tunnel routing for the hostname are the operator's
+	// job (obol tunnel hostname add <host> --offer <ns>/<name>).
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`
+	Hostname string `json:"hostname,omitempty"`
 
 	// Optional provenance metadata for the service. Tracks how the model or
 	// service was produced (e.g. autoresearch experiment data). Included in
@@ -150,6 +175,15 @@ type ServiceOfferSpec struct {
 	// ERC-8004 registration metadata. Field names align with the
 	// AgentRegistration document schema (ERC-8004 spec).
 	Registration ServiceOfferRegistration `json:"registration,omitempty"`
+
+	// Async turns the offer's paid routes into accepted jobs: payment
+	// settles at acceptance, the request is replayed against the upstream
+	// with no client-facing deadline by the job broker, and the buyer
+	// polls a free status page (202 + Location: <offer>/jobs/<id>).
+	Async ServiceOfferAsync `json:"async,omitempty"`
+
+	// Limits renders Traefik middleware in front of the offer's routes.
+	Limits ServiceOfferLimits `json:"limits,omitempty"`
 
 	// DrainAt marks the offer as draining when non-nil. While the offer
 	// is in the drain window, discovery surfaces (/skill.md and
@@ -233,6 +267,129 @@ type ServiceOfferPayment struct {
 	// Which fields are applicable depends on the workload type.
 	// +kubebuilder:validation:Required
 	Price ServiceOfferPriceTable `json:"price"`
+}
+
+// Result visibility modes for async offers.
+const (
+	ResultVisibilityPayer  = "payer"
+	ResultVisibilityPublic = "public"
+)
+
+// DefaultJobTTL is how long job records + stored results live when
+// spec.async.ttl is unset.
+const DefaultJobTTL = 72 * time.Hour
+
+// ServiceOfferAsync configures broker-mediated async delivery.
+type ServiceOfferAsync struct {
+	// Enabled routes the offer's paid requests through the job broker.
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled,omitempty"`
+	// ResultVisibility gates GET <offer>/jobs/<id>/result. "payer"
+	// (default) requires the paying wallet (SIWX) or the capability
+	// jobToken returned in the 202 body; "public" makes the unguessable
+	// job id the capability (shareable results).
+	// +kubebuilder:default="payer"
+	// +kubebuilder:validation:Enum=payer;public
+	ResultVisibility string `json:"resultVisibility,omitempty"`
+	// TTL is how long job records + stored results are retained.
+	// Defaults to 72h. Status pages return 410 Gone afterwards.
+	TTL *metav1.Duration `json:"ttl,omitempty"`
+}
+
+// EffectiveResultVisibility defaults to payer — fail closed on paid work.
+func (a *ServiceOfferAsync) EffectiveResultVisibility() string {
+	if a.ResultVisibility == ResultVisibilityPublic {
+		return ResultVisibilityPublic
+	}
+	return ResultVisibilityPayer
+}
+
+// EffectiveTTL returns the configured retention or the default.
+func (a *ServiceOfferAsync) EffectiveTTL() time.Duration {
+	if a.TTL != nil && a.TTL.Duration > 0 {
+		return a.TTL.Duration
+	}
+	return DefaultJobTTL
+}
+
+// ServiceOfferLimits renders Traefik protection middleware for the offer.
+type ServiceOfferLimits struct {
+	// MaxInFlight caps concurrent in-flight requests (Traefik inFlightReq).
+	// 0 = no cap. The unbounded-concurrency hole on paid agents is
+	// pentest-proven; paid agent offers should set a small value.
+	// +kubebuilder:validation:Minimum=0
+	MaxInFlight int64 `json:"maxInFlight,omitempty"`
+	// RPS caps average requests/second (Traefik rateLimit; burst 2x).
+	// 0 = no cap.
+	// +kubebuilder:validation:Minimum=0
+	RPS int64 `json:"rps,omitempty"`
+}
+
+// Gate classes for ServiceOfferRoute.
+const (
+	GatePaid = "paid"
+	GateFree = "free"
+	// GateAuth requires a SIWX-verified wallet (EIP-4361 signature or a
+	// verifier-minted session). The verifier injects X-Verified-Wallet
+	// upstream; authorization (WHICH wallet may see what) is the
+	// upstream's job.
+	GateAuth = "auth"
+)
+
+// ServiceOfferRoute is one entry in an offer's route table. Path is
+// interpreted relative to the offer's effective path (the public prefix),
+// so route tables survive a future move to per-offer hostnames unchanged.
+type ServiceOfferRoute struct {
+	// Path relative to the offer's effective path. Must start with "/".
+	// Supports the verifier's pattern syntax: exact ("/healthz"), greedy
+	// prefix ("/v1/*"), and segment globs ("/models-*/info").
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Pattern=`^/[a-zA-Z0-9/_.*-]*$`
+	// +kubebuilder:validation:MaxLength=512
+	Path string `json:"path"`
+	// HTTP methods this route serves. Discovery metadata only in phase 1 —
+	// the payment gate applies to every method on a matched path. Empty
+	// means all methods.
+	// +kubebuilder:validation:MaxItems=9
+	// +kubebuilder:validation:items:Enum=GET;POST;PUT;PATCH;DELETE;HEAD;OPTIONS
+	Methods []string `json:"methods,omitempty"`
+	// Gate class. "paid" gates the route with x402 (default); "free" passes
+	// the payment gate entirely (health checks, job status pages, per-offer
+	// discovery documents); "auth" requires a SIWX-verified wallet and
+	// forwards it upstream as X-Verified-Wallet.
+	// +kubebuilder:default="paid"
+	// +kubebuilder:validation:Enum=paid;free;auth
+	Gate string `json:"gate,omitempty"`
+	// Price override for a paid route. When set, it replaces the offer's
+	// primary payment option price for this route and the route becomes
+	// single-payment (multi-currency price overrides are not supported —
+	// secondary spec.payments[] options are not advertised on overridden
+	// routes). Empty means the offer's payment pricing applies.
+	Price ServiceOfferPriceTable `json:"price,omitempty"`
+	// Human-readable one-line summary surfaced in discovery (openapi
+	// operation summary, skill.md route list).
+	// +kubebuilder:validation:MaxLength=300
+	Summary string `json:"summary,omitempty"`
+	// FreeQuota grants each SIWX-verified wallet this many free calls per
+	// UTC day on a paid route before the 402 applies (the x402scan-style
+	// free tier). Counters are verifier-local and reset on verifier
+	// restart — a giveaway mechanism, not an entitlement ledger. 0 = none.
+	// +kubebuilder:validation:Minimum=0
+	FreeQuota int64 `json:"freeQuota,omitempty"`
+}
+
+// EffectiveGate returns the route's gate class, defaulting to paid so a
+// zero-valued route never opens a free path by accident.
+func (r *ServiceOfferRoute) EffectiveGate() string {
+	if r.Gate == "" {
+		return GatePaid
+	}
+	return r.Gate
+}
+
+// HasPriceOverride reports whether any price slot is set on the route.
+func (r *ServiceOfferRoute) HasPriceOverride() bool {
+	return r.Price != (ServiceOfferPriceTable{})
 }
 
 // ServiceOfferListing carries storefront presentation hints. Both fields
@@ -439,6 +596,75 @@ func (o *ServiceOffer) EffectivePath() string {
 		return o.Spec.Path
 	}
 	return fmt.Sprintf("/services/%s", o.Name)
+}
+
+// reservedPathRoots are shared-origin surfaces an offer path may never
+// claim or nest under: the discovery documents, the Scalar API reference,
+// the eRPC gateway, and .well-known. Claiming one would shadow it in the
+// verifier's first-match route table (or in Traefik, depending on route
+// specificity) with no signal to the operator.
+var reservedPathRoots = []string{"/api", "/openapi.json", "/skill.md", "/rpc", "/.well-known"}
+
+// ReservedPathConflict returns the reserved root an offer path collides
+// with, or "". "/" and the bare "/services" are reserved exactly (they
+// would blanket the storefront root / every sibling offer); the roots in
+// reservedPathRoots are reserved along with everything nested under them.
+// Trailing slashes are ignored.
+func ReservedPathConflict(path string) string {
+	p := strings.TrimSuffix(path, "/")
+	if p == "" || p == "/services" {
+		return "/"
+	}
+	for _, root := range reservedPathRoots {
+		if p == root || strings.HasPrefix(p, root+"/") {
+			return root
+		}
+	}
+	return ""
+}
+
+// routeReservedPathRoots extends reservedPathRoots with the verifier's own
+// sign-in surface for gate:auth offers. A route declared at "/auth" or
+// "/auth/verify" would shadow the SIWX challenge/verify endpoints the
+// verifier serves at those paths.
+var routeReservedPathRoots = append(append([]string{}, reservedPathRoots...), "/auth")
+
+// ReservedRoutePathConflict returns the reserved root a route's
+// offer-relative path (spec.routes[].path) collides with, or "". Unlike
+// ReservedPathConflict this does not special-case "/" or "/services" — "/"
+// is a normal, meaningful relative route path (the offer's own root route)
+// — it only guards the shared verifier surfaces plus "/auth".
+func ReservedRoutePathConflict(path string) string {
+	p := strings.TrimSuffix(path, "/")
+	for _, root := range routeReservedPathRoots {
+		if p == root || strings.HasPrefix(p, root+"/") {
+			return root
+		}
+	}
+	return ""
+}
+
+// EffectiveOrigin returns the offer's dedicated public origin
+// ("https://<hostname>") when spec.hostname is set, else "". Discovery
+// surfaces use it to advertise hostname-bound offers at their own origin
+// while path-only offers stay rooted at the shared tunnel URL.
+func (o *ServiceOffer) EffectiveOrigin() string {
+	if o.Spec.Hostname == "" {
+		return ""
+	}
+	return "https://" + o.Spec.Hostname
+}
+
+// EffectiveRoutes returns the offer's declared route table, or the
+// synthesized pre-route-table equivalent when spec.routes is empty: a
+// single paid catch-all ("/*") covering everything under the offer's
+// effective path. Callers can therefore treat every offer as route-table
+// driven. The result is never empty.
+func (o *ServiceOffer) EffectiveRoutes() []ServiceOfferRoute {
+	if len(o.Spec.Routes) > 0 {
+		return o.Spec.Routes
+	}
+	return []ServiceOfferRoute{{Path: "/*", Gate: GatePaid}}
 }
 
 // EffectivePayments returns every accepted payment option for the offer.

@@ -130,9 +130,15 @@ func ReconcileRecorded(cfg *config.Config, u *ui.UI) {
 			u.Warnf("LiteLLM restart after model reconcile failed: %v", err)
 		}
 	case configChanged:
-		// Reloader restarts LiteLLM on litellm-config changes since rc14;
-		// no manual rollout needed for a ConfigMap-only change.
+		// Reloader deliberately does NOT watch litellm-config (issue #321:
+		// a CM-triggered rollout would gap inference on every model change),
+		// so a ConfigMap-only reconcile must roll the pod explicitly for the
+		// live router to pick up the recorded model_list. With RollingUpdate
+		// maxUnavailable:0 on the litellm Deployment this is a gapless surge.
 		u.Infof("Restored recorded model list (%d models)", len(state.ModelList))
+		if err := RestartLiteLLM(cfg, u, "recorded model config"); err != nil {
+			u.Warnf("LiteLLM restart after model reconcile failed: %v", err)
+		}
 	}
 }
 

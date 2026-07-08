@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/urfave/cli/v3"
@@ -191,12 +192,22 @@ func tunnelHostnameCommand(cfg *config.Config) *cli.Command {
 				Flags: []cli.Flag{
 					&cli.StringFlag{Name: "hostname", Aliases: []string{"H"}, Usage: "Public hostname to add (or pass as a positional argument)"},
 					&cli.BoolFlag{Name: "overwrite-dns", Usage: "Local-managed only: replace any existing A/AAAA/CNAME at the hostname"},
+					&cli.StringFlag{Name: "offer", Usage: "Bind the hostname to a ServiceOffer as its dedicated origin (<namespace>/<name>). " +
+						"Patches the offer's spec.hostname; the controller renders the per-offer routes + discovery bundle, and the shared storefront skips this hostname."},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					u := getUI(cmd)
 					hostname := strings.TrimSpace(cmd.String("hostname"))
 					if hostname == "" {
 						hostname = strings.TrimSpace(cmd.Args().First())
+					}
+					// Bind BEFORE the tunnel-side render: AddHostname
+					// re-renders the storefront catch-all, which must
+					// already see the offer claim so it skips this host.
+					if offerRef := strings.TrimSpace(cmd.String("offer")); offerRef != "" {
+						if err := bindHostnameToOffer(cfg, u, hostname, offerRef); err != nil {
+							return err
+						}
 					}
 					result, err := tunnel.AddHostname(cfg, u, tunnel.AddHostnameOptions{
 						Hostname:     hostname,
@@ -239,6 +250,28 @@ func tunnelHostnameCommand(cfg *config.Config) *cli.Command {
 			},
 		},
 	}
+}
+
+// bindHostnameToOffer patches spec.hostname on the referenced ServiceOffer.
+// The serviceoffer-controller then renders the dedicated-origin HTTPRoute
+// and discovery bundle; the tunnel side only has to route DNS and keep the
+// storefront catch-all off the host.
+func bindHostnameToOffer(cfg *config.Config, u *ui.UI, hostname, offerRef string) error {
+	ns, name, ok := strings.Cut(offerRef, "/")
+	if !ok || ns == "" || name == "" {
+		return fmt.Errorf("--offer must be <namespace>/<name>, got %q", offerRef)
+	}
+	host := strings.ToLower(strings.TrimSpace(hostname))
+	if host == "" {
+		return fmt.Errorf("--offer requires a hostname to bind")
+	}
+	bin, kubeconfig := kubectl.Paths(cfg)
+	patch := fmt.Sprintf(`{"spec":{"hostname":%q}}`, host)
+	if _, err := kubectl.Output(bin, kubeconfig, "patch", "serviceoffers.obol.org", name, "-n", ns, "--type=merge", "-p", patch); err != nil {
+		return fmt.Errorf("bind hostname to offer %s/%s: %w", ns, name, err)
+	}
+	u.Successf("Bound %s to offer %s/%s (spec.hostname)", host, ns, name)
+	return nil
 }
 
 func printHostnameList(u *ui.UI, result *tunnel.HostnameListResult) {

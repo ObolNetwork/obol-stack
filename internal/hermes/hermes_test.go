@@ -1,6 +1,7 @@
 package hermes
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"gopkg.in/yaml.v3"
 )
 
@@ -22,6 +24,97 @@ func testConfig(t *testing.T) *config.Config {
 	}
 
 	return &config.Config{ConfigDir: dir, DataDir: dir, BinDir: dir}
+}
+
+func TestSyncDefaultModels_BootstrapsMissingDefaultInstance(t *testing.T) {
+	cfg := testConfig(t)
+	wantErr := errors.New("setup called")
+
+	origSetup := setupDefaultForModelSync
+	origSync := syncDefaultForModelSync
+	t.Cleanup(func() {
+		setupDefaultForModelSync = origSetup
+		syncDefaultForModelSync = origSync
+	})
+
+	setupDefaultForModelSync = func(got *config.Config, _ *ui.UI) error {
+		if got != cfg {
+			t.Fatalf("setup cfg = %p, want %p", got, cfg)
+		}
+		return wantErr
+	}
+	syncDefaultForModelSync = func(_ *config.Config, _ string, _ *ui.UI) error {
+		t.Fatal("sync should not run when the default deployment is missing")
+		return nil
+	}
+
+	if err := SyncDefaultModels(cfg, newTestUI()); !errors.Is(err, wantErr) {
+		t.Fatalf("SyncDefaultModels() err = %v, want %v", err, wantErr)
+	}
+}
+
+func TestSyncDefaultModels_SyncsExistingDefaultInstance(t *testing.T) {
+	cfg := testConfig(t)
+	if err := os.MkdirAll(DeploymentPath(cfg, agentruntime.DefaultInstanceID), 0o755); err != nil {
+		t.Fatalf("create default deployment dir: %v", err)
+	}
+	wantErr := errors.New("sync called")
+
+	origSetup := setupDefaultForModelSync
+	origSync := syncDefaultForModelSync
+	t.Cleanup(func() {
+		setupDefaultForModelSync = origSetup
+		syncDefaultForModelSync = origSync
+	})
+
+	setupDefaultForModelSync = func(_ *config.Config, _ *ui.UI) error {
+		t.Fatal("setup should not run when the default deployment exists")
+		return nil
+	}
+	syncDefaultForModelSync = func(got *config.Config, id string, _ *ui.UI) error {
+		if got != cfg {
+			t.Fatalf("sync cfg = %p, want %p", got, cfg)
+		}
+		if id != agentruntime.DefaultInstanceID {
+			t.Fatalf("sync id = %q, want %q", id, agentruntime.DefaultInstanceID)
+		}
+		return wantErr
+	}
+
+	if err := SyncDefaultModels(cfg, newTestUI()); !errors.Is(err, wantErr) {
+		t.Fatalf("SyncDefaultModels() err = %v, want %v", err, wantErr)
+	}
+}
+
+func TestOnboardDefaultAlreadyInstalledIsIdempotent(t *testing.T) {
+	cfg := testConfig(t)
+	if err := os.MkdirAll(DeploymentPath(cfg, agentruntime.DefaultInstanceID), 0o755); err != nil {
+		t.Fatalf("create default deployment dir: %v", err)
+	}
+
+	origInstalled := hermesDeploymentInstalledForOnboard
+	t.Cleanup(func() {
+		hermesDeploymentInstalledForOnboard = origInstalled
+	})
+
+	hermesDeploymentInstalledForOnboard = func(got *config.Config, id string) (bool, error) {
+		if got != cfg {
+			t.Fatalf("installed cfg = %p, want %p", got, cfg)
+		}
+		if id != agentruntime.DefaultInstanceID {
+			t.Fatalf("installed id = %q, want %q", id, agentruntime.DefaultInstanceID)
+		}
+		return true, nil
+	}
+
+	if err := Onboard(cfg, OnboardOptions{
+		ID:        agentruntime.DefaultInstanceID,
+		Sync:      true,
+		IsDefault: true,
+		AgentMode: true,
+	}, newTestUI()); err != nil {
+		t.Fatalf("Onboard(existing installed default) err = %v", err)
+	}
 }
 
 // TestGenerateConfig_PrimaryIsRoundTrippable guards the LiteLLM model_name
@@ -161,6 +254,8 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		`- "obol-agent.obol.stack"`,
 		"name: hermes-dashboard",
 		"name: GATEWAY_HEALTH_URL",
+		"HERMES_DASHBOARD_BASIC_AUTH_USERNAME",
+		"HERMES_DASHBOARD_BASIC_AUTH_PASSWORD",
 	} {
 		if !strings.Contains(values, needle) {
 			t.Fatalf("generateValues() missing %q:\n%s", needle, values)

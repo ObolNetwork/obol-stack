@@ -485,17 +485,19 @@ func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
 	for _, want := range []string{
 		`model_name: "paid/*"`,
 		`model: "openai/*"`,
-		`api_base: "http://127.0.0.1:8402/v1"`,
+		// Paid routes go through the standalone x402-buyer Service — the
+		// buyer is no longer a litellm-pod sidecar (issue #321: LiteLLM must
+		// be stateless so RollingUpdate maxUnavailable:0 gives zero-downtime
+		// rollouts).
+		`api_base: "http://x402-buyer.llm.svc.cluster.local:8402/v1"`,
 		`name: x402-buyer`,
 		`containerPort: 8402`,
 		`name: buyer-http`,
 		`name: x402-buyer-config`,
 		`name: x402-buyer-auths`,
-		// litellm-config ONLY: the buyer ConfigMaps must stay out of the
-		// Reloader annotation — x402-buyer hot-reloads them via /admin/reload
-		// and the Recreate strategy would otherwise bounce the whole gateway
-		// on every buy/refill (CLAUDE.md pitfall 7).
-		`configmap.reloader.stakater.com/reload: "litellm-config"`,
+		// Key rotation is the one remaining case that needs a pod
+		// replacement (os.environ/ refs resolve at config load).
+		`secret.reloader.stakater.com/reload: "litellm-secrets"`,
 		`emptyDir:`,
 	} {
 		if !strings.Contains(out, want) {
@@ -503,8 +505,13 @@ func TestLLMTemplate_IncludesPaidRouteAndBuyerSidecar(t *testing.T) {
 		}
 	}
 
-	if strings.Contains(out, `configmap.reloader.stakater.com/reload: "litellm-config,`) {
-		t.Fatal("llm template reload annotation must list litellm-config only — buyer CM writes happen per purchase and would Recreate-bounce the gateway")
+	// Reloader must NOT watch litellm-config: every model_list change is
+	// hot-applied via /model/new + /model/delete (CLI and controller), and a
+	// ConfigMap-triggered rollout would reintroduce an inference gap on
+	// every model add/remove/prefer and first-time purchase (issue #321).
+	// The buyer ConfigMaps likewise hot-reload via /admin/reload.
+	if strings.Contains(out, "configmap.reloader.stakater.com/reload") {
+		t.Fatal("llm template must not carry a configmap Reloader annotation — model_list changes are hot-applied; a CM-triggered rollout gaps inference (issue #321)")
 	}
 
 	if strings.Contains(out, "custom_provider_map") {

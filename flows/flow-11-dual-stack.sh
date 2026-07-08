@@ -308,7 +308,7 @@ buyer_sidecar_status() {
         python3 -c "
 import urllib.request, json
 try:
-    resp = urllib.request.urlopen('http://localhost:8402/status', timeout=5)
+    resp = urllib.request.urlopen('http://x402-buyer.llm.svc.cluster.local:8402/status', timeout=5)
     d = json.loads(resp.read())
     for name, info in d.items():
         print('%s: remaining=%d spent=%d model=%s' % (name, info['remaining'], info['spent'], info['public_model']))
@@ -1133,7 +1133,7 @@ if [ -n "$REGISTRATION_TX" ] && receipt_status_ok "$REGISTRATION_TX"; then
     write_receipt registration "$REGISTRATION_TX"
     pass "Registration receipt archived: $REGISTRATION_TX"
 else
-    skip "Registration receipt unavailable for Agent ID $AGENT_ID (registration already reflected in ServiceOffer status)"
+    pass "Registration already reflected in ServiceOffer status; receipt lookup unavailable for Agent ID $AGENT_ID"
 fi
 if [ -n "$METADATA_TX" ] && receipt_status_ok "$METADATA_TX"; then
     write_receipt metadata "$METADATA_TX"

@@ -138,6 +138,7 @@ var devLocallyBuiltImageBases = []string{
 	"ghcr.io/obolnetwork/x402-verifier",
 	"ghcr.io/obolnetwork/serviceoffer-controller",
 	"ghcr.io/obolnetwork/x402-buyer",
+	"ghcr.io/obolnetwork/job-broker",
 	"ghcr.io/obolnetwork/demo-server",
 	"ghcr.io/obolnetwork/obol-stack-public-storefront",
 }
@@ -157,18 +158,28 @@ func rewriteDevDigestPins(defaultsDir, devTag string) error {
 	patterns := make([]*regexp.Regexp, 0, len(devLocallyBuiltImageBases))
 	replaceWith := make([]string, 0, len(devLocallyBuiltImageBases))
 	for _, base := range devLocallyBuiltImageBases {
-		// Match all three pin styles we ship across the infrastructure
-		// templates and rewrite to `:latest` so the local-dev build wins.
+		// Match all four pin styles we ship across the infrastructure
+		// templates and rewrite to the dev tag so the local-dev build wins.
 		// Patterns covered (single regex, left-to-right alternation):
 		//   <base>:<7-40 hex>@sha256:<64 hex>   tag + digest combo
 		//   <base>@sha256:<64 hex>              digest-only pin
 		//   <base>:<7-40 hex>                   short-SHA tag pin (e.g. b13254e)
+		//   <base>:latest                       unpinned (e.g. job-broker, an
+		//                                       image not yet published to ghcr,
+		//                                       so it ships as :latest and has
+		//                                       no digest for the release
+		//                                       pipeline to stamp)
 		// The combo form MUST come first so the engine doesn't stop at the
 		// shorter `:<hex>` match and leave a stray `@sha256:<digest>` suffix,
 		// which Docker still resolves to the immutable registry image and
 		// silently bypasses the local build (root cause of the no-debug-logs
-		// regression in flow-11 step 43 chase, May 2026).
-		patterns = append(patterns, regexp.MustCompile(regexp.QuoteMeta(base)+"(:[a-f0-9]{7,40}@sha256:[a-f0-9]{64}|@sha256:[a-f0-9]{64}|:[a-f0-9]{7,40})"))
+		// regression in flow-11 step 43 chase, May 2026). :latest is matched
+		// last because a locally-built base always resolves to the dev build,
+		// so an unpinned ref must point at it too — without this the :latest
+		// deployment stays :latest, the image isn't present under that tag
+		// (the build imports :dev-<sha>), and the pod ImagePullBackOffs against
+		// the unpublished registry ref.
+		patterns = append(patterns, regexp.MustCompile(regexp.QuoteMeta(base)+"(:[a-f0-9]{7,40}@sha256:[a-f0-9]{64}|@sha256:[a-f0-9]{64}|:[a-f0-9]{7,40}|:latest)"))
 		replaceWith = append(replaceWith, base+":"+devTag)
 	}
 

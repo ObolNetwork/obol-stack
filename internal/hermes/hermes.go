@@ -35,7 +35,7 @@ const (
 	rawChartVersion = "2.0.2"
 
 	// renovate: datasource=docker depName=nousresearch/hermes-agent
-	defaultImage = "nousresearch/hermes-agent:v2026.6.19"
+	defaultImage = "nousresearch/hermes-agent:v2026.7.1"
 	// Use the upstream image venv instead of cloning Hermes into the PVC on
 	// every cold start. The init container below validates the required extras
 	// are present so image regressions fail before the gateway starts.
@@ -109,12 +109,22 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 
 	if opts.IsDefault && !opts.Force {
 		if _, err := os.Stat(deploymentDir); err == nil {
-			u.Info("Default Hermes instance already configured, re-syncing...")
+			u.Info("Default Hermes instance already configured.")
 			if err := dns.EnsureHostsEntries(agentruntime.CollectHostnames(cfg, agentruntime.DeploymentRef{
 				Runtime: agentruntime.Hermes,
 				ID:      id,
 			})); err != nil {
 				u.Warnf("Could not update /etc/hosts for Hermes hostnames: %v", err)
+			}
+			if opts.Sync {
+				installed, err := hermesDeploymentInstalledForOnboard(cfg, id)
+				if err != nil {
+					u.Warnf("Could not check existing Hermes deployment, re-syncing: %v", err)
+				} else if installed {
+					u.Success("Default Hermes instance already installed.")
+					return nil
+				}
+				u.Info("Default Hermes deployment not found, re-syncing...")
 			}
 			if err := writeDeploymentFiles(cfg, id, deploymentDir, currentAgentBaseURL(deploymentDir), u); err != nil {
 				return err
@@ -527,9 +537,35 @@ func strategyMigrationPatchArgs(namespace string) []string {
 func SyncDefaultModels(cfg *config.Config, u *ui.UI) error {
 	deploymentDir := DeploymentPath(cfg, agentruntime.DefaultInstanceID)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
-		return nil
+		return setupDefaultForModelSync(cfg, u)
 	}
-	return Sync(cfg, agentruntime.DefaultInstanceID, u)
+	return syncDefaultForModelSync(cfg, agentruntime.DefaultInstanceID, u)
+}
+
+var (
+	setupDefaultForModelSync = SetupDefault
+	syncDefaultForModelSync  = Sync
+)
+
+var hermesDeploymentInstalledForOnboard = hermesDeploymentInstalled
+
+func hermesDeploymentInstalled(cfg *config.Config, id string) (bool, error) {
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return false, nil
+	}
+
+	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	cmd := exec.Command(kubectlBinary, "get", "deployment/hermes", "-n", agentruntime.Namespace(agentruntime.Hermes, id))
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
 }
 
 func Skills(cfg *config.Config, id string, args []string) error {
@@ -977,6 +1013,16 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                 # is safe here. Production deployments must override this via a values overlay.
                 - name: GATEWAY_ALLOW_ALL_USERS
                   value: "true"
+                # v2026.7.x hardening: a non-loopback (0.0.0.0) dashboard bind now
+                # requires an auth provider; the legacy --insecure flag no longer
+                # bypasses it (closes the hermes-0day unauthenticated-dashboard
+                # hole). Register the bundled basic-auth provider using the agent's
+                # existing API token as the password (already surfaced to the
+                # operator). Probe path /api/status stays auth-exempt.
+                - name: HERMES_DASHBOARD_BASIC_AUTH_USERNAME
+                  value: obol
+                - name: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
+                  value: %s
               readinessProbe:
                 httpGet:
                   path: /api/status
@@ -1056,7 +1102,7 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
             - name: %s
               port: %d
 `, desc.DefaultPort, desc.DefaultPort, desc.DefaultPort,
-		quoteYAML(image()), quoteYAML(hermesBinary), dashboardPort, dashboardPort, desc.DefaultPort, dashboardPort, dashboardPort, dashboardPort,
+		quoteYAML(image()), quoteYAML(hermesBinary), dashboardPort, dashboardPort, desc.DefaultPort, quoteYAML(token), dashboardPort, dashboardPort, dashboardPort,
 		desc.DataPVCName,
 		desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.DefaultPort, dashboardPort,
 		desc.ServiceName, namespace, quoteYAML(hostname), desc.ServiceName, desc.DefaultPort,

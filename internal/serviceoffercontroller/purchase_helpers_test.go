@@ -114,8 +114,8 @@ func TestAddLiteLLMModelEntryUpdatesConfigMapAndHotAdds(t *testing.T) {
 	if entry.LiteLLMParams.Model != "openai/paid/qwen3.5:9b" {
 		t.Fatalf("litellm_params.model = %q", entry.LiteLLMParams.Model)
 	}
-	if entry.LiteLLMParams.APIBase != "http://127.0.0.1:8402/v1" {
-		t.Fatalf("litellm_params.api_base = %q", entry.LiteLLMParams.APIBase)
+	if entry.LiteLLMParams.APIBase != "http://x402-buyer.llm.svc.cluster.local:8402/v1" {
+		t.Fatalf("litellm_params.api_base = %q, want the x402-buyer Service (the buyer is no longer a litellm sidecar)", entry.LiteLLMParams.APIBase)
 	}
 
 	if got := fakeAPI.addCalls.Load(); got != 1 {
@@ -348,18 +348,18 @@ func TestCheckBuyerStatusSkipsDeletingPods(t *testing.T) {
 	kubeClient := fake.NewSimpleClientset(
 		&corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:              "litellm-old",
+				Name:              "x402-buyer-old",
 				Namespace:         "llm",
-				Labels:            map[string]string{"app": "litellm"},
+				Labels:            map[string]string{"app": "x402-buyer"},
 				DeletionTimestamp: &now,
 			},
 			Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.1"},
 		},
 		&corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "litellm-new",
+				Name:      "x402-buyer-new",
 				Namespace: "llm",
-				Labels:    map[string]string{"app": "litellm"},
+				Labels:    map[string]string{"app": "x402-buyer"},
 			},
 			Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.2"},
 		},

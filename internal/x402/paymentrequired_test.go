@@ -505,3 +505,38 @@ func TestAgentCopy_NoModelProseAndRunnableExample(t *testing.T) {
 	// The "other AI agent" prompt embeds the concrete message too.
 	mustContain(t, c.PromptOther, defaultAgentTaskExample)
 }
+
+// Every 402 — JSON and HTML branch alike — must advertise the seller's
+// machine-readable catalog via an RFC 8288 Link header, so an agent that
+// lands on a paid endpoint with no prior knowledge can self-serve discovery.
+// Header-only invariant: the body schema assertions live in the sibling
+// tests above and must not change.
+func TestPaymentRequired_CarriesCatalogLinkHeader(t *testing.T) {
+	const wantLink = `</api/services.json>; rel="catalog"`
+	render := NewHTMLAwarePaymentRequired(sampleDisplay())
+
+	t.Run("json", func(t *testing.T) {
+		r := httptest.NewRequest("GET", "/services/agent-quant", nil)
+		w := httptest.NewRecorder()
+		render(w, r, []x402types.PaymentRequirements{sampleRequirement()}, nil)
+		if w.Code != http.StatusPaymentRequired {
+			t.Fatalf("status = %d, want 402", w.Code)
+		}
+		if got := w.Header().Get("Link"); got != wantLink {
+			t.Errorf("Link = %q, want %q", got, wantLink)
+		}
+	})
+
+	t.Run("html", func(t *testing.T) {
+		r := httptest.NewRequest("GET", "/services/agent-quant", nil)
+		r.Header.Set("Accept", "text/html")
+		w := httptest.NewRecorder()
+		render(w, r, []x402types.PaymentRequirements{sampleRequirement()}, nil)
+		if w.Code != http.StatusPaymentRequired {
+			t.Fatalf("status = %d, want 402", w.Code)
+		}
+		if got := w.Header().Get("Link"); got != wantLink {
+			t.Errorf("Link = %q, want %q", got, wantLink)
+		}
+	})
+}

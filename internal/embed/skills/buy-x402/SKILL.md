@@ -218,6 +218,35 @@ python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py maint
 | `list` | List purchased providers + remaining auth counts |
 | `status <name>` | Check sidecar pod status + remaining auths + auth-expiry countdown |
 | `balance [--chain <network>]` | Check agent's USDC balance via eRPC |
+| `siwx <url> [--fetch] [--method GET\|POST]` | Wallet sign-in (SIWX/EIP-4361) for **auth-gated** routes — see below |
+
+## Wallet-gated (auth) routes — SIWX
+
+Not every gated route wants money. Sellers can gate routes on **wallet
+identity** instead of payment (`gate: auth` in their route table) — typically
+result pages bound to whichever wallet paid for a job. You'll recognize them
+by a `401` response with `WWW-Authenticate: SIWX domain="<host>" ...` instead
+of the usual `402`.
+
+```bash
+# Print a ready-to-use Authorization header (signed via the remote-signer;
+# single-use, valid ~10 minutes):
+python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py siwx \
+  https://seller.example/services/audit/reports/42
+
+# Or perform the authenticated request directly:
+python3 .../buy.py siwx https://seller.example/services/audit/reports/42 --fetch
+```
+
+Key facts:
+- The signing wallet is the agent's remote-signer wallet — the same one that
+  pays x402 requests. Sellers bind resources to the **paying** wallet, so
+  paying and reading with the same wallet Just Works.
+- The credential is an EIP-4361 message signed with `personal_sign`; the
+  message's domain must equal the URL's host (the command handles this).
+- For repeated access, POST `{message, signature}` to the offer's
+  `/auth/verify` endpoint (advertised in the 401 body's `auth.verifyUrl`) and
+  reuse the returned `sessionToken` as `Authorization: Bearer <token>`.
 
 ## Surfaces
 
@@ -357,9 +386,9 @@ flowchart LR
 
 4. **Reconcile**: The controller validates pricing, writes per-upstream buyer config/auth files into the `x402-buyer-config` and `x402-buyer-auths` ConfigMaps in `llm`, and keeps the paid model route available in LiteLLM.
 
-5. **Runtime mount**: A lean Go sidecar (`x402-buyer`) already runs inside the existing `litellm` pod in the `llm` namespace. It mounts both ConfigMaps and serves as an OpenAI-compatible reverse proxy on `127.0.0.1:8402`.
+5. **Runtime mount**: A lean Go service (`x402-buyer`) runs as its own Deployment in the `llm` namespace. It mounts both ConfigMaps and serves as an OpenAI-compatible reverse proxy at `x402-buyer.llm.svc.cluster.local:8402`.
 
-6. **Wire**: LiteLLM keeps one static wildcard route: `paid/* -> openai/* -> 127.0.0.1:8402/v1`. The controller also adds explicit paid-model entries when required so models with colons resolve reliably. The public model name is always `paid/<remote-model>`.
+6. **Wire**: LiteLLM keeps one static wildcard route: `paid/* -> openai/* -> http://x402-buyer.llm.svc.cluster.local:8402/v1`. The controller also adds explicit paid-model entries when required so models with colons resolve reliably. The public model name is always `paid/<remote-model>`.
 
 7. **Runtime**: On each request through the sidecar:
    - Sidecar forwards to upstream seller

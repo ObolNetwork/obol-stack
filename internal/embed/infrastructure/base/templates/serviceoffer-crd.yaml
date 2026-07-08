@@ -79,6 +79,35 @@ spec:
                     - namespace
                     type: object
                 type: object
+              async:
+                description: |-
+                  Async turns the offer's paid routes into accepted jobs: payment
+                  settles at acceptance, the request is replayed against the upstream
+                  with no client-facing deadline by the job broker, and the buyer
+                  polls a free status page (202 + Location: <offer>/jobs/<id>).
+                properties:
+                  enabled:
+                    default: false
+                    description: Enabled routes the offer's paid requests through
+                      the job broker.
+                    type: boolean
+                  resultVisibility:
+                    default: payer
+                    description: |-
+                      ResultVisibility gates GET <offer>/jobs/<id>/result. "payer"
+                      (default) requires the paying wallet (SIWX) or the capability
+                      jobToken returned in the 202 body; "public" makes the unguessable
+                      job id the capability (shareable results).
+                    enum:
+                    - payer
+                    - public
+                    type: string
+                  ttl:
+                    description: |-
+                      TTL is how long job records + stored results are retained.
+                      Defaults to 72h. Status pages return 410 Gone afterwards.
+                    type: string
+                type: object
               drainAt:
                 description: |-
                   DrainAt marks the offer as draining when non-nil. While the offer
@@ -97,6 +126,42 @@ spec:
                   is honored as "tear down immediately on the next reconcile" (the
                   equivalent of `obol sell stop --force`).
                 type: string
+              hostname:
+                description: |-
+                  Hostname gives the offer its own public origin: the controller
+                  renders an additional HTTPRoute answering on this hostname alone,
+                  with the offer's routes rooted at "/" (rewritten into the shared
+                  /services/<name> path-world before the payment gate) plus an
+                  offer-scoped discovery bundle (/openapi.json, /.well-known/x402,
+                  and a landing page at "/"). The shared-origin path keeps working as
+                  a back-compat alias. The x402 market is origin-keyed (x402scan,
+                  agentcash crawl per origin) — a dedicated hostname is what makes an
+                  offer list as its own product instead of leaking into one shared
+                  listing. DNS + tunnel routing for the hostname are the operator's
+                  job (obol tunnel hostname add <host> --offer <ns>/<name>).
+                maxLength: 253
+                pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$
+                type: string
+              limits:
+                description: Limits renders Traefik middleware in front of the offer's
+                  routes.
+                properties:
+                  maxInFlight:
+                    description: |-
+                      MaxInFlight caps concurrent in-flight requests (Traefik inFlightReq).
+                      0 = no cap. The unbounded-concurrency hole on paid agents is
+                      pentest-proven; paid agent offers should set a small value.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                  rps:
+                    description: |-
+                      RPS caps average requests/second (Traefik rateLimit; burst 2x).
+                      0 = no cap.
+                    format: int64
+                    minimum: 0
+                    type: integer
+                type: object
               listing:
                 description: |-
                   Listing controls how the offer is presented on the public storefront
@@ -385,6 +450,103 @@ spec:
                       type: string
                     type: array
                 type: object
+              routes:
+                description: |-
+                  Routes declares the offer's route table: per-path gate classes (paid
+                  or free) and optional per-route price overrides, all relative to the
+                  offer's effective path. It is the single source of truth for the
+                  x402 verifier's route rules and for discovery surfaces (openapi,
+                  skill.md, services.json, buy prompts). Empty means the pre-route-table
+                  behavior: one paid catch-all covering everything under the offer path.
+                  See EffectiveRoutes.
+                items:
+                  description: |-
+                    ServiceOfferRoute is one entry in an offer's route table. Path is
+                    interpreted relative to the offer's effective path (the public prefix),
+                    so route tables survive a future move to per-offer hostnames unchanged.
+                  properties:
+                    freeQuota:
+                      description: |-
+                        FreeQuota grants each SIWX-verified wallet this many free calls per
+                        UTC day on a paid route before the 402 applies (the x402scan-style
+                        free tier). Counters are verifier-local and reset on verifier
+                        restart — a giveaway mechanism, not an entitlement ledger. 0 = none.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    gate:
+                      default: paid
+                      description: |-
+                        Gate class. "paid" gates the route with x402 (default); "free" passes
+                        the payment gate entirely (health checks, job status pages, per-offer
+                        discovery documents); "auth" requires a SIWX-verified wallet and
+                        forwards it upstream as X-Verified-Wallet.
+                      enum:
+                      - paid
+                      - free
+                      - auth
+                      type: string
+                    methods:
+                      description: |-
+                        HTTP methods this route serves. Discovery metadata only in phase 1 —
+                        the payment gate applies to every method on a matched path. Empty
+                        means all methods.
+                      items:
+                        enum:
+                        - GET
+                        - POST
+                        - PUT
+                        - PATCH
+                        - DELETE
+                        - HEAD
+                        - OPTIONS
+                        type: string
+                      maxItems: 9
+                      type: array
+                    path:
+                      description: |-
+                        Path relative to the offer's effective path. Must start with "/".
+                        Supports the verifier's pattern syntax: exact ("/healthz"), greedy
+                        prefix ("/v1/*"), and segment globs ("/models-*/info").
+                      maxLength: 512
+                      pattern: ^/[a-zA-Z0-9/_.*-]*$
+                      type: string
+                    price:
+                      description: |-
+                        Price override for a paid route. When set, it replaces the offer's
+                        primary payment option price for this route and the route becomes
+                        single-payment (multi-currency price overrides are not supported —
+                        secondary spec.payments[] options are not advertised on overridden
+                        routes). Empty means the offer's payment pricing applies.
+                      properties:
+                        perEpoch:
+                          description: Per-training-epoch price in USDC. Fine-tuning
+                            only.
+                          type: string
+                        perHour:
+                          description: Per-compute-hour price in USDC. Fine-tuning
+                            only.
+                          type: string
+                        perMTok:
+                          description: Per-million-tokens price in USDC. Inference
+                            only.
+                          type: string
+                        perRequest:
+                          description: Flat per-request price in USDC. Applicable
+                            to all types.
+                          type: string
+                      type: object
+                    summary:
+                      description: |-
+                        Human-readable one-line summary surfaced in discovery (openapi
+                        operation summary, skill.md route list).
+                      maxLength: 300
+                      type: string
+                  required:
+                  - path
+                  type: object
+                maxItems: 128
+                type: array
               type:
                 default: http
                 description: |-

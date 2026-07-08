@@ -62,6 +62,14 @@ type ForwardAuthConfig struct {
 	// funnel-leak metrics per failure stage.
 	OnPaymentFailure func(reason string)
 
+	// OnPaymentVerified, if non-nil, is invoked with the payer address the
+	// facilitator recovered from the verified payment, immediately before
+	// the inner handler runs. The verifier uses it to propagate
+	// X-Payment-Payer to the upstream (payment identity = the wallet that
+	// may later read payer-gated results). Empty when the facilitator
+	// response omits the payer.
+	OnPaymentVerified func(payer string)
+
 	// SettlesInProcess marks the in-process seller-gateway path (HandleProxy /
 	// obol sell inference) where VerifyOnly=false is correct BY DESIGN — the
 	// middleware proxies to the real upstream and settles only after a <400
@@ -296,6 +304,10 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 				return
 			}
 
+			if cfg.OnPaymentVerified != nil {
+				cfg.OnPaymentVerified(verifyResp.Payer)
+			}
+
 			// Payment verified — wrap with settlement interceptor.
 			interceptor := &settlementInterceptor{
 				w: w,
@@ -376,6 +388,7 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 // understand; it remains the default when ForwardAuthConfig.SendPaymentRequired
 // is unset and the fallback when the renderer has nothing else to do.
 func sendPaymentRequiredJSON(w http.ResponseWriter, r *http.Request, requirements []x402types.PaymentRequirements, extensions map[string]any) {
+	setCatalogLinkHeader(w)
 	resp := buildPaymentRequired(r, requirements, extensions)
 
 	body, err := json.Marshal(resp)
@@ -388,6 +401,16 @@ func sendPaymentRequiredJSON(w http.ResponseWriter, r *http.Request, requirement
 	setPaymentRequiredHeader(w, body)
 	w.WriteHeader(http.StatusPaymentRequired)
 	_, _ = w.Write(body)
+}
+
+// setCatalogLinkHeader advertises the seller's machine-readable service
+// catalog on every 402 response (RFC 8288 web linking). An agent that lands
+// on a paid endpoint directly — with no prior knowledge of the seller's
+// layout — can follow the link to /api/services.json and self-serve
+// discovery of every other offer. Header-only addition: the 402 body schema
+// and the verification/settlement flow are unchanged.
+func setCatalogLinkHeader(w http.ResponseWriter) {
+	w.Header().Set("Link", `</api/services.json>; rel="catalog"`)
 }
 
 // buildPaymentRequired assembles the v2 PaymentRequired object for the

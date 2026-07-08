@@ -53,6 +53,14 @@ service:
   type: ClusterIP
   port: 3000
 
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
 podSecurityContext:
   fsGroup: 1001
 

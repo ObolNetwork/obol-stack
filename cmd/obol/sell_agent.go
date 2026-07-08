@@ -87,6 +87,7 @@ Examples:
 		}, acceptFlags()...),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
+			warnOnClockSkew(ctx, u, "")
 			if cmd.NArg() != 1 {
 				return fmt.Errorf("agent name required: obol sell agent <name>")
 			}

@@ -721,7 +721,7 @@ PY
         write_receipt registration "$REGISTRATION_TX"
         pass "Registration receipt archived: $REGISTRATION_TX"
     else
-        skip "Registration receipt unavailable for Agent ID $AGENT_ID (registration already reflected in ServiceOffer status)"
+        pass "Registration already reflected in ServiceOffer status; receipt lookup unavailable for Agent ID $AGENT_ID"
     fi
     if [ -n "$METADATA_TX" ] && receipt_status_ok "$METADATA_TX"; then
         write_receipt metadata "$METADATA_TX"

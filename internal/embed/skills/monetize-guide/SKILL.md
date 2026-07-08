@@ -1,6 +1,6 @@
 ---
 name: monetize-guide
-description: "End-to-end guide for monetizing GPU resources or HTTP services through obol-stack. Covers pre-flight checks, model detection, pricing research, selling via x402, ERC-8004 registration, and verification. Use this skill when the user wants to monetize their machine."
+description: "End-to-end guide for monetizing GPU resources or HTTP services through obol-stack. Covers pre-flight checks, model detection, pricing research, selling via x402, ERC-8004 registration, and verification. Use when the user says 'monetize my machine', 'sell my GPU', or 'expose a paid API' — i.e. selling raw inference or a plain HTTP service. For selling a specialised agent's replies (the higher-margin path), use sub-agent-business instead."
 metadata: { "openclaw": { "emoji": "🚀", "requires": { "bins": ["python3"] } } }
 ---
 

@@ -8,6 +8,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/inference"
@@ -412,6 +415,60 @@ func TestServiceOfferStatusLines_RawTxFallback(t *testing.T) {
 	}
 	if strings.Contains(joined, "https://") {
 		t.Fatalf("unexpected URL in tx line for unknown network:\n%s", joined)
+	}
+}
+
+func TestFormatConditionLine_ShowsAge(t *testing.T) {
+	cond := monetizeapi.Condition{
+		Type:               "Ready",
+		Status:             "True",
+		Reason:             "Ready",
+		LastTransitionTime: metav1.Time{Time: time.Now().Add(-3 * time.Hour)},
+	}
+	line := formatConditionLine(cond)
+	if !strings.Contains(line, "(changed 3h ago)") {
+		t.Errorf("condition line missing age, got: %q", line)
+	}
+
+	// Zero transition time (older controllers, hand-built fixtures) must
+	// not render a bogus age.
+	cond.LastTransitionTime = metav1.Time{}
+	if line := formatConditionLine(cond); strings.Contains(line, "changed") {
+		t.Errorf("zero LastTransitionTime must not render an age, got: %q", line)
+	}
+}
+
+func TestServiceOfferStatusLines_SnapshotCaveat(t *testing.T) {
+	withConditions := monetizeapi.ServiceOffer{
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}},
+		},
+	}
+	joined := strings.Join(serviceOfferStatusLines("llm", "demo", withConditions, ""), "\n")
+	if !strings.Contains(joined, "last reconciled snapshot") {
+		t.Errorf("status output missing the snapshot caveat:\n%s", joined)
+	}
+
+	// No conditions (offer not yet reconciled) → no caveat about them.
+	joined = strings.Join(serviceOfferStatusLines("llm", "demo", monetizeapi.ServiceOffer{}, ""), "\n")
+	if strings.Contains(joined, "snapshot") {
+		t.Errorf("caveat must only render when conditions exist:\n%s", joined)
+	}
+}
+
+func TestHumanAge(t *testing.T) {
+	for _, tt := range []struct {
+		age  time.Duration
+		want string
+	}{
+		{30 * time.Second, "just now"},
+		{5 * time.Minute, "5m ago"},
+		{2 * time.Hour, "2h ago"},
+		{49 * time.Hour, "2d ago"},
+	} {
+		if got := humanAge(time.Now().Add(-tt.age)); got != tt.want {
+			t.Errorf("humanAge(-%v) = %q, want %q", tt.age, got, tt.want)
+		}
 	}
 }
 
@@ -1834,8 +1891,12 @@ func TestResumeSellHTTPOffers_EmptyStoreNoOp(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(cfg.ConfigDir, "kubeconfig.yaml"), []byte("placeholder"), 0o600); err != nil {
 		t.Fatalf("seed kubeconfig: %v", err)
 	}
-	if err := resumePersistedServiceOffers(cfg, ui.New(false)); err != nil {
+	failed, err := resumePersistedServiceOffers(cfg, ui.New(false))
+	if err != nil {
 		t.Errorf("empty-store resume must succeed: %v", err)
+	}
+	if len(failed) != 0 {
+		t.Errorf("empty-store resume must report no failed offers, got %v", failed)
 	}
 }
 
@@ -1885,11 +1946,16 @@ func TestResumeSellOffers_HTTPOnlyStore(t *testing.T) {
 	if err := persistServiceOffer(cfg, "llm", "only-http", manifest); err != nil {
 		t.Fatalf("persist: %v", err)
 	}
-	// kubectl apply will fail against the fake kubeconfig — that's
-	// expected and reported as a warn, not an error. We just need
-	// resumeSellOffers itself to return nil.
-	if err := resumeSellOffers(context.Background(), cfg, ui.New(false)); err != nil {
-		t.Errorf("http-only store must not error from resumeSellOffers: %v", err)
+	// kubectl apply fails against the fake kubeconfig, which means the
+	// offer did NOT come back — resumeSellOffers must say so loudly: a
+	// seller who reboots and reads "OK" while their offer is down loses
+	// revenue silently. The error must name the failed offer.
+	err := resumeSellOffers(context.Background(), cfg, ui.New(false))
+	if err == nil {
+		t.Fatal("resumeSellOffers must return an error when an offer fails to resume")
+	}
+	if !strings.Contains(err.Error(), "llm/only-http") {
+		t.Errorf("resume error must name the failed offer, got: %v", err)
 	}
 }
 
@@ -2436,26 +2502,124 @@ func TestOfferPathCollisionInList(t *testing.T) {
 	]}`)
 
 	// Colliding with a live offer fails, including trailing-slash form.
-	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/shared/"); err == nil {
+	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/shared/", ""); err == nil {
 		t.Fatal("expected collision with agent-a/alpha")
 	}
 	// A deleting offer frees its path.
-	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/free"); err != nil {
+	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/free", ""); err != nil {
 		t.Fatalf("deleting offer must not block the path: %v", err)
 	}
 	// Empty spec.path defaults to /services/<name> on BOTH sides.
-	if err := offerPathCollisionInList(listing, "agent-b", "defaulted", ""); err == nil {
+	if err := offerPathCollisionInList(listing, "agent-b", "defaulted", "", ""); err == nil {
 		t.Fatal("requester's defaulted path must collide with llm/defaulted's defaulted path")
 	}
-	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/defaulted"); err == nil {
+	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/defaulted", ""); err == nil {
 		t.Fatal("expected collision with llm/defaulted's defaulted path")
 	}
 	// Re-applying the same offer is an update, not a collision.
-	if err := offerPathCollisionInList(listing, "agent-a", "alpha", "/services/shared"); err != nil {
+	if err := offerPathCollisionInList(listing, "agent-a", "alpha", "/services/shared", ""); err != nil {
 		t.Fatalf("self-update must pass: %v", err)
 	}
 	// Unparseable listings defer to the controller backstop.
-	if err := offerPathCollisionInList([]byte("not json"), "a", "b", "/c"); err != nil {
+	if err := offerPathCollisionInList([]byte("not json"), "a", "b", "/c", ""); err != nil {
 		t.Fatalf("garbage listing must not block: %v", err)
+	}
+}
+
+// TestPreflightOfferPathCollision_ReservedPath pins the static denylist in
+// the sell preflight: reserved platform paths are rejected before any
+// cluster access (the check must work with an unreachable cluster), while
+// normal /services/<name> paths fall through to the live-offer check.
+func TestPreflightOfferPathCollision_ReservedPath(t *testing.T) {
+	manifest := func(path string) map[string]any {
+		return map[string]any{
+			"metadata": map[string]any{"name": "x", "namespace": "agent-x"},
+			"spec":     map[string]any{"path": path},
+		}
+	}
+	cfg := &config.Config{ConfigDir: t.TempDir(), BinDir: t.TempDir()}
+
+	for _, reserved := range []string{"/rpc", "/api/mine", "/skill.md", "/.well-known/x402", "/services", "/"} {
+		if err := preflightOfferPathCollision(cfg, manifest(reserved)); err == nil {
+			t.Errorf("path %q: expected reserved-path error, got nil", reserved)
+		}
+	}
+
+	// A normal path reaches the kubectl stage; with no cluster the check
+	// is best-effort and passes (controller backstops).
+	if err := preflightOfferPathCollision(cfg, manifest("/services/x")); err != nil {
+		t.Errorf("normal path: %v", err)
+	}
+}
+
+// TestParseRouteFlags pins the --route flag grammar: comma-separated
+// key=value with comma-tolerant summaries, method validation, the
+// paid-by-default gate, and the free-route/price exclusion.
+func TestParseRouteFlags(t *testing.T) {
+	routes, hasPaid, err := parseRouteFlags([]string{
+		"path=/submit,methods=POST,price=0.5,summary=Submit source, then poll",
+		"path=/jobs/*,gate=free",
+		"path=/*",
+	})
+	if err != nil {
+		t.Fatalf("parseRouteFlags: %v", err)
+	}
+	if !hasPaid || len(routes) != 3 {
+		t.Fatalf("routes = %+v hasPaid = %v, want 3 routes with a paid one", routes, hasPaid)
+	}
+	if routes[0]["path"] != "/submit" || routes[0]["gate"] != "paid" {
+		t.Errorf("routes[0] = %+v, want paid /submit", routes[0])
+	}
+	if p, _ := routes[0]["price"].(map[string]any); p["perRequest"] != "0.5" {
+		t.Errorf("routes[0] price = %+v, want perRequest 0.5", routes[0]["price"])
+	}
+	if routes[0]["summary"] != "Submit source, then poll" {
+		t.Errorf("comma-containing summary mangled: %q", routes[0]["summary"])
+	}
+	if m, _ := routes[0]["methods"].([]any); len(m) != 1 || m[0] != "POST" {
+		t.Errorf("routes[0] methods = %+v", routes[0]["methods"])
+	}
+	if routes[1]["gate"] != "free" {
+		t.Errorf("routes[1] = %+v, want free", routes[1])
+	}
+	if routes[2]["gate"] != "paid" {
+		t.Errorf("routes[2] = %+v, want gate defaulted to paid", routes[2])
+	}
+
+	// All-free tables parse but report hasPaid=false (caller warns).
+	_, hasPaid, err = parseRouteFlags([]string{"path=/healthz,gate=free"})
+	if err != nil || hasPaid {
+		t.Errorf("all-free table: err=%v hasPaid=%v, want nil/false", err, hasPaid)
+	}
+
+	for _, bad := range []string{
+		"methods=POST",                // no path
+		"path=submit",                 // missing leading slash
+		"path=/x,gate=member",         // unknown gate
+		"path=/x,methods=YEET",        // unknown method
+		"path=/x,gate=free,price=0.5", // free routes cannot charge
+		"path=/x,pricing=0.5",         // unknown key
+	} {
+		if _, _, err := parseRouteFlags([]string{bad}); err == nil {
+			t.Errorf("parseRouteFlags(%q): expected error, got nil", bad)
+		}
+	}
+}
+
+// TestOfferPathCollisionInList_Hostname pins one-offer-per-origin in the
+// CLI preflight: a second offer claiming an existing spec.hostname fails
+// fast, case-insensitively.
+func TestOfferPathCollisionInList_Hostname(t *testing.T) {
+	listing := []byte(`{"items":[
+		{"metadata":{"name":"alpha","namespace":"agent-a"},"spec":{"path":"/services/alpha","hostname":"audit.v1337.example"}}
+	]}`)
+	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/beta", "AUDIT.v1337.example"); err == nil {
+		t.Fatal("expected hostname collision with agent-a/alpha")
+	}
+	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/beta", "other.v1337.example"); err != nil {
+		t.Fatalf("distinct hostname must pass: %v", err)
+	}
+	if err := offerPathCollisionInList(listing, "agent-a", "alpha", "/services/alpha", "audit.v1337.example"); err != nil {
+		t.Fatalf("self-update must pass: %v", err)
 	}
 }

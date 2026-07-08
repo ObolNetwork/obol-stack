@@ -28,6 +28,12 @@ const (
 	servicesJSONRouteName     = "obol-services-json-route"
 	openAPIRouteName          = "obol-openapi-route"
 	apiDocsRouteName          = "obol-api-docs-route"
+
+	// catalogHeadersMiddlewareName is the Traefik headers Middleware attached
+	// to the public catalog HTTPRoutes (/skill.md, /openapi.json, /api,
+	// /api/services.json). The busybox httpd serving those files cannot set
+	// custom response headers, so CORS + caching are applied at the gateway.
+	catalogHeadersMiddlewareName = "obol-catalog-headers"
 )
 
 // restrictedPodSecurityContext returns a Pod-level securityContext that
@@ -249,7 +255,17 @@ func agentIdentityLabels(identity *monetizeapi.AgentIdentity, appName string) ma
 	}
 }
 
-func buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML string) *unstructured.Unstructured {
+func buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) *unstructured.Unstructured {
+	data := map[string]any{
+		"skill.md":      content,
+		"services.json": servicesJSON,
+		"openapi.json":  openAPIJSON,
+		"api.html":      apiDocsHTML,
+		"httpd.conf":    ".md:text/markdown\n.json:application/json\n.html:text/html\n",
+	}
+	for _, f := range bundles {
+		data[f.Key] = f.Content
+	}
 	return &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
@@ -262,18 +278,32 @@ func buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML 
 					"obol.org/managed-by": "serviceoffer-controller",
 				},
 			},
-			"data": map[string]any{
-				"skill.md":      content,
-				"services.json": servicesJSON,
-				"openapi.json":  openAPIJSON,
-				"api.html":      apiDocsHTML,
-				"httpd.conf":    ".md:text/markdown\n.json:application/json\n.html:text/html\n",
-			},
+			"data": data,
 		},
 	}
 }
 
-func buildSkillCatalogDeployment(contentHash string) *unstructured.Unstructured {
+// skillCatalogVolumeItems projects the ConfigMap keys into the httpd's /www
+// tree: the four aggregate documents plus one file per hostname-offer
+// bundle entry (offers/<ns>/<name>/…).
+func skillCatalogVolumeItems(bundles []offerBundleFile) []any {
+	items := []any{
+		map[string]any{"key": "skill.md", "path": "skill.md"},
+		map[string]any{"key": "services.json", "path": "api/services.json"},
+		map[string]any{"key": "openapi.json", "path": "openapi.json"},
+		// busybox httpd resolves /api/ → /api/index.html, so the
+		// Scalar shell sits at api/index.html. The /api Exact
+		// HTTPRoute also matches the trailing-slash variant so the
+		// resolver kicks in either way.
+		map[string]any{"key": "api.html", "path": "api/index.html"},
+	}
+	for _, f := range bundles {
+		items = append(items, map[string]any{"key": f.Key, "path": f.Path})
+	}
+	return items
+}
+
+func buildSkillCatalogDeployment(contentHash string, bundles []offerBundleFile) *unstructured.Unstructured {
 	labels := map[string]any{
 		"app":                 skillCatalogConfigMapName,
 		"obol.org/managed-by": "serviceoffer-controller",
@@ -324,17 +354,8 @@ func buildSkillCatalogDeployment(contentHash string) *unstructured.Unstructured 
 							map[string]any{
 								"name": "content",
 								"configMap": map[string]any{
-									"name": skillCatalogConfigMapName,
-									"items": []any{
-										map[string]any{"key": "skill.md", "path": "skill.md"},
-										map[string]any{"key": "services.json", "path": "api/services.json"},
-										map[string]any{"key": "openapi.json", "path": "openapi.json"},
-										// busybox httpd resolves /api/ → /api/index.html, so the
-										// Scalar shell sits at api/index.html. The /api Exact
-										// HTTPRoute also matches the trailing-slash variant so the
-										// resolver kicks in either way.
-										map[string]any{"key": "api.html", "path": "api/index.html"},
-									},
+									"name":  skillCatalogConfigMapName,
+									"items": skillCatalogVolumeItems(bundles),
 								},
 							},
 							map[string]any{
@@ -377,6 +398,59 @@ func buildSkillCatalogService() *unstructured.Unstructured {
 	}
 }
 
+// buildCatalogHeadersMiddleware renders the Traefik headers Middleware for
+// the public discovery surfaces. These are read-only public documents served
+// without credentials, so a wildcard CORS origin is correct — browser-based
+// buyers, dashboards, and aggregators must be able to fetch them cross-origin.
+// Cache-Control keeps CDN/browser refetch pressure off the busybox httpd
+// while staying short enough (5 min) that catalog updates propagate quickly.
+//
+// Deliberately NOT attached to the /services/* paid routes (the 402/paid
+// path has its own header semantics) nor to the ERC-8004
+// /.well-known/agent-registration.json routes (those live in per-agent
+// namespaces, where an ExtensionRef cannot reference this x402-namespace
+// Middleware).
+func buildCatalogHeadersMiddleware() *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "traefik.io/v1alpha1",
+			"kind":       "Middleware",
+			"metadata": map[string]any{
+				"name":      catalogHeadersMiddlewareName,
+				"namespace": skillCatalogNamespace,
+				"labels": map[string]any{
+					"obol.org/managed-by": "serviceoffer-controller",
+				},
+			},
+			"spec": map[string]any{
+				"headers": map[string]any{
+					"accessControlAllowOriginList": []any{"*"},
+					"accessControlAllowMethods":    []any{"GET", "OPTIONS"},
+					"customResponseHeaders": map[string]any{
+						"Cache-Control": "public, max-age=300",
+					},
+				},
+			},
+		},
+	}
+}
+
+// catalogHeadersFilters is the HTTPRoute rule filter list that attaches the
+// catalog headers Middleware — same ExtensionRef mechanism the x402
+// ForwardAuth Middleware uses on gated routes.
+func catalogHeadersFilters() []any {
+	return []any{
+		map[string]any{
+			"type": "ExtensionRef",
+			"extensionRef": map[string]any{
+				"group": "traefik.io",
+				"kind":  "Middleware",
+				"name":  catalogHeadersMiddlewareName,
+			},
+		},
+	}
+}
+
 func buildSkillCatalogHTTPRoute() *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
@@ -407,6 +481,7 @@ func buildSkillCatalogHTTPRoute() *unstructured.Unstructured {
 								},
 							},
 						},
+						"filters": catalogHeadersFilters(),
 						"backendRefs": []any{
 							map[string]any{
 								"name":      skillCatalogConfigMapName,
@@ -459,6 +534,7 @@ func buildOpenAPIHTTPRoute() *unstructured.Unstructured {
 								},
 							},
 						},
+						"filters": catalogHeadersFilters(),
 						"backendRefs": []any{
 							map[string]any{
 								"name":      skillCatalogConfigMapName,
@@ -520,6 +596,7 @@ func buildAPIDocsHTTPRoute() *unstructured.Unstructured {
 								},
 							},
 						},
+						"filters": catalogHeadersFilters(),
 						"backendRefs": []any{
 							map[string]any{
 								"name":      skillCatalogConfigMapName,
@@ -564,6 +641,7 @@ func buildServicesJSONHTTPRoute() *unstructured.Unstructured {
 								},
 							},
 						},
+						"filters": catalogHeadersFilters(),
 						"backendRefs": []any{
 							map[string]any{
 								"name":      skillCatalogConfigMapName,
@@ -574,6 +652,57 @@ func buildServicesJSONHTTPRoute() *unstructured.Unstructured {
 					},
 				},
 			},
+		},
+	}
+}
+
+// hasLimits reports whether the offer wants protection middleware.
+func hasLimits(offer *monetizeapi.ServiceOffer) bool {
+	return offer.Spec.Limits.MaxInFlight > 0 || offer.Spec.Limits.RPS > 0
+}
+
+// buildLimitsMiddleware renders the Traefik protection middleware for
+// spec.limits: inFlightReq (concurrency cap — the unbounded-concurrency
+// hole on paid agents is pentest-proven) and/or rateLimit. Lives in the
+// offer's namespace because Gateway API ExtensionRef resolves there.
+func buildLimitsMiddleware(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured {
+	spec := map[string]any{}
+	if offer.Spec.Limits.MaxInFlight > 0 {
+		spec["inFlightReq"] = map[string]any{"amount": offer.Spec.Limits.MaxInFlight}
+	}
+	if offer.Spec.Limits.RPS > 0 {
+		spec["rateLimit"] = map[string]any{
+			"average": offer.Spec.Limits.RPS,
+			"burst":   offer.Spec.Limits.RPS * 2,
+		}
+	}
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "traefik.io/v1alpha1",
+			"kind":       "Middleware",
+			"metadata": map[string]any{
+				"name":            limitsMiddlewareName(offer.Name),
+				"namespace":       offer.Namespace,
+				"ownerReferences": []any{ownerRefMap(offer)},
+			},
+			"spec": spec,
+		},
+	}
+}
+
+func limitsMiddlewareName(offerName string) string {
+	return safeName("so-", offerName, "-limits")
+}
+
+// limitsFilter is the ExtensionRef filter attached to gated rules when
+// spec.limits is set.
+func limitsFilter(offer *monetizeapi.ServiceOffer) map[string]any {
+	return map[string]any{
+		"type": "ExtensionRef",
+		"extensionRef": map[string]any{
+			"group": "traefik.io",
+			"kind":  "Middleware",
+			"name":  limitsMiddlewareName(offer.Name),
 		},
 	}
 }
@@ -597,28 +726,138 @@ func buildHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured 
 					},
 				},
 				"rules": []any{
+					sharedOriginRule(offer),
+				},
+			},
+		},
+	}
+	return obj
+}
+
+// buildHostHTTPRoute renders the dedicated-origin route for a hostname-bound
+// offer. Topology (proven live before being generalized here — see
+// docs/proposals/multistore-storefront-routing.md appendix):
+//
+//   - Exact /, /openapi.json, /.well-known/x402 → the catalog httpd, with
+//     full-path rewrites into the offer's generated bundle files. These are
+//     structurally free — they never touch the payment gate.
+//   - PathPrefix / → x402-verifier, with the public path rewritten into the
+//     shared /services/<name> path-world (so the verifier's route table —
+//     gates, prices, carve-outs — applies unchanged) and X-Forwarded-Host
+//     pinned to the offer hostname (SIWX domain binding + resource URLs).
+//
+// Gateway API ranks Exact matches above PathPrefix, so the discovery rules
+// win their paths and everything else reaches the gate.
+func buildHostHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured {
+	dir := "/" + offerBundleDir(offer)
+	exactTo := func(publicPath, file string) map[string]any {
+		return map[string]any{
+			"matches": []any{
+				map[string]any{"path": map[string]any{"type": "Exact", "value": publicPath}},
+			},
+			"filters": []any{
+				map[string]any{
+					"type": "URLRewrite",
+					"urlRewrite": map[string]any{
+						"path": map[string]any{"type": "ReplaceFullPath", "replaceFullPath": dir + "/" + file},
+					},
+				},
+			},
+			"backendRefs": []any{
+				map[string]any{"name": skillCatalogConfigMapName, "namespace": skillCatalogNamespace, "port": int64(8080)},
+			},
+		}
+	}
+
+	catchallFilters := []any{
+		map[string]any{
+			"type": "URLRewrite",
+			"urlRewrite": map[string]any{
+				"path": map[string]any{
+					"type":               "ReplacePrefixMatch",
+					"replacePrefixMatch": strings.TrimSuffix(offer.EffectivePath(), "/"),
+				},
+			},
+		},
+		map[string]any{
+			"type": "RequestHeaderModifier",
+			"requestHeaderModifier": map[string]any{
+				"set": []any{
+					map[string]any{"name": "X-Forwarded-Host", "value": offer.Spec.Hostname},
+					map[string]any{"name": "X-Forwarded-Proto", "value": "https"},
+				},
+			},
+		},
+	}
+	if hasLimits(offer) {
+		catchallFilters = append(catchallFilters, limitsFilter(offer))
+	}
+
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "HTTPRoute",
+			"metadata": map[string]any{
+				"name":            hostChildName(offer.Name),
+				"namespace":       offer.Namespace,
+				"ownerReferences": []any{ownerRefMap(offer)},
+			},
+			"spec": map[string]any{
+				"hostnames": []any{offer.Spec.Hostname},
+				"parentRefs": []any{
+					map[string]any{
+						"name":        "traefik-gateway",
+						"namespace":   "traefik",
+						"sectionName": "web",
+					},
+				},
+				"rules": []any{
+					exactTo("/", "index.html"),
+					exactTo("/openapi.json", "openapi.json"),
+					exactTo("/.well-known/x402", "x402.json"),
 					map[string]any{
 						"matches": []any{
-							map[string]any{
-								"path": map[string]any{
-									"type":  "PathPrefix",
-									"value": offer.EffectivePath(),
-								},
-							},
+							map[string]any{"path": map[string]any{"type": "PathPrefix", "value": "/"}},
 						},
+						"filters": catchallFilters,
 						"backendRefs": []any{
-							map[string]any{
-								"name":      "x402-verifier",
-								"namespace": "x402",
-								"port":      int64(8080),
-							},
+							map[string]any{"name": "x402-verifier", "namespace": "x402", "port": int64(8080)},
 						},
 					},
 				},
 			},
 		},
 	}
-	return obj
+}
+
+// sharedOriginRule is the /services/<name> PathPrefix rule → verifier,
+// with the protection middleware attached when spec.limits is set.
+func sharedOriginRule(offer *monetizeapi.ServiceOffer) map[string]any {
+	rule := map[string]any{
+		"matches": []any{
+			map[string]any{
+				"path": map[string]any{
+					"type":  "PathPrefix",
+					"value": offer.EffectivePath(),
+				},
+			},
+		},
+		"backendRefs": []any{
+			map[string]any{
+				"name":      "x402-verifier",
+				"namespace": "x402",
+				"port":      int64(8080),
+			},
+		},
+	}
+	if hasLimits(offer) {
+		rule["filters"] = []any{limitsFilter(offer)}
+	}
+	return rule
+}
+
+func hostChildName(offerName string) string {
+	return safeName("so-", offerName, "-host")
 }
 
 func buildReferenceGrant(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured {
@@ -648,6 +887,14 @@ func buildReferenceGrant(offer *monetizeapi.ServiceOffer) *unstructured.Unstruct
 						"group": "",
 						"kind":  "Service",
 						"name":  "x402-verifier",
+					},
+					// Hostname-bound offers backend their discovery bundle
+					// (Exact / + /openapi.json + /.well-known/x402 rules)
+					// to the catalog httpd in this namespace.
+					map[string]any{
+						"group": "",
+						"kind":  "Service",
+						"name":  skillCatalogConfigMapName,
 					},
 				},
 			},
@@ -966,22 +1213,28 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 		if offer.IsDraining() {
 			status = fmt.Sprintf("draining · ends `%s`", offer.DrainEndsAt().UTC().Format(time.RFC3339))
 		}
+		tableEndpoint := baseURL + offer.EffectivePath()
+		if origin := offer.EffectiveOrigin(); origin != "" {
+			tableEndpoint = origin
+		}
 		lines = append(lines, fmt.Sprintf(
-			"| [%s](#%s) | %s | %s | %s | %s | `%s%s` |",
+			"| [%s](#%s) | %s | %s | %s | %s | `%s` |",
 			offer.Name,
 			offer.Name,
 			fallbackOfferType(offer),
 			modelName,
 			describeOfferPaymentsInline(offer),
 			status,
-			baseURL,
-			offer.EffectivePath(),
+			tableEndpoint,
 		))
 	}
 	lines = append(lines, "", "## Service Details", "")
 	for _, offer := range ready {
 		modelName := offer.Spec.Model.Name
 		endpoint := baseURL + offer.EffectivePath()
+		if origin := offer.EffectiveOrigin(); origin != "" {
+			endpoint = origin
+		}
 		lines = append(lines, fmt.Sprintf("### %s", offer.Name))
 		lines = append(lines, fmt.Sprintf("- **Endpoint**: `%s`", endpoint))
 		lines = append(lines, fmt.Sprintf("- **Call**: %s", offerCallHint(offer, endpoint)))
@@ -1005,6 +1258,16 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 				lines = append(lines, fmt.Sprintf("  %d. %s", i+1, describePaymentDetail(payments[i])))
 			}
 		}
+		lines = append(lines, skillCatalogRouteLines(offer, endpoint)...)
+		if offer.Spec.Async.Enabled {
+			access := "results are gated to the paying wallet (SIWX sign-in) or the `jobToken` from the 202 body"
+			if offer.Spec.Async.EffectiveResultVisibility() == monetizeapi.ResultVisibilityPublic {
+				access = "results are public (the unguessable job id is the capability)"
+			}
+			lines = append(lines, fmt.Sprintf(
+				"- **Delivery**: async — paid calls return `202` with `{jobId, statusUrl, resultUrl, jobToken}`; poll `%s/jobs/<jobId>` (free) until `state=complete`, then fetch the result — %s. Optional `{\"callbackUrl\": ...}` in a JSON body registers a completion webhook.",
+				endpoint, access))
+		}
 		if offer.IsDraining() {
 			lines = append(lines, fmt.Sprintf("- **Drain ends at**: %s", offer.DrainEndsAt().UTC().Format(time.RFC3339)))
 		}
@@ -1013,6 +1276,7 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 			description = fmt.Sprintf("x402 payment-gated %s service", fallbackOfferType(offer))
 		}
 		lines = append(lines, fmt.Sprintf("- **Description**: %s", description), "")
+		lines = append(lines, skillCatalogTryIt(offer, endpoint)...)
 	}
 
 	return strings.Join(lines, "\n")
@@ -1054,6 +1318,76 @@ func skillCatalogHowToPay(baseURL string) []string {
 			"pre-authorize a batch of paid inference.",
 		"",
 	}
+}
+
+// catalogModelName resolves the model id a buyer should put in a paid
+// chat-completions body. type=agent offers leave spec.model empty by design
+// (the model lives on the linked Agent), so fall back to the controller's
+// resolved view. Shared by /api/services.json and the /skill.md worked
+// examples so both surfaces advertise the same id.
+func catalogModelName(offer *monetizeapi.ServiceOffer) string {
+	if offer == nil {
+		return ""
+	}
+	if offer.Spec.Model.Name != "" {
+		return offer.Spec.Model.Name
+	}
+	if offer.Status.AgentResolution != nil {
+		return offer.Status.AgentResolution.Model
+	}
+	return ""
+}
+
+// skillCatalogTryIt renders the per-offer "Try it" subsection: one curl that
+// probes the 402 pricing, and one worked paid request. The paid example for
+// chat-shaped offers is buyprompts.Build's Example — the exact same bytes
+// /api/services.json publishes in the entry's buy.example — so the two
+// surfaces cannot drift. Agent buyers convert off copy-paste, not prose.
+func skillCatalogTryIt(offer *monetizeapi.ServiceOffer, endpoint string) []string {
+	// Route-table offers: probe + pay against the primary paid route, not
+	// the offer root (which may not be served at all when the table has no
+	// catch-all).
+	target := endpoint
+	if rt, ok := primaryPaidRoute(offer); ok {
+		target = endpoint + openAPIRelPathForRoute(rt.Path)
+	}
+	lines := []string{
+		"#### Try it",
+		"",
+		"Probe the price (no payment; the `402` body carries the signable `accepts[]` requirements):",
+		"",
+		"```bash",
+		fmt.Sprintf("curl -i %s", target),
+		"```",
+		"",
+	}
+	block := buyprompts.Build(buyprompts.Input{
+		Type:  fallbackOfferType(offer),
+		URL:   target,
+		Model: catalogModelName(offer),
+	})
+	if block.Example != "" {
+		// inference/agent: OpenAI-style chat-completions with the real model id.
+		lines = append(lines,
+			"Then sign one `accepts[]` entry — see [How to pay (x402)](#how-to-pay-x402) — and send a paid request:",
+			"",
+			"```",
+			block.Example,
+			"```",
+			"",
+		)
+	} else {
+		// http/fine-tuning: retry the gated path itself with the payment attached.
+		lines = append(lines,
+			"Then sign one `accepts[]` entry — see [How to pay (x402)](#how-to-pay-x402) — and retry the identical request with the payment attached:",
+			"",
+			"```bash",
+			fmt.Sprintf("curl -i %s -H \"X-PAYMENT: <base64-signed-authorization>\"", endpoint),
+			"```",
+			"",
+		)
+	}
+	return lines
 }
 
 // offerOperationallyReady reports whether an offer is usable for x402
@@ -1175,13 +1509,7 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string,
 		if desc == "" {
 			desc = fmt.Sprintf("x402 payment-gated %s service", fallbackOfferType(offer))
 		}
-		// type=agent offers leave spec.model empty by design (the model
-		// lives on the linked Agent). Fall back to the controller's
-		// resolved view so the storefront can display it.
-		modelName := offer.Spec.Model.Name
-		if modelName == "" && offer.Status.AgentResolution != nil {
-			modelName = offer.Status.AgentResolution.Model
-		}
+		modelName := catalogModelName(offer)
 
 		drainEndsAt := ""
 		if offer.IsDraining() {
@@ -1199,12 +1527,20 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string,
 			skills = append([]string(nil), offer.Spec.Registration.Skills...)
 		}
 
+		// Hostname-bound offers advertise their dedicated origin (the
+		// public path-world is rooted at "/") — the shared-origin path
+		// keeps working as an alias but is no longer what buyers are
+		// taught.
+		endpoint := baseURL + offer.EffectivePath()
+		if origin := offer.EffectiveOrigin(); origin != "" {
+			endpoint = origin
+		}
 		svc := schemas.ServiceCatalogEntry{
 			Name:                offer.Name,
 			Namespace:           offer.Namespace,
 			Type:                fallbackOfferType(offer),
 			Model:               modelName,
-			Endpoint:            baseURL + offer.EffectivePath(),
+			Endpoint:            endpoint,
 			Price:               describeOfferPrice(offer),
 			PayTo:               offer.Spec.Payment.PayTo,
 			Network:             offer.Spec.Payment.Network,
@@ -1240,9 +1576,15 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string,
 		// verbatim by the storefront (and any other consumer) so how-to-buy
 		// copy cannot drift between surfaces. The 402 paywall page builds
 		// its prompt cards from the same buyprompts package.
+		buyURL := svc.Endpoint
+		if rt, ok := primaryPaidRoute(offer); ok {
+			// Route-table offers: teach buyers the primary paid route, not
+			// the offer root. svc.Endpoint stays the base (public contract).
+			buyURL = svc.Endpoint + openAPIRelPathForRoute(rt.Path)
+		}
 		buy := buyprompts.Build(buyprompts.Input{
 			Type:         fallbackOfferType(offer),
-			URL:          svc.Endpoint,
+			URL:          buyURL,
 			SiteURL:      baseURL,
 			Model:        modelName,
 			PriceDisplay: svc.Price,
@@ -1256,10 +1598,11 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string,
 	}
 
 	catalog := schemas.ServiceCatalog{
-		DisplayName: profile.DisplayName,
-		Tagline:     profile.Tagline,
-		LogoURL:     profile.LogoURL,
-		Services:    services,
+		SchemaVersion: schemas.ServiceCatalogSchemaVersion,
+		DisplayName:   profile.DisplayName,
+		Tagline:       profile.Tagline,
+		LogoURL:       profile.LogoURL,
+		Services:      services,
 	}
 	if catalog.Services == nil {
 		catalog.Services = []schemas.ServiceCatalogEntry{}
@@ -1275,14 +1618,15 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string,
 func fallbackServiceCatalogJSON(baseURL string) string {
 	profile := storefront.ResolvePublished(nil, baseURL)
 	catalog := schemas.ServiceCatalog{
-		DisplayName: profile.DisplayName,
-		Tagline:     profile.Tagline,
-		LogoURL:     profile.LogoURL,
-		Services:    []schemas.ServiceCatalogEntry{},
+		SchemaVersion: schemas.ServiceCatalogSchemaVersion,
+		DisplayName:   profile.DisplayName,
+		Tagline:       profile.Tagline,
+		LogoURL:       profile.LogoURL,
+		Services:      []schemas.ServiceCatalogEntry{},
 	}
 	out, err := json.MarshalIndent(catalog, "", "  ")
 	if err != nil {
-		return `{"displayName":"Obol Stack","tagline":"Unlock Agent and API services with digital payments.","logoUrl":"/obol-stack-logo.png","services":[]}`
+		return `{"schemaVersion":"1","displayName":"Obol Stack","tagline":"Unlock Agent and API services with digital payments.","logoUrl":"/obol-stack-logo.png","services":[]}`
 	}
 	return string(out)
 }
@@ -1527,6 +1871,51 @@ func describePaymentDetail(p monetizeapi.ServiceOfferPayment) string {
 		}
 	}
 	return b.String()
+}
+
+// skillCatalogRouteLines renders the per-route list for offers with a
+// declared route table (spec.routes). One line per route: methods, full
+// URL, gate/price, and the route summary. Offers without a route table
+// contribute nothing — their single implicit catch-all is already fully
+// described by the Endpoint/Payment lines above.
+func skillCatalogRouteLines(offer *monetizeapi.ServiceOffer, endpoint string) []string {
+	if len(offer.Spec.Routes) == 0 {
+		return nil
+	}
+	lines := []string{"- **Routes** (per-route gating; paths outside this table are not served):"}
+	for _, rt := range offer.EffectiveRoutes() {
+		gate := rt.EffectiveGate()
+		methods := strings.Join(rt.Methods, "|")
+		if methods == "" {
+			if gate == monetizeapi.GatePaid {
+				methods = "POST"
+			} else {
+				methods = "GET"
+			}
+		}
+		var cost string
+		switch {
+		case gate == monetizeapi.GateFree:
+			cost = "free"
+		case gate == monetizeapi.GateAuth:
+			cost = "free, wallet sign-in required (SIWX/EIP-4361 — see the offer's `/auth` page)"
+		case rt.HasPriceOverride():
+			p := offer.EffectivePayments()[0]
+			p.Price = rt.Price
+			cost = describePaymentPrice(p)
+		default:
+			cost = describeOfferPrice(offer)
+		}
+		line := fmt.Sprintf("  - `%s %s%s` — %s", methods, endpoint, strings.TrimSuffix(rt.Path, "/*"), cost)
+		if strings.HasSuffix(rt.Path, "/*") {
+			line += " (covers sub-paths)"
+		}
+		if rt.Summary != "" {
+			line += " — " + rt.Summary
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 // offerCallHint returns a one-line "how to invoke" hint for the service

@@ -156,9 +156,9 @@ func newPurchaseLifecycleController(t *testing.T, purchases ...monetizeapi.Purch
 		},
 		&corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "litellm-0",
+				Name:      "x402-buyer-0",
 				Namespace: "llm",
-				Labels:    map[string]string{"app": "litellm"},
+				Labels:    map[string]string{"app": "x402-buyer"},
 			},
 			Status: corev1.PodStatus{
 				Phase: corev1.PodRunning,
