@@ -1,16 +1,34 @@
 'use client';
 
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
+import { ExternalLinkIcon } from '@radix-ui/react-icons';
+import { type KeyboardEvent, type MouseEvent } from 'react';
 
+import { Badge } from '@/components/atoms/Badge';
 import { Button } from '@/components/atoms/Button';
+import { ChainIcon } from '@/components/atoms/ChainIcon';
 import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
+import { tones } from '@/lib/ui/tones';
 import type { MarketplaceSort, ServiceListItem } from '@/lib/marketplace/types';
+
+import { Identicon } from './Identicon';
+import {
+  BADGE_LABEL,
+  BADGE_VARIANT,
+  STOREFRONT_TEXT_CSS,
+  chainLabel,
+  chainName,
+  statusLabel,
+  statusTone,
+  storefrontHref,
+} from './service-display';
 
 export interface MarketplaceTableProps {
   items: readonly ServiceListItem[];
   sort: MarketplaceSort;
   onSortChange: (sort: MarketplaceSort) => void;
   onDetails?: (item: ServiceListItem) => void;
+  storefrontUrl?: string;
 }
 
 const Wrapper = styled(Box, {
@@ -22,9 +40,10 @@ const Wrapper = styled(Box, {
 
 const Table = styled('table', {
   width: '100%',
+  tableLayout: 'fixed',
   borderCollapse: 'collapse',
   fontFamily: '$fonts$body',
-  fontSize: '$1',
+  fontSize: '$2',
 });
 
 const Thead = styled('thead', {
@@ -33,10 +52,10 @@ const Thead = styled('thead', {
 
 const Th = styled('th', {
   textAlign: 'left',
-  padding: '$xs $md',
+  padding: '10px $md',
   fontSize: '$0',
   textTransform: 'uppercase',
-  letterSpacing: '0.04em',
+  letterSpacing: '0.05em',
   color: '$body',
   fontWeight: '$semibold',
   borderBottom: '1px solid $stroke',
@@ -50,16 +69,50 @@ const SortableTh = styled(Th, {
 });
 
 const Td = styled('td', {
-  padding: '$xs $md',
+  padding: '$sm $md',
   color: '$light',
   borderBottom: '1px solid $stroke',
   verticalAlign: 'middle',
 });
 
+// Rows are clickable through to the detail page; the whole surface reacts on
+// hover so the affordance is obvious. Zebra tint keeps long lists scannable.
 const Row = styled('tr', {
-  transition: 'background 0.1s ease',
+  cursor: 'pointer',
+  transition: 'background 120ms ease',
+  '&:nth-of-type(even)': { background: 'rgba(255,255,255,0.012)' },
   '&:last-child td': { borderBottom: 'none' },
   '&:hover': { background: '$bg03' },
+  '&:focus-visible': {
+    outline: '2px solid $obolGreen',
+    outlineOffset: -2,
+  },
+});
+
+const NameCell = styled(Flex, {
+  alignItems: 'center',
+  gap: 10,
+  minWidth: 0,
+});
+
+const NameText = styled(Text, {
+  color: '$light',
+  fontWeight: '$semibold',
+  fontFamily: 'monospace',
+  letterSpacing: 0,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+});
+
+const Namespace = styled(Text, {
+  display: 'block',
+  fontFamily: 'monospace',
+  fontSize: '$0',
+  color: '$muted',
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
 });
 
 const Mono = styled(Text, {
@@ -68,16 +121,38 @@ const Mono = styled(Text, {
   color: '$body',
 });
 
-const TypePill = styled(Text, {
-  display: 'inline-block',
-  padding: '2px 8px',
-  borderRadius: '$pill',
-  background: '$bg03',
-  border: '1px solid $stroke',
+const ChainCell = styled(Flex, {
+  alignItems: 'center',
+  gap: 6,
+  color: '$light',
+  fontSize: '$1',
+  whiteSpace: 'nowrap',
+});
+
+const StatusCell = styled(Flex, {
+  alignItems: 'center',
+  gap: 6,
+});
+
+const StatusDot = styled('span', {
+  width: 8,
+  height: 8,
+  borderRadius: 999,
+  flexShrink: 0,
+
+  variants: {
+    tone: {
+      live: { background: tones.success.text },
+      pending: { background: tones.warning.text },
+      degraded: { background: tones.danger.text },
+    },
+  },
+});
+
+const StatusText = styled(Text, {
+  fontSize: '$1',
   color: '$body',
-  fontSize: '$0',
-  textTransform: 'uppercase',
-  letterSpacing: '0.04em',
+  whiteSpace: 'nowrap',
 });
 
 const Actions = styled(Flex, {
@@ -91,20 +166,13 @@ const SortIndicator = styled(Text, {
   color: '$obolGreen',
 });
 
-function statusLabel(status: ServiceListItem['status']): string {
-  switch (status) {
-    case 'live':
-      return '● live';
-    case 'pending-registration':
-      return '◐ pending';
-    case 'degraded':
-      return '◯ degraded';
-  }
-}
-
-function networkLabel(item: ServiceListItem): string {
-  return item.network.alias || item.network.caip2;
-}
+const UNIT_SHORT: Record<ServiceListItem['priceUnit'], string> = {
+  request: '/ req',
+  'agent-turn': '/ turn',
+  mtok: '/ Mtok',
+  hour: '/ hr',
+  epoch: '/ epoch',
+};
 
 function nextSort(
   current: MarketplaceSort,
@@ -121,19 +189,33 @@ export function MarketplaceTable({
   sort,
   onSortChange,
   onDetails,
+  storefrontUrl,
 }: MarketplaceTableProps) {
   return (
     <Wrapper>
       <Table>
+        <colgroup>
+          <col />
+          <col style={{ width: 88 }} />
+          <col style={{ width: 158 }} />
+          <col style={{ width: 130 }} />
+          <col style={{ width: 128 }} />
+          <col style={{ width: 100 }} />
+          <col style={{ width: 150 }} />
+        </colgroup>
         <Thead>
           <tr>
             <SortableTh onClick={() => onSortChange(nextSort(sort, 'name'))}>
-              Name{sort === 'name' ? <SortIndicator>↑</SortIndicator> : null}
+              Service
+              {sort === 'name' ? <SortIndicator>↑</SortIndicator> : null}
             </SortableTh>
             <Th>Type</Th>
             <Th>Model / Runtime</Th>
             <Th>Network</Th>
-            <SortableTh onClick={() => onSortChange(nextSort(sort, 'price'))}>
+            <SortableTh
+              css={{ textAlign: 'right' }}
+              onClick={() => onSortChange(nextSort(sort, 'price'))}
+            >
               Price
               {sort === 'price_asc' ? (
                 <SortIndicator>↑</SortIndicator>
@@ -141,55 +223,100 @@ export function MarketplaceTable({
                 <SortIndicator>↓</SortIndicator>
               ) : null}
             </SortableTh>
-            <Th>Asset</Th>
             <Th>Status</Th>
             <Th css={{ textAlign: 'right' }}>Actions</Th>
           </tr>
         </Thead>
         <tbody>
-          {items.map(item => (
-            <Row key={item.slug}>
-              <Td>
-                <Text css={{ color: '$light', fontWeight: '$semibold' }}>
-                  {item.name}
-                </Text>
-                <Mono css={{ display: 'block' }}>{item.namespace}</Mono>
-              </Td>
-              <Td>
-                <TypePill>{item.type}</TypePill>
-              </Td>
-              <Td>
-                <Mono>{item.modelOrRuntime || '—'}</Mono>
-              </Td>
-              <Td>
-                <Mono>{networkLabel(item)}</Mono>
-              </Td>
-              <Td>
-                <ObolAmountSwitch
-                  amount={item.price || '—'}
-                  symbol={item.asset.symbol}
-                  unit={`/ ${item.priceUnit}`}
-                  showSymbol={false}
-                />
-              </Td>
-              <Td>
-                <Mono>{item.asset.symbol}</Mono>
-              </Td>
-              <Td>{statusLabel(item.status)}</Td>
-              <Td>
-                <Actions>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => onDetails?.(item)}
+          {items.map(item => {
+            const tone = statusTone(item.status);
+            const chain = chainName(item);
+            const seed = item.payTo || item.bannerSeed || item.slug;
+            const storeHref = storefrontHref(item, storefrontUrl);
+            const openDetails = () => onDetails?.(item);
+            return (
+              <Row
+                key={item.slug}
+                role="button"
+                tabIndex={0}
+                onClick={openDetails}
+                onKeyDown={(e: KeyboardEvent<HTMLTableRowElement>) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    openDetails();
+                  }
+                }}
+              >
+                <Td>
+                  <NameCell>
+                    <Identicon seed={seed} size={28} rounded={6} />
+                    <Box css={{ minWidth: 0 }}>
+                      <NameText title={item.name}>{item.name}</NameText>
+                      <Namespace>{item.namespace}</Namespace>
+                    </Box>
+                  </NameCell>
+                </Td>
+                <Td>
+                  <Badge variant={BADGE_VARIANT[item.type]}>
+                    {BADGE_LABEL[item.type]}
+                  </Badge>
+                </Td>
+                <Td>
+                  <Mono
+                    css={{
+                      display: 'block',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                    title={item.modelOrRuntime || undefined}
                   >
-                    Details →
-                  </Button>
-                </Actions>
-              </Td>
-            </Row>
-          ))}
+                    {item.modelOrRuntime || '—'}
+                  </Mono>
+                </Td>
+                <Td>
+                  <ChainCell>
+                    {chain ? <ChainIcon chain={chain} size={16} /> : null}
+                    {chainLabel(item)}
+                  </ChainCell>
+                </Td>
+                <Td css={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                  <ObolAmountSwitch
+                    amount={item.price || '—'}
+                    symbol={item.asset.symbol}
+                    unit={item.price ? UNIT_SHORT[item.priceUnit] : undefined}
+                    align="right"
+                  />
+                </Td>
+                <Td>
+                  <StatusCell>
+                    <StatusDot tone={tone} />
+                    <StatusText>{statusLabel(item.status)}</StatusText>
+                  </StatusCell>
+                </Td>
+                <Td>
+                  <Actions>
+                    {storeHref ? (
+                      <Button
+                        as="a"
+                        variant="primary"
+                        size="sm"
+                        css={STOREFRONT_TEXT_CSS}
+                        href={storeHref}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={(e: MouseEvent<HTMLAnchorElement>) =>
+                          e.stopPropagation()
+                        }
+                      >
+                        Storefront <ExternalLinkIcon width={12} height={12} />
+                      </Button>
+                    ) : null}
+                  </Actions>
+                </Td>
+              </Row>
+            );
+          })}
         </tbody>
       </Table>
     </Wrapper>

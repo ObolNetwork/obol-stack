@@ -1,63 +1,69 @@
 'use client';
 
-import { memo } from 'react';
+import { memo, type KeyboardEvent, type MouseEvent } from 'react';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { ExternalLinkIcon } from '@radix-ui/react-icons';
 
 import { Badge } from '@/components/atoms/Badge';
 import { Button } from '@/components/atoms/Button';
 import { ChainIcon } from '@/components/atoms/ChainIcon';
-import { CopyButton } from '@/components/atoms/CopyButton';
 import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
 import { tones } from '@/lib/ui/tones';
 import type { ServiceListItem } from '@/lib/marketplace/types';
-import type { ChainName } from '@/types/dashboard';
-import type { ServiceOfferType } from '@/types/sell';
 
-import { Identicon, shortAddress } from './Identicon';
+import { Identicon } from './Identicon';
+import {
+  BADGE_LABEL,
+  BADGE_VARIANT,
+  PRICE_UNIT_LABEL,
+  STOREFRONT_TEXT_CSS,
+  chainLabel,
+  chainName,
+  skillMdUrl,
+  statusLabel,
+  statusTone,
+  storefrontHref,
+} from './service-display';
 
 export interface MarketplaceCardProps {
   item: ServiceListItem;
   onDetails?: (item: ServiceListItem) => void;
+  /**
+   * Root URL of the operator's public storefront (tunnel or local controller).
+   * The footer action opens it in a new tab; ERC-8004 listings fall back to
+   * the public 8004scan explorer instead.
+   */
+  storefrontUrl?: string;
 }
 
-// Card view follows the Services.html grid card: content/action area on the
-// left, price + chain rail on the right. The view is still named "cards" in
-// the product; this is only the card component shape.
+// Cards view follows the Services.html "clean" card: a single calm column
+// (no split price rail) with the whole card clickable through to the detail
+// page. Identity + badges on top, clamped description, skill tags, and a
+// footer that carries price, chain, skill.md, and the primary action.
 const Card = styled('article', {
-  display: 'grid',
-  gridTemplateColumns: 'minmax(0, 1fr) 188px',
-  borderRadius: '$2',
-  border: '1px solid $stroke',
-  background: '$bg03',
-  minHeight: 248,
-  overflow: 'hidden',
-  contentVisibility: 'auto',
-  containIntrinsicSize: '0 248px',
-  transition: 'border-color 200ms ease',
-
-  '&:hover': {
-    borderColor: '$bg05',
-  },
-
-  '@media (max-width: 620px)': {
-    gridTemplateColumns: '1fr',
-  },
-});
-
-const Content = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
   gap: '$xs',
-  minWidth: 0,
   padding: '$sm $md',
+  borderRadius: '$2',
+  border: '1px solid $stroke',
+  background: '$bg03',
+  minHeight: 208,
+  cursor: 'pointer',
+  overflow: 'hidden',
+  contentVisibility: 'auto',
+  containIntrinsicSize: '0 208px',
+  transition: 'border-color 200ms ease',
+
+  '&:hover': {
+    borderColor: '$body',
+  },
 });
 
 const TopRow = styled('div', {
-  display: 'grid',
-  gridTemplateColumns: '38px minmax(0, 1fr) auto',
-  alignItems: 'start',
-  columnGap: 12,
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
   minWidth: 0,
 });
 
@@ -65,6 +71,7 @@ const TitleStack = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
   minWidth: 0,
+  flex: 1,
 });
 
 const TitleRow = styled('div', {
@@ -79,7 +86,7 @@ const TitleRow = styled('div', {
 const Title = styled(Text, {
   flex: '0 1 auto',
   minWidth: 0,
-  fontSize: '$5',
+  fontSize: '$4',
   fontWeight: '$semibold',
   color: '$light',
   fontFamily: 'monospace',
@@ -92,90 +99,57 @@ const Title = styled(Text, {
 const TypeBadgeSlot = styled('span', {
   display: 'inline-flex',
   flex: '0 0 auto',
-  maxWidth: '45%',
   overflow: 'hidden',
-});
-
-const SubRow = styled('div', {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  marginTop: 4,
-  fontSize: '$1',
-  color: '$body',
-  minWidth: 0,
 });
 
 const Sub = styled(Text, {
   fontSize: '$1',
   color: '$body',
+  marginTop: 3,
   whiteSpace: 'nowrap',
   overflow: 'hidden',
   textOverflow: 'ellipsis',
 });
 
-const Mono = styled(Text, {
-  flexShrink: 0,
-  fontFamily: 'monospace',
-  fontSize: '$1',
-  color: '$body',
-});
-
-const Dot = styled(Text, {
-  color: '$muted',
-  fontSize: '$1',
-});
-
-const StatusPillBox = styled('div', {
+// Quiet status — a solid dot in the tone colour plus a soft label. Replaces
+// the filled pill so the card reads calmer, per the readability pass.
+const StatusWrap = styled('span', {
   display: 'inline-flex',
   alignItems: 'center',
-  gap: '$xxs',
+  gap: 6,
   flexShrink: 0,
-  width: 'fit-content',
-  whiteSpace: 'nowrap',
-  padding: '4px 12px 4px 8px',
-  borderRadius: '$pill',
-  fontSize: '$1',
-  fontWeight: '$medium',
-  border: '1px solid transparent',
+});
+
+const StatusDot = styled('span', {
+  width: 8,
+  height: 8,
+  borderRadius: 999,
+  flexShrink: 0,
 
   variants: {
     tone: {
-      live: {
-        background: tones.success.bg,
-        borderColor: tones.success.border,
-        color: tones.success.text,
-      },
-      pending: {
-        background: tones.warning.bg,
-        borderColor: tones.warning.border,
-        color: tones.warning.text,
-      },
-      degraded: {
-        background: tones.danger.bg,
-        borderColor: tones.danger.border,
-        color: tones.danger.text,
-      },
+      live: { background: tones.success.text },
+      pending: { background: tones.warning.text },
+      degraded: { background: tones.danger.text },
     },
   },
 });
 
-const Dotty = styled('span', {
-  width: 8,
-  height: 8,
-  borderRadius: 999,
-  background: 'currentColor',
+const StatusLabel = styled(Text, {
+  fontSize: '$1',
+  color: '$body',
 });
 
 const Description = styled(Text, {
   margin: 0,
-  fontSize: '$3',
+  fontSize: '$2',
   color: '$body',
-  lineHeight: 1.55,
+  lineHeight: 1.5,
   display: '-webkit-box',
   WebkitLineClamp: 2,
   WebkitBoxOrient: 'vertical',
   overflow: 'hidden',
+  minHeight: 36,
 });
 
 const TagRow = styled(Flex, {
@@ -184,70 +158,53 @@ const TagRow = styled(Flex, {
 });
 
 const Tag = styled(Text, {
-  padding: '3px 8px',
+  padding: '2px 8px',
   fontSize: '$1',
+  lineHeight: 1.5,
   color: '$body',
   background: '$bg02',
   border: '1px solid $stroke',
-  borderRadius: '$1',
+  borderRadius: '$2',
   fontFamily: 'monospace',
+  whiteSpace: 'nowrap',
 });
 
-const ActionRow = styled(Flex, {
+const Footer = styled(Flex, {
   alignItems: 'center',
   gap: '$xs',
   marginTop: 'auto',
+  paddingTop: '$sm',
+  borderTop: '1px solid $stroke',
 });
 
-const SkillLink = styled('a', {
-  border: 0,
-  background: 'transparent',
-  color: '$body',
-  fontSize: '$2',
-  display: 'inline-flex',
-  alignItems: 'center',
-  gap: 4,
-  textDecoration: 'none',
-  cursor: 'pointer',
-  '&:hover': { color: '$light' },
+const PriceBlock = styled(Box, {
+  minWidth: 0,
 });
 
-const Rail = styled('aside', {
-  backgroundColor: '$bg02',
-  backgroundImage:
-    'linear-gradient(180deg, rgba(47,228,171,0.06), rgba(47,228,171,0))',
-  borderLeft: '1px solid $stroke',
-  boxShadow: 'inset 1px 0 0 rgba(255,255,255,0.03)',
-  padding: '$sm $md',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: '$xs',
-
-  '@media (max-width: 620px)': {
-    borderLeft: 0,
-    borderTop: '1px solid $stroke',
+const PriceAmount = styled(ObolAmountSwitch, {
+  '& [data-part="amount"], & [data-part="converted-amount"]': {
+    color: '$light',
+    fontSize: '$5',
+    fontWeight: '$semibold',
+    letterSpacing: 0,
+  },
+  '& [data-part="symbol"]': {
+    fontSize: '$2',
+    color: '$body',
+    marginLeft: 4,
   },
 });
 
-const FieldLabel = styled(Text, {
+const PriceUnit = styled(Text, {
   fontSize: '$1',
-  color: '$body',
-  fontWeight: '$medium',
-  textTransform: 'uppercase',
-  letterSpacing: '0.03em',
-});
-
-const EmptyPrice = styled(Text, {
-  fontFamily: 'monospace',
-  color: '$light',
-  fontSize: '$7',
-  fontWeight: '$semibold',
-  letterSpacing: 0,
+  color: '$muted',
+  marginTop: 1,
 });
 
 const ChainBadge = styled(Flex, {
   alignItems: 'center',
   gap: 6,
+  flexShrink: 0,
   width: 'fit-content',
   padding: '3px 8px 3px 5px',
   borderRadius: '$3',
@@ -257,101 +214,18 @@ const ChainBadge = styled(Flex, {
   fontSize: '$1',
 });
 
-const RailBottom = styled(Box, {
-  marginTop: 'auto',
-  display: 'flex',
-  flexDirection: 'column',
+const SkillLink = styled('a', {
+  border: 0,
+  background: 'transparent',
+  color: '$body',
+  fontSize: '$1',
+  display: 'inline-flex',
+  alignItems: 'center',
   gap: 4,
+  textDecoration: 'none',
+  cursor: 'pointer',
+  '&:hover': { color: '$light' },
 });
-
-const BADGE_VARIANT: Record<ServiceOfferType, 'purple' | 'code' | 'neutral'> = {
-  agent: 'purple',
-  inference: 'purple',
-  http: 'code',
-  'fine-tuning': 'neutral',
-};
-
-const BADGE_LABEL: Record<ServiceOfferType, string> = {
-  agent: 'Agent',
-  inference: 'Inference',
-  http: 'HTTP',
-  'fine-tuning': 'Fine-tune',
-};
-
-const PRICE_UNIT_LABEL: Record<ServiceListItem['priceUnit'], string> = {
-  request: 'per request',
-  'agent-turn': 'per turn',
-  mtok: 'per Mtok',
-  hour: 'per hour',
-  epoch: 'per epoch',
-};
-
-function statusTone(
-  status: ServiceListItem['status']
-): 'live' | 'pending' | 'degraded' {
-  switch (status) {
-    case 'live':
-      return 'live';
-    case 'pending-registration':
-      return 'pending';
-    case 'degraded':
-    default:
-      return 'degraded';
-  }
-}
-
-function statusLabel(status: ServiceListItem['status']): string {
-  switch (status) {
-    case 'live':
-      return 'Live';
-    case 'pending-registration':
-      return 'Pending';
-    case 'degraded':
-      return 'Degraded';
-  }
-}
-
-function chainName(item: ServiceListItem): ChainName | undefined {
-  switch (item.network.caip2) {
-    case 'eip155:1':
-      return 'mainnet';
-    case 'eip155:11155111':
-      return 'sepolia';
-    case 'eip155:8453':
-      return 'base';
-    case 'eip155:84532':
-      return 'base-sepolia';
-    default:
-      return undefined;
-  }
-}
-
-function chainLabel(item: ServiceListItem): string {
-  switch (item.network.caip2) {
-    case 'eip155:1':
-      return 'Ethereum';
-    case 'eip155:11155111':
-      return 'Sepolia';
-    case 'eip155:8453':
-      return 'Base';
-    case 'eip155:84532':
-      return 'Base Sepolia';
-    default:
-      return item.network.alias || item.network.caip2;
-  }
-}
-
-function skillMdUrl(endpoint: string): string | undefined {
-  try {
-    const u = new URL(endpoint);
-    u.pathname = '/skill.md';
-    u.search = '';
-    u.hash = '';
-    return u.toString();
-  } catch {
-    return undefined;
-  }
-}
 
 function registryBadge(item: ServiceListItem) {
   if (item.namespace.startsWith('erc8004:')) {
@@ -363,116 +237,114 @@ function registryBadge(item: ServiceListItem) {
   return null;
 }
 
-function MarketplaceCardImpl({ item, onDetails }: MarketplaceCardProps) {
+function MarketplaceCardImpl({
+  item,
+  onDetails,
+  storefrontUrl,
+}: MarketplaceCardProps) {
   const seed = item.payTo || item.bannerSeed || item.slug;
   const provider = item.namespace;
   const tone = statusTone(item.status);
   const chain = chainName(item);
   const skillUrl = skillMdUrl(item.endpoint);
   const visibleTags = item.skills.slice(0, 4);
+  const badge = registryBadge(item);
+  // The whole card opens the in-app detail page; the footer CTA opens the
+  // listing on the public storefront (8004scan for remote ERC-8004 agents).
+  const storeHref = storefrontHref(item, storefrontUrl);
 
   return (
-    <Card>
-      <Content>
-        <TopRow>
-          <Identicon seed={seed} size={38} rounded={8} />
-          <TitleStack>
-            <TitleRow>
-              <Title title={item.name}>{item.name}</Title>
-              <TypeBadgeSlot>
-                <Badge variant={BADGE_VARIANT[item.type]}>
-                  {BADGE_LABEL[item.type]}
-                </Badge>
-              </TypeBadgeSlot>
-            </TitleRow>
-            <SubRow>
-              <Sub>{provider}</Sub>
-              {item.payTo ? (
-                <>
-                  <Dot>·</Dot>
-                  <Mono>{shortAddress(item.payTo)}</Mono>
-                  <CopyButton text={item.payTo} title="Copy wallet" />
-                </>
-              ) : null}
-            </SubRow>
-          </TitleStack>
-          <StatusPillBox tone={tone}>
-            <Dotty />
-            {statusLabel(item.status)}
-          </StatusPillBox>
-        </TopRow>
+    <Card
+      role="button"
+      tabIndex={0}
+      onClick={() => onDetails?.(item)}
+      onKeyDown={(e: KeyboardEvent<HTMLElement>) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onDetails?.(item);
+        }
+      }}
+    >
+      <TopRow>
+        <Identicon seed={seed} size={36} rounded={8} />
+        <TitleStack>
+          <TitleRow>
+            <Title title={item.name}>{item.name}</Title>
+            <TypeBadgeSlot>
+              <Badge variant={BADGE_VARIANT[item.type]}>
+                {BADGE_LABEL[item.type]}
+              </Badge>
+            </TypeBadgeSlot>
+            {badge}
+          </TitleRow>
+          <Sub>{provider}</Sub>
+        </TitleStack>
+        <StatusWrap>
+          <StatusDot tone={tone} />
+          <StatusLabel>{statusLabel(item.status)}</StatusLabel>
+        </StatusWrap>
+      </TopRow>
 
-        <Description>
-          {item.description || 'x402 payment-gated service'}
-        </Description>
+      <Description>
+        {item.description || 'x402 payment-gated service'}
+      </Description>
 
-        {visibleTags.length > 0 || registryBadge(item) ? (
-          <TagRow>
-            {visibleTags.map(skill => (
-              <Tag key={skill}>{skill}</Tag>
-            ))}
-            {item.skills.length > visibleTags.length ? (
-              <Tag>+{item.skills.length - visibleTags.length}</Tag>
-            ) : null}
-            {registryBadge(item)}
-          </TagRow>
-        ) : null}
-
-        <ActionRow>
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => onDetails?.(item)}
-          >
-            Details
-          </Button>
-          <Box css={{ flex: 1 }} />
-          {skillUrl ? (
-            <SkillLink
-              href={skillUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              skill.md <ExternalLinkIcon width={12} height={12} />
-            </SkillLink>
+      {visibleTags.length > 0 ? (
+        <TagRow>
+          {visibleTags.map(skill => (
+            <Tag key={skill}>{skill}</Tag>
+          ))}
+          {item.skills.length > visibleTags.length ? (
+            <Tag>+{item.skills.length - visibleTags.length}</Tag>
           ) : null}
-        </ActionRow>
-      </Content>
+        </TagRow>
+      ) : null}
 
-      <Rail>
-        <Box>
-          <FieldLabel>Price</FieldLabel>
-          <Box css={{ marginTop: 6 }}>
-            {item.price ? (
-              <ObolAmountSwitch
-                amount={item.price}
-                symbol={item.asset.symbol}
-                unit={PRICE_UNIT_LABEL[item.priceUnit]}
-                variant="rail"
-              />
-            ) : (
-              <EmptyPrice>-</EmptyPrice>
-            )}
-          </Box>
-        </Box>
+      <Footer>
+        <PriceBlock>
+          <PriceAmount
+            amount={item.price || '—'}
+            symbol={item.asset.symbol}
+            variant="inline"
+          />
+          {item.price ? (
+            <PriceUnit>{PRICE_UNIT_LABEL[item.priceUnit]}</PriceUnit>
+          ) : null}
+        </PriceBlock>
 
-        <Box>
-          <ChainBadge>
-            {chain ? <ChainIcon chain={chain} size={14} /> : null}
-            {chainLabel(item)}
-          </ChainBadge>
-        </Box>
+        <ChainBadge>
+          {chain ? <ChainIcon chain={chain} size={14} /> : null}
+          {chainLabel(item)}
+        </ChainBadge>
 
-        {item.modelOrRuntime ? (
-          <RailBottom>
-            <FieldLabel>Model / runtime</FieldLabel>
-            <Mono css={{ color: '$light', fontSize: '$2' }}>
-              {item.modelOrRuntime}
-            </Mono>
-          </RailBottom>
+        <Box css={{ flex: 1 }} />
+
+        {skillUrl ? (
+          <SkillLink
+            href={skillUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e: MouseEvent<HTMLAnchorElement>) => e.stopPropagation()}
+          >
+            skill.md <ExternalLinkIcon width={12} height={12} />
+          </SkillLink>
         ) : null}
-      </Rail>
+
+        {storeHref ? (
+          <Button
+            as="a"
+            variant="primary"
+            size="sm"
+            css={STOREFRONT_TEXT_CSS}
+            href={storeHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e: MouseEvent<HTMLAnchorElement>) => e.stopPropagation()}
+          >
+            Storefront <ExternalLinkIcon width={12} height={12} />
+          </Button>
+        ) : null}
+      </Footer>
     </Card>
   );
 }

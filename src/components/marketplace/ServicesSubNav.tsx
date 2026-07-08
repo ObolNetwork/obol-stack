@@ -6,6 +6,8 @@ import { styled } from '@obolnetwork/obol-ui';
 
 import { Button } from '@/components/atoms/Button';
 
+import { STOREFRONT_TEXT_CSS } from './service-display';
+
 export type ServicesTab = 'browse' | 'purchases' | 'listings';
 
 export interface ServicesSubNavProps {
@@ -131,7 +133,7 @@ export function ServicesSubNav({
         type="button"
         variant="primary"
         size="sm"
-        css={{ flexShrink: 0 }}
+        css={{ flexShrink: 0, ...STOREFRONT_TEXT_CSS }}
         onClick={onNewListing}
         disabled={!onNewListing}
         title={onNewListing ? 'Create a new listing' : 'Coming soon'}
