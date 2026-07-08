@@ -553,3 +553,31 @@ spec:
     - name: http
       port: 8090
       targetPort: 8090
+---
+# job-broker trusts the X-Obol-Upstream-* headers on every request it
+# receives to know where to replay it — it is not itself capable of
+# re-verifying payment. Without this policy any in-cluster pod could POST
+# straight to job-broker.x402.svc with forged upstream headers (SSRF /
+# free-compute against whatever upstream it names). Restrict ingress to
+# only the x402-verifier pods, which are the sole intended caller (F1).
+# Egress is intentionally left unrestricted: the broker must be able to
+# reach arbitrary seller upstreams by design.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: job-broker
+  namespace: x402
+spec:
+  podSelector:
+    matchLabels:
+      app: job-broker
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: x402-verifier
+      ports:
+        - protocol: TCP
+          port: 8090
