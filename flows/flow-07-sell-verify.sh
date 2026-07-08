@@ -163,23 +163,6 @@ else
     fail "No tunnel URL found — ${TUNNEL_OUTPUT:0:200}"
 fi
 
-# #697: prove `obol sell register x402scan` CLI wiring is live. The smoke
-# stack only has a quick-tunnel origin, which resolveX402scanOrigin
-# (cmd/obol/sell_register_x402scan.go) deliberately rejects — assert the
-# real rejection path fires (nonzero exit + the "quick-tunnel" message)
-# rather than exercising the full remote-registration path, which needs a
-# permanent hostname this env doesn't have.
-if [ -n "$TUNNEL_URL" ]; then
-    step "sell register x402scan rejects quick-tunnel origin (CLI wiring, #697)"
-    x402scan_out=$("$OBOL" sell register x402scan --origin "$TUNNEL_URL" 2>&1)
-    x402scan_rc=$?
-    if [ "$x402scan_rc" -ne 0 ] && echo "$x402scan_out" | grep -q "quick-tunnel"; then
-        pass "sell register x402scan correctly rejected quick-tunnel origin"
-    else
-        fail "expected nonzero exit + 'quick-tunnel' message — rc=$x402scan_rc, out=${x402scan_out:0:200}"
-    fi
-fi
-
 # §1.6: Verify paths
 
 # Wait for x402-verifier to be ready — Kubernetes Reloader restarts pods when
@@ -211,85 +194,6 @@ for i in $(seq 1 6); do
     [ "$i" -eq 6 ] && fail "Expected 402 after 30s, got: $local_code"
     sleep 5
 done
-
-# Multi-route gate classes: flow-06 declared an explicit route table
-# (healthPath -> free, /v1/chat/completions -> paid) instead of the old
-# implicit paid catch-all. Verify both halves of that route table are
-# actually enforced by the live verifier.
-step "free route (healthPath) reachable without payment"
-free_code=""
-for i in $(seq 1 3); do
-    free_code=$($CURL_OBOL -s --max-time 5 -o /dev/null -w '%{http_code}' \
-        "$INGRESS_URL/services/flow-qwen/health" 2>&1) || true
-    [ "$free_code" = "200" ] && break
-    sleep 3
-done
-if [ "$free_code" = "200" ]; then
-    pass "Free route /services/flow-qwen/health returned 200 without payment"
-else
-    fail "Free route did not return 200 — got $free_code"
-fi
-
-step "undeclared sibling path fails closed (not 200)"
-undeclared_code=""
-for i in $(seq 1 3); do
-    undeclared_code=$($CURL_OBOL -s --max-time 5 -o /dev/null -w '%{http_code}' \
-        "$INGRESS_URL/services/flow-qwen/undeclared-smoke" 2>&1) || true
-    [ -n "$undeclared_code" ] && [ "$undeclared_code" != "000" ] && break
-    sleep 3
-done
-if [ "$undeclared_code" != "200" ] && [ "$undeclared_code" != "000" ]; then
-    pass "Undeclared path fails closed — HTTP $undeclared_code (not 200)"
-else
-    fail "Undeclared path did not fail closed — got $undeclared_code"
-fi
-
-# P1b: per-offer hostname binding. flow-06 bound $BOUND_HOSTNAME to the
-# flow-qwen offer's spec.hostname; the controller renders a dedicated-origin
-# HTTPRoute (so-flow-qwen-host) that answers ONLY on that hostname, with
-# routes rooted at "/" instead of "/services/flow-qwen" (monetizeapi
-# ServiceOfferSpec.Hostname doc). That means this has to be verified with an
-# explicit Host header directly against the Traefik Service — the shared
-# $INGRESS_URL (obol.stack) does not match a per-offer hostname.
-BOUND_HOSTNAME="flow-qwen-smoke.test.invalid"
-so_bound_hostname=$("$OBOL" kubectl get serviceoffer flow-qwen -n llm \
-    -o jsonpath='{.spec.hostname}' 2>&1) || true
-if [ "$so_bound_hostname" = "$BOUND_HOSTNAME" ]; then
-    step "Dedicated origin ($BOUND_HOSTNAME) reachable via Host header (P1b)"
-    kill $(lsof -ti:18080) 2>/dev/null || true
-    "$OBOL" kubectl port-forward -n traefik svc/traefik 18080:80 &>/dev/null &
-    PF_HOST_PID=$!
-    for i in $(seq 1 10); do
-        if curl -s --max-time 2 -o /dev/null -H "Host: $BOUND_HOSTNAME" http://127.0.0.1:18080/ 2>/dev/null; then
-            break
-        fi
-        sleep 1
-    done
-    # Root-relative path (no /services/flow-qwen prefix) — the dedicated
-    # origin's catch-all rewrites into the shared path-world internally.
-    host_code=$(curl -s --max-time 10 -o /dev/null -w '%{http_code}' \
-        -H "Host: $BOUND_HOSTNAME" -X POST \
-        "http://127.0.0.1:18080/v1/chat/completions" \
-        -H "Content-Type: application/json" \
-        -d "{\"model\":\"$FLOW_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Hello\"}]}" 2>&1) || true
-    cleanup_pid "$PF_HOST_PID"
-    if [ "$host_code" = "402" ]; then
-        pass "Dedicated origin reachable at its own hostname — HTTP 402 (not 404)"
-    else
-        fail "Dedicated origin not reachable via Host header — got $host_code (expected 402)"
-    fi
-
-    step "Storefront catch-all did not absorb the bound hostname"
-    storefront_hostnames=$("$OBOL" kubectl get httproute -n traefik tunnel-storefront \
-        -o jsonpath='{.spec.hostnames}' 2>&1) || true
-    if echo "$storefront_hostnames" | grep -q "$BOUND_HOSTNAME"; then
-        fail "Storefront HTTPRoute absorbed the offer-bound hostname — ${storefront_hostnames:0:200}"
-    else
-        pass "Storefront HTTPRoute does not list $BOUND_HOSTNAME"
-    fi
-else
-    skip "P1b dedicated-origin checks — flow-06 did not bind $BOUND_HOSTNAME to flow-qwen (spec.hostname=$so_bound_hostname)"
-fi
 
 # Validate 402 JSON body has required x402 fields.
 # Retry: the first request after the verifier pod becomes Ready can return

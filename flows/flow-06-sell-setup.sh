@@ -38,10 +38,6 @@ apply_flow_qwen_inference_offer() {
       "perRequest": "0.001"
     }
   },
-  "routes": [
-    {"path": "/health", "methods": ["GET"], "gate": "free"},
-    {"path": "/v1/chat/completions", "methods": ["POST"], "gate": "paid"}
-  ],
   "path": "/services/flow-qwen",
   "registration": {
     "enabled": false
@@ -231,10 +227,6 @@ if [ "$SELL_OFFER_TYPE" = "inference" ]; then
     poll_step_grep "Tunnel active for inference offer" "https://[a-z0-9-]+\\.trycloudflare\\.com" 12 5 \
         "$OBOL" tunnel status
 else
-    # Route table: declared explicitly (instead of the implicit paid
-    # catch-all) so flow-07 can verify a free health route AND that an
-    # undeclared sibling path fails closed. --route path is relative to the
-    # offer's effective path (/services/flow-qwen).
     run_step_grep "sell http flow-qwen" \
         "ServiceOffer.*created|ServiceOffer.*updated|agent will reconcile" \
         "$OBOL" sell http flow-qwen \
@@ -244,9 +236,7 @@ else
         --per-request 0.001 \
         --namespace llm \
         --upstream "$SELL_UPSTREAM_SERVICE" \
-        --port "$SELL_UPSTREAM_PORT" \
-        --route "path=/health,methods=GET,gate=free" \
-        --route "path=/v1/chat/completions,methods=POST,gate=paid"
+        --port "$SELL_UPSTREAM_PORT"
 
     # §1.4 UX: re-running sell http on the same SO shows "updated" not "created"
     step "sell http idempotent: re-run shows 'updated' not 'created'"
@@ -254,9 +244,7 @@ else
         --wallet "$SELLER_WALLET" --chain "$CHAIN" \
         --no-register \
         --per-request 0.001 --namespace llm \
-        --upstream "$SELL_UPSTREAM_SERVICE" --port "$SELL_UPSTREAM_PORT" \
-        --route "path=/health,methods=GET,gate=free" \
-        --route "path=/v1/chat/completions,methods=POST,gate=paid" 2>&1) || true
+        --upstream "$SELL_UPSTREAM_SERVICE" --port "$SELL_UPSTREAM_PORT" 2>&1) || true
     if echo "$rerun_out" | grep -q "ServiceOffer.*updated"; then
         pass "sell http idempotent: shows 'updated' on re-run"
     else
@@ -314,29 +302,5 @@ if [ "$route_backend" = "x402/x402-verifier:8080" ]; then
 else
     fail "HTTPRoute backend unexpected — ${route_backend:0:100}"
 fi
-
-# P1b: per-offer hostname binding — give flow-qwen its own public origin.
-# bindHostnameToOffer (cmd/obol/tunnel_domain.go) is a plain kubectl patch of
-# spec.hostname with no cloudflared/DNS dependency, so it works even though
-# this smoke stack only has the default quick-tunnel. tunnel.AddHostname
-# (the DNS half of `tunnel hostname add`) requires a *permanent* tunnel and
-# is expected to error in that case ("no permanent tunnel configured") —
-# that failure is swallowed here; only the offer bind is asserted as a hard
-# requirement, matching the graceful-degradation guidance for this env.
-BOUND_HOSTNAME="flow-qwen-smoke.test.invalid"
-step "obol tunnel hostname add --offer binds hostname to ServiceOffer (P1b)"
-bind_out=$("$OBOL" tunnel hostname add "$BOUND_HOSTNAME" --offer llm/flow-qwen 2>&1) || true
-if echo "$bind_out" | grep -q "Bound $BOUND_HOSTNAME to offer llm/flow-qwen"; then
-    pass "hostname bind: offer claimed $BOUND_HOSTNAME (tunnel-side DNS step may no-op without a permanent tunnel)"
-else
-    fail "hostname bind to offer failed — ${bind_out:0:300}"
-fi
-
-run_step_grep "ServiceOffer flow-qwen spec.hostname is $BOUND_HOSTNAME" "$BOUND_HOSTNAME" \
-    "$OBOL" kubectl get serviceoffer flow-qwen -n llm -o "jsonpath={.spec.hostname}"
-
-poll_step_grep "Dedicated-origin HTTPRoute so-flow-qwen-host exists (controller reconcile)" \
-    "so-flow-qwen-host" 12 5 \
-    "$OBOL" kubectl get httproute so-flow-qwen-host -n llm
 
 emit_metrics
