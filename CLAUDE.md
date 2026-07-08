@@ -171,6 +171,12 @@ Port-forward to `x402-verifier` and calling `/verify` directly: MUST set `X-Forw
                                1. ServiceOffer CR namespace
                                2. upstream k8s service namespace
 --health-path /api/tags      Upstream health check path            [default: /health]
+--hostname    audit.acme.io  Dedicated public origin: offer routes rooted at "/" on that
+                             hostname (rewritten into /services/<name> before the gate),
+                             plus per-offer /openapi.json + /.well-known/x402 + landing page.
+                             One offer per origin (HostnameConflict). Storefront catch-all
+                             skips offer-bound hostnames. Bind later via
+                             `obol tunnel hostname add <host> --offer <ns>/<name>`.
 --route       path=/x,...    Repeatable route-table entry: path=/submit[,methods=POST|GET]
                              [,gate=paid|free|auth][,price=0.5][,summary=...]. Declaring ANY
                              route makes the table exhaustive (undeclared paths 404) — add

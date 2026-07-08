@@ -526,6 +526,18 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		setCondition(&status, "Draining", "False", "Active", "Offer is active")
 		setCondition(&status, "PaymentGateReady", "False", "ReservedPath", msg)
 		setCondition(&status, "RoutePublished", "False", "ReservedPath", msg)
+	} else if conflict := c.findHostnameConflict(offer); conflict != "" {
+		// One offer per public origin — same first-claimant-wins treatment
+		// as a path conflict.
+		msg := fmt.Sprintf("hostname %s is already claimed by older offer %s — set a different spec.hostname", offer.Spec.Hostname, conflict)
+		log.Printf("serviceoffer-controller: %s/%s hostname conflict: %s", offer.Namespace, offer.Name, msg)
+		if err := c.deleteRouteChildren(ctx, offer); err != nil {
+			return err
+		}
+		setCondition(&status, "Draining", "False", "Active", "Offer is active")
+		setCondition(&status, "PaymentGateReady", "False", "HostnameConflict", msg)
+		setCondition(&status, "RoutePublished", "False", "HostnameConflict", msg)
+		c.offerQueue.AddAfter(offer.Namespace+"/"+offer.Name, 30*time.Second)
 	} else if conflict := c.findPathConflict(offer); conflict != "" {
 		// First-claimant-wins: an older offer holds this path. Publishing
 		// anyway would silently shadow one of the two offers in the
@@ -771,8 +783,25 @@ func (c *Controller) reconcileRoute(ctx context.Context, status *monetizeapi.Ser
 		setCondition(status, "RoutePublished", "False", "ApplyFailed", err.Error())
 		return err
 	}
-	log.Printf("serviceoffer-controller: route published for %s/%s at %s", offer.Namespace, offer.Name, offer.EffectivePath())
-	setCondition(status, "RoutePublished", "True", "Reconciled", fmt.Sprintf("HTTPRoute published at %s", offer.EffectivePath()))
+	if offer.Spec.Hostname != "" {
+		if err := c.applyObject(ctx, c.httpRoutes.Namespace(offer.Namespace), buildHostHTTPRoute(offer)); err != nil {
+			setCondition(status, "RoutePublished", "False", "ApplyFailed", err.Error())
+			return err
+		}
+	} else {
+		// Hostname removed from the spec: tear the host route down so the
+		// origin frees up (for the storefront catch-all or another offer).
+		err := c.httpRoutes.Namespace(offer.Namespace).Delete(ctx, hostChildName(offer.Name), metav1.DeleteOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	published := offer.EffectivePath()
+	if origin := offer.EffectiveOrigin(); origin != "" {
+		published = origin + " (+ shared-origin alias " + offer.EffectivePath() + ")"
+	}
+	log.Printf("serviceoffer-controller: route published for %s/%s at %s", offer.Namespace, offer.Name, published)
+	setCondition(status, "RoutePublished", "True", "Reconciled", fmt.Sprintf("HTTPRoute published at %s", published))
 	return nil
 }
 
@@ -1227,9 +1256,10 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	// when tunnelURL changes — see enqueueDiscoveryRefresh).
 	openAPIJSON := buildOpenAPIDocument(offers, baseURL, resolvedProfile)
 	apiDocsHTML := scalarHTML()
-	contentHash := computeSkillCatalogContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML)
+	bundles := buildOfferBundles(offers, resolvedProfile)
+	contentHash := computeSkillCatalogContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)
 
-	unchanged, err := c.skillCatalogContentUnchanged(ctx, content, servicesJSON, openAPIJSON, apiDocsHTML)
+	unchanged, err := c.skillCatalogContentUnchanged(ctx, content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)
 	if err != nil {
 		return err
 	}
@@ -1239,10 +1269,10 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 		return nil
 	}
 
-	if err := c.applyObject(ctx, c.configMaps.Namespace(skillCatalogNamespace), buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML)); err != nil {
+	if err := c.applyObject(ctx, c.configMaps.Namespace(skillCatalogNamespace), buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)); err != nil {
 		return err
 	}
-	if err := c.applyObject(ctx, c.deployments.Namespace(skillCatalogNamespace), buildSkillCatalogDeployment(contentHash)); err != nil {
+	if err := c.applyObject(ctx, c.deployments.Namespace(skillCatalogNamespace), buildSkillCatalogDeployment(contentHash, bundles)); err != nil {
 		return err
 	}
 	if err := c.applyObject(ctx, c.services.Namespace(skillCatalogNamespace), buildSkillCatalogService()); err != nil {
@@ -1287,6 +1317,7 @@ func (c *Controller) deleteRouteChildren(ctx context.Context, offer *monetizeapi
 	}{
 		{resource: c.referenceGrants.Namespace("x402"), name: backendReferenceGrantName(offer.Name)},
 		{resource: c.httpRoutes.Namespace(offer.Namespace), name: childName(offer.Name)},
+		{resource: c.httpRoutes.Namespace(offer.Namespace), name: hostChildName(offer.Name)},
 	} {
 		err := deletion.resource.Delete(ctx, deletion.name, metav1.DeleteOptions{})
 		if err != nil && !apierrors.IsNotFound(err) {

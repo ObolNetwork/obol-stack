@@ -2502,26 +2502,26 @@ func TestOfferPathCollisionInList(t *testing.T) {
 	]}`)
 
 	// Colliding with a live offer fails, including trailing-slash form.
-	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/shared/"); err == nil {
+	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/shared/", ""); err == nil {
 		t.Fatal("expected collision with agent-a/alpha")
 	}
 	// A deleting offer frees its path.
-	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/free"); err != nil {
+	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/free", ""); err != nil {
 		t.Fatalf("deleting offer must not block the path: %v", err)
 	}
 	// Empty spec.path defaults to /services/<name> on BOTH sides.
-	if err := offerPathCollisionInList(listing, "agent-b", "defaulted", ""); err == nil {
+	if err := offerPathCollisionInList(listing, "agent-b", "defaulted", "", ""); err == nil {
 		t.Fatal("requester's defaulted path must collide with llm/defaulted's defaulted path")
 	}
-	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/defaulted"); err == nil {
+	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/defaulted", ""); err == nil {
 		t.Fatal("expected collision with llm/defaulted's defaulted path")
 	}
 	// Re-applying the same offer is an update, not a collision.
-	if err := offerPathCollisionInList(listing, "agent-a", "alpha", "/services/shared"); err != nil {
+	if err := offerPathCollisionInList(listing, "agent-a", "alpha", "/services/shared", ""); err != nil {
 		t.Fatalf("self-update must pass: %v", err)
 	}
 	// Unparseable listings defer to the controller backstop.
-	if err := offerPathCollisionInList([]byte("not json"), "a", "b", "/c"); err != nil {
+	if err := offerPathCollisionInList([]byte("not json"), "a", "b", "/c", ""); err != nil {
 		t.Fatalf("garbage listing must not block: %v", err)
 	}
 }
@@ -2603,5 +2603,23 @@ func TestParseRouteFlags(t *testing.T) {
 		if _, _, err := parseRouteFlags([]string{bad}); err == nil {
 			t.Errorf("parseRouteFlags(%q): expected error, got nil", bad)
 		}
+	}
+}
+
+// TestOfferPathCollisionInList_Hostname pins one-offer-per-origin in the
+// CLI preflight: a second offer claiming an existing spec.hostname fails
+// fast, case-insensitively.
+func TestOfferPathCollisionInList_Hostname(t *testing.T) {
+	listing := []byte(`{"items":[
+		{"metadata":{"name":"alpha","namespace":"agent-a"},"spec":{"path":"/services/alpha","hostname":"audit.v1337.example"}}
+	]}`)
+	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/beta", "AUDIT.v1337.example"); err == nil {
+		t.Fatal("expected hostname collision with agent-a/alpha")
+	}
+	if err := offerPathCollisionInList(listing, "agent-b", "beta", "/services/beta", "other.v1337.example"); err != nil {
+		t.Fatalf("distinct hostname must pass: %v", err)
+	}
+	if err := offerPathCollisionInList(listing, "agent-a", "alpha", "/services/alpha", "audit.v1337.example"); err != nil {
+		t.Fatalf("self-update must pass: %v", err)
 	}
 }

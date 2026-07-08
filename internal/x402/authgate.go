@@ -68,6 +68,18 @@ func requestHost(r *http.Request) string {
 	return r.Host
 }
 
+// publicPrefix returns the path prefix the CLIENT sees for this rule's
+// offer. On the offer's dedicated hostname the public path-world is rooted
+// at "/" (Traefik rewrote it into /services/<name> before we matched), so
+// public URLs must not leak the internal prefix; on the shared origin the
+// prefix is the offer path itself.
+func publicPrefix(rule *RouteRule, host string) string {
+	if rule.Hostname != "" && strings.EqualFold(host, rule.Hostname) {
+		return ""
+	}
+	return strings.TrimSuffix(rule.StripPrefix, "/")
+}
+
 // stripIdentityHeaders removes client-supplied identity headers. Called on
 // every proxied request before the verifier decides whether to set its own.
 func stripIdentityHeaders(h http.Header) {
@@ -92,12 +104,15 @@ const (
 func (v *Verifier) writeSIWXChallenge(w http.ResponseWriter, r *http.Request, rule *RouteRule, reason error) {
 	host := requestHost(r)
 	windowSecs := int(v.siwx.Window().Seconds())
-	authPath := strings.TrimSuffix(rule.StripPrefix, "/") + authPageSuffix
+	authPath := publicPrefix(rule, host) + authPageSuffix
 	w.Header().Set("WWW-Authenticate",
-		fmt.Sprintf(`SIWX realm=%q, domain=%q, window="%d"`, rule.StripPrefix, host, windowSecs))
+		fmt.Sprintf(`SIWX realm=%q, domain=%q, window="%d"`, rule.OfferName, host, windowSecs))
 
 	if strings.Contains(r.Header.Get("Accept"), "text/html") {
-		next := r.URL.Path
+		// The redirect target must be the PUBLIC path — on a dedicated
+		// hostname r.URL.Path is the rewritten internal path, which does
+		// not exist in the browser's path-world.
+		next := publicPrefix(rule, host) + stripRoutePrefix(rule.StripPrefix, r.URL.Path)
 		if r.URL.RawQuery != "" {
 			next += "?" + r.URL.RawQuery
 		}
@@ -173,7 +188,7 @@ func (v *Verifier) handleAuthEndpoints(w http.ResponseWriter, r *http.Request) b
 		"version":       "eip4361",
 		"domain":        host,
 		"windowSeconds": int(v.siwx.Window().Seconds()),
-		"verifyUrl":     "https://" + host + strings.TrimSuffix(rule.StripPrefix, "/") + authVerifySuffix,
+		"verifyUrl":     "https://" + host + publicPrefix(rule, host) + authVerifySuffix,
 	})
 	return true
 }
@@ -230,7 +245,7 @@ func (v *Verifier) renderSIWXPage(w http.ResponseWriter, r *http.Request, rule *
 	data := map[string]any{
 		"Host":      host,
 		"OfferName": rule.OfferName,
-		"VerifyURL": strings.TrimSuffix(rule.StripPrefix, "/") + authVerifySuffix,
+		"VerifyURL": publicPrefix(rule, host) + authVerifySuffix,
 		"Next":      sanitizeNextPath(next),
 		"Reason":    "",
 	}

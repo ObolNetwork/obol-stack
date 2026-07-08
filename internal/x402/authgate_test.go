@@ -255,3 +255,71 @@ func TestVerifier_ErrorPages_ContentNegotiated(t *testing.T) {
 		t.Errorf("agent 404 = %d, body must stay plain (body: %.80s)", w.Code, w.Body.String())
 	}
 }
+
+// TestVerifier_AuthGate_HostnameOffer_PublicURLs pins the dedicated-origin
+// path-world: when a request arrives via the offer's own hostname (Traefik
+// rewrote /reports/42 → /services/audit/reports/42 and set
+// X-Forwarded-Host), every public URL the verifier emits — sign-in URL,
+// verify URL, post-auth redirect — must be rooted at "/", never leaking
+// the internal /services/<name> prefix.
+func TestVerifier_AuthGate_HostnameOffer_PublicURLs(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(upstream.Close)
+
+	v := newTestVerifier(t, fac.URL, []RouteRule{
+		{
+			Pattern:     "/services/audit/reports/*",
+			Gate:        "auth",
+			Hostname:    "audit.shop.example",
+			UpstreamURL: upstream.URL,
+			StripPrefix: "/services/audit",
+			OfferName:   "audit",
+		},
+	})
+
+	// Challenge JSON: sign-in/verify URLs rooted at the hostname origin.
+	req := httptest.NewRequest(http.MethodGet, "/services/audit/reports/42", nil)
+	req.Header.Set("X-Forwarded-Host", "audit.shop.example")
+	w := httptest.NewRecorder()
+	v.HandleProxy(w, req)
+	var challenge struct {
+		Auth struct {
+			SignInURL string `json:"signInUrl"`
+		} `json:"auth"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &challenge); err != nil {
+		t.Fatalf("challenge: %v", err)
+	}
+	if challenge.Auth.SignInURL != "https://audit.shop.example/auth" {
+		t.Errorf("signInUrl = %q, want hostname-rooted /auth", challenge.Auth.SignInURL)
+	}
+
+	// Browser challenge: verify URL and redirect target use public paths.
+	req = httptest.NewRequest(http.MethodGet, "/services/audit/reports/42", nil)
+	req.Header.Set("X-Forwarded-Host", "audit.shop.example")
+	req.Header.Set("Accept", "text/html")
+	w = httptest.NewRecorder()
+	v.HandleProxy(w, req)
+	body := w.Body.String()
+	if strings.Contains(body, "/services/audit") {
+		t.Errorf("hostname sign-in page leaks internal prefix:\n%.300s", body)
+	}
+	if !strings.Contains(body, `"/auth/verify"`) && !strings.Contains(body, "/auth/verify") {
+		t.Errorf("sign-in page missing public verify URL:\n%.300s", body)
+	}
+
+	// Shared-origin access to the SAME rule keeps the prefixed URLs.
+	req = httptest.NewRequest(http.MethodGet, "/services/audit/reports/42", nil)
+	req.Host = "shop.example.com"
+	w = httptest.NewRecorder()
+	v.HandleProxy(w, req)
+	if err := json.Unmarshal(w.Body.Bytes(), &challenge); err != nil {
+		t.Fatalf("shared-origin challenge: %v", err)
+	}
+	if challenge.Auth.SignInURL != "https://shop.example.com/services/audit/auth" {
+		t.Errorf("shared-origin signInUrl = %q, want prefixed path", challenge.Auth.SignInURL)
+	}
+}

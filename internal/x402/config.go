@@ -171,6 +171,14 @@ type RouteRule struct {
 	// Empty means a single-payment route described by the inline fields.
 	Payments []RoutePayment `yaml:"payments,omitempty"`
 
+	// Hostname is the originating offer's dedicated public origin (empty
+	// for shared-origin offers). Requests arriving via that hostname have
+	// their public paths rooted at "/" (Traefik rewrites them into the
+	// /services/<name> path-world before this rule matches); the verifier
+	// uses this to build public-facing URLs (SIWX sign-in, redirects)
+	// without leaking the internal path prefix.
+	Hostname string `yaml:"hostname,omitempty"`
+
 	// Gate is the route's gate class from the originating ServiceOffer's
 	// route table: "paid" (default when empty — fail closed), "free", or
 	// "auth". Free rules pass the payment gate entirely: HandleVerify

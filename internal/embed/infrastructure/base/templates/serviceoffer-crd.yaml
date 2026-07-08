@@ -97,6 +97,22 @@ spec:
                   is honored as "tear down immediately on the next reconcile" (the
                   equivalent of `obol sell stop --force`).
                 type: string
+              hostname:
+                description: |-
+                  Hostname gives the offer its own public origin: the controller
+                  renders an additional HTTPRoute answering on this hostname alone,
+                  with the offer's routes rooted at "/" (rewritten into the shared
+                  /services/<name> path-world before the payment gate) plus an
+                  offer-scoped discovery bundle (/openapi.json, /.well-known/x402,
+                  and a landing page at "/"). The shared-origin path keeps working as
+                  a back-compat alias. The x402 market is origin-keyed (x402scan,
+                  agentcash crawl per origin) — a dedicated hostname is what makes an
+                  offer list as its own product instead of leaking into one shared
+                  listing. DNS + tunnel routing for the hostname are the operator's
+                  job (obol tunnel hostname add <host> --offer <ns>/<name>).
+                maxLength: 253
+                pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$
+                type: string
               listing:
                 description: |-
                   Listing controls how the offer is presented on the public storefront

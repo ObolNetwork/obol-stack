@@ -93,6 +93,37 @@ records, reports) to `X-Payment-Payer`, and gate their retrieval routes with
 `gate: auth`, authorizing when `X-Verified-Wallet` matches. The wallet that
 paid is the wallet that may read — no accounts, no API keys.
 
+## Dedicated origins (`--hostname`)
+
+The x402 market is origin-keyed: crawlers like x402scan and agentcash group
+resources per origin, so multiple offers on one shared domain list as one
+mixed product. Give an offer its own origin:
+
+```bash
+obol sell http audit ... --hostname audit.example.com
+# or bind later:
+obol tunnel hostname add audit.example.com --offer sec/audit
+```
+
+What you get on `https://audit.example.com`:
+
+- The offer's routes rooted at `/` (`POST /submit`, `GET /jobs/<id>`, …) —
+  internally rewritten onto the same payment gate, so gates, prices, and
+  SIWX all behave identically. The `/services/audit/*` path keeps working
+  as an alias.
+- An offer-scoped `/openapi.json` (servers = the origin, only this offer's
+  operations), a `/.well-known/x402` resource list with signable payment
+  requirements, and a branded landing page at `/`.
+- SIWX sign-in at `/auth`; the EIP-4361 domain to sign is the offer
+  hostname.
+
+One offer per origin (first claimant wins — the CLI preflights and the
+controller sets `RoutePublished=False/HostnameConflict`). The shared
+storefront catch-all automatically skips offer-bound hostnames. DNS routing
+to the tunnel stays your job (`obol tunnel hostname add` handles
+local-managed tunnels end-to-end; dashboard-managed tunnels print the one
+remaining Cloudflare step).
+
 ## Error pages and operator contact
 
 Human-facing errors (404/403/5xx, the 401 challenge, the 402 paywall) render

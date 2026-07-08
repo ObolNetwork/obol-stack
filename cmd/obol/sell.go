@@ -753,6 +753,14 @@ Examples:
 				Name:  "path",
 				Usage: "URL path prefix (default: /services/<name>)",
 			},
+			&cli.StringFlag{
+				Name: "hostname",
+				Usage: "Dedicated public origin for this offer (e.g. audit.example.com). The offer's " +
+					"routes answer at the hostname root with their own discovery bundle (/openapi.json, " +
+					"/.well-known/x402, landing page) so per-origin crawlers (x402scan, agentcash) list " +
+					"it as its own product. The /services/<name> path stays as an alias. Route the DNS " +
+					"via 'obol tunnel hostname add <host> --offer <ns>/<name>'.",
+			},
 			&cli.StringSliceFlag{
 				Name: "route",
 				Usage: "Declare one route in the offer's route table (repeatable). " +
@@ -950,6 +958,10 @@ Examples:
 
 			if path := cmd.String("path"); path != "" {
 				spec["path"] = path
+			}
+
+			if hostname := strings.ToLower(strings.TrimSpace(cmd.String("hostname"))); hostname != "" {
+				spec["hostname"] = hostname
 			}
 
 			if routeVals := cmd.StringSlice("route"); len(routeVals) > 0 {
@@ -4826,6 +4838,7 @@ func preflightOfferPathCollision(cfg *config.Config, manifest map[string]any) er
 	if path == "" {
 		path = "/services/" + name
 	}
+	hostname, _ := spec["hostname"].(string)
 	// Static check first — reserved platform paths are rejected even when
 	// the cluster is unreachable (the controller backstops with
 	// RoutePublished=False/ReservedPath, but failing here is friendlier).
@@ -4837,11 +4850,11 @@ func preflightOfferPathCollision(cfg *config.Config, manifest map[string]any) er
 	if err != nil {
 		return nil //nolint:nilerr // best-effort preflight; the apply surfaces real errors
 	}
-	return offerPathCollisionInList([]byte(out), ns, name, path)
+	return offerPathCollisionInList([]byte(out), ns, name, path, hostname)
 }
 
 // offerPathCollisionInList is the pure core of preflightOfferPathCollision.
-func offerPathCollisionInList(listJSON []byte, ns, name, path string) error {
+func offerPathCollisionInList(listJSON []byte, ns, name, path, hostname string) error {
 	var list struct {
 		Items []struct {
 			Metadata struct {
@@ -4850,7 +4863,8 @@ func offerPathCollisionInList(listJSON []byte, ns, name, path string) error {
 				DeletionTimestamp string `json:"deletionTimestamp"`
 			} `json:"metadata"`
 			Spec struct {
-				Path string `json:"path"`
+				Path     string `json:"path"`
+				Hostname string `json:"hostname"`
 			} `json:"spec"`
 		} `json:"items"`
 	}
@@ -4875,6 +4889,10 @@ func offerPathCollisionInList(listJSON []byte, ns, name, path string) error {
 		if strings.TrimSuffix(other, "/") == want {
 			return fmt.Errorf("path %s is already used by offer %s/%s — pass --path to pick a different public path, or delete the existing offer first",
 				path, item.Metadata.Namespace, item.Metadata.Name)
+		}
+		if hostname != "" && strings.EqualFold(item.Spec.Hostname, hostname) {
+			return fmt.Errorf("hostname %s is already used by offer %s/%s — one offer per origin; pass a different --hostname or delete the existing offer first",
+				hostname, item.Metadata.Namespace, item.Metadata.Name)
 		}
 	}
 	return nil

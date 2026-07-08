@@ -255,7 +255,17 @@ func agentIdentityLabels(identity *monetizeapi.AgentIdentity, appName string) ma
 	}
 }
 
-func buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML string) *unstructured.Unstructured {
+func buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) *unstructured.Unstructured {
+	data := map[string]any{
+		"skill.md":      content,
+		"services.json": servicesJSON,
+		"openapi.json":  openAPIJSON,
+		"api.html":      apiDocsHTML,
+		"httpd.conf":    ".md:text/markdown\n.json:application/json\n.html:text/html\n",
+	}
+	for _, f := range bundles {
+		data[f.Key] = f.Content
+	}
 	return &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "v1",
@@ -268,18 +278,32 @@ func buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML 
 					"obol.org/managed-by": "serviceoffer-controller",
 				},
 			},
-			"data": map[string]any{
-				"skill.md":      content,
-				"services.json": servicesJSON,
-				"openapi.json":  openAPIJSON,
-				"api.html":      apiDocsHTML,
-				"httpd.conf":    ".md:text/markdown\n.json:application/json\n.html:text/html\n",
-			},
+			"data": data,
 		},
 	}
 }
 
-func buildSkillCatalogDeployment(contentHash string) *unstructured.Unstructured {
+// skillCatalogVolumeItems projects the ConfigMap keys into the httpd's /www
+// tree: the four aggregate documents plus one file per hostname-offer
+// bundle entry (offers/<ns>/<name>/…).
+func skillCatalogVolumeItems(bundles []offerBundleFile) []any {
+	items := []any{
+		map[string]any{"key": "skill.md", "path": "skill.md"},
+		map[string]any{"key": "services.json", "path": "api/services.json"},
+		map[string]any{"key": "openapi.json", "path": "openapi.json"},
+		// busybox httpd resolves /api/ → /api/index.html, so the
+		// Scalar shell sits at api/index.html. The /api Exact
+		// HTTPRoute also matches the trailing-slash variant so the
+		// resolver kicks in either way.
+		map[string]any{"key": "api.html", "path": "api/index.html"},
+	}
+	for _, f := range bundles {
+		items = append(items, map[string]any{"key": f.Key, "path": f.Path})
+	}
+	return items
+}
+
+func buildSkillCatalogDeployment(contentHash string, bundles []offerBundleFile) *unstructured.Unstructured {
 	labels := map[string]any{
 		"app":                 skillCatalogConfigMapName,
 		"obol.org/managed-by": "serviceoffer-controller",
@@ -330,17 +354,8 @@ func buildSkillCatalogDeployment(contentHash string) *unstructured.Unstructured 
 							map[string]any{
 								"name": "content",
 								"configMap": map[string]any{
-									"name": skillCatalogConfigMapName,
-									"items": []any{
-										map[string]any{"key": "skill.md", "path": "skill.md"},
-										map[string]any{"key": "services.json", "path": "api/services.json"},
-										map[string]any{"key": "openapi.json", "path": "openapi.json"},
-										// busybox httpd resolves /api/ → /api/index.html, so the
-										// Scalar shell sits at api/index.html. The /api Exact
-										// HTTPRoute also matches the trailing-slash variant so the
-										// resolver kicks in either way.
-										map[string]any{"key": "api.html", "path": "api/index.html"},
-									},
+									"name":  skillCatalogConfigMapName,
+									"items": skillCatalogVolumeItems(bundles),
 								},
 							},
 							map[string]any{
@@ -684,6 +699,101 @@ func buildHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured 
 	return obj
 }
 
+// buildHostHTTPRoute renders the dedicated-origin route for a hostname-bound
+// offer. Topology (proven live before being generalized here — see
+// docs/proposals/multistore-storefront-routing.md appendix):
+//
+//   - Exact /, /openapi.json, /.well-known/x402 → the catalog httpd, with
+//     full-path rewrites into the offer's generated bundle files. These are
+//     structurally free — they never touch the payment gate.
+//   - PathPrefix / → x402-verifier, with the public path rewritten into the
+//     shared /services/<name> path-world (so the verifier's route table —
+//     gates, prices, carve-outs — applies unchanged) and X-Forwarded-Host
+//     pinned to the offer hostname (SIWX domain binding + resource URLs).
+//
+// Gateway API ranks Exact matches above PathPrefix, so the discovery rules
+// win their paths and everything else reaches the gate.
+func buildHostHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured {
+	dir := "/" + offerBundleDir(offer)
+	exactTo := func(publicPath, file string) map[string]any {
+		return map[string]any{
+			"matches": []any{
+				map[string]any{"path": map[string]any{"type": "Exact", "value": publicPath}},
+			},
+			"filters": []any{
+				map[string]any{
+					"type": "URLRewrite",
+					"urlRewrite": map[string]any{
+						"path": map[string]any{"type": "ReplaceFullPath", "replaceFullPath": dir + "/" + file},
+					},
+				},
+			},
+			"backendRefs": []any{
+				map[string]any{"name": skillCatalogConfigMapName, "namespace": skillCatalogNamespace, "port": int64(8080)},
+			},
+		}
+	}
+
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "HTTPRoute",
+			"metadata": map[string]any{
+				"name":            hostChildName(offer.Name),
+				"namespace":       offer.Namespace,
+				"ownerReferences": []any{ownerRefMap(offer)},
+			},
+			"spec": map[string]any{
+				"hostnames": []any{offer.Spec.Hostname},
+				"parentRefs": []any{
+					map[string]any{
+						"name":        "traefik-gateway",
+						"namespace":   "traefik",
+						"sectionName": "web",
+					},
+				},
+				"rules": []any{
+					exactTo("/", "index.html"),
+					exactTo("/openapi.json", "openapi.json"),
+					exactTo("/.well-known/x402", "x402.json"),
+					map[string]any{
+						"matches": []any{
+							map[string]any{"path": map[string]any{"type": "PathPrefix", "value": "/"}},
+						},
+						"filters": []any{
+							map[string]any{
+								"type": "URLRewrite",
+								"urlRewrite": map[string]any{
+									"path": map[string]any{
+										"type":               "ReplacePrefixMatch",
+										"replacePrefixMatch": strings.TrimSuffix(offer.EffectivePath(), "/"),
+									},
+								},
+							},
+							map[string]any{
+								"type": "RequestHeaderModifier",
+								"requestHeaderModifier": map[string]any{
+									"set": []any{
+										map[string]any{"name": "X-Forwarded-Host", "value": offer.Spec.Hostname},
+										map[string]any{"name": "X-Forwarded-Proto", "value": "https"},
+									},
+								},
+							},
+						},
+						"backendRefs": []any{
+							map[string]any{"name": "x402-verifier", "namespace": "x402", "port": int64(8080)},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func hostChildName(offerName string) string {
+	return safeName("so-", offerName, "-host")
+}
+
 func buildReferenceGrant(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
@@ -711,6 +821,14 @@ func buildReferenceGrant(offer *monetizeapi.ServiceOffer) *unstructured.Unstruct
 						"group": "",
 						"kind":  "Service",
 						"name":  "x402-verifier",
+					},
+					// Hostname-bound offers backend their discovery bundle
+					// (Exact / + /openapi.json + /.well-known/x402 rules)
+					// to the catalog httpd in this namespace.
+					map[string]any{
+						"group": "",
+						"kind":  "Service",
+						"name":  skillCatalogConfigMapName,
 					},
 				},
 			},
@@ -1029,22 +1147,28 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 		if offer.IsDraining() {
 			status = fmt.Sprintf("draining · ends `%s`", offer.DrainEndsAt().UTC().Format(time.RFC3339))
 		}
+		tableEndpoint := baseURL + offer.EffectivePath()
+		if origin := offer.EffectiveOrigin(); origin != "" {
+			tableEndpoint = origin
+		}
 		lines = append(lines, fmt.Sprintf(
-			"| [%s](#%s) | %s | %s | %s | %s | `%s%s` |",
+			"| [%s](#%s) | %s | %s | %s | %s | `%s` |",
 			offer.Name,
 			offer.Name,
 			fallbackOfferType(offer),
 			modelName,
 			describeOfferPaymentsInline(offer),
 			status,
-			baseURL,
-			offer.EffectivePath(),
+			tableEndpoint,
 		))
 	}
 	lines = append(lines, "", "## Service Details", "")
 	for _, offer := range ready {
 		modelName := offer.Spec.Model.Name
 		endpoint := baseURL + offer.EffectivePath()
+		if origin := offer.EffectiveOrigin(); origin != "" {
+			endpoint = origin
+		}
 		lines = append(lines, fmt.Sprintf("### %s", offer.Name))
 		lines = append(lines, fmt.Sprintf("- **Endpoint**: `%s`", endpoint))
 		lines = append(lines, fmt.Sprintf("- **Call**: %s", offerCallHint(offer, endpoint)))
@@ -1328,12 +1452,20 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string,
 			skills = append([]string(nil), offer.Spec.Registration.Skills...)
 		}
 
+		// Hostname-bound offers advertise their dedicated origin (the
+		// public path-world is rooted at "/") — the shared-origin path
+		// keeps working as an alias but is no longer what buyers are
+		// taught.
+		endpoint := baseURL + offer.EffectivePath()
+		if origin := offer.EffectiveOrigin(); origin != "" {
+			endpoint = origin
+		}
 		svc := schemas.ServiceCatalogEntry{
 			Name:                offer.Name,
 			Namespace:           offer.Namespace,
 			Type:                fallbackOfferType(offer),
 			Model:               modelName,
-			Endpoint:            baseURL + offer.EffectivePath(),
+			Endpoint:            endpoint,
 			Price:               describeOfferPrice(offer),
 			PayTo:               offer.Spec.Payment.PayTo,
 			Network:             offer.Spec.Payment.Network,

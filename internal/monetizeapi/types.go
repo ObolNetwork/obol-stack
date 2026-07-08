@@ -152,6 +152,21 @@ type ServiceOfferSpec struct {
 	// +kubebuilder:validation:Pattern=`^/[a-zA-Z0-9/_.-]*$`
 	Path string `json:"path,omitempty"`
 
+	// Hostname gives the offer its own public origin: the controller
+	// renders an additional HTTPRoute answering on this hostname alone,
+	// with the offer's routes rooted at "/" (rewritten into the shared
+	// /services/<name> path-world before the payment gate) plus an
+	// offer-scoped discovery bundle (/openapi.json, /.well-known/x402,
+	// and a landing page at "/"). The shared-origin path keeps working as
+	// a back-compat alias. The x402 market is origin-keyed (x402scan,
+	// agentcash crawl per origin) — a dedicated hostname is what makes an
+	// offer list as its own product instead of leaking into one shared
+	// listing. DNS + tunnel routing for the hostname are the operator's
+	// job (obol tunnel hostname add <host> --offer <ns>/<name>).
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`
+	Hostname string `json:"hostname,omitempty"`
+
 	// Optional provenance metadata for the service. Tracks how the model or
 	// service was produced (e.g. autoresearch experiment data). Included in
 	// the ERC-8004 registration document when present.
@@ -535,6 +550,17 @@ func ReservedPathConflict(path string) string {
 		}
 	}
 	return ""
+}
+
+// EffectiveOrigin returns the offer's dedicated public origin
+// ("https://<hostname>") when spec.hostname is set, else "". Discovery
+// surfaces use it to advertise hostname-bound offers at their own origin
+// while path-only offers stay rooted at the shared tunnel URL.
+func (o *ServiceOffer) EffectiveOrigin() string {
+	if o.Spec.Hostname == "" {
+		return ""
+	}
+	return "https://" + o.Spec.Hostname
 }
 
 // EffectiveRoutes returns the offer's declared route table, or the

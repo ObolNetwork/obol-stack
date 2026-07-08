@@ -7,8 +7,8 @@ import (
 )
 
 func TestComputeSkillCatalogContentHashDeterministic(t *testing.T) {
-	a := computeSkillCatalogContentHash("# cat", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>")
-	b := computeSkillCatalogContentHash("# cat", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>")
+	a := computeSkillCatalogContentHash("# cat", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>", nil)
+	b := computeSkillCatalogContentHash("# cat", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>", nil)
 	if a != b {
 		t.Fatalf("hash not deterministic: %q vs %q", a, b)
 	}
@@ -16,27 +16,27 @@ func TestComputeSkillCatalogContentHashDeterministic(t *testing.T) {
 		t.Fatalf("hash length = %d, want 8", len(a))
 	}
 
-	changed := computeSkillCatalogContentHash("# cat", `{"services":[{"name":"a"}]}`, `{"openapi":"3.1.0"}`, "<html></html>")
+	changed := computeSkillCatalogContentHash("# cat", `{"services":[{"name":"a"}]}`, `{"openapi":"3.1.0"}`, "<html></html>", nil)
 	if changed == a {
 		t.Fatal("expected different hash when catalog content changes")
 	}
 }
 
 func TestSkillCatalogContentMatches(t *testing.T) {
-	cm := buildSkillCatalogConfigMap("# cat", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>")
-	if !skillCatalogContentMatches(cm, "# cat", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>") {
+	cm := buildSkillCatalogConfigMap("# cat", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>", nil)
+	if !skillCatalogContentMatches(cm, "# cat", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>", nil) {
 		t.Fatal("expected matching catalog content")
 	}
-	if skillCatalogContentMatches(cm, "# changed", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>") {
+	if skillCatalogContentMatches(cm, "# changed", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>", nil) {
 		t.Fatal("expected different skill.md to not match")
 	}
-	if skillCatalogContentMatches(nil, "# cat", `{}`, `{}`, "") {
+	if skillCatalogContentMatches(nil, "# cat", `{}`, `{}`, "", nil) {
 		t.Fatal("nil configmap must not match")
 	}
 }
 
 func TestSkillCatalogDeployedContentHash(t *testing.T) {
-	deployment := buildSkillCatalogDeployment("abc12345")
+	deployment := buildSkillCatalogDeployment("abc12345", nil)
 	if got := skillCatalogDeployedContentHash(deployment); got != "abc12345" {
 		t.Fatalf("hash = %q, want abc12345", got)
 	}

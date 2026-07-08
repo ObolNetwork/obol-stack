@@ -1226,6 +1226,31 @@ func storefrontHostnames(cfg *config.Config, tunnelURL string) []string {
 	return nil
 }
 
+// offerBoundHostnames returns the set of hostnames claimed by ServiceOffers
+// (spec.hostname), normalized. Best-effort: any error (cluster down, CRD
+// missing) returns nil and the caller keeps its historical behavior.
+func offerBoundHostnames(kubectlPath, kubeconfigPath string) map[string]bool {
+	cmd := exec.Command(kubectlPath,
+		"--kubeconfig", kubeconfigPath,
+		"get", "serviceoffers.obol.org", "-A",
+		"-o", `jsonpath={range .items[*]}{.spec.hostname}{"\n"}{end}`,
+	)
+	out, err := cmd.Output()
+	if err != nil {
+		return nil
+	}
+	bound := map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if h := normalizeHostname(line); h != "" {
+			bound[h] = true
+		}
+	}
+	if len(bound) == 0 {
+		return nil
+	}
+	return bound
+}
+
 // CreateStorefront creates (or updates) the public storefront landing page and
 // publishes it at the root path of EVERY supplied hostname. Each argument may be
 // a bare hostname or a full URL (scheme/path stripped); empty or duplicate
@@ -1239,6 +1264,28 @@ func CreateStorefront(cfg *config.Config, hostnames ...string) error {
 
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	// Hostnames claimed by a ServiceOffer (spec.hostname) belong to that
+	// offer's dedicated-origin route — the storefront catch-all must not
+	// contest their root (Gateway API breaks PathPrefix-/ ties on route
+	// age, i.e. silently). Best-effort: if the cluster can't be queried,
+	// keep the historical behavior.
+	if bound := offerBoundHostnames(kubectlPath, kubeconfigPath); len(bound) > 0 {
+		kept := hosts[:0]
+		for _, h := range hosts {
+			if bound[h] {
+				fmt.Printf("   Storefront: skipping %s (bound to a ServiceOffer via spec.hostname)\n", h)
+				continue
+			}
+			kept = append(kept, h)
+		}
+		hosts = kept
+		if len(hosts) == 0 {
+			// Every tracked hostname is offer-bound; nothing for the
+			// storefront to serve — a valid configuration.
+			return nil
+		}
+	}
 
 	labels := map[string]string{"app": "tunnel-storefront"}
 

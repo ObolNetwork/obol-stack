@@ -237,6 +237,7 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 
 	rule := RouteRule{
 		Pattern:                strings.TrimSuffix(offer.EffectivePath(), "/") + "/*",
+		Hostname:               offer.Spec.Hostname,
 		Price:                  primary.Price,
 		Description:            offer.Spec.Registration.Description,
 		OfferType:              offer.Spec.Type,
