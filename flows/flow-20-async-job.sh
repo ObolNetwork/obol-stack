@@ -24,15 +24,17 @@
 # product (a Kubernetes CR + sidecar auth pool) and has no equivalent for
 # an arbitrary paid HTTP route, so it does not apply to this offer.
 #
-# Upstream: the "ollama" ClusterIP Service in namespace llm (routes to the
-# host's Ollama daemon — internal/embed/infrastructure/base/templates/
-# llm.yaml) is deployed unconditionally as base infra, so it's a safe,
-# already-there deterministic upstream: GET /api/version always returns
-# {"version":"X.Y.Z"} with no auth and no request body, which is exactly
-# what a job-broker replay (any method, no body needed) wants. The
-# ServiceOffer's upstream namespace is always the offer's own --namespace,
-# so the offer is created in "llm" alongside it (same pattern flow-06 uses
-# for its own http offer).
+# Upstream: the "litellm" ClusterIP Service in namespace llm (port 4000) is
+# the inference gateway deployed unconditionally as base infra whether the
+# stack serves inference locally (ollama backend) or via a remote endpoint
+# (OBOL_LLM_ENDPOINT). Its GET /health/readiness probe is unauthenticated,
+# needs no request body, and returns a deterministic 200 JSON — exactly what
+# a job-broker replay (any method, no body) wants. We deliberately do NOT use
+# the "ollama" Service: it only has a live backend when the stack runs a
+# *host* ollama daemon, which is absent under remote-inference smoke runs, so
+# an ollama-upstream offer never reaches UpstreamHealthy/Ready there. The
+# ServiceOffer's upstream namespace is always the offer's own --namespace, so
+# the offer is created in "llm" alongside litellm (same as flow-06/flow-19).
 source "$(dirname "$0")/lib.sh"
 
 OFFER_NAME="flow-async"
@@ -101,8 +103,8 @@ run_step_grep "sell http $OFFER_NAME --async" \
     --network "$CHAIN" \
     --price "0.001" \
     --namespace "$NS" \
-    --upstream ollama \
-    --port 11434 \
+    --upstream litellm \
+    --port 4000 \
     --no-register \
     --async \
     --job-ttl 15m
@@ -112,7 +114,7 @@ poll_step_grep "ServiceOffer $OFFER_NAME Ready" "$OFFER_NAME.*True" 48 5 \
 
 refresh_obol_ingress_env
 BASE_URL="${OBOL_INGRESS_URL%/}"
-TARGET_PATH="/services/$OFFER_NAME/api/version"
+TARGET_PATH="/services/$OFFER_NAME/health/readiness"
 TARGET_URL="$BASE_URL$TARGET_PATH"
 
 # §3: unauthenticated submit → 402 with the same accepts[] shape flow-08
@@ -265,8 +267,8 @@ result_status=$($CURL_OBOL -sS -o /dev/null -w '%{http_code}' --max-time 10 \
     -H "Authorization: Bearer $JOB_TOKEN" "$BASE_URL$RESULT_PATH" 2>&1) || true
 result_body=$($CURL_OBOL -sS --max-time 10 \
     -H "Authorization: Bearer $JOB_TOKEN" "$BASE_URL$RESULT_PATH" 2>&1) || true
-if [ "$result_status" = "200" ] && echo "$result_body" | grep -q '"version"'; then
-    pass "jobToken result: 200, upstream ollama /api/version body: ${result_body:0:120}"
+if [ "$result_status" = "200" ] && [ -n "$result_body" ]; then
+    pass "jobToken result: 200, upstream litellm /health/readiness body: ${result_body:0:120}"
 else
     fail "jobToken result fetch failed (status=$result_status) — ${result_body:0:300}"
 fi
