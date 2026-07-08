@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	signinwithx "github.com/x402-foundation/x402/go/v2/extensions/signinwithx"
 )
 
 // signSIWX builds and signs a valid EIP-4361 message with a fresh key,
@@ -154,5 +155,67 @@ func TestSIWX_Authenticate_HeaderAndCookieForms(t *testing.T) {
 	req = httptest.NewRequest(http.MethodGet, "/x", nil)
 	if _, err := a.Authenticate(req, "shop.example.com", now); err == nil {
 		t.Error("credential-less request authenticated")
+	}
+}
+
+// TestSIWX_SpecHeader_RoundTrip pins the additive x402 sign-in-with-x
+// transport (F3): a base64-JSON payload in the SIGN-IN-WITH-X header, built
+// and signed exactly as a stock x402 SDK client would, authenticates through
+// the same checks as the native Authorization: SIWX form.
+func TestSIWX_SpecHeader_RoundTrip(t *testing.T) {
+	a, err := NewSIWXAuthenticator(0, 0)
+	if err != nil {
+		t.Fatalf("NewSIWXAuthenticator: %v", err)
+	}
+	now := time.Now()
+
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	addr := crypto.PubkeyToAddress(key.PublicKey).Hex()
+	payload := signinwithx.Payload{
+		Domain:   "shop.example.com",
+		Address:  addr,
+		URI:      "https://shop.example.com/services/audit/auth",
+		Version:  "1",
+		ChainID:  "eip155:8453",
+		Type:     "eip191",
+		Nonce:    "specnonce0001",
+		IssuedAt: now.UTC().Format(time.RFC3339),
+	}
+	// Sign the canonical EIP-4361 message the server will reconstruct.
+	message, err := signinwithx.CreateMessage(payload)
+	if err != nil {
+		t.Fatalf("CreateMessage: %v", err)
+	}
+	digest := crypto.Keccak256([]byte(fmt.Sprintf("\x19Ethereum Signed Message:\n%d%s", len(message), message)))
+	raw, err := crypto.Sign(digest, key)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	raw[64] += 27
+	payload.Signature = "0x" + hex.EncodeToString(raw)
+
+	header, err := signinwithx.EncodeHeader(payload)
+	if err != nil {
+		t.Fatalf("EncodeHeader: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/services/audit/reports/1", nil)
+	req.Header.Set("SIGN-IN-WITH-X", header)
+
+	got, err := a.Authenticate(req, "shop.example.com", now)
+	if err != nil {
+		t.Fatalf("Authenticate(SIGN-IN-WITH-X) = %v", err)
+	}
+	if got != strings.ToLower(addr) {
+		t.Fatalf("wallet = %s, want %s", got, strings.ToLower(addr))
+	}
+
+	// Wrong host must be rejected (domain binding still enforced).
+	req2 := httptest.NewRequest(http.MethodGet, "/services/audit/reports/1", nil)
+	req2.Header.Set("SIGN-IN-WITH-X", header)
+	if _, err := a.Authenticate(req2, "evil.example.com", now); err == nil {
+		t.Fatal("spec header authenticated against the wrong domain")
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	signinwithx "github.com/x402-foundation/x402/go/v2/extensions/signinwithx"
 )
 
 // SIWX (Sign-In With X, EIP-4361) authentication for gate:auth routes.
@@ -301,6 +302,16 @@ func (a *SIWXAuthenticator) signSession(body string) string {
 // carries. expectedDomain is the request's public host authority. Returns
 // the authenticated wallet (lowercase) or an error describing what to send.
 func (a *SIWXAuthenticator) Authenticate(r *http.Request, expectedDomain string, now time.Time) (string, error) {
+	// Spec transport (x402 sign-in-with-x): a base64-JSON payload in the
+	// SIGN-IN-WITH-X header, per docs.x402.org/extensions/sign-in-with-x.
+	// Accepted alongside the Authorization forms so stock x402 clients (e.g.
+	// the SDK's client extension) interoperate without an obol-specific
+	// credential shape. We borrow only the SDK's canonical EIP-4361
+	// serialization and run the result through the same domain-binding,
+	// freshness, nonce-replay, and EOA-recovery checks as the native form.
+	if hdr := r.Header.Get("SIGN-IN-WITH-X"); hdr != "" {
+		return a.verifySpecHeader(hdr, expectedDomain, now)
+	}
 	if auth := r.Header.Get("Authorization"); auth != "" {
 		if cred, ok := strings.CutPrefix(auth, "SIWX "); ok {
 			msgB64, sigB64, found := strings.Cut(strings.TrimSpace(cred), ".")
@@ -324,7 +335,29 @@ func (a *SIWXAuthenticator) Authenticate(r *http.Request, expectedDomain string,
 	if c, err := r.Cookie(SIWXSessionCookie); err == nil && c.Value != "" {
 		return a.VerifySession(c.Value, now)
 	}
-	return "", fmt.Errorf("siwx: no credential — sign in at the offer's /auth page or send Authorization: SIWX <b64 message>.<b64 signature>")
+	return "", fmt.Errorf("siwx: no credential — sign in at the offer's /auth page, send the SIGN-IN-WITH-X header, or Authorization: SIWX <b64 message>.<b64 signature>")
+}
+
+// verifySpecHeader verifies an x402 sign-in-with-x credential carried in the
+// SIGN-IN-WITH-X header (base64-JSON payload). It decodes the payload with the
+// x402 SDK, rebuilds the canonical EIP-4361 message the client signed, then
+// runs it through VerifyMessage so the domain, freshness, nonce, and EOA
+// checks are identical to the native transport. EVM (eip155) EOA only — the
+// same limitation as the rest of this file; Solana/EIP-1271 payloads get a
+// clear error rather than a silent pass.
+func (a *SIWXAuthenticator) verifySpecHeader(header, expectedDomain string, now time.Time) (string, error) {
+	payload, err := signinwithx.ParseHeader(header)
+	if err != nil {
+		return "", fmt.Errorf("siwx: %w", err)
+	}
+	if !strings.HasPrefix(payload.ChainID, "eip155:") {
+		return "", fmt.Errorf("siwx: unsupported chain %q — this server verifies EVM (eip155) EOA signatures only", payload.ChainID)
+	}
+	message, err := signinwithx.CreateMessage(payload)
+	if err != nil {
+		return "", fmt.Errorf("siwx: %w", err)
+	}
+	return a.VerifyMessage(message, payload.Signature, expectedDomain, now)
 }
 
 func isHexAddress(s string) bool {
