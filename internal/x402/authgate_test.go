@@ -147,6 +147,7 @@ func TestVerifier_AuthEndpoints_SignInFlow(t *testing.T) {
 	})
 	req = httptest.NewRequest(http.MethodPost, "/services/audit/auth/verify", bytes.NewReader(body))
 	req.Host = "shop.example.com"
+	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 	v.HandleProxy(w, req)
 	if w.Code != http.StatusSeeOther {
@@ -161,6 +162,9 @@ func TestVerifier_AuthEndpoints_SignInFlow(t *testing.T) {
 			session = c.Value
 			if !c.HttpOnly || !c.Secure {
 				t.Error("session cookie must be HttpOnly + Secure")
+			}
+			if c.SameSite != http.SameSiteStrictMode {
+				t.Error("session cookie must be SameSite=Strict (login-CSRF defense)")
 			}
 		}
 	}
@@ -185,6 +189,7 @@ func TestVerifier_AuthEndpoints_SignInFlow(t *testing.T) {
 	body, _ = json.Marshal(map[string]string{"message": msg, "signature": sig, "next": "https://evil.example.com/"})
 	req = httptest.NewRequest(http.MethodPost, "/services/audit/auth/verify", bytes.NewReader(body))
 	req.Host = "shop.example.com"
+	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 	v.HandleProxy(w, req)
 	if w.Code == http.StatusSeeOther {
@@ -321,5 +326,64 @@ func TestVerifier_AuthGate_HostnameOffer_PublicURLs(t *testing.T) {
 	}
 	if challenge.Auth.SignInURL != "https://shop.example.com/services/audit/auth" {
 		t.Errorf("shared-origin signInUrl = %q, want prefixed path", challenge.Auth.SignInURL)
+	}
+}
+
+// TestVerifier_AuthVerify_CSRFGuards pins the login-CSRF defenses on
+// /auth/verify (F4): a POST without an application/json Content-Type, or a
+// browser-declared cross-site fetch, must be refused before any session is
+// minted — otherwise an attacker could plant their own wallet's session in
+// a victim's browser via a cross-origin form.
+func TestVerifier_AuthVerify_CSRFGuards(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	v, _, _ := authGateVerifier(t, fac.URL)
+	msg, sig, _ := signSIWX(t, "shop.example.com", "csrf-1", time.Now())
+	body, _ := json.Marshal(map[string]string{"message": msg, "signature": sig})
+
+	// (a) no Content-Type → 415, no cookie.
+	req := httptest.NewRequest(http.MethodPost, "/services/audit/auth/verify", bytes.NewReader(body))
+	req.Host = "shop.example.com"
+	w := httptest.NewRecorder()
+	v.HandleProxy(w, req)
+	if w.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("verify without JSON Content-Type = %d, want 415", w.Code)
+	}
+	if len(w.Result().Cookies()) != 0 {
+		t.Error("no session cookie must be set on a rejected CSRF-shaped request")
+	}
+
+	// (b) cross-site fetch → 403, even with the right Content-Type.
+	req = httptest.NewRequest(http.MethodPost, "/services/audit/auth/verify", bytes.NewReader(body))
+	req.Host = "shop.example.com"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	w = httptest.NewRecorder()
+	v.HandleProxy(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("cross-site verify = %d, want 403", w.Code)
+	}
+}
+
+// TestVerifier_ForwardAuth_ExactOnlyTable_FailsClosed pins F7: an offer whose
+// route table is entirely exact paid routes must still fail closed for an
+// undeclared sibling in ForwardAuth mode — the offer base is registered as a
+// paid prefix so an unmatched path under it is refused (403), not 200-passed.
+func TestVerifier_ForwardAuth_ExactOnlyTable_FailsClosed(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	v := newTestVerifier(t, fac.URL, []RouteRule{{
+		Pattern:        "/services/foo/submit", // exact, no trailing /*
+		Price:          "0.0001",
+		StripPrefix:    "/services/foo",
+		OfferNamespace: "f",
+		OfferName:      "foo",
+	}})
+
+	// Undeclared sibling under the offer base → fail closed.
+	req := httptest.NewRequest(http.MethodGet, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/services/foo/other")
+	w := httptest.NewRecorder()
+	v.HandleVerify(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("undeclared sibling of an exact-only table = %d, want 403 (fail closed)", w.Code)
 	}
 }

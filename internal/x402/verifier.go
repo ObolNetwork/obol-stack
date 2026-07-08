@@ -109,6 +109,17 @@ func (v *Verifier) load(cfg *PricingConfig) error {
 	// uses this to fail-closed when a URI is under a tracked prefix but
 	// no rule matches (see isUnderPaidPrefix for the rationale).
 	prefixes := make([]string, 0, len(cfg.Routes))
+	seenPrefix := make(map[string]struct{}, len(cfg.Routes))
+	addPrefix := func(p string) {
+		if p == "" {
+			return
+		}
+		if _, ok := seenPrefix[p]; ok {
+			return
+		}
+		seenPrefix[p] = struct{}{}
+		prefixes = append(prefixes, p)
+	}
 	for _, r := range cfg.Routes {
 		// Free carve-outs never establish a paid prefix: a wildcard free
 		// route (e.g. /services/foo/jobs/*) must not make unmatched
@@ -116,9 +127,18 @@ func (v *Verifier) load(cfg *PricingConfig) error {
 		if r.IsFree() {
 			continue
 		}
-		prefix := patternToPrefix(r.Pattern)
-		if prefix != "" {
-			prefixes = append(prefixes, prefix)
+		addPrefix(patternToPrefix(r.Pattern))
+		// Fail-closed for exact-only route tables. A wildcard route yields
+		// a paid prefix above, but an offer whose non-free routes are ALL
+		// exact (e.g. only `/services/foo/submit`) would register none, so
+		// an undeclared sibling like `/services/foo/other` — which matched
+		// no rule — would 200-free-pass in ForwardAuth mode, contradicting
+		// the route-table contract that undeclared paths are refused once
+		// any route is declared. Register the offer base as a paid prefix
+		// so those siblings fail closed. Declared routes (free/auth/paid)
+		// still return from matchRoute before this prefix is ever consulted.
+		if base := strings.TrimSuffix(r.StripPrefix, "/"); base != "" {
+			addPrefix(base + "/")
 		}
 	}
 	sort.Slice(prefixes, func(i, j int) bool { return len(prefixes[i]) > len(prefixes[j]) })
