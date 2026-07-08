@@ -222,6 +222,22 @@ func (v *Verifier) handleAuthVerify(w http.ResponseWriter, r *http.Request, rule
 		http.Error(w, "POST {message, signature}", http.StatusMethodNotAllowed)
 		return
 	}
+	// Login-CSRF defense. Minting a session cookie from a cross-origin POST
+	// would let an attacker plant *their own* wallet's session in a victim's
+	// browser (session fixation). Two guards, either sufficient:
+	//   1. Require Content-Type: application/json. A cross-origin HTML form
+	//      can only send text/plain|form-encoded as a CORS "simple" request;
+	//      anything else triggers a preflight this endpoint never satisfies.
+	//   2. Reject a browser-declared cross-site fetch. Non-browser API
+	//      clients omit Sec-Fetch-Site, so this only ever blocks browsers.
+	if ct := r.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/json") {
+		http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
+		return
+	}
+	if site := r.Header.Get("Sec-Fetch-Site"); site == "cross-site" {
+		http.Error(w, "cross-site sign-in is not allowed", http.StatusForbidden)
+		return
+	}
 	var body struct {
 		Message   string `json:"message"`
 		Signature string `json:"signature"`
@@ -249,7 +265,12 @@ func (v *Verifier) handleAuthVerify(w http.ResponseWriter, r *http.Request, rule
 		MaxAge:   int(DefaultSIWXSessionTTL.Seconds()),
 		HttpOnly: true,
 		Secure:   true,
-		SameSite: http.SameSiteLaxMode,
+		// Strict, not Lax: the post-sign-in redirect is same-origin
+		// (sanitizeNextPath enforces same-origin paths), so Strict never
+		// blocks the legitimate flow, but it stops the session cookie from
+		// riding along on any cross-site request — a second layer under the
+		// Content-Type/Sec-Fetch-Site guards on the verify endpoint.
+		SameSite: http.SameSiteStrictMode,
 	})
 
 	if next := sanitizeNextPath(firstNonEmptyStr(body.Next, r.URL.Query().Get("next"))); next != "" {
@@ -296,9 +317,15 @@ func (v *Verifier) authRuleForPrefix(prefix string) *RouteRule {
 
 // sanitizeNextPath allows only same-origin absolute paths for post-auth
 // redirects — anything else (absolute URLs, scheme-relative //host, or
-// javascript:) is an open-redirect vector and is dropped.
+// javascript:) is an open-redirect vector and is dropped. A backslash is
+// rejected outright: Go's url.Parse treats "\" as a path byte, but WHATWG
+// browsers normalize it to "/", so "/\evil.com" would pass the checks here
+// yet resolve to "//evil.com" → https://evil.com in the browser.
 func sanitizeNextPath(next string) string {
 	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
+		return ""
+	}
+	if strings.Contains(next, "\\") {
 		return ""
 	}
 	if u, err := url.Parse(next); err != nil || u.Host != "" || u.Scheme != "" {
