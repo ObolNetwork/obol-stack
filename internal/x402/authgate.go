@@ -2,6 +2,7 @@ package x402
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	_ "embed"
 	"encoding/hex"
@@ -13,6 +14,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	signinwithx "github.com/x402-foundation/x402/go/v2/extensions/signinwithx"
 )
 
 // Identity propagation headers. Both are set by the verifier ONLY — any
@@ -163,6 +166,7 @@ func (v *Verifier) writeSIWXChallenge(w http.ResponseWriter, r *http.Request, ru
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
+	resourceURI := "https://" + host + publicPrefix(rule, host) + stripRoutePrefix(rule.StripPrefix, r.URL.Path)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"error":  "authentication_required",
 		"detail": reason.Error(),
@@ -178,7 +182,56 @@ func (v *Verifier) writeSIWXChallenge(w http.ResponseWriter, r *http.Request, ru
 				"`Authorization: SIWX <base64 message>.<base64 signature>`. Or POST {message, signature} " +
 				"to verifyUrl to mint a reusable session token (also set as the obol_siwx cookie).",
 		},
+		// x402 sign-in-with-x extension block, so a cold stock client can
+		// construct the credential without prior knowledge of this server.
+		// The nonce is freshly minted per challenge; obol accepts client
+		// nonces, so advertising one is additive, not a tightening.
+		"extensions": siwxChallengeExtension(host, resourceURI, "Sign in to "+rule.OfferName, v.siwx.Window()),
 	})
+}
+
+// obolSIWXChains are the CAIP-2 chains obol advertises for SIWx. Signing is
+// domain-bound (EIP-191), so chainId is a client hint only — obol verifies
+// the same way regardless. eip191/EOA only.
+var obolSIWXChains = []string{"eip155:8453", "eip155:84532"}
+
+// siwxChallengeExtension builds the extensions["sign-in-with-x"] block for a
+// 401/402 challenge per docs.x402.org/extensions/sign-in-with-x: message
+// metadata (with a fresh server nonce), the supported chains, and the
+// canonical schema from the x402 SDK.
+func siwxChallengeExtension(domain, resourceURI, statement string, window time.Duration) map[string]any {
+	now := time.Now().UTC()
+	supported := make([]map[string]any, 0, len(obolSIWXChains))
+	for _, c := range obolSIWXChains {
+		supported = append(supported, map[string]any{"chainId": c, "type": "eip191"})
+	}
+	return map[string]any{
+		"sign-in-with-x": map[string]any{
+			"info": map[string]any{
+				"domain":         domain,
+				"uri":            resourceURI,
+				"version":        "1",
+				"nonce":          siwxNonce(),
+				"issuedAt":       now.Format(time.RFC3339),
+				"expirationTime": now.Add(window).Format(time.RFC3339),
+				"statement":      statement,
+				"resources":      []string{resourceURI},
+			},
+			"supportedChains": supported,
+			"schema":          signinwithx.Schema(),
+		},
+	}
+}
+
+// siwxNonce mints a fresh alphanumeric nonce (siwe requires >=8 alphanumeric
+// characters). 16 hex chars from crypto/rand; falls back to a timestamp-derived
+// value only if the RNG is unavailable, which never happens in practice.
+func siwxNonce() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return fmt.Sprintf("%016x", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // handleAuthEndpoints intercepts the verifier-served sign-in endpoints

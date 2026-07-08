@@ -387,3 +387,56 @@ func TestVerifier_ForwardAuth_ExactOnlyTable_FailsClosed(t *testing.T) {
 		t.Fatalf("undeclared sibling of an exact-only table = %d, want 403 (fail closed)", w.Code)
 	}
 }
+
+// TestVerifier_AuthChallenge_AdvertisesSIWXExtension pins the F3 follow-up:
+// the machine (JSON) 401 challenge carries the x402 sign-in-with-x extension
+// block — fresh nonce, supported chains, canonical schema — so a cold stock
+// client can construct the credential without prior knowledge of the server.
+func TestVerifier_AuthChallenge_AdvertisesSIWXExtension(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	v, _, _ := authGateVerifier(t, fac.URL)
+
+	req := httptest.NewRequest(http.MethodGet, "/services/audit/reports/7", nil)
+	req.Host = "shop.example.com"
+	w := httptest.NewRecorder()
+	v.HandleProxy(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("challenge status = %d, want 401", w.Code)
+	}
+	var body struct {
+		Extensions map[string]struct {
+			Info struct {
+				Domain   string `json:"domain"`
+				Nonce    string `json:"nonce"`
+				IssuedAt string `json:"issuedAt"`
+				URI      string `json:"uri"`
+			} `json:"info"`
+			SupportedChains []struct {
+				ChainID string `json:"chainId"`
+				Type    string `json:"type"`
+			} `json:"supportedChains"`
+		} `json:"extensions"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("challenge not JSON: %v\n%s", err, w.Body.String())
+	}
+	siwx, ok := body.Extensions["sign-in-with-x"]
+	if !ok {
+		t.Fatalf("challenge missing extensions[sign-in-with-x]: %s", w.Body.String())
+	}
+	if siwx.Info.Domain != "shop.example.com" || len(siwx.Info.Nonce) < 8 || siwx.Info.IssuedAt == "" {
+		t.Errorf("info incomplete: %+v", siwx.Info)
+	}
+	if len(siwx.SupportedChains) == 0 || siwx.SupportedChains[0].Type != "eip191" {
+		t.Errorf("supportedChains missing/wrong: %+v", siwx.SupportedChains)
+	}
+	// Two challenges must mint different nonces (freshness).
+	w2 := httptest.NewRecorder()
+	v.HandleProxy(w2, req)
+	var body2 map[string]any
+	_ = json.Unmarshal(w2.Body.Bytes(), &body2)
+	n2 := body2["extensions"].(map[string]any)["sign-in-with-x"].(map[string]any)["info"].(map[string]any)["nonce"]
+	if n2 == siwx.Info.Nonce {
+		t.Error("nonce not fresh across challenges")
+	}
+}
