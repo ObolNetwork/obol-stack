@@ -57,6 +57,10 @@ metadata:
 type: Opaque
 stringData:
   WALLET_ADDRESS: ""
+  # Shared secret for the verifier→broker HMAC (F1 defense in depth over the
+  # NetworkPolicy). Empty = disabled on both sides; set the same non-empty
+  # value to require a valid X-Obol-Broker-Sig on every async submit.
+  JOB_BROKER_HMAC_SECRET: ""
 
 ---
 apiVersion: v1
@@ -279,6 +283,16 @@ spec:
             - --config=/config/pricing.yaml
             - --listen=:8080
             - --route-source=kube
+          env:
+            # F1 defense in depth: sign async broker-contract headers so a
+            # NetworkPolicy-allowed pod still can't forge a submit. optional
+            # so an install without the key runs (HMAC off, NetworkPolicy on).
+            - name: JOB_BROKER_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: x402-secrets
+                  key: JOB_BROKER_HMAC_SECRET
+                  optional: true
           volumeMounts:
             - name: pricing-config
               mountPath: /config
@@ -514,6 +528,15 @@ spec:
           args:
             - --listen=:8090
             - --db=/data/jobs.db
+          env:
+            # Same shared secret the verifier signs with (F1). When set, the
+            # broker requires a valid X-Obol-Broker-Sig on every submit.
+            - name: JOB_BROKER_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: x402-secrets
+                  key: JOB_BROKER_HMAC_SECRET
+                  optional: true
           ports:
             - name: http
               containerPort: 8090

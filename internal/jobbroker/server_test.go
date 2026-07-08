@@ -272,3 +272,50 @@ func TestBroker_SubmitWithoutContractHeaders(t *testing.T) {
 		t.Errorf("ungated submit = %d, want 400", w.Code)
 	}
 }
+
+// TestBroker_HMAC_RejectsForgedSubmit pins F1 defense-in-depth: with a shared
+// secret set, a submit whose X-Obol-Broker-Sig doesn't match the contract
+// headers is refused (403) — so a NetworkPolicy-allowed pod still can't forge
+// an arbitrary-URL, attacker-credentialed job. A correctly-signed submit passes.
+func TestBroker_HMAC_RejectsForgedSubmit(t *testing.T) {
+	t.Setenv("JOB_BROKER_HMAC_SECRET", "test-shared-secret")
+	dir := t.TempDir()
+	store, err := OpenStore(dir + "/jobs.db")
+	if err != nil {
+		t.Fatalf("OpenStore: %v", err)
+	}
+	defer store.Close()
+	srv := NewServer(store)
+
+	upstream := "http://upstream.internal/work"
+	offer := "sec/audit"
+	newReq := func(sig string) *http.Request {
+		req := httptest.NewRequest(http.MethodPost, "/jobs", strings.NewReader(`{}`))
+		req.Header.Set(HeaderUpstreamURL, upstream)
+		req.Header.Set(HeaderOffer, offer)
+		if sig != "" {
+			req.Header.Set(HeaderBrokerSig, sig)
+		}
+		return req
+	}
+
+	// Forged / missing signature → 403.
+	w := httptest.NewRecorder()
+	srv.handleSubmit(w, newReq("deadbeef"))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("forged-sig submit = %d, want 403", w.Code)
+	}
+	w = httptest.NewRecorder()
+	srv.handleSubmit(w, newReq(""))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("missing-sig submit = %d, want 403", w.Code)
+	}
+
+	// Correct signature (matching the verifier's computation) → accepted (202).
+	good := brokerSignature("test-shared-secret", upstream, offer, "")
+	w = httptest.NewRecorder()
+	srv.handleSubmit(w, newReq(good))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("correctly-signed submit = %d (%s), want 202", w.Code, w.Body.String())
+	}
+}

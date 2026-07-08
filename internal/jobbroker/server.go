@@ -2,12 +2,16 @@ package jobbroker
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -44,15 +48,40 @@ const upstreamTimeout = 2 * time.Hour
 type Server struct {
 	store  *Store
 	client *http.Client
+	// hmacSecret, when non-empty, requires every submit to carry a valid
+	// X-Obol-Broker-Sig computed by the verifier over the contract headers.
+	// Empty = disabled (the NetworkPolicy is then the only guard). Sourced
+	// from JOB_BROKER_HMAC_SECRET, the same value the verifier signs with.
+	hmacSecret string
 	// now is swappable for tests.
 	now func() time.Time
 }
 
+// HeaderBrokerSig carries the verifier's HMAC over the contract headers, so
+// the broker can reject forged submits even from a pod the NetworkPolicy
+// allows (defense in depth with the F1 NetworkPolicy). Mirrored in
+// internal/x402 (see authgate.go) — the two packages don't share code.
+const HeaderBrokerSig = "X-Obol-Broker-Sig"
+
+// brokerSignature is the HMAC the verifier and broker both compute over the
+// security-critical contract fields: the replay URL, the offer identity, and
+// the injected upstream credential. Keep byte-identical to the x402 copy.
+func brokerSignature(secret, upstreamURL, offer, upstreamAuth string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(upstreamURL + "\n" + offer + "\n" + upstreamAuth))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
 func NewServer(store *Store) *Server {
+	secret := os.Getenv("JOB_BROKER_HMAC_SECRET")
+	if secret == "" {
+		log.Printf("job-broker: JOB_BROKER_HMAC_SECRET unset — verifier→broker HMAC disabled; relying on the NetworkPolicy alone")
+	}
 	return &Server{
-		store:  store,
-		client: &http.Client{Timeout: upstreamTimeout},
-		now:    time.Now,
+		store:      store,
+		client:     &http.Client{Timeout: upstreamTimeout},
+		hmacSecret: secret,
+		now:        time.Now,
 	}
 }
 
@@ -122,6 +151,18 @@ func (s *Server) handleSubmit(w http.ResponseWriter, r *http.Request) {
 		// come through the payment gate.
 		http.Error(w, "not a gated async submit (missing broker contract headers)", http.StatusBadRequest)
 		return
+	}
+	// Defense in depth over the NetworkPolicy: when a shared secret is
+	// provisioned, header *presence* is not enough — the verifier's HMAC
+	// over (upstreamURL, offer, upstreamAuth) must check out, so a pod that
+	// slips past the network layer still can't forge an arbitrary-URL,
+	// attacker-credentialed submit.
+	if s.hmacSecret != "" {
+		want := brokerSignature(s.hmacSecret, upstream, offer, r.Header.Get(HeaderUpstreamAuth))
+		if !hmac.Equal([]byte(r.Header.Get(HeaderBrokerSig)), []byte(want)) {
+			http.Error(w, "invalid or missing broker signature", http.StatusForbidden)
+			return
+		}
 	}
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, maxSubmitBody+1))

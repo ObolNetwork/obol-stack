@@ -1,7 +1,10 @@
 package x402
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -90,6 +93,10 @@ const (
 	headerBrokerVisibility   = "X-Obol-Result-Visibility"
 	headerBrokerPublicPrefix = "X-Obol-Public-Prefix"
 	headerBrokerUpstreamAuth = "X-Obol-Upstream-Auth"
+	// headerBrokerSig carries the verifier's HMAC over the contract fields,
+	// so the broker can reject forged submits even from a NetworkPolicy-
+	// allowed pod (F1 defense in depth). Verified in internal/jobbroker.
+	headerBrokerSig = "X-Obol-Broker-Sig"
 )
 
 // stripIdentityHeaders removes client-supplied identity and broker-contract
@@ -106,6 +113,17 @@ func stripIdentityHeaders(h http.Header) {
 	h.Del(headerBrokerVisibility)
 	h.Del(headerBrokerPublicPrefix)
 	h.Del(headerBrokerUpstreamAuth)
+	h.Del(headerBrokerSig)
+}
+
+// brokerSignature is the HMAC the verifier sets and the broker checks over
+// the security-critical contract fields (replay URL, offer, injected upstream
+// credential). Byte-identical to internal/jobbroker.brokerSignature — the two
+// packages deliberately don't share code (the broker pulls in SQLite).
+func brokerSignature(secret, upstreamURL, offer, upstreamAuth string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(upstreamURL + "\n" + offer + "\n" + upstreamAuth))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 // authPageSuffix/authVerifySuffix are the verifier-served sign-in endpoints

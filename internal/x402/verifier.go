@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -790,6 +791,11 @@ func buildUpstreamProxy(rule *RouteRule) (http.Handler, error) {
 		return nil, fmt.Errorf("parse upstream URL %q: %w", targetURL, err)
 	}
 
+	// Shared secret for the verifier→broker HMAC (F1 defense in depth over
+	// the NetworkPolicy). Read once here; empty disables signing, and the
+	// broker likewise only enforces when its own copy is set.
+	brokerHMACSecret := os.Getenv("JOB_BROKER_HMAC_SECRET")
+
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(target)
@@ -809,6 +815,11 @@ func buildUpstreamProxy(rule *RouteRule) (http.Handler, error) {
 				// the client's own Authorization (SIWX / jobToken bearer)
 				// must keep flowing through for result access.
 				pr.Out.Header.Set(headerBrokerUpstreamAuth, rule.UpstreamAuth)
+				if brokerHMACSecret != "" {
+					pr.Out.Header.Set(headerBrokerSig,
+						brokerSignature(brokerHMACSecret, rule.UpstreamURL,
+							rule.OfferNamespace+"/"+rule.OfferName, rule.UpstreamAuth))
+				}
 			} else if rule.UpstreamAuth != "" {
 				pr.Out.Header.Set("Authorization", rule.UpstreamAuth)
 			}
