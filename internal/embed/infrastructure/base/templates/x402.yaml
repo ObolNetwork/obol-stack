@@ -518,6 +518,9 @@ spec:
           type: RuntimeDefault
       containers:
         - name: job-broker
+          # Digest-pinned by release-prep.yml (repin-x402-images.sh) like the
+          # verifier/controller/buyer; OBOL_DEVELOPMENT rewrites it to the
+          # local dev tag. `:latest` only survives until the first repin.
           image: ghcr.io/obolnetwork/job-broker:latest
           imagePullPolicy: IfNotPresent
           securityContext:

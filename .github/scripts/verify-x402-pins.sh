@@ -5,9 +5,9 @@
 #
 # "Stale" means: some commit after the pinned build commit changed source
 # that compiles into the x402-verifier / serviceoffer-controller /
-# x402-buyer binaries (computed live from `go list -deps`, plus their
-# Dockerfiles and go.mod/go.sum), so the pinned images no longer match the
-# source being released. This is the gate that makes the rc14 trap —
+# x402-buyer / job-broker binaries (computed live from `go list -deps`,
+# plus their Dockerfiles and go.mod/go.sum), so the pinned images no longer
+# match the source being released. This is the gate that makes the rc14 trap —
 # tagging a release whose embedded pins predate the release's own
 # verifier/buyer changes — structurally impossible.
 #
@@ -57,15 +57,17 @@ extract_pin() {
 # (read -r x <<<"$(cmd)" would swallow cmd's exit status).
 verifier_pin="$(extract_pin "${X402_YAML}" "x402-verifier")"
 controller_pin="$(extract_pin "${X402_YAML}" "serviceoffer-controller")"
+broker_pin="$(extract_pin "${X402_YAML}" "job-broker")"
 buyer_pin="$(extract_pin "${LLM_YAML}" "x402-buyer")"
 read -r VERIFIER_TAG VERIFIER_DIGEST <<<"${verifier_pin}"
 read -r CONTROLLER_TAG CONTROLLER_DIGEST <<<"${controller_pin}"
+read -r BROKER_TAG BROKER_DIGEST <<<"${broker_pin}"
 read -r BUYER_TAG BUYER_DIGEST <<<"${buyer_pin}"
 
-if [[ ! ("${VERIFIER_TAG}" == "${CONTROLLER_TAG}" && "${VERIFIER_TAG}" == "${BUYER_TAG}") ]]; then
+if [[ ! ("${VERIFIER_TAG}" == "${CONTROLLER_TAG}" && "${VERIFIER_TAG}" == "${BUYER_TAG}" && "${VERIFIER_TAG}" == "${BROKER_TAG}") ]]; then
     echo "error: embedded x402 pins do not share one build commit:" >&2
-    echo "       x402-verifier=${VERIFIER_TAG} serviceoffer-controller=${CONTROLLER_TAG} x402-buyer=${BUYER_TAG}" >&2
-    echo "       Repin all three from one commit: .github/scripts/repin-x402-images.sh <commit>" >&2
+    echo "       x402-verifier=${VERIFIER_TAG} serviceoffer-controller=${CONTROLLER_TAG} x402-buyer=${BUYER_TAG} job-broker=${BROKER_TAG}" >&2
+    echo "       Repin all four from one commit: .github/scripts/repin-x402-images.sh <commit>" >&2
     exit 1
 fi
 
@@ -89,6 +91,7 @@ else
     for entry in \
         "x402-verifier ${VERIFIER_DIGEST}" \
         "serviceoffer-controller ${CONTROLLER_DIGEST}" \
+        "job-broker ${BROKER_DIGEST}" \
         "x402-buyer ${BUYER_DIGEST}"; do
         read -r image embedded_digest <<<"${entry}"
         live_digest="$(fetch_index_digest "${image}" "${PIN_TAG}")"
@@ -112,7 +115,7 @@ fi
 # Computed FAIL-CLOSED: a process substitution would swallow a go-list
 # failure under set -e and silently gut the gate down to the static paths,
 # turning any toolchain hiccup into a false PASS on stale pins.
-if ! deps_out="$(go list -deps ./cmd/x402-verifier ./cmd/x402-buyer ./cmd/serviceoffer-controller)"; then
+if ! deps_out="$(go list -deps ./cmd/x402-verifier ./cmd/x402-buyer ./cmd/serviceoffer-controller ./cmd/job-broker)"; then
     echo "error: 'go list -deps' failed; cannot compute the component import graph." >&2
     echo "       Refusing to pass the gate on a partial path set." >&2
     exit 1
@@ -120,7 +123,7 @@ fi
 graph="$(grep '^github.com/ObolNetwork/obol-stack/' <<<"${deps_out}" \
     | sed 's|^github.com/ObolNetwork/obol-stack/||' \
     | sort -u)"
-for must in cmd/x402-verifier cmd/x402-buyer cmd/serviceoffer-controller; do
+for must in cmd/x402-verifier cmd/x402-buyer cmd/serviceoffer-controller cmd/job-broker; do
     if ! grep -qx "${must}" <<<"${graph}"; then
         echo "error: import graph is missing ${must} (module path changed?); refusing to pass." >&2
         exit 1
@@ -128,7 +131,7 @@ for must in cmd/x402-verifier cmd/x402-buyer cmd/serviceoffer-controller; do
 done
 
 # (while-read instead of mapfile: macOS ships bash 3.2.)
-paths=(go.mod go.sum Dockerfile.x402-verifier Dockerfile.x402-buyer Dockerfile.serviceoffer-controller)
+paths=(go.mod go.sum Dockerfile.x402-verifier Dockerfile.x402-buyer Dockerfile.serviceoffer-controller Dockerfile.job-broker)
 while IFS= read -r dir; do
     paths+=("${dir}")
 done <<<"${graph}"
@@ -143,7 +146,7 @@ stale_files="$(git diff --name-only "${PIN_COMMIT}..${RELEASE_REF}" -- "${paths[
 pin_template_drift="$(git diff --unified=0 "${PIN_COMMIT}..${RELEASE_REF}" -- "${X402_YAML}" "${LLM_YAML}" \
     | grep -E '^[+-]' \
     | grep -Ev '^(\+\+\+ |--- )' \
-    | grep -Ev '^[+-][[:space:]]*image: ghcr\.io/obolnetwork/(x402-verifier|serviceoffer-controller|x402-buyer):' \
+    | grep -Ev '^[+-][[:space:]]*image: ghcr\.io/obolnetwork/(x402-verifier|serviceoffer-controller|x402-buyer|job-broker):' \
     | grep -Ev '^[+-][[:space:]]*# hosts\. The :[0-9a-f]{7,40} tag is preserved' \
     || true)"
 

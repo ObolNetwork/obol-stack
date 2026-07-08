@@ -8,7 +8,7 @@
 #
 # Run this once when preparing a release (the natural moment the pins need to be
 # fresh — release.yml's verify-x402-pins gate is also release-time). It:
-#   1. builds the four x402 images for the release commit, and
+#   1. builds the x402 component images for the release commit, and
 #   2. opens an auto-merging PR that repins the embedded manifests to them.
 #
 # The pin bump lands through the normal review path — NO ruleset bypass, no
@@ -51,10 +51,10 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Build the four x402 images for the release commit so the pins can reference
-  # them by digest. Mirrors docker-publish-x402.yml's build matrix; images are
-  # tagged by the release commit's short and long SHA (repin-x402-images.sh
-  # resolves the digest from the short-SHA tag).
+  # Build the x402 component images for the release commit so the pins can
+  # reference them by digest. Mirrors docker-publish-x402.yml's build matrix;
+  # images are tagged by the release commit's short and long SHA
+  # (repin-x402-images.sh resolves the digest from the short-SHA tag).
   # ---------------------------------------------------------------------------
   build-images:
     runs-on: ubuntu-latest
@@ -69,6 +69,7 @@ jobs:
           - { image: obolnetwork/x402-buyer, dockerfile: Dockerfile.x402-buyer }
           - { image: obolnetwork/serviceoffer-controller, dockerfile: Dockerfile.serviceoffer-controller }
           - { image: obolnetwork/demo-server, dockerfile: Dockerfile.demo-server }
+          - { image: obolnetwork/job-broker, dockerfile: Dockerfile.job-broker }
     steps:
       - name: Checkout release ref
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

@@ -13,7 +13,14 @@
 #
 # How to use:
 #
-#   1. Create and push a release tag:
+#   0. Refresh the embedded x402 image pins first: run the
+#      "Release Prep - repin x402 pins" workflow against the release commit
+#      and merge the PR it opens (docs/release-x402-pins.md). Skipping this
+#      fails the verify-image-pins gate below and NO assets get built —
+#      the v0.13.0-rc0/rc1 empty-release trap.
+#
+#   1. Create and push a release tag ON MAIN (tags cut on integration or
+#      feature branches fail the pin gate — images are only built from main):
 #      $ git tag v0.1.0
 #      $ git push origin v0.1.0
 #
@@ -51,12 +58,14 @@ permissions:
 
 jobs:
   # Gate: the embedded x402 image pins (x402-verifier, serviceoffer-controller,
-  # x402-buyer) must have been built from source that contains every change to
-  # those binaries' import graph. Without this, a tag can ship manifests that
-  # deploy images predating the release's own payment-path changes (the
-  # v0.10.0-rc14 stale-pin trap). The repin-embedded-pins job in
-  # docker-publish-x402.yml normally lands the bump automatically; this gate
-  # makes sure the tag was cut after it.
+  # x402-buyer, job-broker) must have been built from source that contains
+  # every change to those binaries' import graph. Without this, a tag can ship
+  # manifests that deploy images predating the release's own payment-path
+  # changes (the v0.10.0-rc14 stale-pin trap, repeated by v0.13.0-rc0/rc1).
+  # Repinning is MANUAL: run the "Release Prep - repin x402 pins" workflow
+  # (release-prep.yml) against the release commit and merge its PR BEFORE
+  # tagging — see docs/release-x402-pins.md. This gate makes sure that
+  # happened.
   verify-image-pins:
     name: Verify embedded x402 image pins are fresh
     runs-on: ubuntu-latest

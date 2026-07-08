@@ -164,11 +164,11 @@ func rewriteDevDigestPins(defaultsDir, devTag string) error {
 		//   <base>:<7-40 hex>@sha256:<64 hex>   tag + digest combo
 		//   <base>@sha256:<64 hex>              digest-only pin
 		//   <base>:<7-40 hex>                   short-SHA tag pin (e.g. b13254e)
-		//   <base>:latest                       unpinned (e.g. job-broker, an
-		//                                       image not yet published to ghcr,
-		//                                       so it ships as :latest and has
-		//                                       no digest for the release
-		//                                       pipeline to stamp)
+		//   <base>:latest                       unpinned (a component that has
+		//                                       not been through its first
+		//                                       release repin yet — job-broker
+		//                                       shipped like this before it
+		//                                       joined the pin regime)
 		// The combo form MUST come first so the engine doesn't stop at the
 		// shorter `:<hex>` match and leave a stray `@sha256:<digest>` suffix,
 		// which Docker still resolves to the immutable registry image and

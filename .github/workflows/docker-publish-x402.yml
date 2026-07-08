@@ -2,11 +2,15 @@ name: Build and Publish x402 Images
 
 on:
   push:
+    # main only — release images are built from main (or via the manual
+    # release-prep.yml dispatch); feature/integration branches never publish.
     branches:
       - main
-      # Release trains get the same build + auto-repin treatment, so a tag
-      # cut on the branch never needs a manual workflow_dispatch first.
-      - 'release/**'
+    # Tag pushes MUST keep building: path filters below do not apply to tags,
+    # and internal/images.Resolve commit-pins demo-server (and the release
+    # binary's own components) to the tag commit's short SHA — the tag build
+    # is what guarantees those SHA tags exist even when the same commit's
+    # main-push build was skipped by the paths filter (e.g. a docs-only merge).
     tags:
       - 'v*'
     # Approximates the import graph of the built binaries (verifier,
@@ -39,14 +43,17 @@ on:
       - 'internal/walletbackup/**'
       - 'internal/x402/**'
       - 'internal/demo/**'
+      - 'internal/jobbroker/**'
       - 'cmd/x402-verifier/**'
       - 'cmd/x402-buyer/**'
       - 'cmd/serviceoffer-controller/**'
       - 'cmd/demo-server/**'
+      - 'cmd/job-broker/**'
       - 'Dockerfile.x402-verifier'
       - 'Dockerfile.x402-buyer'
       - 'Dockerfile.serviceoffer-controller'
       - 'Dockerfile.demo-server'
+      - 'Dockerfile.job-broker'
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/docker-publish-x402.yml'
@@ -89,6 +96,10 @@ jobs:
             image: obolnetwork/demo-server
             dockerfile: Dockerfile.demo-server
             description: Demo HTTP services for Obol Stack sell demo
+          - component: job-broker
+            image: obolnetwork/job-broker
+            dockerfile: Dockerfile.job-broker
+            description: Async job delivery broker for x402-paid ServiceOffers
 
     steps:
       - name: Checkout
@@ -125,7 +136,7 @@ jobs:
             # it through internal/images.Resolve to commit-pin the deployments
             # it manages. Without this, binary upgrades wouldn't roll the pods.
             type=sha,format=short,prefix=
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/secure-enclave-inference' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
           labels: |
             org.opencontainers.image.title=${{ matrix.component }}
             org.opencontainers.image.description=${{ matrix.description }}
@@ -167,6 +178,8 @@ jobs:
             image: obolnetwork/serviceoffer-controller
           - component: demo-server
             image: obolnetwork/demo-server
+          - component: job-broker
+            image: obolnetwork/job-broker
 
     steps:
       - name: Run Trivy vulnerability scanner

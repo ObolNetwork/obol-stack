@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 # Repin the embedded x402 image references (x402-verifier,
-# serviceoffer-controller, x402-buyer) to the images built from a given
-# commit.
+# serviceoffer-controller, x402-buyer, job-broker) to the images built from
+# a given commit.
 #
 #   .github/scripts/repin-x402-images.sh <commit-ish>
 #
-# CI runs this from the repin-embedded-pins job in docker-publish-x402.yml
-# after every successful branch build, so the embedded manifests track the
-# images built from the same source. Operators can run it manually for
-# ad-hoc repins (the rc11/rc14 pattern, cf. 8fb1553 / 2db429b) — the images
-# must already exist on GHCR at the 7-char short-SHA tag, which the
-# docker-publish-x402 workflow publishes for every build.
+# CI runs this from release-prep.yml (workflow_dispatch), which builds the
+# images for the release commit and opens a reviewed repin PR — see
+# docs/release-x402-pins.md. Operators can run it manually for ad-hoc
+# repins (the rc11/rc14 pattern, cf. 8fb1553 / 2db429b) — the images must
+# already exist on GHCR at the 7-char short-SHA tag, which release-prep and
+# every main-push docker-publish-x402 build publish.
 #
 # The script rewrites image lines in the two embedded templates and nothing
 # else. The digest written is the multi-arch index digest (amd64+arm64) —
@@ -38,9 +38,12 @@ repin_image() {
         return 1
     }
     ref="ghcr.io/obolnetwork/${image}:${SHORT_SHA}@${digest}"
+    # The digest suffix is optional so a component's FIRST repin converts a
+    # plain `:latest` (or bare short-SHA) pin into the digest-pinned form —
+    # job-broker shipped as `:latest` before it joined the pin regime.
     # BSD and GNU sed both accept -i with an attached suffix.
     sed -E -i.repin-bak \
-        "s|image: ghcr\.io/obolnetwork/${image}:[A-Za-z0-9._-]+@sha256:[0-9a-f]{64}|image: ${ref}|" \
+        "s|image: ghcr\.io/obolnetwork/${image}:[A-Za-z0-9._-]+(@sha256:[0-9a-f]{64})?|image: ${ref}|" \
         "${REPO_ROOT}/${file}"
     rm -f "${REPO_ROOT}/${file}.repin-bak"
     if ! grep -q "image: ${ref}" "${REPO_ROOT}/${file}"; then
@@ -52,6 +55,7 @@ repin_image() {
 
 repin_image "${X402_YAML}" "x402-verifier"
 repin_image "${X402_YAML}" "serviceoffer-controller"
+repin_image "${X402_YAML}" "job-broker"
 repin_image "${LLM_YAML}" "x402-buyer"
 
 # Keep the human-readability note in llm.yaml in sync with the tag.

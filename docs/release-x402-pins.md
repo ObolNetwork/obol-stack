@@ -1,8 +1,8 @@
 # Releasing: x402 image pins
 
 The embedded infrastructure manifests pin the x402 images
-(`x402-verifier`, `serviceoffer-controller`, `x402-buyer`) by tag **and**
-digest, in:
+(`x402-verifier`, `serviceoffer-controller`, `job-broker`, `x402-buyer`) by
+tag **and** digest, in:
 
 - `internal/embed/infrastructure/base/templates/x402.yaml`
 - `internal/embed/infrastructure/base/templates/llm.yaml`
@@ -17,7 +17,7 @@ pins must point at images built from the release commit before you tag.
 Run the **Release Prep - repin x402 pins** workflow (`release-prep.yml`,
 `workflow_dispatch`) with `ref` = the release commit (usually `main`). It:
 
-1. builds the four x402 images for that commit (tagged by its SHA), then
+1. builds the x402 component images for that commit (tagged by its SHA), then
 2. opens an **auto-merging PR** that repins `x402.yaml` / `llm.yaml` to them.
 
 The pin commit is made with the GraphQL `createCommitOnBranch` API onto a
