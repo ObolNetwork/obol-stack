@@ -4903,12 +4903,51 @@ func preflightOfferPathCollision(cfg *config.Config, manifest map[string]any) er
 	if root := monetizeapi.ReservedPathConflict(path); root != "" {
 		return fmt.Errorf("path %s collides with the reserved platform path %s (discovery/routing surface) — pass --path to pick a different public path", path, root)
 	}
+	// F8: same static check, but over each declared spec.routes[].path
+	// entry rather than just the offer root. A route landing on "/auth" (or
+	// nested under it) would shadow the verifier's SIWX sign-in endpoints.
+	if routePath, root := reservedRoutePathCollision(spec); root != "" {
+		return fmt.Errorf("route path %s collides with the reserved platform path %s (discovery/routing surface) — pick a different route path", routePath, root)
+	}
 	bin, kubeconfig := kubectl.Paths(cfg)
 	out, err := kubectl.Output(bin, kubeconfig, "get", "serviceoffers.obol.org", "-A", "-o", "json")
 	if err != nil {
 		return nil //nolint:nilerr // best-effort preflight; the apply surfaces real errors
 	}
 	return offerPathCollisionInList([]byte(out), ns, name, path, hostname)
+}
+
+// reservedRoutePathCollision checks spec["routes"] against the route-level
+// reserved-path denylist and returns the first colliding route's path and
+// the reserved root it hit, or ("", "") when none collide. spec["routes"]
+// takes two shapes depending on how the manifest was built: []map[string]any
+// from parseRouteFlags (the --route flag path) or []any of
+// map[string]interface{} from json.Unmarshal (the --from-json path) — any
+// is an alias for interface{}, so both element types assert the same way.
+func reservedRoutePathCollision(spec map[string]any) (routePath, root string) {
+	var routes []any
+	switch rs := spec["routes"].(type) {
+	case []map[string]any:
+		for _, r := range rs {
+			routes = append(routes, r)
+		}
+	case []any:
+		routes = rs
+	}
+	for _, item := range routes {
+		rm, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		p, _ := rm["path"].(string)
+		if p == "" {
+			continue
+		}
+		if r := monetizeapi.ReservedRoutePathConflict(p); r != "" {
+			return p, r
+		}
+	}
+	return "", ""
 }
 
 // offerPathCollisionInList is the pure core of preflightOfferPathCollision.

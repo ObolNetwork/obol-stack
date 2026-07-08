@@ -115,6 +115,20 @@ func pickHostnameConflict(offer *monetizeapi.ServiceOffer, others []*monetizeapi
 	return ""
 }
 
+// reservedRouteConflict returns the offer-relative route path and reserved
+// root of the first declared spec.routes[] entry that collides with a
+// reserved verifier surface (F8), or ("", "") when none do. The offer's
+// root path is checked separately via monetizeapi.ReservedPathConflict —
+// this only walks the route table.
+func reservedRouteConflict(offer *monetizeapi.ServiceOffer) (routePath, root string) {
+	for _, route := range offer.EffectiveRoutes() {
+		if r := monetizeapi.ReservedRoutePathConflict(route.Path); r != "" {
+			return route.Path, r
+		}
+	}
+	return "", ""
+}
+
 // claimPrecedes reports whether a's claim on a path beats b's: older
 // creationTimestamp wins; equal timestamps fall back to namespace/name
 // ordering so the outcome is deterministic on both sides.

@@ -526,6 +526,19 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		setCondition(&status, "Draining", "False", "Active", "Offer is active")
 		setCondition(&status, "PaymentGateReady", "False", "ReservedPath", msg)
 		setCondition(&status, "RoutePublished", "False", "ReservedPath", msg)
+	} else if routePath, root := reservedRouteConflict(offer); root != "" {
+		// Same reserved-surface treatment as above, but for an individual
+		// spec.routes[].path entry (F8) — e.g. a route declared at "/auth"
+		// would shadow the verifier's own SIWX sign-in endpoints for
+		// gate:auth offers.
+		msg := fmt.Sprintf("route path %s collides with the reserved platform path %s — set a different spec.routes[].path", routePath, root)
+		log.Printf("serviceoffer-controller: %s/%s reserved route path: %s", offer.Namespace, offer.Name, msg)
+		if err := c.deleteRouteChildren(ctx, offer); err != nil {
+			return err
+		}
+		setCondition(&status, "Draining", "False", "Active", "Offer is active")
+		setCondition(&status, "PaymentGateReady", "False", "ReservedPath", msg)
+		setCondition(&status, "RoutePublished", "False", "ReservedPath", msg)
 	} else if conflict := c.findHostnameConflict(offer); conflict != "" {
 		// One offer per public origin — same first-claimant-wins treatment
 		// as a path conflict.

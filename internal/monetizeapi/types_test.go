@@ -197,3 +197,28 @@ func TestReservedPathConflict(t *testing.T) {
 		}
 	}
 }
+
+// TestReservedRoutePathConflict pins the route-level denylist (F8): a
+// spec.routes[].path may not land on "/auth" or "/auth/verify" (the
+// verifier's SIWX sign-in endpoints for gate:auth offers) or nest under any
+// of the shared reservedPathRoots. Unlike the offer-root check, "/" is a
+// legitimate relative route path and must stay unreserved.
+func TestReservedRoutePathConflict(t *testing.T) {
+	tests := []struct{ path, wantRoot string }{
+		{"/", ""},
+		{"/v1/*", ""},
+		{"/healthz", ""},
+		{"/auth", "/auth"},
+		{"/auth/", "/auth"},
+		{"/auth/verify", "/auth"},
+		{"/authorize", ""}, // prefix must respect segment boundaries
+		{"/api", "/api"},
+		{"/api/services.json", "/api"},
+		{"/.well-known/x402", "/.well-known"},
+	}
+	for _, tt := range tests {
+		if got := ReservedRoutePathConflict(tt.path); got != tt.wantRoot {
+			t.Errorf("ReservedRoutePathConflict(%q) = %q, want %q", tt.path, got, tt.wantRoot)
+		}
+	}
+}

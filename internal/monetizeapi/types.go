@@ -623,6 +623,27 @@ func ReservedPathConflict(path string) string {
 	return ""
 }
 
+// routeReservedPathRoots extends reservedPathRoots with the verifier's own
+// sign-in surface for gate:auth offers. A route declared at "/auth" or
+// "/auth/verify" would shadow the SIWX challenge/verify endpoints the
+// verifier serves at those paths.
+var routeReservedPathRoots = append(append([]string{}, reservedPathRoots...), "/auth")
+
+// ReservedRoutePathConflict returns the reserved root a route's
+// offer-relative path (spec.routes[].path) collides with, or "". Unlike
+// ReservedPathConflict this does not special-case "/" or "/services" — "/"
+// is a normal, meaningful relative route path (the offer's own root route)
+// — it only guards the shared verifier surfaces plus "/auth".
+func ReservedRoutePathConflict(path string) string {
+	p := strings.TrimSuffix(path, "/")
+	for _, root := range routeReservedPathRoots {
+		if p == root || strings.HasPrefix(p, root+"/") {
+			return root
+		}
+	}
+	return ""
+}
+
 // EffectiveOrigin returns the offer's dedicated public origin
 // ("https://<hostname>") when spec.hostname is set, else "". Discovery
 // surfaces use it to advertise hostname-bound offers at their own origin
