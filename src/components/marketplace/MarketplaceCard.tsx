@@ -58,6 +58,14 @@ const Card = styled('article', {
   '&:hover': {
     borderColor: '$body',
   },
+
+  // Keyboard affordance to match the List view's row focus ring — the card is
+  // role="button" and tabbable, so it needs a visible focus state of its own.
+  '&:focus-visible': {
+    outline: '2px solid $obolGreen',
+    outlineOffset: -2,
+    borderColor: 'transparent',
+  },
 });
 
 const TopRow = styled('div', {
@@ -305,6 +313,7 @@ function MarketplaceCardImpl({
           <PriceAmount
             amount={item.price || '—'}
             symbol={item.asset.symbol}
+            showSymbol={Boolean(item.price)}
             variant="inline"
           />
           {item.price ? (
