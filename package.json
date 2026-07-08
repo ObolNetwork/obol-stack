@@ -34,7 +34,7 @@
     "@copilotkit/react-ui": "1.61.2",
     "@copilotkit/runtime": "1.62.2",
     "@kubernetes/client-node": "1.4.0",
-    "@obolnetwork/obol-ui": "1.1.19",
+    "@obolnetwork/obol-ui": "1.1.21",
     "@radix-ui/react-icons": "1.3.2",
     "@radix-ui/react-tooltip": "1.2.11",
     "@rainbow-me/rainbowkit": "2.2.11",
