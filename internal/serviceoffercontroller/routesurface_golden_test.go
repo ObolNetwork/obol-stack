@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	"github.com/ObolNetwork/obol-stack/internal/x402"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -29,6 +30,7 @@ func routeTableOffer() *monetizeapi.ServiceOffer {
 					Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.5"},
 					Summary: "Submit source for audit"},
 				{Path: "/jobs/*", Gate: monetizeapi.GateFree},
+				{Path: "/reports/*", Gate: monetizeapi.GateAuth},
 				{Path: "/*", Gate: monetizeapi.GatePaid},
 			},
 		},
@@ -59,11 +61,17 @@ func TestRouteSurface_Golden_VerifierAndOpenAPIAgree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RouteRulesForOffer: %v", err)
 	}
-	if len(rules) != 3 {
-		t.Fatalf("len(rules) = %d, want 3", len(rules))
+	if len(rules) != 4 {
+		t.Fatalf("len(rules) = %d, want 4", len(rules))
 	}
 
 	paths := buildOpenAPIPaths([]*monetizeapi.ServiceOffer{offer})
+
+	// The siwx securityScheme must exist exactly when an auth route does.
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, "https://example.com", schemas.StorefrontProfile{}))
+	if dig(t, doc, "components", "securitySchemes", "siwx") == nil {
+		t.Error("offer has an auth route but the document lacks securitySchemes.siwx")
+	}
 
 	// Bijection: every verifier rule maps to exactly one OpenAPI path key
 	// (wildcard patterns collapse to their literal prefix), and no OpenAPI
@@ -83,12 +91,28 @@ func TestRouteSurface_Golden_VerifierAndOpenAPIAgree(t *testing.T) {
 				t.Fatalf("path %q method %q: not an operation object", key, method)
 			}
 			info, hasPayment := op["x-payment-info"].(map[string]any)
-			if rule.IsFree() {
+			switch {
+			case rule.IsFree():
 				if hasPayment {
 					t.Errorf("free route %q advertises x-payment-info", rule.Pattern)
 				}
 				if op["x-gate"] != "free" {
 					t.Errorf("free route %q missing x-gate: free marker", rule.Pattern)
+				}
+				continue
+			case rule.IsAuth():
+				if hasPayment {
+					t.Errorf("auth route %q advertises x-payment-info", rule.Pattern)
+				}
+				if op["x-gate"] != "auth" {
+					t.Errorf("auth route %q missing x-gate: auth marker", rule.Pattern)
+				}
+				sec, _ := op["security"].([]any)
+				if len(sec) != 1 {
+					t.Errorf("auth route %q must declare the siwx security requirement, got %v", rule.Pattern, op["security"])
+				}
+				if _, ok := op["x-auth-info"].(map[string]any); !ok {
+					t.Errorf("auth route %q missing x-auth-info", rule.Pattern)
 				}
 				continue
 			}
@@ -118,6 +142,7 @@ func TestRouteSurface_Golden_SkillMDListsEveryRoute(t *testing.T) {
 	for _, want := range []string{
 		"`POST https://example.com/services/audit/submit` — 0.5 USDC/request — Submit source for audit",
 		"`GET https://example.com/services/audit/jobs` — free (covers sub-paths)",
+		"`GET https://example.com/services/audit/reports` — free, wallet sign-in required (SIWX/EIP-4361 — see the offer's `/auth` page) (covers sub-paths)",
 		"`POST https://example.com/services/audit` — 0.1 USDC/request (covers sub-paths)",
 		// Buy prompts + try-it must target the primary paid route, not the root.
 		"curl -i https://example.com/services/audit/submit",

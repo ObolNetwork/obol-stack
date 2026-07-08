@@ -1677,19 +1677,21 @@ func skillCatalogRouteLines(offer *monetizeapi.ServiceOffer, endpoint string) []
 	}
 	lines := []string{"- **Routes** (per-route gating; paths outside this table are not served):"}
 	for _, rt := range offer.EffectiveRoutes() {
-		free := rt.EffectiveGate() == monetizeapi.GateFree
+		gate := rt.EffectiveGate()
 		methods := strings.Join(rt.Methods, "|")
 		if methods == "" {
-			if free {
-				methods = "GET"
-			} else {
+			if gate == monetizeapi.GatePaid {
 				methods = "POST"
+			} else {
+				methods = "GET"
 			}
 		}
 		var cost string
 		switch {
-		case free:
+		case gate == monetizeapi.GateFree:
 			cost = "free"
+		case gate == monetizeapi.GateAuth:
+			cost = "free, wallet sign-in required (SIWX/EIP-4361 — see the offer's `/auth` page)"
 		case rt.HasPriceOverride():
 			p := offer.EffectivePayments()[0]
 			p.Price = rt.Price

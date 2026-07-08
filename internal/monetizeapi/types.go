@@ -245,13 +245,15 @@ type ServiceOfferPayment struct {
 	Price ServiceOfferPriceTable `json:"price"`
 }
 
-// Gate classes for ServiceOfferRoute. GateAuth (SIWX-verified wallet) is
-// planned for the identity milestone and intentionally absent from the CRD
-// enum until the verifier can enforce it — fail closed, never advertise a
-// gate that isn't enforced.
+// Gate classes for ServiceOfferRoute.
 const (
 	GatePaid = "paid"
 	GateFree = "free"
+	// GateAuth requires a SIWX-verified wallet (EIP-4361 signature or a
+	// verifier-minted session). The verifier injects X-Verified-Wallet
+	// upstream; authorization (WHICH wallet may see what) is the
+	// upstream's job.
+	GateAuth = "auth"
 )
 
 // ServiceOfferRoute is one entry in an offer's route table. Path is
@@ -273,9 +275,10 @@ type ServiceOfferRoute struct {
 	Methods []string `json:"methods,omitempty"`
 	// Gate class. "paid" gates the route with x402 (default); "free" passes
 	// the payment gate entirely (health checks, job status pages, per-offer
-	// discovery documents).
+	// discovery documents); "auth" requires a SIWX-verified wallet and
+	// forwards it upstream as X-Verified-Wallet.
 	// +kubebuilder:default="paid"
-	// +kubebuilder:validation:Enum=paid;free
+	// +kubebuilder:validation:Enum=paid;free;auth
 	Gate string `json:"gate,omitempty"`
 	// Price override for a paid route. When set, it replaces the offer's
 	// primary payment option price for this route and the route becomes

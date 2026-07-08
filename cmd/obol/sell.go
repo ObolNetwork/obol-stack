@@ -756,11 +756,12 @@ Examples:
 			&cli.StringSliceFlag{
 				Name: "route",
 				Usage: "Declare one route in the offer's route table (repeatable). " +
-					"Format: path=/submit[,methods=POST|GET][,gate=paid|free][,price=0.5][,summary=...]. " +
+					"Format: path=/submit[,methods=POST|GET][,gate=paid|free|auth][,price=0.5][,summary=...]. " +
 					"Paths are relative to the offer prefix; trailing /* covers sub-paths. " +
 					"When any --route is set, only declared routes are served (undeclared paths 404) — " +
 					"add path=/*,gate=paid for a catch-all. gate=free carves the route out of the " +
-					"payment gate; price overrides the offer price for that route.",
+					"payment gate; gate=auth requires a SIWX wallet sign-in instead of payment; " +
+					"price overrides the offer price for that route.",
 			},
 			&cli.IntFlag{
 				Name:  "max-timeout",
@@ -4780,10 +4781,10 @@ func parseRouteFlags(vals []string) (routes []map[string]any, hasPaid bool, err 
 				route["methods"] = methods
 			case "gate":
 				switch v {
-				case monetizeapi.GatePaid, monetizeapi.GateFree:
+				case monetizeapi.GatePaid, monetizeapi.GateFree, monetizeapi.GateAuth:
 					gate = v
 				default:
-					return nil, false, fmt.Errorf("--route %q: gate must be paid or free (got %q)", val, v)
+					return nil, false, fmt.Errorf("--route %q: gate must be paid, free, or auth (got %q)", val, v)
 				}
 			case "price":
 				route["price"] = map[string]any{"perRequest": v}
@@ -4797,12 +4798,10 @@ func parseRouteFlags(vals []string) (routes []map[string]any, hasPaid bool, err 
 			return nil, false, fmt.Errorf("--route %q: path is required", val)
 		}
 		route["gate"] = gate
-		if gate == monetizeapi.GateFree {
-			if route["price"] != nil {
-				return nil, false, fmt.Errorf("--route %q: a free route cannot carry a price", val)
-			}
-		} else {
+		if gate == monetizeapi.GatePaid {
 			hasPaid = true
+		} else if route["price"] != nil {
+			return nil, false, fmt.Errorf("--route %q: only paid routes carry a price (gate=%s)", val, gate)
 		}
 		routes = append(routes, route)
 	}

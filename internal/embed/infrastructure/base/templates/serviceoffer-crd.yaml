@@ -405,10 +405,12 @@ spec:
                       description: |-
                         Gate class. "paid" gates the route with x402 (default); "free" passes
                         the payment gate entirely (health checks, job status pages, per-offer
-                        discovery documents).
+                        discovery documents); "auth" requires a SIWX-verified wallet and
+                        forwards it upstream as X-Verified-Wallet.
                       enum:
                       - paid
                       - free
+                      - auth
                       type: string
                     methods:
                       description: |-

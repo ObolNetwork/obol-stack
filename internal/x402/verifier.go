@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	x402types "github.com/x402-foundation/x402/go/v2/types"
@@ -40,6 +41,11 @@ type Verifier struct {
 	// Sorted by length descending so longer-prefix matches win first
 	// (defensive — fixes nothing today but cheap insurance).
 	paidPrefixes atomic.Pointer[[]string]
+
+	// siwx authenticates gate:auth routes (EIP-4361 signatures + session
+	// tokens). Sessions are signed with a per-process secret: a verifier
+	// restart invalidates them (single-replica; clients re-authenticate).
+	siwx *SIWXAuthenticator
 }
 
 // MarkRoutesLoaded signals that the route source has produced its first
@@ -49,7 +55,11 @@ func (v *Verifier) MarkRoutesLoaded() { v.routesLoaded.Store(true) }
 
 // NewVerifier creates a Verifier with the given initial configuration.
 func NewVerifier(cfg *PricingConfig) (*Verifier, error) {
-	v := &Verifier{metrics: newVerifierMetrics()}
+	siwx, err := NewSIWXAuthenticator(0, 0)
+	if err != nil {
+		return nil, err
+	}
+	v := &Verifier{metrics: newVerifierMetrics(), siwx: siwx}
 	if err := v.load(cfg); err != nil {
 		return nil, err
 	}
@@ -180,11 +190,32 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 
 	// Declared free carve-out (offer route table, gate: free): allow the
 	// request through, still authenticating it with the upstream when the
-	// offer has upstream auth configured.
+	// offer has upstream auth configured. Identity headers are set to
+	// empty so Traefik's authResponseHeaders overwrite any client-forged
+	// values on the forwarded request.
 	if rule.IsFree() {
 		if rule.UpstreamAuth != "" {
 			w.Header().Set("Authorization", rule.UpstreamAuth)
 		}
+		w.Header().Set(HeaderVerifiedWallet, "")
+		w.Header().Set(HeaderPaymentPayer, "")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// SIWX-gated carve-out (gate: auth): a verified wallet substitutes for
+	// payment; the wallet is handed to the upstream via authResponseHeaders.
+	if rule.IsAuth() {
+		wallet, err := v.siwx.Authenticate(r, requestHost(r), time.Now())
+		if err != nil {
+			v.writeSIWXChallenge(w, r, rule, err)
+			return
+		}
+		if rule.UpstreamAuth != "" {
+			w.Header().Set("Authorization", rule.UpstreamAuth)
+		}
+		w.Header().Set(HeaderVerifiedWallet, wallet)
+		w.Header().Set(HeaderPaymentPayer, "")
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -236,6 +267,13 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		OnPaymentFailure: func(reason string) {
 			v.metrics.paymentFailureReasons.With(withReason(matchedLabels, reason)).Inc()
 		},
+		// Propagate the verified payer to the upstream. Set even when
+		// empty: Traefik's authResponseHeaders only overwrite forwarded
+		// request headers when present on the auth response, so an
+		// always-set header is what neutralizes client-forged values.
+		OnPaymentVerified: func(payer string) {
+			w.Header().Set(HeaderPaymentPayer, payer)
+		},
 	}, mr.requirements)
 
 	upstreamAuth := mr.rule.UpstreamAuth
@@ -243,6 +281,10 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		if upstreamAuth != "" {
 			w.Header().Set("Authorization", upstreamAuth)
 		}
+		if w.Header().Get(HeaderPaymentPayer) == "" {
+			w.Header().Set(HeaderPaymentPayer, "")
+		}
+		w.Header().Set(HeaderVerifiedWallet, "")
 
 		w.WriteHeader(http.StatusOK)
 	})
@@ -268,9 +310,21 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	cfg := v.config.Load()
 
+	// The identity headers are verifier-set facts; client-supplied values
+	// must never reach an upstream — on any route class.
+	stripIdentityHeaders(r.Header)
+
+	// Verifier-served sign-in endpoints (<offer>/auth[/verify]) for offers
+	// with gate:auth routes — handled before route matching so they never
+	// proxy or gate.
+	if v.handleAuthEndpoints(w, r) {
+		return
+	}
+
 	rule := matchRoute(cfg.Routes, r.URL.Path)
 	if rule == nil {
-		http.NotFound(w, r)
+		writeErrorResponse(w, r, http.StatusNotFound, "No service here",
+			"This path is not part of any published service. The operator's catalog lists every live endpoint.")
 		return
 	}
 
@@ -282,9 +336,30 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		proxy, err := buildUpstreamProxy(rule)
 		if err != nil {
 			log.Printf("x402-verifier: build upstream proxy for %s/%s: %v", rule.OfferNamespace, rule.OfferName, err)
-			http.Error(w, "upstream unavailable", http.StatusInternalServerError)
+			writeErrorResponse(w, r, http.StatusInternalServerError, "Upstream unavailable",
+				"The service behind this route is not reachable right now. Retry shortly.")
 			return
 		}
+		proxy.ServeHTTP(&statusRecorder{ResponseWriter: w, status: http.StatusOK}, r)
+		return
+	}
+
+	// SIWX-gated carve-out: verified wallet substitutes for payment; the
+	// wallet rides to the upstream as X-Verified-Wallet.
+	if rule.IsAuth() {
+		wallet, err := v.siwx.Authenticate(r, requestHost(r), time.Now())
+		if err != nil {
+			v.writeSIWXChallenge(w, r, rule, err)
+			return
+		}
+		proxy, err := buildUpstreamProxy(rule)
+		if err != nil {
+			log.Printf("x402-verifier: build upstream proxy for %s/%s: %v", rule.OfferNamespace, rule.OfferName, err)
+			writeErrorResponse(w, r, http.StatusInternalServerError, "Upstream unavailable",
+				"The service behind this route is not reachable right now. Retry shortly.")
+			return
+		}
+		r.Header.Set(HeaderVerifiedWallet, wallet)
 		proxy.ServeHTTP(&statusRecorder{ResponseWriter: w, status: http.StatusOK}, r)
 		return
 	}
@@ -295,7 +370,8 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		// loudly: silently 404ing here is the CAIP-2/legacy chain-form
 		// mismatch failure mode (CLAUDE.md pitfall #10).
 		log.Printf("x402-verifier: rule %q matched but no payment option resolves — fail closed", rule.Pattern)
-		http.Error(w, "route is payment-gated but has no resolvable payment option", http.StatusForbidden)
+		writeErrorResponse(w, r, http.StatusForbidden, "Route misconfigured",
+			"route is payment-gated but has no resolvable payment option")
 		return
 	}
 
@@ -328,6 +404,14 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		OnPaymentFailure: func(reason string) {
 			paymentFailed = true
 			v.metrics.paymentFailureReasons.With(withReason(matchedLabels, reason)).Inc()
+		},
+		// Hand the verified payer to the upstream (client-supplied copies
+		// were stripped at the top of HandleProxy). Upstreams use it to
+		// bind created resources (e.g. async jobs) to the paying wallet.
+		OnPaymentVerified: func(payer string) {
+			if payer != "" {
+				r.Header.Set(HeaderPaymentPayer, payer)
+			}
 		},
 	}, mr.requirements)
 

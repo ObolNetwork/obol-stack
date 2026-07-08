@@ -62,6 +62,14 @@ type ForwardAuthConfig struct {
 	// funnel-leak metrics per failure stage.
 	OnPaymentFailure func(reason string)
 
+	// OnPaymentVerified, if non-nil, is invoked with the payer address the
+	// facilitator recovered from the verified payment, immediately before
+	// the inner handler runs. The verifier uses it to propagate
+	// X-Payment-Payer to the upstream (payment identity = the wallet that
+	// may later read payer-gated results). Empty when the facilitator
+	// response omits the payer.
+	OnPaymentVerified func(payer string)
+
 	// SettlesInProcess marks the in-process seller-gateway path (HandleProxy /
 	// obol sell inference) where VerifyOnly=false is correct BY DESIGN — the
 	// middleware proxies to the real upstream and settles only after a <400
@@ -294,6 +302,10 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 					Hint:   hint,
 				}), requirements, cfg.Extensions)
 				return
+			}
+
+			if cfg.OnPaymentVerified != nil {
+				cfg.OnPaymentVerified(verifyResp.Payer)
 			}
 
 			// Payment verified — wrap with settlement interceptor.

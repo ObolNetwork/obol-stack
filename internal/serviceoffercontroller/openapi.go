@@ -54,16 +54,32 @@ func buildOpenAPIDocument(offers []*monetizeapi.ServiceOffer, tunnelURL string, 
 		return ready[i].Namespace < ready[j].Namespace
 	})
 
+	components := map[string]any{
+		"schemas":   openAPIComponentSchemas(),
+		"responses": openAPIComponentResponses(),
+	}
+	// The siwx securityScheme is emitted ONLY when some offer declares a
+	// gate:auth route — those genuinely are HTTP-auth-gated (wallet
+	// sign-in). An unconditional scheme would re-introduce the indexer
+	// misclassification the "no securitySchemes" rule below exists to
+	// prevent (schemes present ⇒ x402scan reads the API as auth-gated).
+	if anyOfferHasAuthRoute(ready) {
+		components["securitySchemes"] = map[string]any{
+			"siwx": map[string]any{
+				"type":        "http",
+				"scheme":      "bearer",
+				"description": "Sign-In With X (EIP-4361). Either send `Authorization: SIWX <base64 message>.<base64 signature>` — an EIP-4361 message (domain = this host, Version 1, fresh Nonce, recent Issued At) signed with EIP-191 personal_sign — or POST {message, signature} to the offer's `/auth/verify` endpoint and reuse the returned session token as `Authorization: Bearer <token>`. Operations gated this way carry `x-auth-info` with the exact URLs.",
+			},
+		}
+	}
+
 	doc := map[string]any{
-		"openapi": openAPISpecVersion,
-		"info":    buildOpenAPIInfo(profile, len(ready)),
-		"servers": buildOpenAPIServers(tunnelURL),
-		"tags":    buildOpenAPITags(ready),
-		"paths":   buildOpenAPIPaths(ready),
-		"components": map[string]any{
-			"schemas":   openAPIComponentSchemas(),
-			"responses": openAPIComponentResponses(),
-		},
+		"openapi":    openAPISpecVersion,
+		"info":       buildOpenAPIInfo(profile, len(ready)),
+		"servers":    buildOpenAPIServers(tunnelURL),
+		"tags":       buildOpenAPITags(ready),
+		"paths":      buildOpenAPIPaths(ready),
+		"components": components,
 		// No global security block: payment is enforced by the x402 paywall
 		// (runtime 402 + X-PAYMENT retry), not an HTTP auth scheme. Modeling
 		// X-PAYMENT as an apiKey securityScheme made discovery indexers
@@ -210,6 +226,20 @@ func openAPIPrimaryPathForOffer(offer *monetizeapi.ServiceOffer) string {
 	return joinOpenAPIPath(offer.EffectivePath(), "")
 }
 
+// anyOfferHasAuthRoute reports whether any offer's declared route table
+// contains a gate:auth entry (the condition for emitting the siwx
+// securityScheme).
+func anyOfferHasAuthRoute(offers []*monetizeapi.ServiceOffer) bool {
+	for _, offer := range offers {
+		for _, rt := range offer.Spec.Routes {
+			if rt.EffectiveGate() == monetizeapi.GateAuth {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // primaryPaidRoute returns the first paid entry of a DECLARED route table.
 // ok=false for offers without spec.routes — callers keep the legacy
 // offer-root behavior — and for (misconfigured) all-free tables.
@@ -345,13 +375,16 @@ func openAPIPathsForRouteTable(offer *monetizeapi.ServiceOffer) map[string]map[s
 			item = map[string]any{}
 			paths[rel] = item
 		}
-		free := rt.EffectiveGate() == monetizeapi.GateFree
+		gate := rt.EffectiveGate()
 
 		summary := rt.Summary
 		if summary == "" {
-			if free {
+			switch gate {
+			case monetizeapi.GateFree:
 				summary = fmt.Sprintf("%s — %s (free)", offer.Name, rt.Path)
-			} else {
+			case monetizeapi.GateAuth:
+				summary = fmt.Sprintf("%s — %s (wallet sign-in)", offer.Name, rt.Path)
+			default:
 				summary = fmt.Sprintf("Invoke %s — %s", offer.Name, rt.Path)
 			}
 		}
@@ -362,10 +395,10 @@ func openAPIPathsForRouteTable(offer *monetizeapi.ServiceOffer) map[string]map[s
 
 		methods := rt.Methods
 		if len(methods) == 0 {
-			if free {
-				methods = []string{"GET"}
-			} else {
+			if gate == monetizeapi.GatePaid {
 				methods = []string{"POST"}
+			} else {
+				methods = []string{"GET"}
 			}
 		}
 
@@ -377,12 +410,28 @@ func openAPIPathsForRouteTable(offer *monetizeapi.ServiceOffer) map[string]map[s
 				"tags":        operationTagsForOffer(offer),
 				"security":    []any{},
 			}
-			if free {
+			switch gate {
+			case monetizeapi.GateFree:
 				op["responses"] = map[string]any{
 					"200": openAPIGenericSuccessResponse("Upstream response (shape is operator-defined)."),
 				}
 				op["x-gate"] = "free"
-			} else {
+			case monetizeapi.GateAuth:
+				op["responses"] = map[string]any{
+					"200": openAPIGenericSuccessResponse("Upstream response (shape is operator-defined)."),
+					"401": map[string]any{
+						"description": "Authentication required. The body and WWW-Authenticate header describe the SIWX challenge; browsers get a sign-in page.",
+					},
+				}
+				op["security"] = []any{map[string]any{"siwx": []any{}}}
+				op["x-gate"] = "auth"
+				op["x-auth-info"] = map[string]any{
+					"scheme":    "siwx",
+					"version":   "eip4361",
+					"signInUrl": joinOpenAPIPath(offer.EffectivePath(), "/auth"),
+					"verifyUrl": joinOpenAPIPath(offer.EffectivePath(), "/auth/verify"),
+				}
+			default:
 				op["responses"] = map[string]any{
 					"200": openAPIGenericSuccessResponse("Upstream response (shape is operator-defined)."),
 					"402": map[string]any{"$ref": "#/components/responses/PaymentRequired"},

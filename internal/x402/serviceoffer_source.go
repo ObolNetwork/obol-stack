@@ -160,10 +160,11 @@ func routeRulesFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (
 		}
 
 		switch {
-		case rule.IsFree():
-			// Free carve-out: no payment surface at all. Upstream wiring
+		case rule.IsFree(), rule.IsAuth():
+			// Free and auth carve-outs: no payment surface at all (auth
+			// substitutes a SIWX credential for payment). Upstream wiring
 			// (UpstreamURL/StripPrefix/UpstreamAuth) stays so HandleProxy
-			// can serve it.
+			// can serve them.
 			rule.Price = "0"
 			rule.Payments = nil
 		case rt.HasPriceOverride():

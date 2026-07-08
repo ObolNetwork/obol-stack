@@ -172,12 +172,14 @@ type RouteRule struct {
 	Payments []RoutePayment `yaml:"payments,omitempty"`
 
 	// Gate is the route's gate class from the originating ServiceOffer's
-	// route table: "paid" (default when empty — fail closed) or "free".
-	// Free rules pass the payment gate entirely: HandleVerify allows the
-	// request through and HandleProxy proxies to the upstream without the
-	// payment middleware. They exist so an offer can carve out health
-	// checks, job status pages, and per-offer discovery documents from an
-	// otherwise paid prefix.
+	// route table: "paid" (default when empty — fail closed), "free", or
+	// "auth". Free rules pass the payment gate entirely: HandleVerify
+	// allows the request through and HandleProxy proxies to the upstream
+	// without the payment middleware. Auth rules require a SIWX-verified
+	// wallet (EIP-4361) instead of payment; the verified wallet is
+	// forwarded upstream as X-Verified-Wallet. Both exist so an offer can
+	// carve health checks, job status pages, and wallet-gated result pages
+	// out of an otherwise paid prefix.
 	Gate string `yaml:"gate,omitempty"`
 }
 
@@ -186,6 +188,12 @@ type RouteRule struct {
 // a malformed rule never opens a free path.
 func (r *RouteRule) IsFree() bool {
 	return r.Gate == "free"
+}
+
+// IsAuth reports whether this rule is gated by SIWX wallet authentication
+// instead of payment.
+func (r *RouteRule) IsAuth() bool {
+	return r.Gate == "auth"
 }
 
 // PaymentOptions returns the route's accepted payment options. When the
