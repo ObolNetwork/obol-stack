@@ -7,20 +7,26 @@
 //     (`:__OBOL_IMAGE__`). Digests are never committed to git.
 //  2. At apply time (CopyInfrastructure / dynamic resource creation), Resolve
 //     rewrites each managed image to a short-SHA tag from version.GitCommit.
-//  3. For production security, Resolve also binds the multi-arch index digest
-//     from the registry (repo:sha@sha256:…), so a retagged short-SHA cannot
-//     silently substitute a different image. Digest fetch is best-effort:
-//     if the registry is unreachable, the short-SHA tag alone is used (still
-//     privileged over :latest).
-//  4. Dev mode (OBOL_DEVELOPMENT=true) uses a caller-supplied dev tag
-//     (dev-<sha>) with no digest, matching the local k3d import.
+//  3. For production security, Resolve binds the multi-arch index digest from
+//     GHCR on first resolve for that (repo, tag) and persists it under the
+//     config dir (`image-digests.json`). Later applies with the same CLI
+//     GitCommit reuse the stored digest — they do NOT re-query GHCR — so a
+//     retagged short-SHA cannot change the image under a running install.
+//     Set OBOL_REFRESH_IMAGE_DIGESTS=true to re-bind from the registry.
+//  4. Digest fetch is best-effort when no pin exists yet: if GHCR is
+//     unreachable, the short-SHA tag alone is used (still preferred over
+//     :latest). Dev mode uses a caller-supplied dev tag with no digest.
 //
-// This replaces the old continuous repin-PR machinery: the binary's GitCommit
-// and the image tag always match by construction, so a release that ships
-// source after a fix always asks the cluster for images of that same commit.
+// Threat model notes: short-SHA tags on GHCR are mutable if a package writer
+// overwrites them. We rely on (a) CI never retagging published short SHAs,
+// (b) first-bind-then-persist digests for install stability, and (c) package
+// write ACLs on ghcr.io/obolnetwork. Digests-in-git were stronger for
+// "same manifest everywhere forever" but forced the repin PR train; this is
+// the intentional trade-off. See docs/release-images.md.
 package images
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -166,12 +172,26 @@ func resolvePinned(repo, tag string) string {
 	if skipDigest() {
 		return ref
 	}
+
+	// Prefer a durable local pin so restarts / stack up with the same CLI
+	// GitCommit keep the same digest even if GHCR short-SHA tags are
+	// overwritten later. Fresh bind only when no pin exists or refresh is set.
+	if !refreshDigests() {
+		if d := loadPersistedDigest(repo, tag); d != "" {
+			return ref + "@" + d
+		}
+	}
+
 	digest, err := FetchIndexDigest(repo, tag)
 	if err != nil || digest == "" {
-		// Short-SHA tag is still privileged over :latest. Digest is defense
-		// in depth when the registry is reachable at apply time.
+		// Fall back to a prior pin if refresh failed mid-flight.
+		if d := loadPersistedDigest(repo, tag); d != "" {
+			return ref + "@" + d
+		}
+		// Short-SHA tag is still privileged over :latest.
 		return ref
 	}
+	_ = persistDigest(repo, tag, digest)
 	return ref + "@" + digest
 }
 
@@ -194,6 +214,11 @@ func skipDigest() bool {
 	return v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
 }
 
+func refreshDigests() bool {
+	v := strings.TrimSpace(os.Getenv("OBOL_REFRESH_IMAGE_DIGESTS"))
+	return v == "1" || strings.EqualFold(v, "true") || strings.EqualFold(v, "yes")
+}
+
 // ---------------------------------------------------------------------------
 // Registry digest binding (GHCR multi-arch index digest)
 // ---------------------------------------------------------------------------
@@ -202,11 +227,16 @@ var (
 	digestCache   = map[string]string{}
 	digestCacheMu sync.Mutex
 	httpClient    = &http.Client{Timeout: 8 * time.Second}
+
+	// persistedMu guards the on-disk pin file + in-memory mirror.
+	persistedMu   sync.Mutex
+	persistedMemo map[string]string // nil until first load
 )
 
 // FetchIndexDigest returns the multi-arch index digest GHCR serves for
 // repo:tag (e.g. "sha256:deadbeef…"). Matches
 // `docker buildx imagetools inspect --format '{{ .Manifest.Digest }}'`.
+// Process-local cache only — durable pins live in image-digests.json.
 func FetchIndexDigest(repo, tag string) (string, error) {
 	cacheKey := repo + ":" + tag
 	digestCacheMu.Lock()
@@ -253,11 +283,101 @@ func FetchIndexDigest(repo, tag string) (string, error) {
 	return digest, nil
 }
 
-// ClearDigestCache is for tests.
+// ClearDigestCache is for tests (process-local GHCR cache only).
 func ClearDigestCache() {
 	digestCacheMu.Lock()
 	digestCache = map[string]string{}
 	digestCacheMu.Unlock()
+}
+
+// ClearPersistedDigests clears the in-memory mirror of the durable pin file
+// (tests). Does not delete the file unless digestsPath is under a temp dir
+// the test owns.
+func ClearPersistedDigests() {
+	persistedMu.Lock()
+	persistedMemo = nil
+	persistedMu.Unlock()
+}
+
+// digestsFile returns the path of the durable pin map. Overridable via
+// OBOL_IMAGE_DIGESTS_FILE (tests) or OBOL_CONFIG_DIR/image-digests.json.
+func digestsFile() string {
+	if p := strings.TrimSpace(os.Getenv("OBOL_IMAGE_DIGESTS_FILE")); p != "" {
+		return p
+	}
+	if cfg := strings.TrimSpace(os.Getenv("OBOL_CONFIG_DIR")); cfg != "" {
+		return filepath.Join(cfg, "image-digests.json")
+	}
+	// XDG-ish fallback when config dir is not exported yet (early CLI paths).
+	if home, err := os.UserConfigDir(); err == nil && home != "" {
+		return filepath.Join(home, "obol", "image-digests.json")
+	}
+	return ""
+}
+
+func loadPersistedDigest(repo, tag string) string {
+	key := repo + ":" + tag
+	persistedMu.Lock()
+	defer persistedMu.Unlock()
+	if err := ensurePersistedLocked(); err != nil {
+		return ""
+	}
+	return persistedMemo[key]
+}
+
+func persistDigest(repo, tag, digest string) error {
+	key := repo + ":" + tag
+	persistedMu.Lock()
+	defer persistedMu.Unlock()
+	if err := ensurePersistedLocked(); err != nil {
+		return err
+	}
+	if persistedMemo[key] == digest {
+		return nil
+	}
+	persistedMemo[key] = digest
+	path := digestsFile()
+	if path == "" {
+		return fmt.Errorf("images: no digests file path configured")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(persistedMemo, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(path, data, 0o600)
+}
+
+// ensurePersistedLocked loads the pin file into persistedMemo once.
+// Caller must hold persistedMu.
+func ensurePersistedLocked() error {
+	if persistedMemo != nil {
+		return nil
+	}
+	persistedMemo = map[string]string{}
+	path := digestsFile()
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if len(data) == 0 {
+		return nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal(data, &m); err != nil {
+		return err
+	}
+	persistedMemo = m
+	return nil
 }
 
 func ghcrPullToken(repository string) (string, error) {
@@ -270,20 +390,14 @@ func ghcrPullToken(repository string) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("images: ghcr token HTTP %d", resp.StatusCode)
 	}
-	// Tiny JSON: {"token":"..."} — avoid importing encoding/json dependency
-	// surface for a one-field parse by using a minimal scan.
-	buf := make([]byte, 4096)
-	n, _ := resp.Body.Read(buf)
-	body := string(buf[:n])
-	const key = `"token":"`
-	i := strings.Index(body, key)
-	if i < 0 {
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return "", fmt.Errorf("images: ghcr token decode: %w", err)
+	}
+	if body.Token == "" {
 		return "", fmt.Errorf("images: ghcr token response missing token field")
 	}
-	rest := body[i+len(key):]
-	j := strings.IndexByte(rest, '"')
-	if j < 0 {
-		return "", fmt.Errorf("images: ghcr token response truncated")
-	}
-	return rest[:j], nil
+	return body.Token, nil
 }

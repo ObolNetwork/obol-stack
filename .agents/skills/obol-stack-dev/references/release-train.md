@@ -90,7 +90,7 @@ merge to main → docker-publish-x402 tags :shortsha → tag when green
 gh workflow run docker-publish-x402.yml --ref main
 ```
 
-CLI `version.GitCommit` selects `repo:<short-sha>`; apply-time `images.Resolve` binds the GHCR index digest for security. Digests are never committed.
+CLI `version.GitCommit` selects `repo:<short-sha>`; first apply binds the GHCR index digest and **persists** it under `$OBOL_CONFIG_DIR/image-digests.json` so restarts keep the same digest (short-SHA tags on GHCR are treated as immutable by policy, but we do not re-resolve on every apply). Digests are never committed to git — see `docs/release-images.md` security considerations.
 
 ## Merge And Collapse Order
 
