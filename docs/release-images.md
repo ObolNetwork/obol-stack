@@ -13,7 +13,9 @@ in git.
 | Unknown / dirty build | `repo:latest` |
 
 - Short-SHA tags are published by `docker-publish-x402.yml` on every relevant
-  `main` push and on `v*` tags (`type=sha,format=short`).
+  `main` push and on `v*` tags (bake → `docker-bake.hcl` / `Dockerfile.x402`).
+- CI builds all five pure-Go images in **one bake job**: shared builder stage,
+  native cross-compile (`BUILDPLATFORM` + `GOARCH`, no QEMU), shared GHA cache.
 - The CLI embeds the same short SHA via goreleaser ldflags
   (`version.GitCommit`).
 - `internal/images.Resolve` is the single policy. Embedded templates use the

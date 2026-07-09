@@ -1,10 +1,18 @@
-FROM golang:1.25-alpine AS builder
+# syntax=docker/dockerfile:1
+# Thin local/dev target — production CI uses docker-bake.hcl → Dockerfile.x402.
+# Cross-compiles from BUILDPLATFORM (no QEMU for pure Go).
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+ARG TARGETOS=linux
+ARG TARGETARCH
 WORKDIR /src
+RUN apk add --no-cache ca-certificates git
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /x402-verifier ./cmd/x402-verifier
-
+RUN --mount=type=cache,target=/go/pkg/mod \
+	--mount=type=cache,target=/root/.cache/go-build \
+	CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+	go build -trimpath -ldflags="-s -w" -o /out ./cmd/x402-verifier
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=builder /x402-verifier /x402-verifier
+COPY --from=builder /out /x402-verifier
 ENTRYPOINT ["/x402-verifier"]
