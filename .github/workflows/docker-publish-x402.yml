@@ -1,20 +1,20 @@
 name: Build and Publish x402 Images
 
+# Publishes stack-owned component images tagged by commit short SHA (and long
+# SHA / latest on main). The released CLI resolves image refs via
+# internal/images.Resolve (GitCommit short SHA + registry digest at apply
+# time) — no digests are committed to git and no repin PR is required.
+# Release gate: .github/scripts/verify-release-images.sh
+
 on:
   push:
     branches:
       - main
-      # Release trains get the same build + auto-repin treatment, so a tag
-      # cut on the branch never needs a manual workflow_dispatch first.
-      - 'release/**'
     tags:
       - 'v*'
-    # Approximates the import graph of the built binaries (verifier,
-    # controller, buyer pull in far more than internal/x402 — agent
-    # rendering, embed, erc8004, tunnel, ...). The release-gate script
-    # .github/scripts/verify-x402-pins.sh computes the EXACT graph via
-    # `go list -deps` at tag time, so anything this list misses fails the
-    # release instead of shipping stale; keep the list generous.
+    # Approximates the import graph of the built binaries. Keep generous;
+    # missing a path only delays image publish until the next matching push
+    # or a manual workflow_dispatch.
     paths:
       - 'internal/agentruntime/**'
       - 'internal/config/**'
@@ -26,6 +26,7 @@ on:
       - 'internal/helmcmd/**'
       - 'internal/images/**'
       - 'internal/inference/**'
+      - 'internal/jobbroker/**'
       - 'internal/kubectl/**'
       - 'internal/model/**'
       - 'internal/monetizeapi/**'
@@ -43,14 +44,17 @@ on:
       - 'cmd/x402-buyer/**'
       - 'cmd/serviceoffer-controller/**'
       - 'cmd/demo-server/**'
+      - 'cmd/job-broker/**'
       - 'Dockerfile.x402-verifier'
       - 'Dockerfile.x402-buyer'
       - 'Dockerfile.serviceoffer-controller'
       - 'Dockerfile.demo-server'
+      - 'Dockerfile.job-broker'
       - 'go.mod'
       - 'go.sum'
       - '.github/workflows/docker-publish-x402.yml'
-      - '.github/scripts/repin-x402-images.sh'
+      - '.github/scripts/lib-ghcr.sh'
+      - '.github/scripts/verify-release-images.sh'
   workflow_dispatch:
 
 concurrency:
@@ -61,9 +65,6 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  # ---------------------------------------------------------------------------
-  # Build each x402 component and publish its image.
-  # ---------------------------------------------------------------------------
   build:
     runs-on: ubuntu-latest
     permissions:
@@ -89,6 +90,10 @@ jobs:
             image: obolnetwork/demo-server
             dockerfile: Dockerfile.demo-server
             description: Demo HTTP services for Obol Stack sell demo
+          - component: job-broker
+            image: obolnetwork/job-broker
+            dockerfile: Dockerfile.job-broker
+            description: Async job delivery broker for x402-paid ServiceOffers
 
     steps:
       - name: Checkout
@@ -115,17 +120,10 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            # format=long + empty prefix emits the full 40-char commit SHA so the
-            # security-scan job's `image-ref: ...:${{ github.sha }}` reference resolves.
-            # Previously `type=sha,prefix=` produced the 7-char short SHA,
-            # causing Trivy to fail with MANIFEST_UNKNOWN on every run.
             type=sha,format=long,prefix=
-            # Also publish the 7-char short SHA as a separate tag. The obol
-            # binary embeds version.GitCommit (short SHA) via ldflags and uses
-            # it through internal/images.Resolve to commit-pin the deployments
-            # it manages. Without this, binary upgrades wouldn't roll the pods.
+            # Short SHA is what version.GitCommit / images.Resolve uses.
             type=sha,format=short,prefix=
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/secure-enclave-inference' }}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
           labels: |
             org.opencontainers.image.title=${{ matrix.component }}
             org.opencontainers.image.description=${{ matrix.description }}
@@ -147,9 +145,6 @@ jobs:
           provenance: true
           sbom: true
 
-  # ---------------------------------------------------------------------------
-  # Security scan each published image using the exact SHA tag from the build.
-  # ---------------------------------------------------------------------------
   security-scan:
     needs: build
     runs-on: ubuntu-latest
@@ -167,6 +162,8 @@ jobs:
             image: obolnetwork/serviceoffer-controller
           - component: demo-server
             image: obolnetwork/demo-server
+          - component: job-broker
+            image: obolnetwork/job-broker
 
     steps:
       - name: Run Trivy vulnerability scanner
