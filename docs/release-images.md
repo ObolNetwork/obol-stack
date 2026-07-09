@@ -8,7 +8,7 @@ in git.
 
 | When | Image ref |
 |------|-----------|
-| Production CLI (`version.GitCommit` set) | `repo:<short-sha>@sha256:<index-digest>` when GHCR is reachable at apply time; else `repo:<short-sha>` |
+| Production CLI (`version.GitCommit` set) | `repo:<short-sha>@sha256:<index-digest>` |
 | `OBOL_DEVELOPMENT=true` | `repo:dev-<sha>` (local k3d import tag) |
 | Unknown / dirty build | `repo:latest` |
 
@@ -20,8 +20,22 @@ in git.
   (`version.GitCommit`).
 - `internal/images.Resolve` is the single policy. Embedded templates use the
   placeholder `:__OBOL_IMAGE__`; `CopyInfrastructure` rewrites it at apply time.
-- Digests are **bound at apply time** from GHCR (multi-arch index digest), never
-  committed. Set `OBOL_SKIP_IMAGE_DIGEST=true` for offline applies/tests.
+- Digests are **not committed to git**. On first resolve for a given
+  `repo:short-sha`, the multi-arch index digest is fetched from GHCR and
+  **persisted** under `$OBOL_CONFIG_DIR/image-digests.json`. Later applies with
+  the same CLI version reuse that pin and do **not** re-query GHCR, so a
+  retagged short-SHA cannot change images under an existing install.
+  - `OBOL_SKIP_IMAGE_DIGEST=true` — never bind digests (tests / air-gap).
+  - `OBOL_REFRESH_IMAGE_DIGESTS=true` — re-bind from GHCR and overwrite pins.
+
+## Security considerations
+
+| Risk | Mitigation |
+|------|------------|
+| Short-SHA tag on GHCR is overwritten | First-bind-then-persist digests; subsequent `stack up` reuses the pin. Operator policy: never retag published short SHAs. |
+| Package write ACL on `ghcr.io/obolnetwork/*` | Restrict who can push; short SHA is only as trustworthy as that ACL. |
+| Cross-host / fresh install | First resolve on a new host re-fetches GHCR (same short SHA should resolve to the same digest if tags were not retagged). |
+| Digests-in-git (old model) | Stronger “same manifest everywhere forever”, but forced the repin PR train. We traded that for install-local durability. |
 
 ## Release train
 

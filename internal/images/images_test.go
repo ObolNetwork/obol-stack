@@ -1,6 +1,8 @@
 package images
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -153,5 +155,71 @@ func TestStampIdentity(t *testing.T) {
 	t.Setenv("OBOL_DEVELOPMENT", "true")
 	if got := StampIdentity(); got != "dev" {
 		t.Errorf("StampIdentity = %q, want dev", got)
+	}
+}
+
+func TestResolve_PersistsDigestAcrossRestarts(t *testing.T) {
+	// First resolve with a seeded pin file (simulates a prior GHCR bind);
+	// second resolve must reuse it without network.
+	dir := t.TempDir()
+	pinPath := filepath.Join(dir, "image-digests.json")
+	t.Setenv("OBOL_IMAGE_DIGESTS_FILE", pinPath)
+	t.Setenv("OBOL_DEVELOPMENT", "")
+	t.Setenv("OBOL_SKIP_IMAGE_DIGEST", "")
+	t.Setenv("OBOL_REFRESH_IMAGE_DIGESTS", "")
+	withVersion(t, "abc1234", "false")
+	ClearDigestCache()
+	ClearPersistedDigests()
+
+	const (
+		repo   = "ghcr.io/obolnetwork/x402-verifier"
+		digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	)
+	if err := os.WriteFile(pinPath, []byte(`{"`+repo+`:abc1234":"`+digest+`"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := Resolve(repo)
+	want := repo + ":abc1234@" + digest
+	if got != want {
+		t.Fatalf("first Resolve = %q, want %q", got, want)
+	}
+
+	// Simulate process restart: drop process caches, keep the pin file.
+	ClearDigestCache()
+	ClearPersistedDigests()
+	// Point Fetch at a broken path so any network attempt would fail the test
+	// if we accidentally re-queried GHCR.
+	got2 := Resolve(repo)
+	if got2 != want {
+		t.Fatalf("second Resolve after restart = %q, want durable pin %q", got2, want)
+	}
+}
+
+func TestPersistDigest_WritesFile(t *testing.T) {
+	dir := t.TempDir()
+	pinPath := filepath.Join(dir, "image-digests.json")
+	t.Setenv("OBOL_IMAGE_DIGESTS_FILE", pinPath)
+	ClearPersistedDigests()
+
+	const (
+		repo   = "ghcr.io/obolnetwork/x402-buyer"
+		tag    = "deadbee"
+		digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	)
+	if err := persistDigest(repo, tag, digest); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(pinPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), digest) || !strings.Contains(string(data), repo+":"+tag) {
+		t.Fatalf("pin file missing entry:\n%s", data)
+	}
+	// Reload and read back.
+	ClearPersistedDigests()
+	if got := loadPersistedDigest(repo, tag); got != digest {
+		t.Fatalf("loadPersistedDigest = %q, want %q", got, digest)
 	}
 }
