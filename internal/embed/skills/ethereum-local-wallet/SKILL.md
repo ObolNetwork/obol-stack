@@ -81,7 +81,9 @@ python3 scripts/signer.py send-tx --network hoodi \
   --from 0x... --to 0x... --value 1000000000000000000
 ```
 
-Supported networks: `mainnet`, `base`, `base-sepolia`, `hoodi`, `sepolia` (depends on eRPC configuration). The aliases `ethereum` and `eip155:<id>` resolve to the canonical name. Unknown values fail with an explicit error rather than silently signing against chain id 1.
+Supported networks: `mainnet`, `base`, `base-sepolia`, `hoodi`, `sepolia`, `arbitrum`, `robinhood` (depends on eRPC configuration). The aliases `ethereum`, `arb`, `arbitrum-one`, `robinhood-chain`, and `eip155:<id>` resolve to the canonical name. Unknown values fail with an explicit error rather than silently signing against chain id 1.
+
+Note: `arbitrum` and `robinhood` require the stack operator to have registered an eRPC upstream under that alias (`obol network add` — ChainList has both). If `${ERPC_URL}/arbitrum` or `${ERPC_URL}/robinhood` returns 404, the upstream isn't registered — ask the operator.
 
 ## Gas & Tip Selection
 
@@ -114,6 +116,7 @@ If `eth_feeHistory` is unavailable, the oracle falls back to per-chain safe defa
 ## Important Notes
 
 - Always **confirm with the user** before sending transactions
+- **Never sign calldata you can't explain** — decode it first with the `inspect` skill's `decode.py`
 - Values are in **wei** (1 ETH = 1000000000000000000 wei)
 - Use `ethereum-networks` skill (`rpc.sh balance <address>`) to check balances before sending
 - The `send-tx` command will broadcast the transaction immediately after signing
