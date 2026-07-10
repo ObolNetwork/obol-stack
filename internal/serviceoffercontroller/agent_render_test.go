@@ -113,6 +113,9 @@ func TestAgentManifests_DeploymentEnvCarriesContext(t *testing.T) {
 		"AGENT_NAMESPACE":       "agent-quant",
 		"AGENT_WALLET_ADDRESS":  agent.Status.WalletAddress,
 		"OBOL_SKILLS_DIR":       "/data/.hermes/obol-skills",
+		// Must track HERMES_HOME: the upstream image bakes /opt/data and
+		// denies all file-tool writes outside the safe root.
+		"HERMES_WRITE_SAFE_ROOT": "/data/.hermes:/tmp",
 	}
 	got := make(map[string]string)
 	for _, e := range envs {
