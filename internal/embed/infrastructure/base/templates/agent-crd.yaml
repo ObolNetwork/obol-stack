@@ -64,11 +64,81 @@ spec:
             type: object
           spec:
             properties:
+              disabledToolsets:
+                description: |-
+                  Hermes agent.disabled_toolsets. Nil = ["memory","web"] (historical
+                  default). Explicit empty list disables none.
+                items:
+                  maxLength: 64
+                  type: string
+                maxItems: 32
+                type: array
+              maxTurns:
+                description: Hermes agent.max_turns. Nil = 30 (historical sub-agent
+                  default).
+                maximum: 10000
+                minimum: 1
+                type: integer
+              mcpServers:
+                description: |-
+                  MCP servers rendered into Hermes config.yaml under mcp_servers.
+                  Empty/omitted: no mcp_servers block (byte-identical to pre-field config).
+                items:
+                  description: |-
+                    MCPServer is one Hermes MCP server entry (stdio transport). Env values
+                    may use ${VAR} interpolation; Hermes resolves them in-pod at runtime —
+                    the controller does not expand them.
+                  properties:
+                    args:
+                      description: Arguments passed to Command. Omitted from YAML
+                        when empty.
+                      items:
+                        type: string
+                      maxItems: 64
+                      type: array
+                    command:
+                      description: Command to launch the MCP server process.
+                      maxLength: 256
+                      minLength: 1
+                      type: string
+                    env:
+                      additionalProperties:
+                        type: string
+                      description: |-
+                        Environment variables for the MCP process. Values may contain
+                        ${VAR} placeholders resolved by Hermes in-pod (not by the controller).
+                      maxProperties: 64
+                      type: object
+                    name:
+                      description: Server name used as the key under mcp_servers in
+                        config.yaml.
+                      maxLength: 64
+                      minLength: 1
+                      pattern: ^[a-zA-Z0-9][a-zA-Z0-9._-]*$
+                      type: string
+                    timeout:
+                      description: Optional process timeout in seconds. Omitted from
+                        YAML when nil.
+                      minimum: 1
+                      type: integer
+                  required:
+                  - command
+                  - name
+                  type: object
+                maxItems: 32
+                type: array
               model:
                 description: |-
                   LiteLLM model name to pin. Empty = controller picks cluster
                   top-of-rank on first deploy and writes status.pinnedModel.
                 maxLength: 256
+                type: string
+              modelProvider:
+                description: |-
+                  Hermes model provider. Empty or "custom" keeps the cluster LiteLLM
+                  path (base_url + api_key). Other values (e.g. "xai-oauth") omit those
+                  and resolve credentials in-pod.
+                maxLength: 64
                 type: string
               objective:
                 description: |-

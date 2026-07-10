@@ -901,6 +901,11 @@ type AgentSpec struct {
 	// top-of-rank on first deploy and writes status.pinnedModel.
 	// +kubebuilder:validation:MaxLength=256
 	Model string `json:"model,omitempty"`
+	// Hermes model provider. Empty or "custom" keeps the cluster LiteLLM
+	// path (base_url + api_key). Other values (e.g. "xai-oauth") omit those
+	// and resolve credentials in-pod.
+	// +kubebuilder:validation:MaxLength=64
+	ModelProvider string `json:"modelProvider,omitempty"`
 	// Allow-listed skills written to the per-agent skills dir on first
 	// reconcile. Agent can edit afterwards; this is a seed, not a sandbox.
 	// +kubebuilder:validation:MaxItems=64
@@ -910,8 +915,46 @@ type AgentSpec struct {
 	// Operator-supplied objective text. Substituted into the SOUL.md
 	// template by the seeder on first write. Agent owns SOUL.md after that.
 	// +kubebuilder:validation:MaxLength=4096
-	Objective string      `json:"objective,omitempty"`
-	Wallet    AgentWallet `json:"wallet,omitempty"`
+	Objective string `json:"objective,omitempty"`
+	// MCP servers rendered into Hermes config.yaml under mcp_servers.
+	// Empty/omitted: no mcp_servers block (byte-identical to pre-field config).
+	// +kubebuilder:validation:MaxItems=32
+	MCPServers []MCPServer `json:"mcpServers,omitempty"`
+	// Hermes agent.max_turns. Nil = 30 (historical sub-agent default).
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=10000
+	MaxTurns *int `json:"maxTurns,omitempty"`
+	// Hermes agent.disabled_toolsets. Nil = ["memory","web"] (historical
+	// default). Explicit empty list disables none.
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MaxLength=64
+	DisabledToolsets []string    `json:"disabledToolsets,omitempty"`
+	Wallet           AgentWallet `json:"wallet,omitempty"`
+}
+
+// MCPServer is one Hermes MCP server entry (stdio transport). Env values
+// may use ${VAR} interpolation; Hermes resolves them in-pod at runtime —
+// the controller does not expand them.
+type MCPServer struct {
+	// Server name used as the key under mcp_servers in config.yaml.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`
+	Name string `json:"name"`
+	// Command to launch the MCP server process.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	Command string `json:"command"`
+	// Arguments passed to Command. Omitted from YAML when empty.
+	// +kubebuilder:validation:MaxItems=64
+	Args []string `json:"args,omitempty"`
+	// Optional process timeout in seconds. Omitted from YAML when nil.
+	// +kubebuilder:validation:Minimum=1
+	Timeout *int `json:"timeout,omitempty"`
+	// Environment variables for the MCP process. Values may contain
+	// ${VAR} placeholders resolved by Hermes in-pod (not by the controller).
+	// +kubebuilder:validation:MaxProperties=64
+	Env map[string]string `json:"env,omitempty"`
 }
 
 type AgentWallet struct {
