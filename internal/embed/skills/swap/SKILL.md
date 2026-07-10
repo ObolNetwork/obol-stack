@@ -21,23 +21,34 @@ from QuoterV2 and execution through the agent's remote-signer
    expected amount out, minimum out, fee tier, chain. Never swap autonomously.
 3. **Never swap more than the immediate need** (e.g. gas top-ups: swap for
    ~2–4 weeks of expected gas, not the whole balance).
-4. Addresses below were verified on-chain (`eth_getCode`) on 2026-07-06.
+4. Addresses below were verified on-chain (`eth_getCode`) on 2026-07-06
+   (Arbitrum addresses verified 2026-07-10).
    Re-verify with `rpc.sh code <addr>` if anything reverts unexpectedly.
 
 ## Verified addresses
 
-| Contract | Base (8453) | Ethereum mainnet (1) |
-|----------|-------------|----------------------|
-| Uniswap V3 SwapRouter02 | `0x2626664c2603336E57B271c5C0b26F421741e481` | `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` |
-| Uniswap V3 QuoterV2 | `0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a` | `0x61fFE014bA17989E743c5F6cB21bF9697530B21e` |
-| USDC (6 decimals) | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | `0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48` |
-| WETH (18 decimals) | `0x4200000000000000000000000000000000000006` | `0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2` |
-| OBOL (18 decimals) | — (Base-Sepolia only, no mainnet-Base deploy) | `0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7` |
+| Contract | Base (8453) | Ethereum mainnet (1) | Arbitrum (42161) |
+|----------|-------------|----------------------|------------------|
+| Uniswap V3 SwapRouter02 | `0x2626664c2603336E57B271c5C0b26F421741e481` | `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` | `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` |
+| Uniswap V3 QuoterV2 | `0x3d4e44Eb1374240CE5F1B871ab261CD16335B76a` | `0x61fFE014bA17989E743c5F6cB21bF9697530B21e` | `0x61fFE014bA17989E743c5F6cB21bF9697530B21e` |
+| USDC (6 decimals) | `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913` | `0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48` | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` (native) |
+| WETH (18 decimals) | `0x4200000000000000000000000000000000000006` | `0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2` | `0x82aF49447D8a07e3bd95BD0d56f35241523fBab1` |
+| OBOL (18 decimals) | — (Base-Sepolia only, no mainnet-Base deploy) | `0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7` | — (no Arbitrum deploy) |
 
 Aerodrome (router `0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43`, Base) often
 has deeper liquidity for long-tail Base pairs — but its ve(3,3) router ABI
 differs; prefer Uniswap V3 for the pairs above and reach for Aerodrome only
 when V3 quotes are bad. See `building-blocks` for Aerodrome details.
+
+Before approving or swapping a token contract *not* in this table, run the
+`inspect` skill's `contract.py check <token>` (proxy? verified source?
+labels?) — token contracts that are unverified proxies deserve suspicion.
+
+Camelot is the major Arbitrum-native DEX, but the recipes here use Uniswap V3
+(same router/quoter ABI on every chain in the table).
+
+Robinhood Chain (4663): no verified DEX deployment in this skill yet — check
+addresses skill references before attempting swaps there.
 
 ## Recipe: USDC → ETH for gas (Base example)
 
@@ -132,6 +143,7 @@ sh "$RPC" --network $NET call $USDC "balanceOf(address)(uint256)" $ME # USDC lef
 
 - Paying for an x402 service — that's `buy-x402` (no swap needed; it signs
   USDC/OBOL authorizations directly).
-- Bridging between chains — this skill never bridges. USDC on Base and USDC
-  on mainnet are different balances; say so if the user conflates them.
+- Moving value BETWEEN chains — that's the `bridging` skill, not swap. This
+  skill never bridges. USDC on Base and USDC on mainnet are different
+  balances; say so if the user conflates them.
 - Anything the user hasn't confirmed. Every swap is user-confirmed, every time.
