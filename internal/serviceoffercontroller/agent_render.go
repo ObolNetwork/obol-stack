@@ -262,6 +262,9 @@ func buildAgentDataPVC(agent *monetizeapi.Agent) *unstructured.Unstructured {
 }
 
 func buildAgentConfigMap(agent *monetizeapi.Agent, configYAML string) *unstructured.Unstructured {
+	// Stamp the same sha256 hex used for Deployment's checksum/hermes-config
+	// annotation so provisionAgent can skip rewrites when desired is unchanged.
+	configHash := fmt.Sprintf("%x", sha256.Sum256([]byte(configYAML)))
 	u := &unstructured.Unstructured{}
 	u.SetUnstructuredContent(map[string]any{
 		"apiVersion": "v1",
@@ -270,6 +273,9 @@ func buildAgentConfigMap(agent *monetizeapi.Agent, configYAML string) *unstructu
 			"name":      hermesConfigMap,
 			"namespace": agent.Namespace,
 			"labels":    asAnyMap(agentLabels(agent.Name)),
+			"annotations": map[string]any{
+				hermesConfigHashAnnotation: configHash,
+			},
 		},
 		"data": map[string]any{"config.yaml": configYAML},
 	})
