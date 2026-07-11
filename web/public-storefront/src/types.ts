@@ -56,6 +56,11 @@ export interface Service {
   // for OBOL on base-sepolia and any non-mainnet OBOL deployment.
   asset?: ServiceAsset;
   description: string;
+  // descriptionHtml is the sanitized HTML rendering of description
+  // (markdown subset; sanitized by internal/storefront/richtext.go, the
+  // single markdown→HTML path). Absent on catalogs from pre-richtext
+  // controllers — fall back to the plain description.
+  descriptionHtml?: string;
   // skills are the OASF / buy-x402 skill names this offer advertises.
   // For type=agent offers it mirrors AgentResolution.Skills (the
   // resolved allow-list from the linked Agent CR); for non-agent
@@ -99,7 +104,9 @@ export interface StorefrontProfile {
   faviconUrl?: string;
   // ogImageUrl overrides the link-preview image; empty uses the generated one.
   ogImageUrl?: string;
-  // description is longer-form seller copy (markdown subset; rendered as
-  // plain text with preserved line breaks until the richtext pipeline lands).
+  // description is longer-form seller copy (markdown subset).
   description?: string;
+  // descriptionHtml is its sanitized HTML rendering — same contract as
+  // Service.descriptionHtml.
+  descriptionHtml?: string;
 }

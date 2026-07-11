@@ -287,6 +287,12 @@ var offerLandingTmpl = template.Must(template.New("offer_landing").Parse(`<!doct
       .pill { display:inline-block; font-family:var(--mono); font-size:13px; font-weight:600; color:var(--green); border:1px solid var(--green); border-radius:999px; padding:6px 14px; margin-bottom:24px; }
       h1 { font-size:28px; margin:0 0 8px; }
       p { color:var(--body); margin:0 0 12px; }
+      .richtext { color:var(--body); }
+      .richtext p { margin:0 0 10px; }
+      .richtext ul, .richtext ol { margin:0 0 10px; padding-left:22px; }
+      .richtext h3, .richtext h4 { color:var(--light); margin:14px 0 6px; font-size:16px; }
+      .richtext code { font-family:var(--mono); font-size:0.9em; }
+      .richtext pre { background:var(--bg01); border:1px solid var(--stroke); border-radius:8px; padding:12px; overflow-x:auto; }
       .card { background:var(--bg02); border:1px solid var(--stroke); border-radius:12px; padding:20px 24px; margin-top:24px; }
       .card h2 { font-size:15px; margin:0 0 8px; color:var(--light); }
       code, .mono { font-family:var(--mono); font-size:13px; color:var(--light); }
@@ -299,7 +305,7 @@ var offerLandingTmpl = template.Must(template.New("offer_landing").Parse(`<!doct
       {{if .LogoURL}}<div class="brand"><img src="{{.LogoURL}}" alt="{{.Operator}}" />{{if .ShowName}}<span>{{.Operator}}</span>{{end}}</div>{{end}}
       <span class="pill">{{.Price}}</span>
       <h1>{{.Title}}</h1>
-      <p>{{.Description}}</p>
+      <div class="richtext">{{.DescriptionHTML}}</div>
       <div class="card">
         <h2>For agents &amp; developers</h2>
         <p class="mono"><a href="/openapi.json">/openapi.json</a> — request shapes + per-route pricing</p>
@@ -343,18 +349,21 @@ func buildOfferLandingHTML(offer *monetizeapi.ServiceOffer, profile schemas.Stor
 		favicon = crossOriginAssetURL(logo)
 	}
 
+	desc := offerDescription(offer, "x402 payment-gated service.")
 	var out strings.Builder
 	err := offerLandingTmpl.Execute(&out, map[string]any{
-		"Title":       title,
-		"Description": offerDescription(offer, "x402 payment-gated service."),
-		"Price":       describeOfferPrice(offer),
-		"LogoURL":     logo,
-		"ShowName":    showName,
-		"Operator":    operator,
-		"ThemeCSS":    template.CSS(theme.CSSVars()),
-		"ThemeColor":  theme.ThemeColor(),
-		"FaviconURL":  favicon,
-		"OGImageURL":  crossOriginAssetURL(profile.OGImageURL),
+		"Title": title,
+		// Meta/OG tags keep the plain text; the body renders the markdown.
+		"Description":     desc,
+		"DescriptionHTML": storefront.RenderRichText(desc),
+		"Price":           describeOfferPrice(offer),
+		"LogoURL":         logo,
+		"ShowName":        showName,
+		"Operator":        operator,
+		"ThemeCSS":        template.CSS(theme.CSSVars()),
+		"ThemeColor":      theme.ThemeColor(),
+		"FaviconURL":      favicon,
+		"OGImageURL":      crossOriginAssetURL(profile.OGImageURL),
 	})
 	if err != nil {
 		return "<!doctype html><title>" + template.HTMLEscapeString(title) + "</title>"

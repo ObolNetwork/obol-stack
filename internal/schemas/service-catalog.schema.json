@@ -37,7 +37,11 @@
     },
     "theme": {
       "type": "string",
-      "enum": ["light", "dark", "obol"],
+      "enum": [
+        "light",
+        "dark",
+        "obol"
+      ],
       "description": "Operator-selected theme preset applied to seller HTML surfaces."
     },
     "themeVars": {
@@ -59,6 +63,11 @@
     "description": {
       "type": "string",
       "minLength": 1
+    },
+    "descriptionHtml": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Sanitized HTML rendering of the storefront description."
     }
   },
   "$defs": {
@@ -247,6 +256,11 @@
         "description": {
           "type": "string",
           "minLength": 1
+        },
+        "descriptionHtml": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Sanitized HTML rendering of description (markdown subset; single sanitizer in internal/storefront/richtext.go)."
         },
         "skills": {
           "type": "array",

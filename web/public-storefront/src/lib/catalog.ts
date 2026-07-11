@@ -66,6 +66,8 @@ function parseCatalogDocument(data: unknown): ServiceCatalogDocument {
     ogImageUrl: typeof doc.ogImageUrl === "string" ? doc.ogImageUrl : undefined,
     description:
       typeof doc.description === "string" ? doc.description : undefined,
+    descriptionHtml:
+      typeof doc.descriptionHtml === "string" ? doc.descriptionHtml : undefined,
     services: Array.isArray(doc.services) ? doc.services : [],
   };
 }
@@ -101,5 +103,6 @@ export const fetchStorefront = cache(async (): Promise<StorefrontProfile> => {
     faviconUrl: catalog.faviconUrl,
     ogImageUrl: catalog.ogImageUrl,
     description: catalog.description,
+    descriptionHtml: catalog.descriptionHtml,
   };
 });

@@ -34,6 +34,11 @@ type ServiceCatalogEntry struct {
 	ChainID          int64                `json:"chainId,omitempty"`
 	Asset            *ServiceCatalogAsset `json:"asset,omitempty"`
 	Description      string               `json:"description"`
+	// DescriptionHTML is the sanitized HTML rendering of Description
+	// (markdown subset). Produced ONLY by internal/storefront/richtext.go;
+	// consumers may inject it verbatim. Absent on catalogs from
+	// pre-richtext controllers — fall back to the plain Description.
+	DescriptionHTML string `json:"descriptionHtml,omitempty"`
 	// Skills are the OASF / buy-x402 skill names this offer advertises.
 	// For type=agent offers it mirrors AgentResolution.Skills (the
 	// resolved allow-list from the linked Agent CR); for non-agent
@@ -181,4 +186,7 @@ type ServiceCatalog struct {
 	FaviconURL  string `json:"faviconUrl,omitempty"`
 	OGImageURL  string `json:"ogImageUrl,omitempty"`
 	Description string `json:"description,omitempty"`
+	// DescriptionHTML is the sanitized HTML rendering of Description —
+	// same contract as ServiceCatalogEntry.DescriptionHTML.
+	DescriptionHTML string `json:"descriptionHtml,omitempty"`
 }

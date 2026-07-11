@@ -15,6 +15,7 @@ import (
 	x402types "github.com/x402-foundation/x402/go/v2/types"
 
 	"github.com/ObolNetwork/obol-stack/internal/buyprompts"
+	"github.com/ObolNetwork/obol-stack/internal/storefront"
 )
 
 // displayTokenRe is the allowed charset for ServiceOffer-sourced strings
@@ -264,7 +265,7 @@ func sendPaymentRequiredHTML(w http.ResponseWriter, r *http.Request, requirement
 		PayToDisplay        string
 		PayToFull           string
 		ExplorerURL         string
-		OfferDescription    string
+		OfferDescription    template.HTML
 		Skills              []string
 		Lede                template.HTML
 		ShowPrimary         bool
@@ -289,7 +290,7 @@ func sendPaymentRequiredHTML(w http.ResponseWriter, r *http.Request, requirement
 		PayToDisplay:        payToDisplay,
 		PayToFull:           payToFull,
 		ExplorerURL:         display.ExplorerURL,
-		OfferDescription:    display.OfferDescription,
+		OfferDescription:    storefront.RenderRichText(display.OfferDescription),
 		Skills:              display.AgentSkills,
 		Lede:                typeCopy.Lede,
 		ShowPrimary:         typeCopy.ShowPrimary,

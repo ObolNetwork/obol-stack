@@ -43,3 +43,50 @@ body {
 * {
   scrollbar-color: var(--color-bg04) var(--color-bg01);
 }
+
+/* Operator markdown rendered by internal/storefront/richtext.go (the single
+   sanitizer). Tags are limited to p, br, strong, em, ul, ol, li, code, pre,
+   a, h3, h4 — style just those. */
+.richtext p {
+  margin: 0 0 0.5rem;
+}
+.richtext p:last-child {
+  margin-bottom: 0;
+}
+.richtext ul,
+.richtext ol {
+  margin: 0 0 0.5rem;
+  padding-left: 1.25rem;
+}
+.richtext ul {
+  list-style: disc;
+}
+.richtext ol {
+  list-style: decimal;
+}
+.richtext li {
+  margin-bottom: 0.15rem;
+}
+.richtext h3,
+.richtext h4 {
+  color: var(--color-text-light);
+  font-weight: 600;
+  margin: 0.75rem 0 0.25rem;
+}
+.richtext code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  color: var(--color-text-light);
+}
+.richtext pre {
+  background: var(--color-bg01);
+  border: 1px solid var(--color-stroke);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  overflow-x: auto;
+  margin: 0 0 0.5rem;
+}
+.richtext a {
+  color: var(--color-obol-green);
+  text-decoration: underline;
+}
