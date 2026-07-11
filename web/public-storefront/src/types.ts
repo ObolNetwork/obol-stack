@@ -89,4 +89,17 @@ export interface StorefrontProfile {
   displayName: string;
   tagline: string;
   logoUrl: string;
+  // theme is the operator-selected preset name ("light" | "dark" | "obol").
+  // Absent on catalogs from pre-theming controllers — treat as "light".
+  theme?: string;
+  // themeVars is the resolved token→hex map for the theme (accent override
+  // already applied). Keys are bare token names ("bg01", "green", ...).
+  themeVars?: Record<string, string>;
+  // faviconUrl overrides the tab icon; empty falls back to the logo.
+  faviconUrl?: string;
+  // ogImageUrl overrides the link-preview image; empty uses the generated one.
+  ogImageUrl?: string;
+  // description is longer-form seller copy (markdown subset; rendered as
+  // plain text with preserved line breaks until the richtext pipeline lands).
+  description?: string;
 }

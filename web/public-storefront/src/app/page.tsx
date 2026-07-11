@@ -17,6 +17,11 @@ export default async function Home() {
             {DEFAULT_HERO_TITLE}
           </h1>
           <p className="text-text-body">{catalog.tagline}</p>
+          {catalog.description ? (
+            <p className="text-text-muted text-sm mt-3 whitespace-pre-line">
+              {catalog.description}
+            </p>
+          ) : null}
         </section>
 
         <ServicesList initial={catalog.services} />

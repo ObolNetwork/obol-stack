@@ -1,28 +1,43 @@
 import { ImageResponse } from "next/og";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fetchStorefront, isDefaultStorefrontLogo } from "@/lib/catalog";
+import { isDarkTheme, themeToken } from "@/lib/theme";
+import { resolvePublicUrl, resolveSiteUrl } from "@/lib/site-url";
 
-// Static OG image for HTTP 402 responses emitted by x402-verifier. Referenced
-// from the verifier's HTML 402 body via absolute URL on the same tunnel host.
+// OG image for HTTP 402 responses emitted by x402-verifier. Referenced from
+// the verifier's HTML 402 body via absolute URL on the same tunnel host.
 // Same Satori/JSX pipeline as src/app/opengraph-image.tsx so styling stays
-// consistent across the two surfaces.
+// consistent across the two surfaces. Rendered per-request (branding +
+// theme come from the live catalog) but edge/browser-cached for an hour.
 
 export const runtime = "nodejs";
-export const dynamic = "force-static";
+export const dynamic = "force-dynamic";
 
-const TEXT_LIGHT = "#DFEAED";
-const TEXT_BODY = "#9CC2C9";
-const OBOL_GREEN = "#2FE4AB";
-const BG01 = "#091011";
-const BG_PANEL = "#111F22";
-const STROKE_GREEN = "#1D5249";
 const SIZE = { width: 1200, height: 630 };
 
+function logoDataUrl(file: string): string {
+  const bytes = readFileSync(join(process.cwd(), "public", file));
+  return `data:image/png;base64,${bytes.toString("base64")}`;
+}
+
 export async function GET() {
-  const wordmark = readFileSync(
-    join(process.cwd(), "public", "obol-stack-logo.png"),
-  );
-  const wordmarkDataUrl = `data:image/png;base64,${wordmark.toString("base64")}`;
+  const [storefront, siteUrl] = await Promise.all([
+    fetchStorefront(),
+    resolveSiteUrl(),
+  ]);
+  const vars = storefront.themeVars;
+  const dark = isDarkTheme(storefront.theme);
+  const textLight = themeToken("light", vars);
+  const textBody = themeToken("body", vars);
+  const accent = themeToken("green", vars);
+  const bg = themeToken("bg01", vars);
+  const panel = themeToken("bg02", vars);
+  const stroke = themeToken("stroke", vars);
+
+  const customLogoSrc = isDefaultStorefrontLogo(storefront.logoUrl)
+    ? ""
+    : resolvePublicUrl(storefront.logoUrl, siteUrl);
 
   const Chip = ({ label }: { label: string }) => (
     <div
@@ -34,9 +49,9 @@ export async function GET() {
         paddingLeft: 22,
         paddingRight: 22,
         borderRadius: 25,
-        background: BG_PANEL,
-        border: `1.5px solid ${STROKE_GREEN}`,
-        color: OBOL_GREEN,
+        background: panel,
+        border: `1.5px solid ${stroke}`,
+        color: accent,
         fontSize: 22,
         fontWeight: 600,
       }}
@@ -54,7 +69,7 @@ export async function GET() {
           display: "flex",
           flexDirection: "column",
           padding: 80,
-          background: BG01,
+          background: bg,
         }}
       >
         <div
@@ -64,14 +79,48 @@ export async function GET() {
             alignItems: "center",
           }}
         >
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={wordmarkDataUrl}
-            alt="Obol Stack"
-            width={322}
-            height={56}
-            style={{ width: 322, height: 56 }}
-          />
+          {/* Brand, top-left. The default wordmark is light-on-dark, so
+              light themes use the dark square mark + name instead. */}
+          {customLogoSrc === "" && dark ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={logoDataUrl("obol-stack-logo.png")}
+              alt={storefront.displayName}
+              width={322}
+              height={56}
+              style={{ width: 322, height: 56 }}
+            />
+          ) : (
+            <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={
+                  customLogoSrc === ""
+                    ? logoDataUrl("obol-logo.png")
+                    : customLogoSrc
+                }
+                alt={storefront.displayName}
+                width={72}
+                height={72}
+                style={{
+                  width: 72,
+                  height: 72,
+                  borderRadius: 16,
+                  objectFit: "cover",
+                }}
+              />
+              <div
+                style={{
+                  display: "flex",
+                  color: textLight,
+                  fontSize: 38,
+                  fontWeight: 700,
+                }}
+              >
+                {storefront.displayName}
+              </div>
+            </div>
+          )}
           <div
             style={{
               display: "flex",
@@ -81,9 +130,9 @@ export async function GET() {
               paddingLeft: 22,
               paddingRight: 22,
               borderRadius: 21,
-              background: BG_PANEL,
-              border: `1.5px solid ${OBOL_GREEN}`,
-              color: OBOL_GREEN,
+              background: panel,
+              border: `1.5px solid ${accent}`,
+              color: accent,
               fontSize: 22,
               fontWeight: 600,
               fontFamily: "monospace",
@@ -97,7 +146,7 @@ export async function GET() {
           style={{
             display: "flex",
             marginTop: 110,
-            color: TEXT_LIGHT,
+            color: textLight,
             fontSize: 96,
             fontWeight: 700,
             letterSpacing: -2,
@@ -111,13 +160,14 @@ export async function GET() {
           style={{
             display: "flex",
             marginTop: 28,
-            color: TEXT_BODY,
+            color: textBody,
             fontSize: 34,
             fontWeight: 500,
             lineHeight: 1.3,
           }}
         >
-          Unlock this Obol Agent service. Pay per call in USDC or OBOL.
+          Unlock this service from {storefront.displayName}. Pay per call in
+          USDC or OBOL.
         </div>
 
         <div
@@ -138,7 +188,7 @@ export async function GET() {
       ...SIZE,
       headers: {
         "Content-Type": "image/png",
-        "Cache-Control": "public, max-age=3600, immutable",
+        "Cache-Control": "public, max-age=3600",
       },
     },
   );

@@ -9,6 +9,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/ObolNetwork/obol-stack/internal/storefront"
 )
 
 // Per-offer discovery bundles for hostname-bound offers.
@@ -267,13 +268,22 @@ var offerLandingTmpl = template.Must(template.New("offer_landing").Parse(`<!doct
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>{{.Title}}</title>
     <meta name="description" content="{{.Description}}" />
-    <meta name="theme-color" content="#091011" />
+    <meta name="theme-color" content="{{.ThemeColor}}" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="{{.Title}}" />
+    <meta property="og:description" content="{{.Description}}" />
+    <meta property="og:site_name" content="{{.Operator}}" />
+    {{if .OGImageURL}}<meta property="og:image" content="{{.OGImageURL}}" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="{{.OGImageURL}}" />{{end}}
+    {{if .FaviconURL}}<link rel="icon" href="{{.FaviconURL}}" />{{end}}
     <style>
-      :root { --bg01:#091011; --bg02:#111f22; --stroke:#1e3a3f; --green:#2fe4ab; --light:#d9eef3; --body:#9cc2c9; --muted:#475e64; --mono:"JetBrains Mono",ui-monospace,monospace; }
+      :root { {{.ThemeCSS}} --mono:"JetBrains Mono",ui-monospace,monospace; }
       * { box-sizing: border-box; } html, body { background: var(--bg01); }
       body { margin:0; color:var(--light); font-family:"DM Sans",system-ui,sans-serif; line-height:1.5; }
       .wrap { max-width:640px; margin:0 auto; padding:64px 24px 96px; }
-      img.logo { height:32px; width:auto; margin-bottom:24px; }
+      .brand { display:flex; align-items:center; gap:10px; margin-bottom:24px; color:var(--light); font-weight:600; font-size:15px; }
+      .brand img { height:32px; width:auto; }
       .pill { display:inline-block; font-family:var(--mono); font-size:13px; font-weight:600; color:var(--green); border:1px solid var(--green); border-radius:999px; padding:6px 14px; margin-bottom:24px; }
       h1 { font-size:28px; margin:0 0 8px; }
       p { color:var(--body); margin:0 0 12px; }
@@ -286,7 +296,7 @@ var offerLandingTmpl = template.Must(template.New("offer_landing").Parse(`<!doct
   </head>
   <body>
     <div class="wrap">
-      {{if .LogoURL}}<img class="logo" src="{{.LogoURL}}" alt="" />{{end}}
+      {{if .LogoURL}}<div class="brand"><img src="{{.LogoURL}}" alt="{{.Operator}}" />{{if .ShowName}}<span>{{.Operator}}</span>{{end}}</div>{{end}}
       <span class="pill">{{.Price}}</span>
       <h1>{{.Title}}</h1>
       <p>{{.Description}}</p>
@@ -314,16 +324,52 @@ func buildOfferLandingHTML(offer *monetizeapi.ServiceOffer, profile schemas.Stor
 	if operator == "" {
 		operator = "an Obol Stack operator"
 	}
+	theme := storefront.ResolveTheme(profile.Theme, profile.AccentColor)
+
+	// This page lives on the offer's dedicated origin, so only absolute
+	// URLs (or data: URIs) resolve reliably; the resolved profile's default
+	// logo is already absolute against the main storefront origin.
+	logo := strings.TrimSpace(profile.LogoURL)
+	custom := !storefront.IsDefaultLogoURL(logo)
+	showName := custom
+	if !custom && !theme.Dark {
+		// Default wordmark is light-on-dark: swap in the dark square mark
+		// (same origin as the wordmark) and spell out the operator name.
+		logo = strings.TrimSuffix(logo, storefront.DefaultLogoPath) + storefront.DefaultMarkPath
+		showName = true
+	}
+	favicon := crossOriginAssetURL(profile.FaviconURL)
+	if favicon == "" && custom {
+		favicon = crossOriginAssetURL(logo)
+	}
+
 	var out strings.Builder
 	err := offerLandingTmpl.Execute(&out, map[string]any{
 		"Title":       title,
 		"Description": offerDescription(offer, "x402 payment-gated service."),
 		"Price":       describeOfferPrice(offer),
-		"LogoURL":     strings.TrimSpace(profile.LogoURL),
+		"LogoURL":     logo,
+		"ShowName":    showName,
 		"Operator":    operator,
+		"ThemeCSS":    template.CSS(theme.CSSVars()),
+		"ThemeColor":  theme.ThemeColor(),
+		"FaviconURL":  favicon,
+		"OGImageURL":  crossOriginAssetURL(profile.OGImageURL),
 	})
 	if err != nil {
 		return "<!doctype html><title>" + template.HTMLEscapeString(title) + "</title>"
 	}
 	return out.String()
+}
+
+// crossOriginAssetURL returns raw only when it resolves from a different
+// origin than it was authored against: absolute http(s) URLs and inline
+// data: URIs pass, site-relative paths (which would 404 on a dedicated
+// offer hostname) drop to "".
+func crossOriginAssetURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "https://") || strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "data:") {
+		return raw
+	}
+	return ""
 }

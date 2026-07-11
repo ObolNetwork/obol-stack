@@ -135,6 +135,22 @@ type StorefrontProfile struct {
 	Tagline      string `json:"tagline"`
 	LogoURL      string `json:"logoUrl"`
 	ContactEmail string `json:"contactEmail,omitempty"`
+
+	// Theme is a preset name ("light", "dark", "obol"); empty means the
+	// stack default (light). Applied to every seller-facing HTML surface.
+	Theme string `json:"theme,omitempty"`
+	// AccentColor optionally overrides the preset accent with a #hex value
+	// (validated against a strict hex pattern before it reaches any CSS).
+	AccentColor string `json:"accentColor,omitempty"`
+	// FaviconURL follows the same forms as LogoURL (https://, /path, or
+	// inline data:image/...;base64). Empty falls back to the logo.
+	FaviconURL string `json:"faviconUrl,omitempty"`
+	// OGImageURL is the link-preview image (og:image). Empty falls back to
+	// the storefront's generated preview.
+	OGImageURL string `json:"ogImageUrl,omitempty"`
+	// Description is longer-form seller copy (markdown subset). Publishing
+	// surfaces render it as plain text until the richtext pipeline lands.
+	Description string `json:"description,omitempty"`
 }
 
 // ServiceCatalogSchemaVersion is the current version of the
@@ -153,4 +169,16 @@ type ServiceCatalog struct {
 	Tagline       string                `json:"tagline"`
 	LogoURL       string                `json:"logoUrl"`
 	Services      []ServiceCatalogEntry `json:"services"`
+
+	// Theme is the operator-selected preset name (always populated by
+	// current controllers; empty on catalogs from older releases).
+	Theme string `json:"theme,omitempty"`
+	// ThemeVars is the resolved token→hex map for Theme (accent override
+	// already applied), so consumers can style without knowing the presets.
+	// Keys are the bare token names ("bg01", "green", ...).
+	ThemeVars map[string]string `json:"themeVars,omitempty"`
+	// FaviconURL / OGImageURL / Description mirror StorefrontProfile.
+	FaviconURL  string `json:"faviconUrl,omitempty"`
+	OGImageURL  string `json:"ogImageUrl,omitempty"`
+	Description string `json:"description,omitempty"`
 }

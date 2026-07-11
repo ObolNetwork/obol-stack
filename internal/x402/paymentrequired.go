@@ -250,14 +250,14 @@ func sendPaymentRequiredHTML(w http.ResponseWriter, r *http.Request, requirement
 	payToDisplay := truncateAddress(payToFull)
 
 	typeCopy := buildTypeCopy(siteURL, endpoint, display)
+	branding := resolveBranding(siteURL)
 
 	data := struct {
 		Title               string
 		Description         string
 		PageURL             string
 		StorefrontURL       string
-		WordmarkURL         string
-		OGImageURL          string
+		Branding            Branding
 		Endpoint            string
 		NetworkLabel        string
 		PriceDisplay        string
@@ -278,12 +278,11 @@ func sendPaymentRequiredHTML(w http.ResponseWriter, r *http.Request, requirement
 		ChatCompletionsNote string
 		ChatCompletionsBody string
 	}{
-		Title:               "Payment required — Obol Stack",
+		Title:               "Payment required — " + branding.SiteName,
 		Description:         buildMetaDescription(display),
 		PageURL:             pageURL,
 		StorefrontURL:       siteURL,
-		WordmarkURL:         siteURL + "/obol-stack-logo.png",
-		OGImageURL:          siteURL + "/og-payment-required.png",
+		Branding:            branding,
 		Endpoint:            endpoint,
 		NetworkLabel:        networkLabel,
 		PriceDisplay:        priceDisplay,

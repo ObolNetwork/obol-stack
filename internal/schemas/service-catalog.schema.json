@@ -34,6 +34,31 @@
       "items": {
         "$ref": "#/$defs/service"
       }
+    },
+    "theme": {
+      "type": "string",
+      "enum": ["light", "dark", "obol"],
+      "description": "Operator-selected theme preset applied to seller HTML surfaces."
+    },
+    "themeVars": {
+      "type": "object",
+      "description": "Resolved theme token->hex map (accent override applied) so consumers can style without knowing the presets.",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^#[0-9a-fA-F]{3,8}$"
+      }
+    },
+    "faviconUrl": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ogImageUrl": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
     }
   },
   "$defs": {

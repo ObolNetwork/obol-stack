@@ -5,34 +5,26 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>{{.Title}}</title>
     <meta name="description" content="{{.Description}}" />
-    <meta name="theme-color" content="#091011" />
+    <meta name="theme-color" content="{{.Branding.ThemeColor}}" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="{{.Title}}" />
     <meta property="og:description" content="{{.Description}}" />
-    <meta property="og:site_name" content="Obol Stack" />
+    <meta property="og:site_name" content="{{.Branding.SiteName}}" />
     <meta property="og:url" content="{{.PageURL}}" />
-    <meta property="og:image" content="{{.OGImageURL}}" />
+    <meta property="og:image" content="{{.Branding.OGImageURL}}" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Payment required — Obol Stack" />
+    <meta property="og:image:alt" content="Payment required — {{.Branding.SiteName}}" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="{{.Title}}" />
     <meta name="twitter:description" content="{{.Description}}" />
-    <meta name="twitter:image" content="{{.OGImageURL}}" />
-    <link rel="icon" href="{{.StorefrontURL}}/favicon.png" type="image/png" />
+    <meta name="twitter:image" content="{{.Branding.OGImageURL}}" />
+    <link rel="icon" href="{{.Branding.FaviconURL}}" />
     <style>
       :root {
-        /* Mirrors web/public-storefront/src/app/globals.css token names */
-        --bg01: #091011;
-        --bg02: #111f22;
-        --bg03: #182d32;
-        --bg04: #243d42;
-        --stroke: #1e3a3f;
-        --green: #2fe4ab;
-        --green-dim: #1a7a5c;
-        --light: #d9eef3;
-        --body: #9cc2c9;
-        --muted: #475e64;
+        /* Theme tokens (preset + accent) shared with the public storefront
+           — see internal/storefront/theme.go */
+        {{.Branding.ThemeCSS}}
         --font-mono: "JetBrains Mono", "IBM Plex Mono", "Fira Code", ui-monospace, monospace;
       }
       * { box-sizing: border-box; }
@@ -49,6 +41,8 @@
       .wrap { max-width: 760px; margin: 0 auto; padding: 48px 24px 96px; }
       header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 56px; }
       header img { height: 28px; width: auto; }
+      .brand { display: flex; align-items: center; gap: 10px; color: var(--light); text-decoration: none; font-weight: 600; font-size: 16px; min-width: 0; }
+      .brand span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .pill {
         font-family: var(--font-mono);
         font-size: 13px;
@@ -162,7 +156,10 @@
   <body>
     <div class="wrap">
       <header>
-        <a href="{{.StorefrontURL}}" aria-label="Obol Stack home"><img src="{{.WordmarkURL}}" alt="Obol Stack" /></a>
+        <a class="brand" href="{{.StorefrontURL}}" aria-label="{{.Branding.SiteName}} home">
+          <img src="{{.Branding.LogoURL}}" alt="{{.Branding.SiteName}}" />
+          {{if .Branding.ShowName}}<span>{{.Branding.SiteName}}</span>{{end}}
+        </a>
         <span class="pill">HTTP 402</span>
       </header>
 
