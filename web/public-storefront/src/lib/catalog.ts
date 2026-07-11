@@ -57,6 +57,15 @@ function parseCatalogDocument(data: unknown): ServiceCatalogDocument {
     displayName: doc.displayName || DEFAULT_STOREFRONT.displayName,
     tagline: doc.tagline || DEFAULT_STOREFRONT.tagline,
     logoUrl: doc.logoUrl || DEFAULT_STOREFRONT.logoUrl,
+    theme: typeof doc.theme === "string" ? doc.theme : undefined,
+    themeVars:
+      doc.themeVars && typeof doc.themeVars === "object"
+        ? (doc.themeVars as Record<string, string>)
+        : undefined,
+    faviconUrl: typeof doc.faviconUrl === "string" ? doc.faviconUrl : undefined,
+    ogImageUrl: typeof doc.ogImageUrl === "string" ? doc.ogImageUrl : undefined,
+    description:
+      typeof doc.description === "string" ? doc.description : undefined,
     services: Array.isArray(doc.services) ? doc.services : [],
   };
 }
@@ -87,5 +96,10 @@ export const fetchStorefront = cache(async (): Promise<StorefrontProfile> => {
     displayName: catalog.displayName,
     tagline: catalog.tagline,
     logoUrl: catalog.logoUrl,
+    theme: catalog.theme,
+    themeVars: catalog.themeVars,
+    faviconUrl: catalog.faviconUrl,
+    ogImageUrl: catalog.ogImageUrl,
+    description: catalog.description,
   };
 });

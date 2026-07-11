@@ -1,5 +1,13 @@
 package serviceoffercontroller
 
+import (
+	"html/template"
+	"strings"
+
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/ObolNetwork/obol-stack/internal/storefront"
+)
+
 // scalarBundleVersion is the pinned NPM version of @scalar/api-reference
 // served from jsdelivr. Renovate tracks it via the scalar_html.go custom
 // manager in renovate.json; bumps land as reviewable PRs so the bundled JS
@@ -20,54 +28,71 @@ const scalarBundleSRI = "sha384-8krtlmjW90KNKDXFfcFls2ueiU+9/jzPmL/C2r7Y2NPh9KWC
 
 // scalarHTML returns the static HTML shell served at /api. It loads the
 // pinned @scalar/api-reference bundle from jsdelivr, points it at the
-// sibling /openapi.json document, and lightly themes the renderer in Obol
-// greens (#2FE4AB accent on a #091011 background) via Scalar's CSS
-// custom-property interface. OG metadata reuses the storefront's existing
-// /og-payment-required.png asset so link unfurls stay coherent across the
-// tunnel UI surface.
+// sibling /openapi.json document, and themes the renderer from the
+// operator's storefront profile (theme preset + optional accent) via
+// Scalar's CSS custom-property interface. OG metadata reuses the
+// storefront's existing /og-payment-required.png asset (or the operator's
+// custom og image) so link unfurls stay coherent across the tunnel UI
+// surface.
 //
 // The HTML is deliberately small — Scalar handles the actual rendering.
 // Any future theming work should land here in pure CSS without pulling in
 // a build step.
-func scalarHTML() string {
+func scalarHTML(profile schemas.StorefrontProfile) string {
 	integrityAttr := ""
 	if scalarBundleSRI != "" {
 		integrityAttr = ` integrity="` + scalarBundleSRI + `" crossorigin="anonymous"`
+	}
+	theme := storefront.ResolveTheme(profile.Theme, profile.AccentColor)
+	v := theme.Vars
+	esc := template.HTMLEscapeString
+	title := strings.TrimSpace(profile.DisplayName)
+	if title == "" {
+		title = "Obol Stack"
+	}
+	title += " — API reference"
+	ogImage := strings.TrimSpace(profile.OGImageURL)
+	if ogImage == "" {
+		ogImage = "/og-payment-required.png"
+	}
+	favicon := ""
+	if f := strings.TrimSpace(profile.FaviconURL); f != "" {
+		favicon = "\n  <link rel=\"icon\" href=\"" + esc(f) + "\" />"
 	}
 	return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Obol Stack — API reference</title>
+  <title>` + esc(title) + `</title>
 
-  <meta name="description" content="x402 payment-gated services advertised by this Obol Stack operator." />
-  <meta property="og:title" content="Obol Stack — API reference" />
-  <meta property="og:description" content="x402 payment-gated services advertised by this Obol Stack operator." />
-  <meta property="og:image" content="/og-payment-required.png" />
+  <meta name="description" content="x402 payment-gated services advertised by this operator." />
+  <meta property="og:title" content="` + esc(title) + `" />
+  <meta property="og:description" content="x402 payment-gated services advertised by this operator." />
+  <meta property="og:image" content="` + esc(ogImage) + `" />
   <meta property="og:type" content="website" />
   <meta name="twitter:card" content="summary_large_image" />
-  <meta name="twitter:title" content="Obol Stack — API reference" />
-  <meta name="twitter:description" content="x402 payment-gated services advertised by this Obol Stack operator." />
-  <meta name="twitter:image" content="/og-payment-required.png" />
-  <meta name="theme-color" content="#091011" />
+  <meta name="twitter:title" content="` + esc(title) + `" />
+  <meta name="twitter:description" content="x402 payment-gated services advertised by this operator." />
+  <meta name="twitter:image" content="` + esc(ogImage) + `" />
+  <meta name="theme-color" content="` + v["bg01"] + `" />` + favicon + `
 
   <style>
     :root {
-      --scalar-color-1: #e5f9f1;
-      --scalar-color-2: #b5ecd3;
-      --scalar-color-3: #6fd0a8;
-      --scalar-color-accent: #2FE4AB;
-      --scalar-background-1: #091011;
-      --scalar-background-2: #0d1618;
-      --scalar-background-3: #11201f;
-      --scalar-background-accent: #2FE4AB;
-      --scalar-border-color: #1a2426;
-      --scalar-button-1: #2FE4AB;
-      --scalar-button-1-color: #091011;
-      --scalar-button-1-hover: #5af0c0;
+      --scalar-color-1: ` + v["light"] + `;
+      --scalar-color-2: ` + v["body"] + `;
+      --scalar-color-3: ` + v["muted"] + `;
+      --scalar-color-accent: ` + v["green"] + `;
+      --scalar-background-1: ` + v["bg01"] + `;
+      --scalar-background-2: ` + v["bg02"] + `;
+      --scalar-background-3: ` + v["bg03"] + `;
+      --scalar-background-accent: ` + v["green"] + `;
+      --scalar-border-color: ` + v["stroke"] + `;
+      --scalar-button-1: ` + v["green"] + `;
+      --scalar-button-1-color: ` + v["bg01"] + `;
+      --scalar-button-1-hover: ` + v["green-dim"] + `;
     }
-    html, body { margin: 0; padding: 0; background: #091011; color: #e5f9f1; }
+    html, body { margin: 0; padding: 0; background: ` + v["bg01"] + `; color: ` + v["light"] + `; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif; }
   </style>
 </head>

@@ -6,6 +6,7 @@ import {
   fetchStorefront,
   isDefaultStorefrontLogo,
 } from "@/lib/catalog";
+import { isDarkTheme, themeStyle, themeToken } from "@/lib/theme";
 import { resolveSiteUrl } from "@/lib/site-url";
 import "./globals.css";
 
@@ -42,6 +43,12 @@ function buildDynamicCopy(
 }
 
 function buildIcons(storefront: Awaited<ReturnType<typeof fetchStorefront>>) {
+  if (storefront.faviconUrl) {
+    return {
+      icon: [{ url: storefront.faviconUrl }],
+      apple: [{ url: storefront.faviconUrl, sizes: "180x180" }],
+    };
+  }
   if (isDefaultStorefrontLogo(storefront.logoUrl)) {
     return {
       icon: [
@@ -83,6 +90,9 @@ export async function generateMetadata(): Promise<Metadata> {
       title,
       description,
       url: siteUrl,
+      // An operator-supplied preview image wins; otherwise Next falls back
+      // to the generated opengraph-image route.
+      ...(storefront.ogImageUrl ? { images: [storefront.ogImageUrl] } : {}),
     },
     twitter: {
       card: "summary_large_image",
@@ -96,10 +106,13 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-export const viewport: Viewport = {
-  themeColor: "#091011",
-  colorScheme: "dark",
-};
+export async function generateViewport(): Promise<Viewport> {
+  const storefront = await fetchStorefront();
+  return {
+    themeColor: themeToken("bg01", storefront.themeVars),
+    colorScheme: isDarkTheme(storefront.theme) ? "dark" : "light",
+  };
+}
 
 function JsonLd({
   services,
@@ -156,7 +169,14 @@ export default async function RootLayout({
     resolveSiteUrl(),
   ]);
   return (
-    <html lang="en" className={dmSans.variable}>
+    <html
+      lang="en"
+      className={dmSans.variable}
+      style={{
+        ...themeStyle(storefront.themeVars),
+        colorScheme: isDarkTheme(storefront.theme) ? "dark" : "light",
+      }}
+    >
       <body className="font-sans antialiased min-h-screen">
         {children}
         <JsonLd

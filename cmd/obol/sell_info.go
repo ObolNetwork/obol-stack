@@ -98,7 +98,7 @@ are not yet ready or are draining, use 'obol sell status'.`,
 func sellInfoSetCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "set",
-		Usage: "Set storefront display name, tagline, and/or logo URL",
+		Usage: "Set storefront branding: name, tagline, logo, theme, favicon, preview image, description",
 		Description: `Updates seller-wide storefront branding. With no flags on a TTY this walks
 you through each field (pre-filled with the current value). With flags, only
 the fields you pass change; everything else is left untouched.
@@ -110,13 +110,29 @@ proceeding; non-interactive runs warn and continue. To sidestep hosting
 brittleness entirely (CORS, hotlinking, dead hosts), inline a local image —
 it is embedded in the catalog as a self-contained data: URI:
 
-  obol sell info set --logo-file ./logo.png`,
+  obol sell info set --logo-file ./logo.png
+
+Theming applies to every seller-facing page (storefront, 402 paywall pages,
+sign-in, error pages, /api docs, per-offer landing pages):
+
+  obol sell info set --theme dark                 light (default), dark, obol
+  obol sell info set --accent '#7c5cff'           accent override on any preset
+  obol sell info set --favicon-file ./fav.png     tab icon (falls back to logo)
+  obol sell info set --og-image-file ./og.png     link-preview image
+  obol sell info set --description 'What you sell and why it is good.'`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "display-name", Usage: "Seller title shown in the storefront header"},
 			&cli.StringFlag{Name: "tagline", Usage: "Short subtitle under the storefront hero"},
 			&cli.StringFlag{Name: "logo-url", Usage: "Logo image URL (https://..., /path on this host, or inline data:image/...;base64)"},
 			&cli.StringFlag{Name: "logo-file", Usage: "Local image file to inline as the logo (≤256 KiB, converted to a data: URI — no hosting needed)"},
 			&cli.StringFlag{Name: "contact-email", Usage: "Operator contact email published in /openapi.json (x402scan)"},
+			&cli.StringFlag{Name: "theme", Usage: "Theme preset for all seller pages: " + strings.Join(storefront.ThemeNames(), ", ") + " (default: " + storefront.DefaultTheme + ")"},
+			&cli.StringFlag{Name: "accent", Usage: "Accent color override as #hex (e.g. #0b9b71); empty keeps the preset accent"},
+			&cli.StringFlag{Name: "favicon-url", Usage: "Favicon URL (https://..., /path on this host, or inline data:image/...;base64); empty falls back to the logo"},
+			&cli.StringFlag{Name: "favicon-file", Usage: "Local image file to inline as the favicon (≤256 KiB)"},
+			&cli.StringFlag{Name: "og-image-url", Usage: "Link-preview (og:image) URL; empty uses the storefront's generated preview"},
+			&cli.StringFlag{Name: "og-image-file", Usage: "Local image file to inline as the link-preview image (≤256 KiB)"},
+			&cli.StringFlag{Name: "description", Usage: "Longer seller description shown on the storefront (markdown subset)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -130,11 +146,25 @@ it is embedded in the catalog as a self-contained data: URI:
 			}
 
 			patch := schemas.StorefrontProfile{}
-			anyFlag := cmd.IsSet("display-name") || cmd.IsSet("tagline") || cmd.IsSet("logo-url") || cmd.IsSet("logo-file") || cmd.IsSet("contact-email")
+			setFlags := []string{"display-name", "tagline", "logo-url", "logo-file", "contact-email",
+				"theme", "accent", "favicon-url", "favicon-file", "og-image-url", "og-image-file", "description"}
+			anyFlag := false
+			for _, f := range setFlags {
+				if cmd.IsSet(f) {
+					anyFlag = true
+					break
+				}
+			}
 			if anyFlag {
 				// Flag mode: patch only the fields the operator passed.
 				if cmd.IsSet("logo-url") && cmd.IsSet("logo-file") {
 					return errors.New("--logo-url and --logo-file are mutually exclusive")
+				}
+				if cmd.IsSet("favicon-url") && cmd.IsSet("favicon-file") {
+					return errors.New("--favicon-url and --favicon-file are mutually exclusive")
+				}
+				if cmd.IsSet("og-image-url") && cmd.IsSet("og-image-file") {
+					return errors.New("--og-image-url and --og-image-file are mutually exclusive")
 				}
 				if cmd.IsSet("display-name") {
 					patch.DisplayName = strings.TrimSpace(cmd.String("display-name"))
@@ -154,6 +184,35 @@ it is embedded in the catalog as a self-contained data: URI:
 				}
 				if cmd.IsSet("contact-email") {
 					patch.ContactEmail = strings.TrimSpace(cmd.String("contact-email"))
+				}
+				if cmd.IsSet("theme") {
+					patch.Theme = strings.TrimSpace(cmd.String("theme"))
+				}
+				if cmd.IsSet("accent") {
+					patch.AccentColor = strings.TrimSpace(cmd.String("accent"))
+				}
+				if cmd.IsSet("favicon-url") {
+					patch.FaviconURL = strings.TrimSpace(cmd.String("favicon-url"))
+				}
+				if cmd.IsSet("favicon-file") {
+					uri, err := storefront.InlineImageFromFile(strings.TrimSpace(cmd.String("favicon-file")), "favicon")
+					if err != nil {
+						return err
+					}
+					patch.FaviconURL = uri
+				}
+				if cmd.IsSet("og-image-url") {
+					patch.OGImageURL = strings.TrimSpace(cmd.String("og-image-url"))
+				}
+				if cmd.IsSet("og-image-file") {
+					uri, err := storefront.InlineImageFromFile(strings.TrimSpace(cmd.String("og-image-file")), "OG image")
+					if err != nil {
+						return err
+					}
+					patch.OGImageURL = uri
+				}
+				if cmd.IsSet("description") {
+					patch.Description = strings.TrimSpace(cmd.String("description"))
 				}
 			} else {
 				// No flags: prompt interactively (pre-filled with effective values).
@@ -180,15 +239,34 @@ it is embedded in the catalog as a self-contained data: URI:
 				if v, err := u.Input("Contact email (OpenAPI)", effective.ContactEmail); err == nil {
 					patch.ContactEmail = strings.TrimSpace(v)
 				}
+				if v, err := u.Input("Theme ("+strings.Join(storefront.ThemeNames(), "/")+")", effective.Theme); err == nil {
+					patch.Theme = strings.TrimSpace(v)
+				}
+				if v, err := u.Input("Description (markdown, shown on the storefront)", effective.Description); err == nil {
+					patch.Description = strings.TrimSpace(v)
+				}
+				u.Dim("Accent color, favicon, and link-preview image: flags only (--accent, --favicon-file, --og-image-file)")
 			}
 
-			if patch.DisplayName == "" && patch.Tagline == "" && patch.LogoURL == "" && patch.ContactEmail == "" {
+			if patch == (schemas.StorefrontProfile{}) {
 				return errors.New("nothing to set")
 			}
 			if err := storefront.ValidateLogoURL(patch.LogoURL); err != nil {
 				return err
 			}
 			if err := storefront.ValidateContactEmail(patch.ContactEmail); err != nil {
+				return err
+			}
+			if err := storefront.ValidateThemeName(patch.Theme); err != nil {
+				return err
+			}
+			if err := storefront.ValidateAccentColor(patch.AccentColor); err != nil {
+				return err
+			}
+			if err := storefront.ValidateImageURL(patch.FaviconURL, "favicon"); err != nil {
+				return err
+			}
+			if err := storefront.ValidateImageURL(patch.OGImageURL, "OG image"); err != nil {
 				return err
 			}
 			if err := confirmLogoURL(ctx, u, cfg, patch.LogoURL); err != nil {
@@ -225,6 +303,11 @@ more field flags to reset only those fields, leaving the rest untouched.`,
 			&cli.BoolFlag{Name: "tagline", Usage: "Reset only the tagline"},
 			&cli.BoolFlag{Name: "logo-url", Usage: "Reset only the logo URL"},
 			&cli.BoolFlag{Name: "contact-email", Usage: "Reset only the OpenAPI contact email"},
+			&cli.BoolFlag{Name: "theme", Usage: "Reset only the theme (back to " + storefront.DefaultTheme + ")"},
+			&cli.BoolFlag{Name: "accent", Usage: "Reset only the accent color"},
+			&cli.BoolFlag{Name: "favicon-url", Usage: "Reset only the favicon"},
+			&cli.BoolFlag{Name: "og-image-url", Usage: "Reset only the link-preview image"},
+			&cli.BoolFlag{Name: "description", Usage: "Reset only the description"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -232,7 +315,14 @@ more field flags to reset only those fields, leaving the rest untouched.`,
 				return err
 			}
 
-			partial := cmd.Bool("display-name") || cmd.Bool("tagline") || cmd.Bool("logo-url") || cmd.Bool("contact-email")
+			clear := map[string]bool{}
+			for _, f := range []string{"display-name", "tagline", "logo-url", "contact-email",
+				"theme", "accent", "favicon-url", "og-image-url", "description"} {
+				if cmd.Bool(f) {
+					clear[f] = true
+				}
+			}
+			partial := len(clear) > 0
 
 			var explicit *schemas.StorefrontProfile
 			if partial {
@@ -240,7 +330,7 @@ more field flags to reset only those fields, leaving the rest untouched.`,
 				if err != nil {
 					return err
 				}
-				cleared := clearProfileFields(current, cmd.Bool("display-name"), cmd.Bool("tagline"), cmd.Bool("logo-url"), cmd.Bool("contact-email"))
+				cleared := clearProfileFields(current, clear)
 				if cleared == (schemas.StorefrontProfile{}) {
 					// Everything is back to default — remove the override entirely.
 					if err := deleteSellerProfile(cfg); err != nil {
@@ -333,21 +423,36 @@ func confirmLogoURL(ctx context.Context, u *ui.UI, cfg *config.Config, logoURL s
 	return nil
 }
 
-// clearProfileFields returns a copy of p with the flagged fields emptied, so
-// they fall back to stack defaults while the rest of the operator override is
-// preserved.
-func clearProfileFields(p schemas.StorefrontProfile, displayName, tagline, logoURL, contactEmail bool) schemas.StorefrontProfile {
-	if displayName {
+// clearProfileFields returns a copy of p with the flagged fields (keyed by
+// their reset-flag names) emptied, so they fall back to stack defaults while
+// the rest of the operator override is preserved.
+func clearProfileFields(p schemas.StorefrontProfile, clear map[string]bool) schemas.StorefrontProfile {
+	if clear["display-name"] {
 		p.DisplayName = ""
 	}
-	if tagline {
+	if clear["tagline"] {
 		p.Tagline = ""
 	}
-	if logoURL {
+	if clear["logo-url"] {
 		p.LogoURL = ""
 	}
-	if contactEmail {
+	if clear["contact-email"] {
 		p.ContactEmail = ""
+	}
+	if clear["theme"] {
+		p.Theme = ""
+	}
+	if clear["accent"] {
+		p.AccentColor = ""
+	}
+	if clear["favicon-url"] {
+		p.FaviconURL = ""
+	}
+	if clear["og-image-url"] {
+		p.OGImageURL = ""
+	}
+	if clear["description"] {
+		p.Description = ""
 	}
 	return p
 }
@@ -553,9 +658,19 @@ func waitForPublishedCatalog(cfg *config.Config, explicit *schemas.StorefrontPro
 }
 
 func sellerProfilesEqual(catalog schemas.ServiceCatalog, want schemas.StorefrontProfile) bool {
+	// An empty published theme means the running controller predates
+	// theming: accept it only when the operator wants the default. A
+	// non-default want must actually publish (same "controller too old"
+	// timeout semantics as every other field — see pitfall 19).
+	themeOK := strings.TrimSpace(catalog.Theme) == strings.TrimSpace(want.Theme) ||
+		(strings.TrimSpace(catalog.Theme) == "" && strings.TrimSpace(want.Theme) == storefront.DefaultTheme)
 	return strings.TrimSpace(catalog.DisplayName) == strings.TrimSpace(want.DisplayName) &&
 		strings.TrimSpace(catalog.Tagline) == strings.TrimSpace(want.Tagline) &&
-		strings.TrimSpace(catalog.LogoURL) == strings.TrimSpace(want.LogoURL)
+		strings.TrimSpace(catalog.LogoURL) == strings.TrimSpace(want.LogoURL) &&
+		themeOK &&
+		strings.TrimSpace(catalog.FaviconURL) == strings.TrimSpace(want.FaviconURL) &&
+		strings.TrimSpace(catalog.OGImageURL) == strings.TrimSpace(want.OGImageURL) &&
+		strings.TrimSpace(catalog.Description) == strings.TrimSpace(want.Description)
 }
 
 func sellerBaseURL(cfg *config.Config) (string, error) {
@@ -588,6 +703,23 @@ func printSellerProfile(u *ui.UI, profile schemas.StorefrontProfile) {
 		u.Printf("  Contact email:  %s", email)
 	} else {
 		u.Printf("  Contact email:  (not set — x402scan may reject /openapi.json)")
+	}
+	theme := profile.Theme
+	if strings.TrimSpace(theme) == "" {
+		theme = storefront.DefaultTheme
+	}
+	if accent := strings.TrimSpace(profile.AccentColor); accent != "" {
+		theme += " (accent " + accent + ")"
+	}
+	u.Printf("  Theme:          %s", theme)
+	if v := strings.TrimSpace(profile.FaviconURL); v != "" {
+		u.Printf("  Favicon:        %s", storefront.DescribeLogoURL(v))
+	}
+	if v := strings.TrimSpace(profile.OGImageURL); v != "" {
+		u.Printf("  Preview image:  %s", storefront.DescribeLogoURL(v))
+	}
+	if v := strings.TrimSpace(profile.Description); v != "" {
+		u.Printf("  Description:    %s", v)
 	}
 }
 

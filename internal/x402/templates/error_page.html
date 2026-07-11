@@ -5,17 +5,12 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>{{.Status}} — {{.Title}}</title>
     <meta name="robots" content="noindex" />
-    <meta name="theme-color" content="#091011" />
+    <meta name="theme-color" content="{{.Branding.ThemeColor}}" />
+    <link rel="icon" href="{{.Branding.FaviconURL}}" />
     <style>
       :root {
-        /* Mirrors web/public-storefront/src/app/globals.css token names */
-        --bg01: #091011;
-        --bg02: #111f22;
-        --stroke: #1e3a3f;
-        --green: #2fe4ab;
-        --light: #d9eef3;
-        --body: #9cc2c9;
-        --muted: #475e64;
+        /* Theme tokens (preset + accent) — see internal/storefront/theme.go */
+        {{.Branding.ThemeCSS}}
         --font-mono: "JetBrains Mono", "IBM Plex Mono", "Fira Code", ui-monospace, monospace;
       }
       * { box-sizing: border-box; }

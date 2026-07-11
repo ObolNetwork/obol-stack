@@ -3,21 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Sign in with your wallet — Obol Stack</title>
+    <title>Sign in with your wallet — {{.Branding.SiteName}}</title>
     <meta name="description" content="Prove wallet ownership with a gasless EIP-4361 signature to access this page." />
-    <meta name="theme-color" content="#091011" />
+    <meta name="theme-color" content="{{.Branding.ThemeColor}}" />
+    <link rel="icon" href="{{.Branding.FaviconURL}}" />
     <style>
       :root {
-        /* Mirrors web/public-storefront/src/app/globals.css token names */
-        --bg01: #091011;
-        --bg02: #111f22;
-        --bg03: #182d32;
-        --stroke: #1e3a3f;
-        --green: #2fe4ab;
-        --light: #d9eef3;
-        --body: #9cc2c9;
-        --muted: #475e64;
-        --red: #ff7a7a;
+        /* Theme tokens (preset + accent) — see internal/storefront/theme.go */
+        {{.Branding.ThemeCSS}}
         --font-mono: "JetBrains Mono", "IBM Plex Mono", "Fira Code", ui-monospace, monospace;
       }
       * { box-sizing: border-box; }
@@ -125,7 +118,7 @@
             var message =
               host + " wants you to sign in with your Ethereum account:\n" +
               address + "\n\n" +
-              "Sign in to " + {{.OfferName}} + " on Obol Stack.\n\n" +
+              "Sign in to " + {{.OfferName}} + " on " + {{.Branding.SiteName}} + ".\n\n" +
               "URI: https://" + host + verifyUrl + "\n" +
               "Version: 1\n" +
               "Nonce: " + nonce() + "\n" +

@@ -7,6 +7,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/ObolNetwork/obol-stack/internal/storefront"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -529,23 +530,49 @@ func TestBuildAPIDocsHTTPRoute(t *testing.T) {
 	}
 }
 
-// TestScalarHTMLShell asserts the OG/theme contract: brand color, OG
+// TestScalarHTMLShell asserts the OG/theme contract: theme tokens, OG
 // metadata, and that the spec URL is pointed at the sibling /openapi.json.
 func TestScalarHTMLShell(t *testing.T) {
-	html := scalarHTML()
+	html := scalarHTML(storefront.ResolvePublished(nil, "https://seller.example.com"))
 
+	lightTheme := storefront.ResolveTheme(storefront.DefaultTheme, "")
 	for _, want := range []string{
 		`<script id="api-reference" data-url="/openapi.json">`,
-		`#2FE4AB`,
-		`#091011`,
+		lightTheme.Vars["green"],
+		lightTheme.Vars["bg01"],
 		`property="og:title"`,
 		`property="og:image"`,
 		`name="twitter:card"`,
 		`name="theme-color"`,
+		"Obol Stack — API reference",
 		"@scalar/api-reference@" + scalarBundleVersion,
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("scalar HTML missing %q", want)
+		}
+	}
+}
+
+// TestScalarHTMLShell_BrandedProfile asserts the operator profile drives
+// title, theme, favicon, and og image.
+func TestScalarHTMLShell_BrandedProfile(t *testing.T) {
+	html := scalarHTML(storefront.ResolvePublished(&schemas.StorefrontProfile{
+		DisplayName: "Acme Labs",
+		Theme:       storefront.ThemeDark,
+		AccentColor: "#a1b2c3",
+		FaviconURL:  "https://cdn.example.com/fav.png",
+		OGImageURL:  "https://cdn.example.com/og.png",
+	}, "https://seller.example.com"))
+
+	for _, want := range []string{
+		"Acme Labs — API reference",
+		`--scalar-color-accent: #a1b2c3;`,
+		`--scalar-background-1: #091011;`,
+		`<link rel="icon" href="https://cdn.example.com/fav.png" />`,
+		`content="https://cdn.example.com/og.png"`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("branded scalar HTML missing %q", want)
 		}
 	}
 }

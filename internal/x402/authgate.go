@@ -56,9 +56,10 @@ func writeErrorResponse(w http.ResponseWriter, r *http.Request, status int, titl
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	if err := errorPageTmpl.Execute(w, map[string]any{
-		"Status": status,
-		"Title":  title,
-		"Detail": detail,
+		"Status":   status,
+		"Title":    title,
+		"Detail":   detail,
+		"Branding": resolveBranding(resolveSiteURL(r)),
 	}); err != nil {
 		log.Printf("x402-verifier: render error page: %v", err)
 	}
@@ -361,6 +362,7 @@ func (v *Verifier) renderSIWXPage(w http.ResponseWriter, r *http.Request, rule *
 		"VerifyURL": publicPrefix(rule, host) + authVerifySuffix,
 		"Next":      sanitizeNextPath(next),
 		"Reason":    "",
+		"Branding":  resolveBranding(resolveSiteURL(r)),
 	}
 	if reason != nil {
 		data["Reason"] = reason.Error()
