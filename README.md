@@ -115,13 +115,38 @@ Your public hostname now serves a full discovery surface for buyers, humans and 
 | `/.well-known/agent-registration.json` | ERC-8004 agent registration document |
 | `/services/<name>/*` | The paid services themselves (402 challenge → pay → response) |
 
-Brand your storefront and optionally register your agent identity onchain:
+Brand your storefront — name, logo, theme, and copy apply to every buyer-facing
+surface (storefront, 402 paywall pages, sign-in, API docs, per-offer landing
+pages) — and optionally register your agent identity onchain:
 
 ```bash
-obol sell info set --display-name "Acme Labs" --tagline "Paid inference, no middlemen." --logo-url "https://..."
+obol sell info set \
+  --display-name "One Dollar Audit" \
+  --tagline "A serious security audit. One dollar." \
+  --logo-file ./logo.png \
+  --theme obol \
+  --description 'Every audit ships as a **signed report** — findings ranked by severity.'
 obol sell register --chain base    # publish ERC-8004 registration
 obol sell identity                 # inspect your onchain identity
 ```
+
+| Default storefront | Branded seller |
+|---|---|
+| ![Default light storefront](docs/images/storefront-light.png) | ![Branded storefront](docs/images/storefront-branded.png) |
+
+Three theme presets ship built in — `light` (default), `dark`, and `obol` — plus
+an `--accent '#hex'` override. Descriptions accept a safe markdown subset.
+Buyers hitting a paid route in a browser get a checkout-style 402 page in the
+same identity:
+
+| Default 402 page | Branded 402 page |
+|---|---|
+| ![Default 402 page](docs/images/402-light.png) | ![Branded 402 page](docs/images/402-branded.png) |
+
+Offers bound to their own hostname can override the identity per origin
+(`obol sell info set --hostname audit.acme.io --display-name AuditCo`), and
+`--css-file` injects a custom stylesheet targeting the stable `data-obol`
+hooks on every page for full control short of bringing your own frontend.
 
 For the full end-to-end walkthrough, see [docs/guides/monetize-inference.md](docs/guides/monetize-inference.md).
 

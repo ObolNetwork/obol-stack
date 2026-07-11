@@ -498,7 +498,7 @@ var statusPageTmpl = template.Must(template.New("job_status").Parse(`<!doctype h
         {{else}}
           <p>Still working — this page refreshes every 5 seconds.</p>
         {{end}}
-        <p class="fineprint">Record expires {{.Job.ExpiresAt.UTC.Format "2006-01-02 15:04 UTC"}} · Powered by Obol Stack</p>
+        <p class="fineprint">Record expires {{.Job.ExpiresAt.UTC.Format "2006-01-02 15:04 UTC"}} · Powered by Obol</p>
       {{else}}
         <div class="state failed">{{.Status}}</div>
         <h1>{{.Title}}</h1>

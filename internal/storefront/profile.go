@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"net/http"
 	"net/mail"
 	"os"
@@ -193,6 +194,29 @@ func InlineImageFromFile(path, what string) (string, error) {
 
 // InlineLogoFromFile is InlineImageFromFile for the logo field.
 func InlineLogoFromFile(path string) (string, error) { return InlineImageFromFile(path, "logo") }
+
+// SafeAssetURL marks a profile asset URL as safe for html/template URL
+// contexts. The template engine's URL sanitizer rejects data: URIs outright
+// (renders #ZgotmplZ), but inline data:image/...;base64 logos/favicons are a
+// supported profile form (`sell info set --logo-file`) — validated at set
+// time AND re-checked here before the bypass. Everything else must be plain
+// http(s); unexpected shapes collapse to "".
+func SafeAssetURL(raw string) template.URL {
+	raw = strings.TrimSpace(raw)
+	switch {
+	case raw == "":
+		return ""
+	case strings.HasPrefix(raw, "https://"), strings.HasPrefix(raw, "http://"):
+		return template.URL(raw)
+	case strings.HasPrefix(raw, "data:image/"):
+		if validateInlineImage(raw, "asset") != nil {
+			return ""
+		}
+		return template.URL(raw)
+	default:
+		return ""
+	}
+}
 
 // detectImageMIME sniffs an image content-type from file bytes, falling back
 // to the extension for SVG (which sniffs as XML/plain text).

@@ -28,8 +28,12 @@ func SetStorefrontProfile(p *schemas.StorefrontProfile) {
 type Branding struct {
 	// SiteName is the seller display name ("Obol Stack" by default).
 	SiteName string
-	// LogoURL is the header logo (absolute URL or data: URI).
-	LogoURL string
+	// LogoURL is the header logo (absolute URL or data: URI). Typed
+	// template.URL because operator logos may be inline
+	// data:image/...;base64 URIs — html/template's URL filter would
+	// otherwise reject them (#ZgotmplZ). Values are validated by
+	// safeAssetURL before being marked safe.
+	LogoURL template.URL
 	// ShowName is true when templates should render the display name as
 	// text beside the logo: always for operator-set logos (usually square
 	// marks), and for the default brand on the light theme (the default
@@ -37,10 +41,10 @@ type Branding struct {
 	// plus the name instead).
 	ShowName bool
 	// FaviconURL is the tab icon (absolute URL or data: URI).
-	FaviconURL string
+	FaviconURL template.URL
 	// OGImageURL is the link-preview image (absolute URL), already
 	// defaulted to the storefront's generated preview when unset.
-	OGImageURL string
+	OGImageURL template.URL
 	// ThemeCSS is the ordered "--bg01:#fff;--bg02:...;" declaration list
 	// for the :root block. Values come from hardcoded presets or a
 	// hex-validated accent, so the CSS-context interpolation is safe.
@@ -92,10 +96,10 @@ func resolveBranding(siteURL string, patch *schemas.StorefrontProfile) Branding 
 
 	return Branding{
 		SiteName:   profile.DisplayName,
-		LogoURL:    logo,
+		LogoURL:    safeAssetURL(logo),
 		ShowName:   showName,
-		FaviconURL: favicon,
-		OGImageURL: ogImage,
+		FaviconURL: safeAssetURL(favicon),
+		OGImageURL: safeAssetURL(ogImage),
 		ThemeCSS:   template.CSS(theme.CSSVars()),
 		ThemeColor: theme.ThemeColor(),
 		CustomCSS:  template.CSS(storefront.SafeCustomCSS(profile.CustomCSS)),
@@ -117,4 +121,11 @@ func absolutizeAssetURL(raw, siteURL string) string {
 	default:
 		return ""
 	}
+}
+
+// safeAssetURL marks a branding asset URL as template-safe (see
+// storefront.SafeAssetURL for the contract — data:image URIs are a
+// supported profile form that html/template's URL filter would reject).
+func safeAssetURL(raw string) template.URL {
+	return storefront.SafeAssetURL(raw)
 }

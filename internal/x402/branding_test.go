@@ -127,6 +127,32 @@ func TestPaymentRequiredHTML_Branded(t *testing.T) {
 	}
 }
 
+// TestPaymentRequiredHTML_InlineDataURILogo pins the template.URL bypass for
+// inline logos: `sell info set --logo-file` stores a data:image/...;base64
+// URI, which html/template's URL filter would otherwise reject (#ZgotmplZ →
+// broken image on every 402 page).
+func TestPaymentRequiredHTML_InlineDataURILogo(t *testing.T) {
+	logo := "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="
+	SetStorefrontProfile(&schemas.StorefrontProfile{DisplayName: "Acme", LogoURL: logo})
+	t.Cleanup(func() { SetStorefrontProfile(nil) })
+
+	send := NewHTMLAwarePaymentRequired(PaymentDisplay{Endpoint: "/services/x"})
+	r := httptest.NewRequest("GET", "https://seller.example.com/services/x", nil)
+	r.Header.Set("Accept", "text/html")
+	w := httptest.NewRecorder()
+	send(w, r, []x402types.PaymentRequirements{{
+		Scheme: "exact", PayTo: "0x1111111111111111111111111111111111111111", Amount: "1000",
+	}}, nil)
+
+	html := w.Body.String()
+	if strings.Contains(html, "ZgotmplZ") {
+		t.Fatal("data: logo URI was rejected by the template URL filter")
+	}
+	if !strings.Contains(html, `src="`+logo+`"`) {
+		t.Fatal("inline data: logo did not reach the page")
+	}
+}
+
 // TestPaymentRequiredHTML_PerOriginBranding asserts a hostname-bound offer's
 // spec.branding patch (threaded through RouteRule → PaymentDisplay) overrides
 // the storefront profile field-wise on the 402 page, with unset fields

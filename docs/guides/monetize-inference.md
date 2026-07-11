@@ -319,6 +319,31 @@ Prometheus scrapes it through a `ServiceMonitor` in `x402`. Key verifier metrics
 - `obol_x402_verifier_payment_failed_total`
 - `obol_x402_verifier_charged_requests_total`
 
+### 1.8 Brand Your Storefront
+
+Buyers who open your tunnel URL (or hit a paid route in a browser) see your
+storefront and checkout-style 402 pages. Brand them once and the identity
+applies everywhere — storefront, paywall pages, wallet sign-in, `/api` docs,
+per-offer landing pages:
+
+```bash
+obol sell info set \
+  --display-name "Acme Labs" \
+  --tagline "Paid inference, no middlemen." \
+  --logo-file ./logo.png \
+  --theme dark \
+  --description 'Frontier-quality open models, served from **our GPUs**.'
+```
+
+| Default (light theme) | Branded |
+|---|---|
+| ![Default 402 page](../images/402-light.png) | ![Branded 402 page](../images/402-branded.png) |
+
+Themes: `light` (default), `dark`, `obol`, plus `--accent '#hex'`. Descriptions
+accept a safe markdown subset. `--css-file` injects a custom stylesheet against
+the stable `data-obol` attributes, and offers bound to their own hostname can
+override the identity per origin (`obol sell info set --hostname <host> ...`).
+
 ---
 
 ## Part 2: Buyer -- Consume the Service
