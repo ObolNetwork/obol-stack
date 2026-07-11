@@ -114,6 +114,12 @@ spec:
                     description: Longer seller copy for this origin (markdown subset
                       — rendered through the storefront richtext sanitizer).
                     type: string
+                  customCss:
+                    description: Operator CSS for this origin, injected after the
+                      theme tokens. Size-capped + breakout-checked at set time and
+                      again at render.
+                    maxLength: 65536
+                    type: string
                 type: object
               async:
                 description: |-

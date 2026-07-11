@@ -156,6 +156,12 @@ type StorefrontProfile struct {
 	// Description is longer-form seller copy (markdown subset). Publishing
 	// surfaces render it as plain text until the richtext pipeline lands.
 	Description string `json:"description,omitempty"`
+	// CustomCSS is operator-authored CSS injected after the theme tokens
+	// on every seller HTML surface (the styling escape hatch on top of
+	// the stable data-obol/class hooks). Size-capped and validated
+	// against style-element breakout at set time; renderers re-check
+	// before injection.
+	CustomCSS string `json:"customCss,omitempty"`
 }
 
 // ServiceCatalogSchemaVersion is the current version of the
@@ -189,4 +195,6 @@ type ServiceCatalog struct {
 	// DescriptionHTML is the sanitized HTML rendering of Description —
 	// same contract as ServiceCatalogEntry.DescriptionHTML.
 	DescriptionHTML string `json:"descriptionHtml,omitempty"`
+	// CustomCSS mirrors StorefrontProfile.CustomCSS for the storefront UI.
+	CustomCSS string `json:"customCss,omitempty"`
 }

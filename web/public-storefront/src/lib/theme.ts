@@ -73,3 +73,20 @@ export function themeStyle(
 export function isDarkTheme(name?: string): boolean {
   return name === "dark" || name === "obol";
 }
+
+/**
+ * Render-time guard for operator custom CSS, mirroring the Go-side
+ * storefront.ValidateCustomCSS contract: the stylesheet is inlined inside a
+ * <style> element, so it must not be able to close that element (or smuggle
+ * markup) — and it stays a stylesheet, not an asset pipeline (64 KiB cap).
+ * Returns "" when unsafe.
+ */
+export function safeCustomCss(css?: string): string {
+  if (!css) return "";
+  if (css.length > 64 * 1024) return "";
+  const lower = css.toLowerCase();
+  for (const forbidden of ["</style", "<script", "<!--"]) {
+    if (lower.includes(forbidden)) return "";
+  }
+  return css;
+}

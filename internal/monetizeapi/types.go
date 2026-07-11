@@ -236,6 +236,10 @@ type ServiceOfferBranding struct {
 	// Longer seller copy for this origin (markdown subset — rendered
 	// through the storefront richtext sanitizer).
 	Description string `json:"description,omitempty"`
+	// Operator CSS for this origin, injected after the theme tokens.
+	// Size-capped + breakout-checked at set time and again at render.
+	// +kubebuilder:validation:MaxLength=65536
+	CustomCSS string `json:"customCss,omitempty"`
 }
 
 // ProfilePatch converts the branding block into a StorefrontProfile patch
@@ -253,6 +257,7 @@ func (b *ServiceOfferBranding) ProfilePatch() schemas.StorefrontProfile {
 		FaviconURL:  b.FaviconURL,
 		OGImageURL:  b.OGImageURL,
 		Description: b.Description,
+		CustomCSS:   b.CustomCSS,
 	}
 }
 

@@ -61,9 +61,10 @@
       .fineprint { color: var(--muted); font-size: 13px; margin-top: 24px; }
       code { font-family: var(--font-mono); color: var(--light); font-size: 0.9em; }
     </style>
+    {{if .Branding.CustomCSS}}<style data-obol="custom-css">{{.Branding.CustomCSS}}</style>{{end}}
   </head>
   <body>
-    <div class="wrap">
+    <div class="wrap" data-obol="page-signin">
       <span class="pill">wallet sign-in</span>
       <h1>Sign in to {{.OfferName}}</h1>
       <p>

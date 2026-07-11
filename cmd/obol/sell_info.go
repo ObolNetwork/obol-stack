@@ -140,6 +140,7 @@ storefront identity on that origin only — fields you don't set inherit:
 			&cli.StringFlag{Name: "og-image-url", Usage: "Link-preview (og:image) URL; empty uses the storefront's generated preview"},
 			&cli.StringFlag{Name: "og-image-file", Usage: "Local image file to inline as the link-preview image (≤256 KiB)"},
 			&cli.StringFlag{Name: "description", Usage: "Longer seller description shown on the storefront (markdown subset)"},
+			&cli.StringFlag{Name: "css-file", Usage: "Local stylesheet injected after the theme on every seller page (≤64 KiB; target the stable data-obol/class hooks)"},
 			&cli.StringFlag{Name: "hostname", Usage: "Scope the change to the offer bound to this dedicated hostname (per-origin branding override; unset fields inherit from the storefront)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -159,7 +160,7 @@ storefront identity on that origin only — fields you don't set inherit:
 
 			patch := schemas.StorefrontProfile{}
 			setFlags := []string{"display-name", "tagline", "logo-url", "logo-file", "contact-email",
-				"theme", "accent", "favicon-url", "favicon-file", "og-image-url", "og-image-file", "description"}
+				"theme", "accent", "favicon-url", "favicon-file", "og-image-url", "og-image-file", "description", "css-file"}
 			anyFlag := false
 			for _, f := range setFlags {
 				if cmd.IsSet(f) {
@@ -225,6 +226,13 @@ storefront identity on that origin only — fields you don't set inherit:
 				}
 				if cmd.IsSet("description") {
 					patch.Description = strings.TrimSpace(cmd.String("description"))
+				}
+				if cmd.IsSet("css-file") {
+					css, err := storefront.CustomCSSFromFile(strings.TrimSpace(cmd.String("css-file")))
+					if err != nil {
+						return err
+					}
+					patch.CustomCSS = css
 				}
 			} else {
 				// No flags: prompt interactively (pre-filled with effective values).
@@ -320,6 +328,7 @@ more field flags to reset only those fields, leaving the rest untouched.`,
 			&cli.BoolFlag{Name: "favicon-url", Usage: "Reset only the favicon"},
 			&cli.BoolFlag{Name: "og-image-url", Usage: "Reset only the link-preview image"},
 			&cli.BoolFlag{Name: "description", Usage: "Reset only the description"},
+			&cli.BoolFlag{Name: "css", Usage: "Reset only the custom CSS"},
 			&cli.StringFlag{Name: "hostname", Usage: "Scope the reset to the offer bound to this dedicated hostname (clears per-origin overrides back to the storefront identity)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -334,7 +343,7 @@ more field flags to reset only those fields, leaving the rest untouched.`,
 
 			clear := map[string]bool{}
 			for _, f := range []string{"display-name", "tagline", "logo-url", "contact-email",
-				"theme", "accent", "favicon-url", "og-image-url", "description"} {
+				"theme", "accent", "favicon-url", "og-image-url", "description", "css"} {
 				if cmd.Bool(f) {
 					clear[f] = true
 				}
@@ -409,6 +418,13 @@ func brandingPatchFromFlags(cmd *cli.Command) (map[string]any, error) {
 	setStr("favicon-url", "faviconUrl")
 	setStr("og-image-url", "ogImageUrl")
 	setStr("description", "description")
+	if cmd.IsSet("css-file") {
+		css, err := storefront.CustomCSSFromFile(strings.TrimSpace(cmd.String("css-file")))
+		if err != nil {
+			return nil, err
+		}
+		patch["customCss"] = css
+	}
 	inline := func(flag, key, what string) error {
 		if !cmd.IsSet(flag) {
 			return nil
@@ -532,6 +548,7 @@ func resetOfferBranding(cfg *config.Config, u *ui.UI, cmd *cli.Command, host str
 		"favicon-url":  "faviconUrl",
 		"og-image-url": "ogImageUrl",
 		"description":  "description",
+		"css":          "customCss",
 	}
 	fields := map[string]any{}
 	for flag, key := range fieldByFlag {
@@ -650,6 +667,9 @@ func clearProfileFields(p schemas.StorefrontProfile, clear map[string]bool) sche
 	}
 	if clear["description"] {
 		p.Description = ""
+	}
+	if clear["css"] {
+		p.CustomCSS = ""
 	}
 	return p
 }
@@ -917,6 +937,9 @@ func printSellerProfile(u *ui.UI, profile schemas.StorefrontProfile) {
 	}
 	if v := strings.TrimSpace(profile.Description); v != "" {
 		u.Printf("  Description:    %s", v)
+	}
+	if v := profile.CustomCSS; v != "" {
+		u.Printf("  Custom CSS:     %d KiB", (len(v)+1023)>>10)
 	}
 }
 

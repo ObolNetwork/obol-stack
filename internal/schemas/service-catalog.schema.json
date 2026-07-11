@@ -68,6 +68,11 @@
       "type": "string",
       "minLength": 1,
       "description": "Sanitized HTML rendering of the storefront description."
+    },
+    "customCss": {
+      "type": "string",
+      "maxLength": 65536,
+      "description": "Operator CSS injected after theme tokens on seller HTML surfaces (escape hatch over the stable data-obol hooks)."
     }
   },
   "$defs": {

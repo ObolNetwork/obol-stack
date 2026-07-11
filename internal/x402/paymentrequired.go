@@ -271,6 +271,7 @@ func sendPaymentRequiredHTML(w http.ResponseWriter, r *http.Request, requirement
 		PayToDisplay        string
 		PayToFull           string
 		ExplorerURL         string
+		OfferName           string
 		OfferDescription    template.HTML
 		Skills              []string
 		Lede                template.HTML
@@ -296,6 +297,7 @@ func sendPaymentRequiredHTML(w http.ResponseWriter, r *http.Request, requirement
 		PayToDisplay:        payToDisplay,
 		PayToFull:           payToFull,
 		ExplorerURL:         display.ExplorerURL,
+		OfferName:           display.OfferName,
 		OfferDescription:    storefront.RenderRichText(display.OfferDescription),
 		Skills:              display.AgentSkills,
 		Lede:                typeCopy.Lede,

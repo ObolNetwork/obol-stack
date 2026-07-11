@@ -7,8 +7,11 @@ export function Header({ storefront }: { storefront: StorefrontProfile }) {
   const isDefaultLogo = isDefaultStorefrontLogo(storefront.logoUrl);
   const dark = isDarkTheme(storefront.theme);
   return (
-    <header className="border-b border-stroke bg-bg01">
-      <div className="max-w-3xl mx-auto px-4 py-4 flex items-center gap-3">
+    <header className="border-b border-stroke bg-bg01" data-obol="header">
+      <div
+        className="max-w-3xl mx-auto px-4 py-4 flex items-center gap-3"
+        data-obol="brand"
+      >
         {isDefaultLogo && dark ? (
           <Image
             src="/obol-stack-logo.png"

@@ -6,7 +6,7 @@ import {
   fetchStorefront,
   isDefaultStorefrontLogo,
 } from "@/lib/catalog";
-import { isDarkTheme, themeStyle, themeToken } from "@/lib/theme";
+import { isDarkTheme, safeCustomCss, themeStyle, themeToken } from "@/lib/theme";
 import { resolveSiteUrl } from "@/lib/site-url";
 import "./globals.css";
 
@@ -168,6 +168,7 @@ export default async function RootLayout({
     fetchStorefront(),
     resolveSiteUrl(),
   ]);
+  const customCss = safeCustomCss(storefront.customCss);
   return (
     <html
       lang="en"
@@ -178,6 +179,16 @@ export default async function RootLayout({
       }}
     >
       <body className="font-sans antialiased min-h-screen">
+        {/* Operator stylesheet (sell info set --css-file). Guarded by
+            safeCustomCss — the single Go-side validator is the primary
+            gate; this re-check keeps a hostile catalog from breaking out
+            of the style element. */}
+        {customCss ? (
+          <style
+            data-obol="custom-css"
+            dangerouslySetInnerHTML={{ __html: customCss }}
+          />
+        ) : null}
         {children}
         <JsonLd
           services={services}

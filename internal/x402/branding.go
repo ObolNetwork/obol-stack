@@ -47,6 +47,10 @@ type Branding struct {
 	ThemeCSS template.CSS
 	// ThemeColor feeds <meta name="theme-color">.
 	ThemeColor string
+	// CustomCSS is the operator stylesheet, injected in its own <style>
+	// element after the theme. Already re-validated by SafeCustomCSS
+	// (size cap + style-element breakout) — empty when absent or unsafe.
+	CustomCSS template.CSS
 }
 
 // resolveBranding merges the current operator profile over defaults,
@@ -94,6 +98,7 @@ func resolveBranding(siteURL string, patch *schemas.StorefrontProfile) Branding 
 		OGImageURL: ogImage,
 		ThemeCSS:   template.CSS(theme.CSSVars()),
 		ThemeColor: theme.ThemeColor(),
+		CustomCSS:  template.CSS(storefront.SafeCustomCSS(profile.CustomCSS)),
 	}
 }
 

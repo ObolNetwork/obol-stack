@@ -35,9 +35,10 @@
       a { color: var(--green); }
       .fineprint { color: var(--muted); font-size: 13px; margin-top: 32px; }
     </style>
+    {{if .Branding.CustomCSS}}<style data-obol="custom-css">{{.Branding.CustomCSS}}</style>{{end}}
   </head>
   <body>
-    <div class="wrap">
+    <div class="wrap" data-obol="page-error">
       <div class="code">{{.Status}}</div>
       <h1>{{.Title}}</h1>
       <p>{{.Detail}}</p>
