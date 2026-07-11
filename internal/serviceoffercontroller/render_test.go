@@ -792,9 +792,46 @@ func TestBuildServiceCatalogJSON(t *testing.T) {
 	if svc.Description != "Proof-of-payment echo service" {
 		t.Errorf("description = %q, want 'Proof-of-payment echo service'", svc.Description)
 	}
+	if svc.DescriptionHTML != "<p>Proof-of-payment echo service</p>" {
+		t.Errorf("descriptionHtml = %q, want sanitized paragraph", svc.DescriptionHTML)
+	}
 	// Single-payment offers still expose payments[] (one entry mirroring flat).
 	if len(svc.Payments) != 1 || svc.Payments[0].Network != "base" {
 		t.Errorf("single-payment offer payments = %+v, want one base entry", svc.Payments)
+	}
+}
+
+// TestBuildServiceCatalogJSON_MarkdownDescription pins the richtext contract
+// on the published feed: markdown renders to sanitized HTML, hostile input
+// never survives in executable form.
+func TestBuildServiceCatalogJSON_MarkdownDescription(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "md", Namespace: "demo"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type:    "http",
+			Payment: monetizeapi.ServiceOfferPayment{Network: "base", PayTo: "0x1111111111111111111111111111111111111111", Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "1"}},
+			Registration: monetizeapi.ServiceOfferRegistration{
+				Description: "We sell **audits**.\n\n<script>alert(1)</script>",
+			},
+		},
+		Status: monetizeapi.ServiceOfferStatus{Conditions: []monetizeapi.Condition{{Type: "Ready", Status: "True"}}},
+	}
+
+	profile := &schemas.StorefrontProfile{Description: "# About us\n\nFast *and* cheap."}
+	jsonStr := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{offer}, "https://example.com", profile)
+	assertServiceCatalogSchema(t, jsonStr)
+	catalog := decodeServiceCatalog(t, jsonStr)
+
+	svc := catalog.Services[0]
+	if !strings.Contains(svc.DescriptionHTML, "<strong>audits</strong>") {
+		t.Errorf("descriptionHtml missing markdown rendering: %q", svc.DescriptionHTML)
+	}
+	if strings.Contains(svc.DescriptionHTML, "<script") {
+		t.Fatalf("script survived sanitization: %q", svc.DescriptionHTML)
+	}
+	if !strings.Contains(catalog.DescriptionHTML, "<h3>About us</h3>") ||
+		!strings.Contains(catalog.DescriptionHTML, "<em>and</em>") {
+		t.Errorf("envelope descriptionHtml = %q, want demoted heading + emphasis", catalog.DescriptionHTML)
 	}
 }
 

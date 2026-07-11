@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { Service, ServicePayment } from "@/types";
+import { RichText } from "@/components/RichText";
 
 // paymentOptions returns the service's accepted payment options, falling back
 // to the flat fields for catalogs predating multi-currency.
@@ -160,7 +161,11 @@ export function ServiceCard({ service }: { service: Service }) {
               </span>
             )}
           </div>
-          <p className="text-sm text-text-body mb-3">{service.description}</p>
+          <RichText
+            html={service.descriptionHtml}
+            fallback={service.description}
+            className="text-sm text-text-body mb-3"
+          />
           {service.skills && service.skills.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-3" aria-label="Agent skills">
               {service.skills.map((s) => (

@@ -126,3 +126,33 @@ func TestPaymentRequiredHTML_Branded(t *testing.T) {
 		}
 	}
 }
+
+// TestPaymentRequiredHTML_MarkdownDescription asserts the offer description
+// renders as sanitized rich HTML (single richtext path), not escaped text.
+func TestPaymentRequiredHTML_MarkdownDescription(t *testing.T) {
+	send := NewHTMLAwarePaymentRequired(PaymentDisplay{
+		Endpoint:         "/services/acme-audit",
+		OfferDescription: "We sell **audits**.\n\n- fast\n- [docs](https://docs.acme.io)\n\n<script>alert(1)</script>",
+	})
+
+	r := httptest.NewRequest("GET", "https://seller.example.com/services/acme-audit", nil)
+	r.Header.Set("Accept", "text/html")
+	w := httptest.NewRecorder()
+	send(w, r, []x402types.PaymentRequirements{{
+		Scheme: "exact", PayTo: "0x1111111111111111111111111111111111111111", Amount: "1000",
+	}}, nil)
+
+	html := w.Body.String()
+	for _, want := range []string{
+		"<strong>audits</strong>",
+		"<li>fast</li>",
+		`href="https://docs.acme.io"`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("402 HTML missing rich description fragment %q", want)
+		}
+	}
+	if strings.Contains(html, "<script>alert(1)</script>") {
+		t.Fatal("raw script from offer description survived into 402 HTML")
+	}
+}

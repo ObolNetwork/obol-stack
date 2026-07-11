@@ -1,5 +1,6 @@
 import { DEFAULT_HERO_TITLE, fetchCatalogDocument } from "@/lib/catalog";
 import { Header } from "@/components/Header";
+import { RichText } from "@/components/RichText";
 import { ServicesList } from "@/components/ServicesList";
 import { PaymentFlow } from "@/components/PaymentFlow";
 export const dynamic = "force-dynamic";
@@ -18,9 +19,11 @@ export default async function Home() {
           </h1>
           <p className="text-text-body">{catalog.tagline}</p>
           {catalog.description ? (
-            <p className="text-text-muted text-sm mt-3 whitespace-pre-line">
-              {catalog.description}
-            </p>
+            <RichText
+              html={catalog.descriptionHtml}
+              fallback={catalog.description}
+              className="text-text-body text-sm mt-3"
+            />
           ) : null}
         </section>
 

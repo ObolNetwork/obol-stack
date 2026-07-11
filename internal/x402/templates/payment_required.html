@@ -54,6 +54,16 @@
       }
       h1 { font-size: 44px; font-weight: 700; letter-spacing: -1px; line-height: 1.1; margin: 0 0 12px; }
       .lede { color: var(--body); font-size: 18px; margin: 0 0 40px; }
+      /* Operator markdown (sanitized by internal/storefront/richtext.go) */
+      .richtext { color: var(--body); font-size: 16px; }
+      .richtext p { margin: 0 0 10px; }
+      .richtext p:last-child { margin-bottom: 0; }
+      .richtext ul, .richtext ol { margin: 0 0 10px; padding-left: 22px; }
+      .richtext li { margin-bottom: 4px; }
+      .richtext h3, .richtext h4 { color: var(--light); margin: 14px 0 6px; font-size: 16px; }
+      .richtext code { font-family: var(--font-mono); font-size: 0.9em; color: var(--light); }
+      .richtext pre { background: var(--bg01); border: 1px solid var(--stroke); border-radius: 8px; padding: 12px; overflow-x: auto; }
+      .richtext a { color: var(--green); }
       .card {
         background: var(--bg02);
         border: 1px solid var(--stroke);
@@ -168,7 +178,7 @@
 
       <div class="card">
         <h2>Service</h2>
-        {{if .OfferDescription}}<p class="lede" style="margin-bottom:14px">{{.OfferDescription}}</p>{{end}}
+        {{if .OfferDescription}}<div class="richtext" style="margin-bottom:14px">{{.OfferDescription}}</div>{{end}}
         {{if .Skills}}<div class="skill-pills" aria-label="Agent skills">{{range .Skills}}<span class="skill-pill">{{.}}</span>{{end}}</div>{{end}}
         <dl class="grid">
           <dt>Endpoint</dt><dd>{{.Endpoint}}</dd>
