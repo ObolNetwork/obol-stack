@@ -49,12 +49,17 @@ type Branding struct {
 	ThemeColor string
 }
 
-// resolveBranding merges the current operator profile over defaults and
-// absolutizes relative asset paths against siteURL (the public origin of the
-// request being served, e.g. "https://seller.example.com").
-func resolveBranding(siteURL string) Branding {
+// resolveBranding merges the current operator profile over defaults,
+// overlays the optional per-origin patch (a hostname-bound offer's
+// spec.branding — nil for storefront-wide rendering), and absolutizes
+// relative asset paths against siteURL (the public origin of the request
+// being served, e.g. "https://seller.example.com").
+func resolveBranding(siteURL string, patch *schemas.StorefrontProfile) Branding {
 	siteURL = strings.TrimRight(siteURL, "/")
 	profile := storefront.ResolvePublished(currentStorefrontProfile.Load(), siteURL)
+	if patch != nil {
+		profile = storefront.MergeProfile(profile, *patch)
+	}
 	theme := storefront.ResolveTheme(profile.Theme, profile.AccentColor)
 
 	logo := absolutizeAssetURL(profile.LogoURL, siteURL)

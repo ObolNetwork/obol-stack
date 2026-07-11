@@ -7,6 +7,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/ObolNetwork/obol-stack/internal/storefront"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -174,6 +175,54 @@ func TestBuildOfferBundles(t *testing.T) {
 		if !strings.Contains(landing, want) {
 			t.Errorf("landing missing %q", want)
 		}
+	}
+}
+
+// TestBuildOfferBundles_BrandingOverride pins the per-origin identity merge:
+// spec.branding fields override the storefront profile on the dedicated
+// origin's surfaces, empty fields inherit.
+func TestBuildOfferBundles_BrandingOverride(t *testing.T) {
+	profile := storefront.ResolvePublished(&schemas.StorefrontProfile{
+		DisplayName:  "Acme",
+		ContactEmail: "ops@acme.example",
+	}, "https://main.example")
+	offer := hostnameOffer()
+	offer.Spec.Branding = &monetizeapi.ServiceOfferBranding{
+		DisplayName: "AuditCo",
+		Theme:       "obol",
+		AccentColor: "#a1b2c3",
+		LogoURL:     "https://cdn.example.com/auditco.png",
+		Description: "**Deep** audits by AuditCo.",
+	}
+
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile)
+	byPath := map[string]string{}
+	for _, f := range bundles {
+		byPath[f.Path] = f.Content
+	}
+
+	landing := byPath["offers/sec/audit/index.html"]
+	for _, want := range []string{
+		"Sold by AuditCo",                          // displayName override
+		"--bg01:#05201a;",                          // obol preset background
+		"--green:#a1b2c3;",                         // accent override
+		`src="https://cdn.example.com/auditco.png`, // logo override
+		"About AuditCo",                            // origin description section
+		"<strong>Deep</strong>",                    // markdown through richtext
+	} {
+		if !strings.Contains(landing, want) {
+			t.Errorf("branded landing missing %q", want)
+		}
+	}
+
+	// Contact email is not a branding field — it inherits from the profile.
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(byPath["offers/sec/audit/openapi.json"]), &doc); err != nil {
+		t.Fatalf("openapi bundle: %v", err)
+	}
+	contact := doc["info"].(map[string]any)["contact"].(map[string]any)
+	if contact["email"] != "ops@acme.example" || contact["name"] != "AuditCo" {
+		t.Errorf("contact = %v, want inherited email + overridden name", contact)
 	}
 }
 

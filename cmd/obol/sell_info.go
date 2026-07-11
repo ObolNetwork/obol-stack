@@ -119,7 +119,14 @@ sign-in, error pages, /api docs, per-offer landing pages):
   obol sell info set --accent '#7c5cff'           accent override on any preset
   obol sell info set --favicon-file ./fav.png     tab icon (falls back to logo)
   obol sell info set --og-image-file ./og.png     link-preview image
-  obol sell info set --description 'What you sell and why it is good.'`,
+  obol sell info set --description 'What you sell and why it is good.'
+
+Per-origin branding: an offer bound to its own hostname (sell http --hostname,
+or obol tunnel hostname add <host> --offer <ns>/<name>) can override the
+storefront identity on that origin only — fields you don't set inherit:
+
+  obol sell info set --hostname audit.acme.io --display-name AuditCo --theme obol
+  obol sell info reset --hostname audit.acme.io            clear all overrides`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "display-name", Usage: "Seller title shown in the storefront header"},
 			&cli.StringFlag{Name: "tagline", Usage: "Short subtitle under the storefront hero"},
@@ -133,11 +140,16 @@ sign-in, error pages, /api docs, per-offer landing pages):
 			&cli.StringFlag{Name: "og-image-url", Usage: "Link-preview (og:image) URL; empty uses the storefront's generated preview"},
 			&cli.StringFlag{Name: "og-image-file", Usage: "Local image file to inline as the link-preview image (≤256 KiB)"},
 			&cli.StringFlag{Name: "description", Usage: "Longer seller description shown on the storefront (markdown subset)"},
+			&cli.StringFlag{Name: "hostname", Usage: "Scope the change to the offer bound to this dedicated hostname (per-origin branding override; unset fields inherit from the storefront)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			if err := kubectl.EnsureCluster(cfg); err != nil {
 				return err
+			}
+
+			if host := strings.TrimSpace(cmd.String("hostname")); host != "" {
+				return setOfferBranding(cfg, u, cmd, host)
 			}
 
 			current, err := loadSellerProfile(cfg)
@@ -308,11 +320,16 @@ more field flags to reset only those fields, leaving the rest untouched.`,
 			&cli.BoolFlag{Name: "favicon-url", Usage: "Reset only the favicon"},
 			&cli.BoolFlag{Name: "og-image-url", Usage: "Reset only the link-preview image"},
 			&cli.BoolFlag{Name: "description", Usage: "Reset only the description"},
+			&cli.StringFlag{Name: "hostname", Usage: "Scope the reset to the offer bound to this dedicated hostname (clears per-origin overrides back to the storefront identity)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			if err := kubectl.EnsureCluster(cfg); err != nil {
 				return err
+			}
+
+			if host := strings.TrimSpace(cmd.String("hostname")); host != "" {
+				return resetOfferBranding(cfg, u, cmd, host)
 			}
 
 			clear := map[string]bool{}
@@ -358,6 +375,186 @@ more field flags to reset only those fields, leaving the rest untouched.`,
 			return nil
 		},
 	}
+}
+
+// brandingPatchFromFlags reads the identity flags shared with the storefront
+// profile into a ServiceOffer spec.branding merge-patch map. Only fields the
+// operator passed appear (patch-only semantics); file flags are inlined as
+// data: URIs. Returns an error for flags that are not per-origin concepts.
+func brandingPatchFromFlags(cmd *cli.Command) (map[string]any, error) {
+	if cmd.IsSet("contact-email") {
+		return nil, errors.New("--contact-email is storefront-wide (it feeds /openapi.json for the whole seller) — set it without --hostname")
+	}
+	if cmd.IsSet("logo-url") && cmd.IsSet("logo-file") {
+		return nil, errors.New("--logo-url and --logo-file are mutually exclusive")
+	}
+	if cmd.IsSet("favicon-url") && cmd.IsSet("favicon-file") {
+		return nil, errors.New("--favicon-url and --favicon-file are mutually exclusive")
+	}
+	if cmd.IsSet("og-image-url") && cmd.IsSet("og-image-file") {
+		return nil, errors.New("--og-image-url and --og-image-file are mutually exclusive")
+	}
+
+	patch := map[string]any{}
+	setStr := func(flag, key string) {
+		if cmd.IsSet(flag) {
+			patch[key] = strings.TrimSpace(cmd.String(flag))
+		}
+	}
+	setStr("display-name", "displayName")
+	setStr("tagline", "tagline")
+	setStr("logo-url", "logoUrl")
+	setStr("theme", "theme")
+	setStr("accent", "accentColor")
+	setStr("favicon-url", "faviconUrl")
+	setStr("og-image-url", "ogImageUrl")
+	setStr("description", "description")
+	inline := func(flag, key, what string) error {
+		if !cmd.IsSet(flag) {
+			return nil
+		}
+		uri, err := storefront.InlineImageFromFile(strings.TrimSpace(cmd.String(flag)), what)
+		if err != nil {
+			return err
+		}
+		patch[key] = uri
+		return nil
+	}
+	if err := inline("logo-file", "logoUrl", "logo"); err != nil {
+		return nil, err
+	}
+	if err := inline("favicon-file", "faviconUrl", "favicon"); err != nil {
+		return nil, err
+	}
+	if err := inline("og-image-file", "ogImageUrl", "OG image"); err != nil {
+		return nil, err
+	}
+	if len(patch) == 0 {
+		return nil, errors.New("nothing to set: pass identity flags (e.g. --display-name, --theme, --logo-file) alongside --hostname")
+	}
+
+	validate := func(key string, fn func(string) error) error {
+		if v, ok := patch[key].(string); ok {
+			return fn(v)
+		}
+		return nil
+	}
+	if err := validate("logoUrl", storefront.ValidateLogoURL); err != nil {
+		return nil, err
+	}
+	if err := validate("theme", storefront.ValidateThemeName); err != nil {
+		return nil, err
+	}
+	if err := validate("accentColor", storefront.ValidateAccentColor); err != nil {
+		return nil, err
+	}
+	if err := validate("faviconUrl", func(v string) error { return storefront.ValidateImageURL(v, "favicon") }); err != nil {
+		return nil, err
+	}
+	if err := validate("ogImageUrl", func(v string) error { return storefront.ValidateImageURL(v, "OG image") }); err != nil {
+		return nil, err
+	}
+	return patch, nil
+}
+
+// findOfferByHostname resolves the ServiceOffer bound to a dedicated public
+// hostname (spec.hostname is one-offer-per-origin).
+func findOfferByHostname(cfg *config.Config, host string) (ns, name string, err error) {
+	raw, err := kubectlOutput(cfg, "get", "serviceoffers.obol.org", "-A", "-o", "json")
+	if err != nil {
+		return "", "", fmt.Errorf("list service offers: %w", err)
+	}
+	var list struct {
+		Items []struct {
+			Metadata struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+			} `json:"metadata"`
+			Spec struct {
+				Hostname string `json:"hostname"`
+			} `json:"spec"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(raw), &list); err != nil {
+		return "", "", fmt.Errorf("parse service offers: %w", err)
+	}
+	host = strings.ToLower(strings.TrimSpace(host))
+	for _, item := range list.Items {
+		if strings.EqualFold(strings.TrimSpace(item.Spec.Hostname), host) {
+			return item.Metadata.Namespace, item.Metadata.Name, nil
+		}
+	}
+	return "", "", fmt.Errorf("no offer is bound to hostname %q — bind one first with 'obol sell http --hostname %s ...' or 'obol tunnel hostname add %s --offer <ns>/<name>'", host, host, host)
+}
+
+// setOfferBranding patches spec.branding on the hostname-bound offer.
+// Field-wise: only the flags passed change; the controller + verifier merge
+// the block over the storefront profile at render time.
+func setOfferBranding(cfg *config.Config, u *ui.UI, cmd *cli.Command, host string) error {
+	patch, err := brandingPatchFromFlags(cmd)
+	if err != nil {
+		return err
+	}
+	ns, name, err := findOfferByHostname(cfg, host)
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]any{"spec": map[string]any{"branding": patch}})
+	if err != nil {
+		return err
+	}
+	if err := kubectlRun(cfg, "patch", "serviceoffers.obol.org", name, "-n", ns,
+		"--type=merge", "-p", string(payload)); err != nil {
+		return fmt.Errorf("patch offer branding: %w", err)
+	}
+	u.Successf("Branding for https://%s updated (offer %s/%s)", host, ns, name)
+	u.Dim("Applies to that origin's landing page, 402 paywall, and sign-in pages; unset fields inherit the storefront identity.")
+	u.Dim("Preview: curl -H 'Accept: text/html' https://" + host + "/")
+	return nil
+}
+
+// resetOfferBranding clears per-origin overrides: field flags null out just
+// those keys, no flags removes the whole spec.branding block.
+func resetOfferBranding(cfg *config.Config, u *ui.UI, cmd *cli.Command, host string) error {
+	if cmd.Bool("contact-email") {
+		return errors.New("--contact-email is storefront-wide — reset it without --hostname")
+	}
+	ns, name, err := findOfferByHostname(cfg, host)
+	if err != nil {
+		return err
+	}
+	fieldByFlag := map[string]string{
+		"display-name": "displayName",
+		"tagline":      "tagline",
+		"logo-url":     "logoUrl",
+		"theme":        "theme",
+		"accent":       "accentColor",
+		"favicon-url":  "faviconUrl",
+		"og-image-url": "ogImageUrl",
+		"description":  "description",
+	}
+	fields := map[string]any{}
+	for flag, key := range fieldByFlag {
+		if cmd.Bool(flag) {
+			fields[key] = nil // merge-patch null deletes the key
+		}
+	}
+	var branding any
+	if len(fields) > 0 {
+		branding = fields
+	} else {
+		branding = nil // clear the whole block
+	}
+	payload, err := json.Marshal(map[string]any{"spec": map[string]any{"branding": branding}})
+	if err != nil {
+		return err
+	}
+	if err := kubectlRun(cfg, "patch", "serviceoffers.obol.org", name, "-n", ns,
+		"--type=merge", "-p", string(payload)); err != nil {
+		return fmt.Errorf("reset offer branding: %w", err)
+	}
+	u.Successf("Branding for https://%s reset (offer %s/%s) — the origin follows the storefront identity again", host, ns, name)
+	return nil
 }
 
 // resolveLogoInput turns an interactive "Logo URL" answer into a profile

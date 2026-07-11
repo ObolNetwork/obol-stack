@@ -48,11 +48,15 @@ func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.Store
 		if offer == nil || offer.Spec.Hostname == "" {
 			continue
 		}
+		// The dedicated origin carries its own identity: the offer's
+		// branding block overrides the storefront profile field-wise
+		// (empty fields inherit).
+		originProfile := storefront.MergeProfile(profile, offer.Spec.Branding.ProfilePatch())
 		bundles = append(bundles,
 			offerBundleFile{
 				Key:     offerBundleKey(offer, "openapi.json"),
 				Path:    offerBundleDir(offer) + "/openapi.json",
-				Content: buildOfferScopedOpenAPI(offer, profile),
+				Content: buildOfferScopedOpenAPI(offer, originProfile),
 			},
 			offerBundleFile{
 				Key:     offerBundleKey(offer, "x402.json"),
@@ -62,7 +66,7 @@ func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.Store
 			offerBundleFile{
 				Key:     offerBundleKey(offer, "index.html"),
 				Path:    offerBundleDir(offer) + "/index.html",
-				Content: buildOfferLandingHTML(offer, profile),
+				Content: buildOfferLandingHTML(offer, originProfile),
 			},
 		)
 	}
@@ -312,6 +316,12 @@ var offerLandingTmpl = template.Must(template.New("offer_landing").Parse(`<!doct
         <p class="mono"><a href="/.well-known/x402">/.well-known/x402</a> — signable x402 payment requirements</p>
         <p>Payment is per-request via x402 micropayments: call an endpoint with no payment to receive the <code>402</code> challenge, sign one <code>accepts[]</code> entry, retry with the <code>X-PAYMENT</code> header.</p>
       </div>
+      {{if .AboutHTML}}
+      <div class="card">
+        <h2>About {{.Operator}}</h2>
+        <div class="richtext">{{.AboutHTML}}</div>
+      </div>
+      {{end}}
       <p class="fineprint">Sold by {{.Operator}} · Powered by <a href="https://obol.org">Obol Stack</a></p>
     </div>
   </body>
@@ -356,6 +366,7 @@ func buildOfferLandingHTML(offer *monetizeapi.ServiceOffer, profile schemas.Stor
 		// Meta/OG tags keep the plain text; the body renders the markdown.
 		"Description":     desc,
 		"DescriptionHTML": storefront.RenderRichText(desc),
+		"AboutHTML":       storefront.RenderRichText(profile.Description),
 		"Price":           describeOfferPrice(offer),
 		"LogoURL":         logo,
 		"ShowName":        showName,

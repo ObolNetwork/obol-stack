@@ -8,6 +8,8 @@ import (
 	"os"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 )
 
 // PricingConfig is the top-level configuration for the x402 ForwardAuth verifier.
@@ -178,6 +180,14 @@ type RouteRule struct {
 	// uses this to build public-facing URLs (SIWX sign-in, redirects)
 	// without leaking the internal path prefix.
 	Hostname string `yaml:"hostname,omitempty"`
+
+	// Branding is the originating offer's per-origin identity override
+	// (ServiceOffer.spec.branding), applied as a field-wise patch over
+	// the storefront profile when rendering this rule's buyer-facing
+	// pages (402 paywall, SIWX sign-in). Nil means storefront-wide
+	// branding. Set for hostname-bound offers; also honored on their
+	// shared-origin alias paths so one product renders one identity.
+	Branding *schemas.StorefrontProfile `yaml:"branding,omitempty"`
 
 	// Async marks a rule whose verified+settled requests are handed to the
 	// job broker instead of the upstream: the broker snapshots the

@@ -12,7 +12,7 @@ import (
 
 func TestResolveBranding_Defaults(t *testing.T) {
 	SetStorefrontProfile(nil)
-	b := resolveBranding("https://seller.example.com")
+	b := resolveBranding("https://seller.example.com", nil)
 
 	if b.SiteName != "Obol Stack" {
 		t.Fatalf("SiteName = %q", b.SiteName)
@@ -43,7 +43,7 @@ func TestResolveBranding_DarkDefaultKeepsWordmark(t *testing.T) {
 	SetStorefrontProfile(&schemas.StorefrontProfile{Theme: storefront.ThemeDark})
 	t.Cleanup(func() { SetStorefrontProfile(nil) })
 
-	b := resolveBranding("https://seller.example.com")
+	b := resolveBranding("https://seller.example.com", nil)
 	if b.LogoURL != "https://seller.example.com"+storefront.DefaultLogoPath {
 		t.Fatalf("LogoURL = %q, want default wordmark", b.LogoURL)
 	}
@@ -66,7 +66,7 @@ func TestResolveBranding_CustomProfile(t *testing.T) {
 	})
 	t.Cleanup(func() { SetStorefrontProfile(nil) })
 
-	b := resolveBranding("https://seller.example.com")
+	b := resolveBranding("https://seller.example.com", nil)
 	if b.SiteName != "Acme Labs" || !b.ShowName {
 		t.Fatalf("custom profile: SiteName=%q ShowName=%v", b.SiteName, b.ShowName)
 	}
@@ -124,6 +124,51 @@ func TestPaymentRequiredHTML_Branded(t *testing.T) {
 		if !strings.Contains(html, want) {
 			t.Errorf("branded 402 HTML missing %q", want)
 		}
+	}
+}
+
+// TestPaymentRequiredHTML_PerOriginBranding asserts a hostname-bound offer's
+// spec.branding patch (threaded through RouteRule → PaymentDisplay) overrides
+// the storefront profile field-wise on the 402 page, with unset fields
+// inheriting.
+func TestPaymentRequiredHTML_PerOriginBranding(t *testing.T) {
+	SetStorefrontProfile(&schemas.StorefrontProfile{
+		DisplayName: "Acme Labs",
+		Theme:       storefront.ThemeDark,
+	})
+	t.Cleanup(func() { SetStorefrontProfile(nil) })
+
+	send := NewHTMLAwarePaymentRequired(PaymentDisplay{
+		Endpoint: "/services/audit",
+		BrandingPatch: &schemas.StorefrontProfile{
+			DisplayName: "AuditCo",
+			Theme:       storefront.ThemeObol,
+			AccentColor: "#a1b2c3",
+			LogoURL:     "https://cdn.example.com/auditco.png",
+		},
+	})
+
+	r := httptest.NewRequest("GET", "https://audit.acme.example/services/audit", nil)
+	r.Header.Set("Accept", "text/html")
+	w := httptest.NewRecorder()
+	send(w, r, []x402types.PaymentRequirements{{
+		Scheme: "exact", PayTo: "0x1111111111111111111111111111111111111111", Amount: "1000",
+	}}, nil)
+
+	html := w.Body.String()
+	for _, want := range []string{
+		"<title>Payment required — AuditCo</title>", // patch wins over profile
+		"--bg01:#05201a;",  // obol preset from the patch
+		"--green:#a1b2c3;", // accent from the patch
+		"<span>AuditCo</span>",
+		`src="https://cdn.example.com/auditco.png"`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("per-origin branded 402 missing %q", want)
+		}
+	}
+	if strings.Contains(html, "Acme Labs") {
+		t.Error("storefront displayName leaked onto the branded origin's 402")
 	}
 }
 
