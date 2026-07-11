@@ -325,7 +325,7 @@ var offerLandingTmpl = template.Must(template.New("offer_landing").Parse(`<!doct
         <div class="richtext">{{.AboutHTML}}</div>
       </div>
       {{end}}
-      <p class="fineprint" data-obol="powered-by">Sold by {{.Operator}} · Powered by <a href="https://obol.org">Obol Stack</a></p>
+      <p class="fineprint" data-obol="powered-by">Sold by {{.Operator}} · Powered by <a href="https://obol.org">Obol</a></p>
     </div>
   </body>
 </html>
@@ -372,13 +372,15 @@ func buildOfferLandingHTML(offer *monetizeapi.ServiceOffer, profile schemas.Stor
 		"AboutHTML":       storefront.RenderRichText(profile.Description),
 		"CustomCSS":       template.CSS(storefront.SafeCustomCSS(profile.CustomCSS)),
 		"Price":           describeOfferPrice(offer),
-		"LogoURL":         logo,
-		"ShowName":        showName,
-		"Operator":        operator,
-		"ThemeCSS":        template.CSS(theme.CSSVars()),
-		"ThemeColor":      theme.ThemeColor(),
-		"FaviconURL":      favicon,
-		"OGImageURL":      crossOriginAssetURL(profile.OGImageURL),
+		// SafeAssetURL: inline data:image logos are a supported profile
+		// form that html/template's URL filter would otherwise reject.
+		"LogoURL":    storefront.SafeAssetURL(logo),
+		"ShowName":   showName,
+		"Operator":   operator,
+		"ThemeCSS":   template.CSS(theme.CSSVars()),
+		"ThemeColor": theme.ThemeColor(),
+		"FaviconURL": storefront.SafeAssetURL(favicon),
+		"OGImageURL": storefront.SafeAssetURL(crossOriginAssetURL(profile.OGImageURL)),
 	})
 	if err != nil {
 		return "<!doctype html><title>" + template.HTMLEscapeString(title) + "</title>"
