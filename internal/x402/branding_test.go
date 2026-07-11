@@ -172,6 +172,80 @@ func TestPaymentRequiredHTML_PerOriginBranding(t *testing.T) {
 	}
 }
 
+// TestPaymentRequiredHTML_LayoutContract pins the checkout layout's stable
+// hooks: the data-obol attributes custom stylesheets target, the tabbed
+// how-to-pay markup, the reserved wallet-checkout mount, and the operator
+// custom-CSS injection point. Renaming/removing these is a breaking change
+// for operator stylesheets — treat this test as the contract.
+func TestPaymentRequiredHTML_LayoutContract(t *testing.T) {
+	SetStorefrontProfile(&schemas.StorefrontProfile{
+		CustomCSS: `[data-obol="price"] { font-size: 44px; }`,
+	})
+	t.Cleanup(func() { SetStorefrontProfile(nil) })
+
+	send := NewHTMLAwarePaymentRequired(PaymentDisplay{
+		Endpoint:     "/services/acme-audit",
+		OfferName:    "acme-audit",
+		OfferType:    "agent",
+		NetworkLabel: "Base",
+		PriceDisplay: "0.5 USDC per request",
+		PayToFull:    "0x1111111111111111111111111111111111111111",
+		AgentSkills:  []string{"audit"},
+	})
+
+	r := httptest.NewRequest("GET", "https://seller.example.com/services/acme-audit", nil)
+	r.Header.Set("Accept", "text/html")
+	w := httptest.NewRecorder()
+	send(w, r, []x402types.PaymentRequirements{{
+		Scheme: "exact", PayTo: "0x1111111111111111111111111111111111111111", Amount: "500000",
+	}}, nil)
+
+	html := w.Body.String()
+	for _, want := range []string{
+		`data-obol="page-402"`, `data-obol="header"`, `data-obol="brand"`,
+		`data-obol="status-pill"`, `data-obol="title"`, `data-obol="lede"`,
+		`data-obol="summary"`, `data-obol="offer-name"`, `data-obol="skills"`,
+		`data-obol="price"`, `data-obol="payment-details"`, `data-obol="endpoint"`,
+		`data-obol="network"`, `data-obol="pay-to"`, `data-obol="checkout"`,
+		`data-obol="pay"`, `data-obol="pay-tabs"`, `data-obol="pay-obol"`,
+		`data-obol="pay-other"`, `data-obol="pay-manual"`, `data-obol="footer"`,
+		`data-obol="powered-by"`,
+		// Tabs + stacked no-JS fallback labels.
+		`role="tablist"`, `data-tab="obol"`, `data-tab="manual"`, `class="panel-label"`,
+		// Operator stylesheet injected in its own style element.
+		`<style data-obol="custom-css">[data-obol="price"] { font-size: 44px; }</style>`,
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("402 layout missing %q", want)
+		}
+	}
+	if strings.Contains(html, "</style><script>") {
+		t.Fatal("custom css escaped its style element")
+	}
+}
+
+// TestPaymentRequiredHTML_CustomCSSBreakoutDropped asserts a hostile stored
+// stylesheet is dropped at render (the SafeCustomCSS guard), not inlined.
+func TestPaymentRequiredHTML_CustomCSSBreakoutDropped(t *testing.T) {
+	SetStorefrontProfile(&schemas.StorefrontProfile{
+		CustomCSS: `a{}</style><script>alert(1)</script>`,
+	})
+	t.Cleanup(func() { SetStorefrontProfile(nil) })
+
+	send := NewHTMLAwarePaymentRequired(PaymentDisplay{Endpoint: "/services/x"})
+	r := httptest.NewRequest("GET", "https://seller.example.com/services/x", nil)
+	r.Header.Set("Accept", "text/html")
+	w := httptest.NewRecorder()
+	send(w, r, []x402types.PaymentRequirements{{
+		Scheme: "exact", PayTo: "0x1111111111111111111111111111111111111111", Amount: "1000",
+	}}, nil)
+
+	html := w.Body.String()
+	if strings.Contains(html, `data-obol="custom-css"`) || strings.Contains(html, "alert(1)</script>") {
+		t.Fatal("hostile custom css reached the page")
+	}
+}
+
 // TestPaymentRequiredHTML_MarkdownDescription asserts the offer description
 // renders as sanitized rich HTML (single richtext path), not escaped text.
 func TestPaymentRequiredHTML_MarkdownDescription(t *testing.T) {

@@ -1611,6 +1611,7 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string,
 		OGImageURL:      profile.OGImageURL,
 		Description:     profile.Description,
 		DescriptionHTML: string(storefront.RenderRichText(profile.Description)),
+		CustomCSS:       storefront.SafeCustomCSS(profile.CustomCSS),
 	}
 	if catalog.Services == nil {
 		catalog.Services = []schemas.ServiceCatalogEntry{}

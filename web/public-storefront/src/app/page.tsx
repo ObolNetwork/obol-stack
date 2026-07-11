@@ -12,17 +12,20 @@ export default async function Home() {
   return (
     <>
       <Header storefront={catalog} />
-      <main className="max-w-3xl mx-auto px-4 py-10">
-        <section className="mb-8">
-          <h1 className="text-3xl font-bold text-text-light mb-2">
+      <main className="max-w-3xl mx-auto px-4 py-10" data-obol="page-storefront">
+        <section className="mb-8" data-obol="hero">
+          <h1 className="text-3xl font-bold text-text-light mb-2" data-obol="hero-title">
             {DEFAULT_HERO_TITLE}
           </h1>
-          <p className="text-text-body">{catalog.tagline}</p>
+          <p className="text-text-body" data-obol="tagline">
+            {catalog.tagline}
+          </p>
           {catalog.description ? (
             <RichText
               html={catalog.descriptionHtml}
               fallback={catalog.description}
               className="text-text-body text-sm mt-3"
+              dataObol="description"
             />
           ) : null}
         </section>

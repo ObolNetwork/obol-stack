@@ -303,26 +303,29 @@ var offerLandingTmpl = template.Must(template.New("offer_landing").Parse(`<!doct
       a { color:var(--green); }
       .fineprint { color:var(--muted); font-size:13px; margin-top:32px; }
     </style>
+    {{if .CustomCSS}}<style data-obol="custom-css">{{.CustomCSS}}</style>{{end}}
   </head>
   <body>
-    <div class="wrap">
-      {{if .LogoURL}}<div class="brand"><img src="{{.LogoURL}}" alt="{{.Operator}}" />{{if .ShowName}}<span>{{.Operator}}</span>{{end}}</div>{{end}}
-      <span class="pill">{{.Price}}</span>
-      <h1>{{.Title}}</h1>
-      <div class="richtext">{{.DescriptionHTML}}</div>
-      <div class="card">
+    <div class="wrap" data-obol="page-landing">
+      {{if .LogoURL}}<div class="brand" data-obol="brand"><img src="{{.LogoURL}}" alt="{{.Operator}}" />{{if .ShowName}}<span>{{.Operator}}</span>{{end}}</div>{{end}}
+      <span class="pill" data-obol="price">{{.Price}}</span>
+      <h1 data-obol="title">{{.Title}}</h1>
+      <div class="richtext" data-obol="description">{{.DescriptionHTML}}</div>
+      <!-- Reserved mount for the in-browser wallet checkout widget. -->
+      <div data-obol="checkout"></div>
+      <div class="card" data-obol="dev-links">
         <h2>For agents &amp; developers</h2>
         <p class="mono"><a href="/openapi.json">/openapi.json</a> — request shapes + per-route pricing</p>
         <p class="mono"><a href="/.well-known/x402">/.well-known/x402</a> — signable x402 payment requirements</p>
         <p>Payment is per-request via x402 micropayments: call an endpoint with no payment to receive the <code>402</code> challenge, sign one <code>accepts[]</code> entry, retry with the <code>X-PAYMENT</code> header.</p>
       </div>
       {{if .AboutHTML}}
-      <div class="card">
+      <div class="card" data-obol="about">
         <h2>About {{.Operator}}</h2>
         <div class="richtext">{{.AboutHTML}}</div>
       </div>
       {{end}}
-      <p class="fineprint">Sold by {{.Operator}} · Powered by <a href="https://obol.org">Obol Stack</a></p>
+      <p class="fineprint" data-obol="powered-by">Sold by {{.Operator}} · Powered by <a href="https://obol.org">Obol Stack</a></p>
     </div>
   </body>
 </html>
@@ -367,6 +370,7 @@ func buildOfferLandingHTML(offer *monetizeapi.ServiceOffer, profile schemas.Stor
 		"Description":     desc,
 		"DescriptionHTML": storefront.RenderRichText(desc),
 		"AboutHTML":       storefront.RenderRichText(profile.Description),
+		"CustomCSS":       template.CSS(storefront.SafeCustomCSS(profile.CustomCSS)),
 		"Price":           describeOfferPrice(offer),
 		"LogoURL":         logo,
 		"ShowName":        showName,

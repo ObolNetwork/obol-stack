@@ -9,18 +9,26 @@ export function RichText({
   html,
   fallback,
   className = "",
+  dataObol,
 }: {
   html?: string;
   fallback: string;
   className?: string;
+  /** Stable hook name emitted as data-obol=... for operator stylesheets. */
+  dataObol?: string;
 }) {
   if (html) {
     return (
       <div
         className={`richtext ${className}`}
+        data-obol={dataObol}
         dangerouslySetInnerHTML={{ __html: html }}
       />
     );
   }
-  return <p className={`whitespace-pre-line ${className}`}>{fallback}</p>;
+  return (
+    <p className={`whitespace-pre-line ${className}`} data-obol={dataObol}>
+      {fallback}
+    </p>
+  );
 }

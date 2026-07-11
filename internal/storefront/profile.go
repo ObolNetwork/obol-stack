@@ -70,6 +70,9 @@ func ResolvePublished(explicit *schemas.StorefrontProfile, baseURL string) schem
 	if v := strings.TrimSpace(explicit.Description); v != "" {
 		profile.Description = v
 	}
+	if v := strings.TrimSpace(explicit.CustomCSS); v != "" {
+		profile.CustomCSS = v
+	}
 	return profile
 }
 
@@ -124,6 +127,9 @@ func MergeProfile(base, patch schemas.StorefrontProfile) schemas.StorefrontProfi
 	}
 	if v := strings.TrimSpace(patch.Description); v != "" {
 		out.Description = v
+	}
+	if v := strings.TrimSpace(patch.CustomCSS); v != "" {
+		out.CustomCSS = v
 	}
 	return out
 }

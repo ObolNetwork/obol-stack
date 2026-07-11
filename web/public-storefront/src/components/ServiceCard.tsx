@@ -139,12 +139,17 @@ export function ServiceCard({ service }: { service: Service }) {
   return (
     <div
       id={anchorId}
+      data-obol="service-card"
+      data-service={service.name}
       className="scroll-mt-4 rounded-lg border border-stroke bg-bg02 p-5 transition-colors hover:bg-bg03"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 mb-1">
-            <h3 className="text-lg font-semibold text-text-light truncate">
+            <h3
+              data-obol="service-name"
+              className="text-lg font-semibold text-text-light truncate"
+            >
               {service.name}
             </h3>
             <button
@@ -165,9 +170,14 @@ export function ServiceCard({ service }: { service: Service }) {
             html={service.descriptionHtml}
             fallback={service.description}
             className="text-sm text-text-body mb-3"
+            dataObol="description"
           />
           {service.skills && service.skills.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mb-3" aria-label="Agent skills">
+            <div
+              className="flex flex-wrap gap-1.5 mb-3"
+              data-obol="skills"
+              aria-label="Agent skills"
+            >
               {service.skills.map((s) => (
                 <span
                   key={s}
@@ -180,13 +190,17 @@ export function ServiceCard({ service }: { service: Service }) {
           )}
         </div>
         <span
+          data-obol="type"
           className={`shrink-0 rounded-full px-2.5 py-0.5 text-xs font-medium ${typeColors[service.type] ?? typeColors.http}`}
         >
           {service.type}
         </span>
       </div>
 
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm mb-4">
+      <div
+        className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm mb-4"
+        data-obol="payment-details"
+      >
         {multiPay ? (
           <div className="col-span-2">
             <span className="text-text-muted">
@@ -205,11 +219,15 @@ export function ServiceCard({ service }: { service: Service }) {
           <>
             <div>
               <span className="text-text-muted">Price</span>
-              <p className="text-text-light font-mono text-xs">{opt.price}</p>
+              <p data-obol="price" className="text-text-light font-mono text-xs">
+                {opt.price}
+              </p>
             </div>
             <div>
               <span className="text-text-muted">Network</span>
-              <p className="text-text-light font-mono text-xs">{opt.network}</p>
+              <p data-obol="network" className="text-text-light font-mono text-xs">
+                {opt.network}
+              </p>
             </div>
           </>
         )}
@@ -223,6 +241,7 @@ export function ServiceCard({ service }: { service: Service }) {
           <span className="text-text-muted">Endpoint</span>
           <a
             href={service.endpoint}
+            data-obol="endpoint"
             className="block text-obol-green font-mono text-xs break-all hover:underline"
           >
             {service.endpoint}

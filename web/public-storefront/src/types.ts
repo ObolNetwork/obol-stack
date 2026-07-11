@@ -109,4 +109,8 @@ export interface StorefrontProfile {
   // descriptionHtml is its sanitized HTML rendering — same contract as
   // Service.descriptionHtml.
   descriptionHtml?: string;
+  // customCss is operator CSS injected after the theme tokens (already
+  // size-capped and breakout-checked by the controller; the layout guards
+  // again before inlining).
+  customCss?: string;
 }
