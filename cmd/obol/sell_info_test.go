@@ -52,6 +52,27 @@ func TestClearProfileFields(t *testing.T) {
 	}
 }
 
+// TestSellInfo_Flags pins the branding flag surface on set/reset, including
+// the per-origin --hostname scope.
+func TestSellInfo_Flags(t *testing.T) {
+	cfg := newTestConfig(t)
+	cmd := sellCommand(cfg)
+	info := findSubcommand(t, cmd, "info")
+
+	set := findSubcommand(t, info, "set")
+	requireFlags(t, flagMap(set),
+		"display-name", "tagline", "logo-url", "logo-file", "contact-email",
+		"theme", "accent", "favicon-url", "favicon-file",
+		"og-image-url", "og-image-file", "description", "hostname",
+	)
+
+	reset := findSubcommand(t, info, "reset")
+	requireFlags(t, flagMap(reset),
+		"display-name", "tagline", "logo-url", "contact-email",
+		"theme", "accent", "favicon-url", "og-image-url", "description", "hostname",
+	)
+}
+
 func TestFindCatalogEntry(t *testing.T) {
 	catalog := schemas.ServiceCatalog{Services: []schemas.ServiceCatalogEntry{
 		{Name: "alpha", Type: "http"},

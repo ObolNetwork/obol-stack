@@ -15,6 +15,7 @@ import (
 	x402types "github.com/x402-foundation/x402/go/v2/types"
 
 	"github.com/ObolNetwork/obol-stack/internal/buyprompts"
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	"github.com/ObolNetwork/obol-stack/internal/storefront"
 )
 
@@ -121,6 +122,11 @@ type PaymentDisplay struct {
 	// card. Empty for non-agent offers and for agents that haven't yet
 	// resolved their skill list.
 	AgentSkills []string
+
+	// BrandingPatch is the originating rule's per-origin identity
+	// override (RouteRule.Branding). Nil renders storefront-wide
+	// branding.
+	BrandingPatch *schemas.StorefrontProfile
 }
 
 // SendPaymentRequiredFunc is the renderer signature compatible with the
@@ -251,7 +257,7 @@ func sendPaymentRequiredHTML(w http.ResponseWriter, r *http.Request, requirement
 	payToDisplay := truncateAddress(payToFull)
 
 	typeCopy := buildTypeCopy(siteURL, endpoint, display)
-	branding := resolveBranding(siteURL)
+	branding := resolveBranding(siteURL, display.BrandingPatch)
 
 	data := struct {
 		Title               string
