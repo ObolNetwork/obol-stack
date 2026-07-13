@@ -30,7 +30,9 @@ The eRPC gateway routes to whichever Ethereum networks are installed:
 http://erpc.erpc.svc.cluster.local/rpc/{network}
 ```
 
-`mainnet` is always available. Other networks (e.g. `hoodi`) are available if installed. You can also use `evm/{chainId}` (e.g. `evm/560048` for Hoodi).
+`mainnet` is always available. Other networks (e.g. `hoodi`, `arbitrum`, `robinhood`) are available if installed. You can also use `evm/{chainId}` (e.g. `evm/560048` for Hoodi, `evm/42161` for Arbitrum One, `evm/4663` for Robinhood Chain).
+
+`arbitrum` and `robinhood` require the stack operator to have registered an eRPC upstream under that alias (`obol network add` — ChainList has both). If `/rpc/arbitrum` or `/rpc/robinhood` returns 404, the upstream isn't registered — ask the operator.
 
 To see which networks are connected:
 
@@ -138,6 +140,34 @@ sh scripts/rpc.sh raw eth_blockNumber
 | `abi-decode` | `sig data` | Decode ABI-encoded data |
 | `logs` | `address [topic0] [--from-block N]` | Query event logs |
 | `raw` | `method [params...]` | Raw JSON-RPC call |
+
+## Cast One-Liner Quick Reference
+
+`cast` itself covers utilities `rpc.sh` doesn't wrap:
+
+```bash
+# Address derivation (no RPC needed)
+cast compute-address <deployer> --nonce <n>                            # CREATE
+cast create2 --deployer <addr> --salt <salt> --init-code-hash <hash>   # CREATE2
+
+# Raw storage slot read (keep it routed through eRPC)
+cast storage <addr> <slot> --rpc-url http://erpc.erpc.svc.cluster.local/rpc/mainnet
+# EIP-1967 implementation slot (proxy → implementation address):
+cast storage <proxy> 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc \
+  --rpc-url http://erpc.erpc.svc.cluster.local/rpc/mainnet
+
+# Pure conversions and hashing (offline)
+cast to-unit 1500000000 gwei                 # convert between eth units
+cast from-wei 1000000000000000000            # wei → ether
+cast to-wei 1.5                              # ether → wei
+cast keccak "some data"                      # keccak256 hash
+cast namehash vitalik.eth                    # ENS namehash
+cast sig 'transfer(address,uint256)'         # 4-byte function selector
+cast max-uint                                # 2^256 - 1
+cast to-check-sum-address 0xd8da6bf26964af9d7eed9e03e53415d37aa96045
+```
+
+For calldata decoding and contract due-diligence beyond raw RPC (proxy detection, verified source, address labels), use the `inspect` skill.
 
 ## Token Queries
 
