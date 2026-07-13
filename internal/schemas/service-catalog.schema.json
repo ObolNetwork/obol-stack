@@ -34,6 +34,45 @@
       "items": {
         "$ref": "#/$defs/service"
       }
+    },
+    "theme": {
+      "type": "string",
+      "enum": [
+        "light",
+        "dark",
+        "obol"
+      ],
+      "description": "Operator-selected theme preset applied to seller HTML surfaces."
+    },
+    "themeVars": {
+      "type": "object",
+      "description": "Resolved theme token->hex map (accent override applied) so consumers can style without knowing the presets.",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^#[0-9a-fA-F]{3,8}$"
+      }
+    },
+    "faviconUrl": {
+      "type": "string",
+      "minLength": 1
+    },
+    "ogImageUrl": {
+      "type": "string",
+      "minLength": 1
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "descriptionHtml": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Sanitized HTML rendering of the storefront description."
+    },
+    "customCss": {
+      "type": "string",
+      "maxLength": 65536,
+      "description": "Operator CSS injected after theme tokens on seller HTML surfaces (escape hatch over the stable data-obol hooks)."
     }
   },
   "$defs": {
@@ -222,6 +261,11 @@
         "description": {
           "type": "string",
           "minLength": 1
+        },
+        "descriptionHtml": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Sanitized HTML rendering of description (markdown subset; single sanitizer in internal/storefront/richtext.go)."
         },
         "skills": {
           "type": "array",

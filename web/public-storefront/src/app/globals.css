@@ -1,30 +1,34 @@
 @import "tailwindcss";
 
 @theme {
-  /* Background scale (dark theme) — mirrors obol-ui stitches.config.ts */
-  --color-bg01: #091011;
-  --color-bg02: #111f22;
-  --color-bg03: #182d32;
-  --color-bg04: #243d42;
-  --color-bg05: #2d4d53;
+  /* Theme tokens — defaults are the LIGHT preset (the stack default).
+     internal/storefront/theme.go owns the preset tables; the layout
+     overrides these vars inline on <html> from the published catalog's
+     themeVars, so the values below only render for catalogs from
+     pre-theming controllers (or when the feed is unreachable). */
+  --color-bg01: #ffffff;
+  --color-bg02: #f6f8f9;
+  --color-bg03: #edf1f2;
+  --color-bg04: #e2e8ea;
+  --color-bg05: #d5dedf;
 
   /* Brand */
-  --color-obol-green: #2fe4ab;
-  --color-obol-green-dim: #1a7a5c;
+  --color-obol-green: #0b9b71;
+  --color-obol-green-dim: #067a57;
   --color-obol-blue: #162a40;
   --color-obol-purple: #9167e4;
 
   /* Text */
-  --color-text-light: #d9eef3;
-  --color-text-body: #9cc2c9;
-  --color-text-muted: #475e64;
+  --color-text-light: #0e1b1e;
+  --color-text-body: #40565c;
+  --color-text-muted: #8299a0;
 
   /* Stroke / border */
-  --color-stroke: #1e3a3f;
+  --color-stroke: #dfe6e8;
 
   /* Status */
-  --color-amber: #e89e30;
-  --color-red: #dd603c;
+  --color-amber: #b96f10;
+  --color-red: #c94f2f;
 
   --font-sans: var(--font-dm-sans), system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", "IBM Plex Mono", "Fira Code", ui-monospace, monospace;
@@ -35,7 +39,54 @@ body {
   color: var(--color-text-light);
 }
 
-/* Subtle scrollbars on dark bg */
+/* Scrollbars follow the theme */
 * {
   scrollbar-color: var(--color-bg04) var(--color-bg01);
+}
+
+/* Operator markdown rendered by internal/storefront/richtext.go (the single
+   sanitizer). Tags are limited to p, br, strong, em, ul, ol, li, code, pre,
+   a, h3, h4 — style just those. */
+.richtext p {
+  margin: 0 0 0.5rem;
+}
+.richtext p:last-child {
+  margin-bottom: 0;
+}
+.richtext ul,
+.richtext ol {
+  margin: 0 0 0.5rem;
+  padding-left: 1.25rem;
+}
+.richtext ul {
+  list-style: disc;
+}
+.richtext ol {
+  list-style: decimal;
+}
+.richtext li {
+  margin-bottom: 0.15rem;
+}
+.richtext h3,
+.richtext h4 {
+  color: var(--color-text-light);
+  font-weight: 600;
+  margin: 0.75rem 0 0.25rem;
+}
+.richtext code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  color: var(--color-text-light);
+}
+.richtext pre {
+  background: var(--color-bg01);
+  border: 1px solid var(--color-stroke);
+  border-radius: 0.5rem;
+  padding: 0.75rem;
+  overflow-x: auto;
+  margin: 0 0 0.5rem;
+}
+.richtext a {
+  color: var(--color-obol-green);
+  text-decoration: underline;
 }

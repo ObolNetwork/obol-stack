@@ -34,6 +34,11 @@ type ServiceCatalogEntry struct {
 	ChainID          int64                `json:"chainId,omitempty"`
 	Asset            *ServiceCatalogAsset `json:"asset,omitempty"`
 	Description      string               `json:"description"`
+	// DescriptionHTML is the sanitized HTML rendering of Description
+	// (markdown subset). Produced ONLY by internal/storefront/richtext.go;
+	// consumers may inject it verbatim. Absent on catalogs from
+	// pre-richtext controllers — fall back to the plain Description.
+	DescriptionHTML string `json:"descriptionHtml,omitempty"`
 	// Skills are the OASF / buy-x402 skill names this offer advertises.
 	// For type=agent offers it mirrors AgentResolution.Skills (the
 	// resolved allow-list from the linked Agent CR); for non-agent
@@ -135,6 +140,28 @@ type StorefrontProfile struct {
 	Tagline      string `json:"tagline"`
 	LogoURL      string `json:"logoUrl"`
 	ContactEmail string `json:"contactEmail,omitempty"`
+
+	// Theme is a preset name ("light", "dark", "obol"); empty means the
+	// stack default (light). Applied to every seller-facing HTML surface.
+	Theme string `json:"theme,omitempty"`
+	// AccentColor optionally overrides the preset accent with a #hex value
+	// (validated against a strict hex pattern before it reaches any CSS).
+	AccentColor string `json:"accentColor,omitempty"`
+	// FaviconURL follows the same forms as LogoURL (https://, /path, or
+	// inline data:image/...;base64). Empty falls back to the logo.
+	FaviconURL string `json:"faviconUrl,omitempty"`
+	// OGImageURL is the link-preview image (og:image). Empty falls back to
+	// the storefront's generated preview.
+	OGImageURL string `json:"ogImageUrl,omitempty"`
+	// Description is longer-form seller copy (markdown subset). Publishing
+	// surfaces render it as plain text until the richtext pipeline lands.
+	Description string `json:"description,omitempty"`
+	// CustomCSS is operator-authored CSS injected after the theme tokens
+	// on every seller HTML surface (the styling escape hatch on top of
+	// the stable data-obol/class hooks). Size-capped and validated
+	// against style-element breakout at set time; renderers re-check
+	// before injection.
+	CustomCSS string `json:"customCss,omitempty"`
 }
 
 // ServiceCatalogSchemaVersion is the current version of the
@@ -153,4 +180,21 @@ type ServiceCatalog struct {
 	Tagline       string                `json:"tagline"`
 	LogoURL       string                `json:"logoUrl"`
 	Services      []ServiceCatalogEntry `json:"services"`
+
+	// Theme is the operator-selected preset name (always populated by
+	// current controllers; empty on catalogs from older releases).
+	Theme string `json:"theme,omitempty"`
+	// ThemeVars is the resolved token→hex map for Theme (accent override
+	// already applied), so consumers can style without knowing the presets.
+	// Keys are the bare token names ("bg01", "green", ...).
+	ThemeVars map[string]string `json:"themeVars,omitempty"`
+	// FaviconURL / OGImageURL / Description mirror StorefrontProfile.
+	FaviconURL  string `json:"faviconUrl,omitempty"`
+	OGImageURL  string `json:"ogImageUrl,omitempty"`
+	Description string `json:"description,omitempty"`
+	// DescriptionHTML is the sanitized HTML rendering of Description —
+	// same contract as ServiceCatalogEntry.DescriptionHTML.
+	DescriptionHTML string `json:"descriptionHtml,omitempty"`
+	// CustomCSS mirrors StorefrontProfile.CustomCSS for the storefront UI.
+	CustomCSS string `json:"customCss,omitempty"`
 }

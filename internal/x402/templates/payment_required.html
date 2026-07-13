@@ -5,39 +5,31 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>{{.Title}}</title>
     <meta name="description" content="{{.Description}}" />
-    <meta name="theme-color" content="#091011" />
+    <meta name="theme-color" content="{{.Branding.ThemeColor}}" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="{{.Title}}" />
     <meta property="og:description" content="{{.Description}}" />
-    <meta property="og:site_name" content="Obol Stack" />
+    <meta property="og:site_name" content="{{.Branding.SiteName}}" />
     <meta property="og:url" content="{{.PageURL}}" />
-    <meta property="og:image" content="{{.OGImageURL}}" />
+    <meta property="og:image" content="{{.Branding.OGImageURL}}" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="Payment required — Obol Stack" />
+    <meta property="og:image:alt" content="Payment required — {{.Branding.SiteName}}" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="{{.Title}}" />
     <meta name="twitter:description" content="{{.Description}}" />
-    <meta name="twitter:image" content="{{.OGImageURL}}" />
-    <link rel="icon" href="{{.StorefrontURL}}/favicon.png" type="image/png" />
+    <meta name="twitter:image" content="{{.Branding.OGImageURL}}" />
+    <link rel="icon" href="{{.Branding.FaviconURL}}" />
     <style>
       :root {
-        /* Mirrors web/public-storefront/src/app/globals.css token names */
-        --bg01: #091011;
-        --bg02: #111f22;
-        --bg03: #182d32;
-        --bg04: #243d42;
-        --stroke: #1e3a3f;
-        --green: #2fe4ab;
-        --green-dim: #1a7a5c;
-        --light: #d9eef3;
-        --body: #9cc2c9;
-        --muted: #475e64;
+        /* Theme tokens (preset + accent) shared with the public storefront
+           — see internal/storefront/theme.go */
+        {{.Branding.ThemeCSS}}
         --font-mono: "JetBrains Mono", "IBM Plex Mono", "Fira Code", ui-monospace, monospace;
       }
       * { box-sizing: border-box; }
       /* Solid match to the storefront / page; also covers iOS/Safari overscroll
-         bounce so the white default body never peeks through. */
+         bounce so the default body background never peeks through. */
       html, body { background-color: var(--bg01); }
       body {
         margin: 0;
@@ -46,9 +38,11 @@
         min-height: 100vh;
         line-height: 1.5;
       }
-      .wrap { max-width: 760px; margin: 0 auto; padding: 48px 24px 96px; }
-      header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 56px; }
+      .wrap { max-width: 720px; margin: 0 auto; padding: 40px 24px 96px; }
+      header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 40px; }
       header img { height: 28px; width: auto; }
+      .brand { display: flex; align-items: center; gap: 10px; color: var(--light); text-decoration: none; font-weight: 600; font-size: 16px; min-width: 0; }
+      .brand span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .pill {
         font-family: var(--font-mono);
         font-size: 13px;
@@ -57,21 +51,55 @@
         border: 1px solid var(--green);
         border-radius: 999px;
         padding: 6px 14px;
+        flex: none;
       }
-      h1 { font-size: 44px; font-weight: 700; letter-spacing: -1px; line-height: 1.1; margin: 0 0 12px; }
-      .lede { color: var(--body); font-size: 18px; margin: 0 0 40px; }
+      h1 { font-size: 34px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.1; margin: 0 0 10px; }
+      .lede { color: var(--body); font-size: 16px; margin: 0 0 28px; }
       .card {
         background: var(--bg02);
         border: 1px solid var(--stroke);
-        border-radius: 12px;
+        border-radius: 14px;
         padding: 24px;
-        margin-bottom: 24px;
+        margin-bottom: 20px;
       }
-      .card h2 { font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--body); margin: 0 0 16px; }
-      .grid { display: grid; grid-template-columns: 120px 1fr; row-gap: 10px; column-gap: 16px; font-size: 15px; }
+      .card > h2 { font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--body); margin: 0 0 16px; }
+      .offer-name { font-size: 20px; font-weight: 700; color: var(--light); margin: 0 0 8px; letter-spacing: -0.25px; }
+
+      /* Operator markdown (sanitized by internal/storefront/richtext.go) */
+      .richtext { color: var(--body); font-size: 15px; margin-bottom: 12px; }
+      .richtext p { margin: 0 0 10px; }
+      .richtext p:last-child { margin-bottom: 0; }
+      .richtext ul, .richtext ol { margin: 0 0 10px; padding-left: 22px; }
+      .richtext li { margin-bottom: 4px; }
+      .richtext h3, .richtext h4 { color: var(--light); margin: 14px 0 6px; font-size: 15px; }
+      .richtext code { font-family: var(--font-mono); font-size: 0.9em; color: var(--light); }
+      .richtext pre { background: var(--bg01); border: 1px solid var(--stroke); border-radius: 8px; padding: 12px; overflow-x: auto; }
+      .richtext a { color: var(--green); }
+
+      .skill-pills { display: flex; flex-wrap: wrap; gap: 6px; margin: 2px 0 14px; }
+      .skill-pill {
+        display: inline-block;
+        background: var(--bg03);
+        border: 1px solid var(--stroke);
+        color: var(--body);
+        font: 500 12px/1 "DM Sans", system-ui, sans-serif;
+        padding: 4px 10px;
+        border-radius: 999px;
+      }
+
+      /* Checkout receipt: the price is the headline of the summary card. */
+      .price {
+        font-size: 32px;
+        font-weight: 700;
+        letter-spacing: -0.5px;
+        color: var(--green);
+        margin: 4px 0 18px;
+        padding-bottom: 16px;
+        border-bottom: 1px dashed var(--stroke);
+      }
+      .grid { display: grid; grid-template-columns: 110px 1fr; row-gap: 10px; column-gap: 16px; font-size: 14px; }
       .grid dt { color: var(--muted); }
       .grid dd { margin: 0; font-family: var(--font-mono); word-break: break-all; display: flex; align-items: center; gap: 10px; }
-      .grid dd.green { color: var(--green); }
 
       /* Inline icon buttons next to the Pay To address: copy + open in
          block explorer. Sized to match the surrounding monospace text. */
@@ -94,6 +122,29 @@
       .icon-btn svg { width: 14px; height: 14px; display: block; }
       .icon-btn.copied { color: var(--green); border-color: var(--green); }
 
+      /* How-to-pay tabs. Without JS the tab bar stays hidden and every panel
+         renders stacked under its own label — nothing is unreachable. */
+      .tabs { display: none; gap: 6px; margin-bottom: 18px; flex-wrap: wrap; }
+      .paytabs.js .tabs { display: flex; }
+      .tab {
+        font: 600 13px/1 "DM Sans", system-ui, sans-serif;
+        color: var(--body);
+        background: var(--bg03);
+        border: 1px solid var(--stroke);
+        border-radius: 999px;
+        padding: 8px 16px;
+        cursor: pointer;
+      }
+      .tab.active { color: var(--bg01); background: var(--green); border-color: var(--green); }
+      .tabpanel + .tabpanel { margin-top: 22px; }
+      .paytabs.js .tabpanel { display: none; margin-top: 0; }
+      .paytabs.js .tabpanel.active { display: block; }
+      .panel-label { font-size: 14px; font-weight: 600; color: var(--light); margin: 0 0 8px; }
+      .paytabs.js .panel-label { display: none; }
+      .panel-lede { color: var(--body); font-size: 14px; margin: 0 0 12px; }
+      .cli-title { font-size: 14px; font-weight: 600; color: var(--light); margin: 0 0 6px; }
+      .cli-block { margin-bottom: 18px; }
+
       .prompt {
         position: relative;
         background: var(--bg01);
@@ -106,23 +157,6 @@
         white-space: pre-wrap;
         word-break: break-word;
       }
-      .prompt + .prompt { margin-top: 12px; }
-      .skill-pills { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
-      .skill-pill {
-        display: inline-block;
-        background: var(--bg03);
-        border: 1px solid var(--stroke);
-        color: var(--body);
-        font: 500 12px/1 "DM Sans", system-ui, sans-serif;
-        padding: 4px 10px;
-        border-radius: 999px;
-      }
-      .chat-completions {
-        margin-top: 16px;
-        padding-top: 14px;
-        border-top: 1px dashed var(--stroke);
-      }
-      .chat-completions p { margin: 0 0 10px; color: var(--body); font-size: 14px; }
       pre.json {
         margin: 0;
         background: var(--bg01);
@@ -153,32 +187,41 @@
       }
       .copy:hover { color: var(--green); border-color: var(--green); }
       .copy.copied { color: var(--green); border-color: var(--green); }
-      footer { margin-top: 40px; display: flex; gap: 24px; flex-wrap: wrap; font-size: 14px; }
+      details.chat-completions { margin-top: 16px; border-top: 1px dashed var(--stroke); padding-top: 14px; }
+      details.chat-completions summary { color: var(--body); font-size: 14px; cursor: pointer; }
+      details.chat-completions .copy-wrap { margin-top: 10px; }
+      footer { margin-top: 36px; display: flex; gap: 20px; flex-wrap: wrap; align-items: center; font-size: 14px; }
       footer a { color: var(--green); text-decoration: none; }
       footer a:hover { text-decoration: underline; }
+      .powered { color: var(--muted); font-size: 13px; margin-left: auto; }
+      .powered a { color: var(--muted); text-decoration: underline; }
       noscript .copy, noscript .icon-btn[data-copy] { display: none; }
     </style>
+    {{if .Branding.CustomCSS}}<style data-obol="custom-css">{{.Branding.CustomCSS}}</style>{{end}}
   </head>
   <body>
-    <div class="wrap">
-      <header>
-        <a href="{{.StorefrontURL}}" aria-label="Obol Stack home"><img src="{{.WordmarkURL}}" alt="Obol Stack" /></a>
-        <span class="pill">HTTP 402</span>
+    <div class="wrap" data-obol="page-402">
+      <header data-obol="header">
+        <a class="brand" data-obol="brand" href="{{.StorefrontURL}}" aria-label="{{.Branding.SiteName}} home">
+          <img src="{{.Branding.LogoURL}}" alt="{{.Branding.SiteName}}" />
+          {{if .Branding.ShowName}}<span>{{.Branding.SiteName}}</span>{{end}}
+        </a>
+        <span class="pill" data-obol="status-pill">HTTP 402</span>
       </header>
 
-      <h1>Payment required</h1>
-      <p class="lede">{{.Lede}}</p>
+      <h1 data-obol="title">Payment required</h1>
+      <p class="lede" data-obol="lede">{{.Lede}}</p>
 
-      <div class="card">
-        <h2>Service</h2>
-        {{if .OfferDescription}}<p class="lede" style="margin-bottom:14px">{{.OfferDescription}}</p>{{end}}
-        {{if .Skills}}<div class="skill-pills" aria-label="Agent skills">{{range .Skills}}<span class="skill-pill">{{.}}</span>{{end}}</div>{{end}}
-        <dl class="grid">
-          <dt>Endpoint</dt><dd>{{.Endpoint}}</dd>
-          <dt>Network</dt><dd>{{.NetworkLabel}}</dd>
-          <dt>Price</dt><dd class="green">{{.PriceDisplay}}</dd>
+      <section class="card" data-obol="summary">
+        {{if .OfferName}}<h2 class="offer-name" data-obol="offer-name">{{.OfferName}}</h2>{{end}}
+        {{if .OfferDescription}}<div class="richtext" data-obol="description">{{.OfferDescription}}</div>{{end}}
+        {{if .Skills}}<div class="skill-pills" data-obol="skills" aria-label="Agent skills">{{range .Skills}}<span class="skill-pill">{{.}}</span>{{end}}</div>{{end}}
+        <div class="price" data-obol="price">{{.PriceDisplay}}</div>
+        <dl class="grid" data-obol="payment-details">
+          <dt>Endpoint</dt><dd data-obol="endpoint">{{.Endpoint}}</dd>
+          <dt>Network</dt><dd data-obol="network">{{.NetworkLabel}}</dd>
           <dt>Pay to</dt>
-          <dd>
+          <dd data-obol="pay-to">
             <span>{{.PayToDisplay}}</span>
             <button class="icon-btn" type="button" data-copy="{{.PayToFull}}" aria-label="Copy address" title="Copy address">
               <!-- clipboard glyph -->
@@ -192,62 +235,71 @@
             {{end}}
           </dd>
         </dl>
-      </div>
+        <!-- Reserved mount for the in-browser wallet checkout widget.
+             Custom stylesheets and future scripts target [data-obol="checkout"];
+             keep this node present and empty until the widget ships. -->
+        <div data-obol="checkout"></div>
+      </section>
 
-      {{if .ShowPrimary}}
-      <div class="card">
-        <h2>{{.PrimaryTitle}}</h2>
-        <p class="lede" style="margin-bottom:12px">{{.PrimaryLede}}</p>
-        <div class="copy-wrap">
+      <section class="card paytabs" data-obol="pay" id="paytabs">
+        <h2>How to pay</h2>
+        <div class="tabs" role="tablist" data-obol="pay-tabs">
+          <button class="tab active" type="button" role="tab" data-tab="obol">Obol Agent</button>
+          <button class="tab" type="button" role="tab" data-tab="other">Any AI agent</button>
+          <button class="tab" type="button" role="tab" data-tab="manual">Manual (x402)</button>
+        </div>
+
+        <div class="tabpanel active" data-panel="obol" data-obol="pay-obol">
+          <h3 class="panel-label">Pay with your Obol Agent</h3>
           {{if .PrimaryIsCode}}
-          <pre class="json" id="p-primary">{{.PrimaryPayload}}</pre>
-          {{else}}
-          <div class="prompt" id="p-primary">{{.PrimaryPayload}}</div>
+          <div class="cli-block" data-obol="pay-cli">
+            <p class="cli-title">{{.PrimaryTitle}}</p>
+            <p class="panel-lede">{{.PrimaryLede}}</p>
+            <div class="copy-wrap">
+              <pre class="json" id="p-primary">{{.PrimaryPayload}}</pre>
+              <button class="copy" data-target="p-primary" type="button">Copy</button>
+            </div>
+          </div>
           {{end}}
-          <button class="copy" data-target="p-primary" type="button">Copy</button>
-        </div>
-      </div>
-      {{end}}
-
-      <div class="card">
-        <h2>Pay with your Obol Agent</h2>
-        <p class="lede" style="margin-bottom:12px">Send this to your Obol Agent (it has the <code>buy-x402</code> skill pre-loaded):</p>
-        <div class="copy-wrap">
-          <div class="prompt" id="p-obol">{{.PromptObol}}</div>
-          <button class="copy" data-target="p-obol" type="button">Copy</button>
-        </div>
-      </div>
-
-      <div class="card">
-        <h2>Pay with another AI agent</h2>
-        <p class="lede" style="margin-bottom:12px">Paste this into Claude, ChatGPT, Gemini, or any agent with internet access:</p>
-        <div class="copy-wrap">
-          <div class="prompt" id="p-other">{{.PromptOther}}</div>
-          <button class="copy" data-target="p-other" type="button">Copy</button>
-        </div>
-      </div>
-
-      <div class="card">
-        <h2>Pay manually (raw HTTP 402)</h2>
-        <p class="lede" style="margin-bottom:12px">For x402-aware tools that consume the wire format directly:</p>
-        <div class="copy-wrap">
-          <pre class="json" id="p-json">{{.JSONBody}}</pre>
-          <button class="copy" data-target="p-json" type="button">Copy JSON</button>
-        </div>
-        {{if .ChatCompletionsBody}}
-        <div class="chat-completions">
-          {{if .ChatCompletionsNote}}<p>{{.ChatCompletionsNote}}</p>{{end}}
+          <p class="panel-lede">Send this to your Obol Agent (it has the <code>buy-x402</code> skill pre-loaded):</p>
           <div class="copy-wrap">
-            <pre class="json" id="p-chat">{{.ChatCompletionsBody}}</pre>
-            <button class="copy" data-target="p-chat" type="button">Copy</button>
+            <div class="prompt" id="p-obol">{{.PromptObol}}</div>
+            <button class="copy" data-target="p-obol" type="button">Copy</button>
           </div>
         </div>
-        {{end}}
-      </div>
 
-      <footer>
+        <div class="tabpanel" data-panel="other" data-obol="pay-other">
+          <h3 class="panel-label">Pay with another AI agent</h3>
+          <p class="panel-lede">Paste this into Claude, ChatGPT, Gemini, or any agent with internet access:</p>
+          <div class="copy-wrap">
+            <div class="prompt" id="p-other">{{.PromptOther}}</div>
+            <button class="copy" data-target="p-other" type="button">Copy</button>
+          </div>
+        </div>
+
+        <div class="tabpanel" data-panel="manual" data-obol="pay-manual">
+          <h3 class="panel-label">Pay manually (raw HTTP 402)</h3>
+          <p class="panel-lede">For x402-aware tools that consume the wire format directly:</p>
+          <div class="copy-wrap">
+            <pre class="json" id="p-json">{{.JSONBody}}</pre>
+            <button class="copy" data-target="p-json" type="button">Copy JSON</button>
+          </div>
+          {{if .ChatCompletionsBody}}
+          <details class="chat-completions" data-obol="chat-example">
+            <summary>{{if .ChatCompletionsNote}}{{.ChatCompletionsNote}}{{else}}Example request body{{end}}</summary>
+            <div class="copy-wrap">
+              <pre class="json" id="p-chat">{{.ChatCompletionsBody}}</pre>
+              <button class="copy" data-target="p-chat" type="button">Copy</button>
+            </div>
+          </details>
+          {{end}}
+        </div>
+      </section>
+
+      <footer data-obol="footer">
         <a href="https://x402.org" target="_blank" rel="noreferrer">What is x402? →</a>
-        <a href="{{.StorefrontURL}}">View seller storefront →</a>
+        <a href="{{.StorefrontURL}}" data-obol="storefront-link">View seller storefront →</a>
+        <span class="powered" data-obol="powered-by">Powered by <a href="https://obol.org" target="_blank" rel="noreferrer">Obol</a></span>
       </footer>
     </div>
 
@@ -268,7 +320,7 @@
         }, 1400);
       }
 
-      // Copy buttons that target an element by id (the Obol/Other/JSON cards).
+      // Copy buttons that target an element by id (prompt/JSON blocks).
       document.querySelectorAll(".copy").forEach(function (btn) {
         btn.addEventListener("click", function () {
           var target = document.getElementById(btn.getAttribute("data-target"));
@@ -285,6 +337,25 @@
           navigator.clipboard.writeText(v).then(function () { flashCopied(btn); });
         });
       });
+
+      // How-to-pay tabs: progressive enhancement — panels render stacked
+      // until this runs (see .paytabs.js rules).
+      (function () {
+        var box = document.getElementById("paytabs");
+        if (!box) return;
+        box.classList.add("js");
+        var tabs = box.querySelectorAll(".tab");
+        var panels = box.querySelectorAll(".tabpanel");
+        tabs.forEach(function (tab) {
+          tab.addEventListener("click", function () {
+            var key = tab.getAttribute("data-tab");
+            tabs.forEach(function (t) { t.classList.toggle("active", t === tab); });
+            panels.forEach(function (p) {
+              p.classList.toggle("active", p.getAttribute("data-panel") === key);
+            });
+          });
+        });
+      })();
     </script>
   </body>
 </html>

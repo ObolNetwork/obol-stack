@@ -1545,6 +1545,7 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string,
 			PayTo:               offer.Spec.Payment.PayTo,
 			Network:             offer.Spec.Payment.Network,
 			Description:         desc,
+			DescriptionHTML:     string(storefront.RenderRichText(desc)),
 			Skills:              skills,
 			Category:            offerCategory(offer),
 			Weight:              offer.Spec.Listing.Weight,
@@ -1597,12 +1598,20 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string,
 		services = append(services, svc)
 	}
 
+	theme := storefront.ResolveTheme(profile.Theme, profile.AccentColor)
 	catalog := schemas.ServiceCatalog{
-		SchemaVersion: schemas.ServiceCatalogSchemaVersion,
-		DisplayName:   profile.DisplayName,
-		Tagline:       profile.Tagline,
-		LogoURL:       profile.LogoURL,
-		Services:      services,
+		SchemaVersion:   schemas.ServiceCatalogSchemaVersion,
+		DisplayName:     profile.DisplayName,
+		Tagline:         profile.Tagline,
+		LogoURL:         profile.LogoURL,
+		Services:        services,
+		Theme:           theme.Name,
+		ThemeVars:       theme.Vars,
+		FaviconURL:      profile.FaviconURL,
+		OGImageURL:      profile.OGImageURL,
+		Description:     profile.Description,
+		DescriptionHTML: string(storefront.RenderRichText(profile.Description)),
+		CustomCSS:       storefront.SafeCustomCSS(profile.CustomCSS),
 	}
 	if catalog.Services == nil {
 		catalog.Services = []schemas.ServiceCatalogEntry{}
@@ -1617,12 +1626,15 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string,
 
 func fallbackServiceCatalogJSON(baseURL string) string {
 	profile := storefront.ResolvePublished(nil, baseURL)
+	theme := storefront.ResolveTheme(profile.Theme, profile.AccentColor)
 	catalog := schemas.ServiceCatalog{
 		SchemaVersion: schemas.ServiceCatalogSchemaVersion,
 		DisplayName:   profile.DisplayName,
 		Tagline:       profile.Tagline,
 		LogoURL:       profile.LogoURL,
 		Services:      []schemas.ServiceCatalogEntry{},
+		Theme:         theme.Name,
+		ThemeVars:     theme.Vars,
 	}
 	out, err := json.MarshalIndent(catalog, "", "  ")
 	if err != nil {

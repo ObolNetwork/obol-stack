@@ -139,7 +139,7 @@ Ask the **operator** (the human at the terminal) to handle the host-side
 half — you cannot do these from inside the cluster:
 
 - Permanent public URL: `obol tunnel setup` (+ optionally `obol domain`)
-- Storefront branding: `obol sell info set --display-name … --tagline … --logo-url …`
+- Storefront branding: `obol sell info set --display-name … --tagline … --logo-file … --theme light|dark|obol --description '<markdown>'` (also `--accent`, `--css-file`, and per-hostname overrides via `--hostname`)
 - ERC-8004 registration signing: `obol sell register`
 
 ### 8. Measure

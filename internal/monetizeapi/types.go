@@ -7,6 +7,8 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 )
 
 // DefaultDrainGracePeriod is the grace period applied to a draining
@@ -167,6 +169,15 @@ type ServiceOfferSpec struct {
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`
 	Hostname string `json:"hostname,omitempty"`
 
+	// Branding overrides the storefront-wide seller identity on this
+	// offer's dedicated origin (the landing page, 402 paywall, sign-in
+	// page and discovery surfaces served under spec.hostname).
+	// Field-wise merge over the operator's storefront profile: empty
+	// fields inherit. Only meaningful when spec.hostname is set —
+	// branding is per-origin; path-shared offers ride the storefront
+	// identity. Set via `obol sell info set --hostname <host> ...`.
+	Branding *ServiceOfferBranding `json:"branding,omitempty"`
+
 	// Optional provenance metadata for the service. Tracks how the model or
 	// service was produced (e.g. autoresearch experiment data). Included in
 	// the ERC-8004 registration document when present.
@@ -205,6 +216,51 @@ type ServiceOfferSpec struct {
 // resolves Ref → Agent CR, derives Upstream from Agent.status.endpoint, and
 // surfaces the agent's model + skills in the 402 response's extra block so
 // buyers see what they're paying for.
+// ServiceOfferBranding is the per-origin seller identity override for a
+// hostname-bound offer. Shape mirrors the storefront profile's identity
+// fields; every field is optional and empty fields inherit from the
+// storefront-wide profile at render time (see ProfilePatch).
+type ServiceOfferBranding struct {
+	// +kubebuilder:validation:MaxLength=128
+	DisplayName string `json:"displayName,omitempty"`
+	// +kubebuilder:validation:MaxLength=256
+	Tagline string `json:"tagline,omitempty"`
+	// https://..., /path on the main origin, or inline data:image/...;base64.
+	LogoURL string `json:"logoUrl,omitempty"`
+	// +kubebuilder:validation:Enum=light;dark;obol
+	Theme string `json:"theme,omitempty"`
+	// +kubebuilder:validation:Pattern=`^#[0-9a-fA-F]{3,8}$`
+	AccentColor string `json:"accentColor,omitempty"`
+	FaviconURL  string `json:"faviconUrl,omitempty"`
+	OGImageURL  string `json:"ogImageUrl,omitempty"`
+	// Longer seller copy for this origin (markdown subset — rendered
+	// through the storefront richtext sanitizer).
+	Description string `json:"description,omitempty"`
+	// Operator CSS for this origin, injected after the theme tokens.
+	// Size-capped + breakout-checked at set time and again at render.
+	// +kubebuilder:validation:MaxLength=65536
+	CustomCSS string `json:"customCss,omitempty"`
+}
+
+// ProfilePatch converts the branding block into a StorefrontProfile patch
+// suitable for storefront.MergeProfile: set fields override, empty inherit.
+func (b *ServiceOfferBranding) ProfilePatch() schemas.StorefrontProfile {
+	if b == nil {
+		return schemas.StorefrontProfile{}
+	}
+	return schemas.StorefrontProfile{
+		DisplayName: b.DisplayName,
+		Tagline:     b.Tagline,
+		LogoURL:     b.LogoURL,
+		Theme:       b.Theme,
+		AccentColor: b.AccentColor,
+		FaviconURL:  b.FaviconURL,
+		OGImageURL:  b.OGImageURL,
+		Description: b.Description,
+		CustomCSS:   b.CustomCSS,
+	}
+}
+
 type ServiceOfferAgent struct {
 	Ref ServiceOfferAgentRef `json:"ref,omitempty"`
 }

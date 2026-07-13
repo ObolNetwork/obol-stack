@@ -114,6 +114,7 @@ Values: `true`/`all` → all; comma-separated short names → those only; unset/
 | `internal/embed/skills/**` | host CLI (embedded) + agent PVC via `CopySkills` on `obol stack up` / `obol agent sync` | yes | no | yes (auto on `stack up`) |
 | `internal/embed/infrastructure/**` (templates/values) | host CLI (embedded helmfile) | yes | no | no |
 | `web/public-storefront/**`, `Dockerfile.public-storefront` | storefront image | no | `obol-stack-public-storefront` | no |
+| `internal/storefront/**` (themes, profile, richtext, custom CSS) | host CLI + verifier + controller images | yes | `x402-verifier,serviceoffer-controller` | no |
 | `flows/**`, `plans/**`, `docs/**`, `*.md`, `*_test.go` | nothing runtime | no | no | no |
 
 ¹ Controller/buyer changes don't strictly need a CLI rebuild, but if your edit also touches a shared package (e.g. `internal/monetizeapi`, `internal/schemas`) the CLI needs to rebuild too — when in doubt, `just build` is cheap.

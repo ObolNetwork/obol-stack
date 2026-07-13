@@ -14,6 +14,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/ObolNetwork/obol-stack/internal/storefront"
 )
 
 // Contract headers between the x402-verifier and the broker. The verifier
@@ -455,6 +457,11 @@ type statusPageData struct {
 	Refresh bool
 }
 
+// brokerTheme is the stack default theme. The broker has no storefront
+// profile access (that plumbing lives in the verifier); per-seller theming
+// of job pages arrives with per-hostname branding.
+var brokerTheme = storefront.ResolveTheme(storefront.DefaultTheme, "")
+
 var statusPageTmpl = template.Must(template.New("job_status").Parse(`<!doctype html>
 <html lang="en">
   <head>
@@ -462,10 +469,10 @@ var statusPageTmpl = template.Must(template.New("job_status").Parse(`<!doctype h
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>{{if .Job}}Job {{.Job.State}}{{else}}{{.Status}} — {{.Title}}{{end}}</title>
     <meta name="robots" content="noindex" />
-    <meta name="theme-color" content="#091011" />
+    <meta name="theme-color" content="` + brokerTheme.ThemeColor() + `" />
     {{if .Refresh}}<meta http-equiv="refresh" content="5" />{{end}}
     <style>
-      :root { --bg01:#091011; --bg02:#111f22; --stroke:#1e3a3f; --green:#2fe4ab; --light:#d9eef3; --body:#9cc2c9; --muted:#475e64; --red:#ff7a7a; --mono:"JetBrains Mono",ui-monospace,monospace; }
+      :root { ` + brokerTheme.CSSVars() + ` --mono:"JetBrains Mono",ui-monospace,monospace; }
       * { box-sizing:border-box; } html, body { background:var(--bg01); }
       body { margin:0; color:var(--light); font-family:"DM Sans",system-ui,sans-serif; line-height:1.5; }
       .wrap { max-width:560px; margin:0 auto; padding:80px 24px; }
@@ -491,7 +498,7 @@ var statusPageTmpl = template.Must(template.New("job_status").Parse(`<!doctype h
         {{else}}
           <p>Still working — this page refreshes every 5 seconds.</p>
         {{end}}
-        <p class="fineprint">Record expires {{.Job.ExpiresAt.UTC.Format "2006-01-02 15:04 UTC"}} · Powered by Obol Stack</p>
+        <p class="fineprint">Record expires {{.Job.ExpiresAt.UTC.Format "2006-01-02 15:04 UTC"}} · Powered by Obol</p>
       {{else}}
         <div class="state failed">{{.Status}}</div>
         <h1>{{.Title}}</h1>

@@ -87,6 +87,13 @@ func main() {
 					log.Printf("x402-serviceoffer-source: stopped: %v", err)
 				}
 			}()
+			// Storefront branding (seller name/logo/theme on 402, sign-in,
+			// and error pages). Best-effort: failure keeps stack defaults.
+			go func() {
+				if err := x402verifier.WatchStorefrontProfile(ctx, kubeCfg); err != nil {
+					log.Printf("x402-profile-source: stopped: %v (pages keep default branding)", err)
+				}
+			}()
 		default:
 			log.Fatalf("unsupported --route-source=%q (use file or kube)", *routeSource)
 		}
