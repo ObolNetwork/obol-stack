@@ -2,6 +2,7 @@ package serviceoffercontroller
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 	"log"
@@ -32,6 +33,19 @@ const (
 	// agentConditionReady is the rollup the rest of the system reads.
 	// True only when both Validated and Provisioned are True.
 	agentConditionReady = "Ready"
+
+	// agentConditionConfigDrift reports whether the live hermes-config
+	// ConfigMap was edited out-of-band relative to the hash the
+	// controller stamped on its last write. True only when reconcile
+	// skips the ConfigMap apply (desired hash still matches the stored
+	// annotation) but live data no longer hashes to that annotation.
+	agentConditionConfigDrift = "ConfigDrift"
+
+	// hermesConfigHashAnnotation is stamped on hermes-config ConfigMaps
+	// with the sha256 hex of data["config.yaml"] at the controller's last
+	// write. Survives controller-pod restarts so provisionAgent can skip
+	// rewrites when the CR-rendered desired config is unchanged.
+	hermesConfigHashAnnotation = "obol.org/hermes-config-hash"
 
 	// agentFinalizer keeps the CR around until the controller has had a
 	// chance to tear down per-agent resources (Deployments, PVCs,
@@ -295,6 +309,11 @@ func (c *Controller) updateAgentStatus(ctx context.Context, raw *unstructured.Un
 // shared cluster Secret so sub-agents can route inference. Resources
 // are server-side-applied with the controller's field manager so
 // repeated reconciles converge instead of fighting each other.
+//
+// hermes-config is special-cased: when the live ConfigMap already carries
+// an annotation equal to the freshly-rendered desired hash, the apply is
+// skipped so operator out-of-band edits are not clobbered every reconcile.
+// Out-of-band drift is reported via the ConfigDrift condition instead.
 func (c *Controller) provisionAgent(ctx context.Context, agent *monetizeapi.Agent, status *monetizeapi.AgentStatus) error {
 	apiKey, err := c.ensureAgentAPIKey(ctx, agent)
 	if err != nil {
@@ -315,11 +334,79 @@ func (c *Controller) provisionAgent(ctx context.Context, agent *monetizeapi.Agen
 	}
 
 	for _, m := range manifests {
+		if m.GetKind() == "ConfigMap" && m.GetName() == hermesConfigMap {
+			if err := c.applyOrSkipHermesConfig(ctx, agent, status, m); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := c.applyAgentObject(ctx, c.resourceFor(m), m); err != nil {
 			return fmt.Errorf("apply %s/%s %s: %w", m.GetKind(), m.GetName(), m.GetNamespace(), err)
 		}
 	}
 	return nil
+}
+
+// applyOrSkipHermesConfig gates the hermes-config ConfigMap write on the
+// content hash stamped as hermesConfigHashAnnotation on the live object.
+// When desired hash equals the stored annotation, the apply is skipped so
+// controller restarts and no-op reconciles do not rewrite the ConfigMap.
+// Drift (live data no longer matching the stored annotation) is surfaced
+// on status rather than clobbered.
+func (c *Controller) applyOrSkipHermesConfig(ctx context.Context, agent *monetizeapi.Agent, status *monetizeapi.AgentStatus, desired *unstructured.Unstructured) error {
+	configYAML, _, _ := unstructured.NestedString(desired.Object, "data", "config.yaml")
+	desiredHash := fmt.Sprintf("%x", sha256.Sum256([]byte(configYAML)))
+
+	live, err := c.configMaps.Namespace(agent.Namespace).Get(ctx, hermesConfigMap, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		live = nil
+		err = nil
+	}
+	if err != nil {
+		return fmt.Errorf("get hermes-config: %w", err)
+	}
+
+	skipApply, drift := hermesConfigDecision(live, desiredHash)
+	if skipApply {
+		if drift {
+			setAgentCondition(status, agentConditionConfigDrift, "True", "OutOfBandEdit",
+				"live hermes-config content differs from what the controller last wrote")
+		} else {
+			setAgentCondition(status, agentConditionConfigDrift, "False", "InSync",
+				"live hermes-config content matches controller-written hash")
+		}
+		return nil
+	}
+
+	if err := c.applyAgentObject(ctx, c.resourceFor(desired), desired); err != nil {
+		return fmt.Errorf("apply %s/%s %s: %w", desired.GetKind(), desired.GetName(), desired.GetNamespace(), err)
+	}
+	setAgentCondition(status, agentConditionConfigDrift, "False", "InSync",
+		"live hermes-config content matches controller-written hash")
+	return nil
+}
+
+// hermesConfigDecision decides whether provisionAgent should skip applying
+// the hermes-config ConfigMap and whether live content has drifted out-of-band.
+//
+// live == nil means ConfigMap not found (Get returned apierrors.IsNotFound).
+// skipApply is true only when desiredHash equals the hash annotation the
+// controller stamped on its last write — never by comparing desired content
+// against live content directly (that would treat deliberate operator edits
+// as "drift to revert" and reintroduce every-reconcile wipes).
+// drift is only meaningful when skipApply is true; when skipApply is false
+// this function always returns drift=false.
+func hermesConfigDecision(live *unstructured.Unstructured, desiredHash string) (skipApply, drift bool) {
+	if live == nil {
+		return false, false
+	}
+	stored, _, _ := unstructured.NestedString(live.Object, "metadata", "annotations", hermesConfigHashAnnotation)
+	if stored != desiredHash {
+		return false, false
+	}
+	liveData, _, _ := unstructured.NestedString(live.Object, "data", "config.yaml")
+	liveHash := fmt.Sprintf("%x", sha256.Sum256([]byte(liveData)))
+	return true, liveHash != desiredHash
 }
 
 // hasFinalizer reports whether the given raw CR carries the named
