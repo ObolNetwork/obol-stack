@@ -24,7 +24,8 @@ flowchart LR
     G --> H["Release-smoke gate"]
     H --> I{"Green enough to release?"}
     I -- "no" --> J["Record blockers, do not claim green"]
-    I -- "yes" --> K["Template-based non-draft RC release"]
+    I -- "yes" --> K["Confirm GHCR images for HEAD short SHA"]
+    K --> L["Tag on main + draft RC"]
 ```
 
 ## Inventory
@@ -67,31 +68,29 @@ PR descriptions should be self-contained and should not mention Codex or local h
 - Exact validation run and result.
 - Remaining risk or follow-up, if any.
 
-Diagram template:
-
-```mermaid
-sequenceDiagram
-    participant User
-    participant CLI as obol CLI
-    participant K8s as Kubernetes
-    participant Controller
-    participant Service as Runtime service
-    User->>CLI: command / upgrade / smoke
-    CLI->>K8s: apply intended manifests
-    K8s->>Controller: reconcile desired state
-    Controller->>Service: publish route or config
-    Service-->>User: validated behavior
-```
-
 ## GHAS, Renovate, And Image Pins
 
 Treat bot comments as review input, not noise:
 
 - Read the exact comment and affected line before changing anything.
 - For GitHub Actions and third-party images, prefer current versions pinned by immutable SHA or digest when the repo pattern expects it.
-- Check whether Renovate has a matching manager/rule for frontend RC images and digest updates. If it failed to open a bump, fix the rule and validate it with the narrowest available Renovate config check.
+- Frontend RC images and third-party digests (LiteLLM, cloudflared) still live in git; stack-owned x402 images do **not** — see `docs/release-images.md`.
 - For frontend RCs, verify both the repo pin and the running pod image/digest after cluster upgrade.
 - Do not mark the train done until PR checks and security comments are either fixed or explicitly documented as non-actionable with evidence.
+
+### Stack-owned images (no repin)
+
+```text
+merge to main → docker-publish-x402 tags :shortsha → tag when green
+```
+
+```bash
+.github/scripts/verify-release-images.sh HEAD
+# force publish if missing:
+gh workflow run docker-publish-x402.yml --ref main
+```
+
+CLI `version.GitCommit` selects `repo:<short-sha>`; first apply binds the GHCR index digest and **persists** it under `$OBOL_CONFIG_DIR/image-digests.json` so restarts keep the same digest (short-SHA tags on GHCR are treated as immutable by policy, but we do not re-resolve on every apply). Digests are never committed to git — see `docs/release-images.md` security considerations.
 
 ## Merge And Collapse Order
 
@@ -110,16 +109,29 @@ Before merging the next PR, confirm the previous behavior did not regress:
 - Any running-cluster upgrade still points at the expected backend and frontend images.
 - Release notes and PR descriptions still match the final merged code, not an earlier draft.
 
+After merges that touch payment-path / image-backed source, wait for **Build and Publish x402 Images** before claiming main is tag-ready.
+
 ## Release Candidate Gate
 
 A release candidate is not ready just because the GitHub release exists. Gate it in this order:
 
-1. Start the body from `.github/release-template.md`.
-2. Keep generated `What's Changed`, `New Contributors`, and `Full Changelog` at the bottom.
-3. Include warnings and operator directions for known upgrade issues only after validating the upgrade path or explicitly labeling the warning as unverified.
-4. Run the smoke set required by the release. Prefer CLI smoke (`obol stack`, `obol model`, `obol sell`, `obol buy`, `obol kubectl`) for targeted fixes. For full RCs, use `flows/release-smoke.sh` with live and fork flags when credentials and RPC capacity are available.
-5. Fill the release body with the actual smoke report: command, artifact path, pass/fail table, failed flow names, and current blockers.
-6. Only make the RC non-draft when the release body and validation evidence are complete.
+1. **Images on GHCR** for HEAD short SHA (`verify-release-images.sh`).
+2. Start the body from `.github/release-template.md`.
+3. Keep generated `What's Changed`, `New Contributors`, and `Full Changelog` at the bottom.
+4. Include warnings and operator directions for known upgrade issues only after validating the upgrade path or explicitly labeling the warning as unverified.
+5. Run the smoke set required by the release. Prefer CLI smoke (`obol stack`, `obol model`, `obol sell`, `obol buy`, `obol kubectl`) for targeted fixes. For full RCs, use `flows/release-smoke.sh` with live and fork flags when credentials and RPC capacity are available.
+6. Fill the release body with the actual smoke report: command, artifact path, pass/fail table, failed flow names, and current blockers.
+7. Only make the RC non-draft when the release body and validation evidence are complete.
+
+Tag only on main after step 1:
+
+```bash
+git fetch origin
+git switch main && git pull --ff-only
+.github/scripts/verify-release-images.sh HEAD
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
 
 If any smoke flow fails, say exactly what failed. Do not present a release as green when the report is red or partially blocked.
 
@@ -150,7 +162,7 @@ End with a short, auditable status:
 
 - PRs reviewed, fixed, merged, skipped, or left blocked.
 - Bot comments resolved or remaining.
-- Image pins and Renovate rules checked.
+- Release images confirmed on GHCR for the tag commit short SHA.
 - Smoke command, report path, and pass/fail summary.
 - Release URL and draft/prerelease status.
 - Cleanup performed and any cluster/worktree intentionally left running.

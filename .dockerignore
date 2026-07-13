@@ -1,3 +1,6 @@
+# Build context for pure-Go images (Dockerfile.x402*) and storefront.
+# Keep this tight — every byte is uploaded to BuildKit on each CI run.
+
 .workspace*
 .build/
 .tmp/
@@ -18,3 +21,23 @@ coverage/
 *.log
 *.out
 *.tmp
+
+# Frontend monorepo bulk (~400MB). Keep only the public storefront.
+web/**
+!web/public-storefront/
+!web/public-storefront/**
+
+# Tests and fixtures are not compiled into release binaries.
+**/*_test.go
+**/testdata/
+**/*_test/
+**/testdata/**
+**/.gitkeep
+
+# Local env / IDE noise
+.env*
+!.env.example
+.idea/
+.vscode/
+*.swp
+.DS_Store
