@@ -256,6 +256,11 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		"name: GATEWAY_HEALTH_URL",
 		"HERMES_DASHBOARD_BASIC_AUTH_USERNAME",
 		"HERMES_DASHBOARD_BASIC_AUTH_PASSWORD",
+		// Must track HERMES_HOME: v2026.7.x images bake
+		// HERMES_WRITE_SAFE_ROOT=/opt/data and deny all file-tool
+		// writes outside the safe root.
+		"name: HERMES_WRITE_SAFE_ROOT",
+		"value: /data/.hermes:/tmp",
 	} {
 		if !strings.Contains(values, needle) {
 			t.Fatalf("generateValues() missing %q:\n%s", needle, values)

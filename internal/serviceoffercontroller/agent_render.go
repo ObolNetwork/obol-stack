@@ -326,6 +326,10 @@ fi
 func agentPodSpec(agent *monetizeapi.Agent) map[string]any {
 	containerEnv := []any{
 		map[string]any{"name": "HERMES_HOME", "value": "/data/.hermes"},
+		// v2026.7.x images bake HERMES_WRITE_SAFE_ROOT=/opt/data (their default
+		// HERMES_HOME); with HERMES_HOME relocated to the PVC the safe root must
+		// follow or every file-tool write is denied.
+		map[string]any{"name": "HERMES_WRITE_SAFE_ROOT", "value": "/data/.hermes:/tmp"},
 		map[string]any{"name": "HOME", "value": "/data/.hermes/home"},
 		map[string]any{"name": "API_SERVER_ENABLED", "value": "true"},
 		map[string]any{"name": "API_SERVER_HOST", "value": "0.0.0.0"},
