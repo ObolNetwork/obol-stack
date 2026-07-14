@@ -73,6 +73,14 @@ spec:
                   type: string
                 maxItems: 32
                 type: array
+              maxConcurrentRuns:
+                description: |-
+                  Hermes gateway.api_server.max_concurrent_runs. Nil = omit the
+                  gateway block (Hermes internal default, 10). 0 disables the
+                  in-process cap — edge concurrency middleware governs instead.
+                maximum: 10000
+                minimum: 0
+                type: integer
               maxTurns:
                 description: Hermes agent.max_turns. Nil = 30 (historical sub-agent
                   default).

@@ -980,6 +980,12 @@ type AgentSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=10000
 	MaxTurns *int `json:"maxTurns,omitempty"`
+	// Hermes gateway.api_server.max_concurrent_runs. Nil = omit the
+	// gateway block (Hermes internal default, 10). 0 disables the
+	// in-process cap — edge concurrency middleware governs instead.
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=10000
+	MaxConcurrentRuns *int `json:"maxConcurrentRuns,omitempty"`
 	// Hermes agent.disabled_toolsets. Nil = ["memory","web"] (historical
 	// default). Explicit empty list disables none.
 	// +kubebuilder:validation:MaxItems=32
