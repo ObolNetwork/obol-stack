@@ -2,7 +2,7 @@
 name: obol-stack-dev
 description: CLI-first Obol Stack development and QA runbook. Use when working on obol-stack lifecycle, obol CLI surfaces, x402 seller/buyer tests, live Base Sepolia OBOL smoke, Anvil fork regressions, ERC-8004 registration, LiteLLM paid routing, release-smoke, cloudflared, Renovate image bumps, or remote QA worktrees.
 metadata:
-  version: "3.1.0"
+  version: "3.2.0"
   domain: infrastructure
   role: specialist
   scope: development-and-testing
@@ -67,7 +67,7 @@ OBOL_TOKEN_BASE_SEPOLIA=0x0a09371a8b011d5110656ceBCc70603e53FD2c78
 
 **Release notes**: start from `.github/release-template.md`. Keep generated `What's Changed` / `New Contributors` / `Full Changelog` at the bottom. v0.9.0 is the style reference. No private keys, seed phrases, hostnames, personal paths, or raw bearer tokens.
 
-## Hard-Won Lessons (from release-smoke 2026-05-13)
+## Hard-Won Lessons (release-smoke 2026-05-13 + 2026-07-14)
 
 When the smoke gate goes red, check these first — each was a multi-hour debug:
 
@@ -84,7 +84,9 @@ When the smoke gate goes red, check these first — each was a multi-hour debug:
 | facilitator arm64 image runs amd64 binary | Was an `ObolNetwork/x402-rs` prom-overlay arm64 manifest packaging bug. | **Fixed upstream**: `ObolNetwork/x402-rs#3` (merged 2026-05-13, `668b7bb`) dropped the redundant `--platform=$BUILDPLATFORM` pin from the prom-overlay builder stage. Registry image republished; arm64 manifest now ships an aarch64 ELF (digest `sha256:b209345c…`). The `X402_FACILITATOR_SKIP_PULL` knob has been removed from `flows/lib.sh`. |
 | flow-13 catalog assertion crashes with `'str' object has no attribute 'get'` | The smoke helper parsed `/api/services.json` as the old bare array and iterated object keys from the current catalog envelope. | `flows/lib-dual-stack.sh::assert_bob_service_catalog_contains` accepts both the current `{"services":[...]}` envelope and the legacy list form. |
 | Hermes install times out fetching `bedag/raw-2.0.2.tgz` | Hermes deploys generated Kubernetes resources through the third-party `bedag/raw` Helm chart. A chart repo/network miss blocks agent install even when the product logic is fine. | Classify as dependency/bootstrap drift. Longer-term debt reduction: replace the external raw chart with a small first-party/local raw-manifest chart or render/apply an embedded first-party Hermes chart. |
-| flow-02 stalls on `monitoring-kube-state-metrics` `ContainerCreating` | The kubelet is stuck pulling `registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0`. | Treat as registry/bootstrap drift. Preflight or pre-cache the exact image before full release-smoke; do not change flow assertions to hide it. |
+| flow-02 stalls on `monitoring-kube-state-metrics` `ContainerCreating` | The kubelet is stuck pulling `registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.18.0`. | Treat as registry/bootstrap drift. Preflight or pre-cache the exact image before full release-smoke; do not change flow assertions to hide it. Cleared on plain rerun 2026-07-14 — a one-off is not a regression. |
+| flow-11 step 43 / flow-03 step 2: intermittent 404 `{'detail':'Not Found'}` on paid or first inference | Poisoned LiteLLM model group: auto-discovery registered the host vLLM with a bare `api_base` (no `/v1`) alongside the correct `setup custom` entry; LiteLLM shuffles ~50/50 and never retries a 404. Latent since v0.10.0, NOT flow- or rc-specific. | Fixed in #745 (`internal/model/discover.go` appends `/v1`). Decisive evidence: vLLM access log alternating `POST /chat/completions 404` / `POST /v1/chat/completions 200`. Drift checker can't see it (names only) — #746. |
+| flow-03 step 3 / flow-04: tool-call not returned, agent HTTP 000 | The QA vLLM endpoint was relaunched without its tool-call/reasoning parser flags (`--enable-auto-tool-choice --tool-call-parser ... --reasoning-parser ...`). flow-03 asserts tool-call passthrough; a parserless endpoint fails it every run. | Always relaunch the QA endpoint with its publisher-exact launcher script, never a hand-rolled unit. Preflight before a smoke run: one direct `curl` chat-completion with `tools[]` against the endpoint must return `tool_calls`. |
 
 **Diagnosis pattern**: a 503 from the verifier or 404 from a paid route almost never means the verifier is bad — it usually means the deployed image isn't what you think it is, the chain id form mismatched, or the upstream wasn't reachable. Confirm the running image first (`obol kubectl get deploy -n x402 x402-verifier -o jsonpath='{.spec.template.spec.containers[*].image}'`) before diving into x402 logic.
 
