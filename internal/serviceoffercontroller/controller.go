@@ -1281,7 +1281,7 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	// on tunnel restarts (the configMap informer re-enqueues every offer
 	// when tunnelURL changes — see enqueueDiscoveryRefresh).
 	openAPIJSON := buildOpenAPIDocument(offers, baseURL, resolvedProfile)
-	apiDocsHTML := scalarHTML()
+	apiDocsHTML := scalarHTML(resolvedProfile)
 	bundles := buildOfferBundles(offers, resolvedProfile)
 	contentHash := computeSkillCatalogContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)
 

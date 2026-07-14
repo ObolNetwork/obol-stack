@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -640,48 +641,66 @@ func preflightHelmRepos(cfg *config.Config, u *ui.UI, helmBinary, helmfilePath s
 }
 
 // claudeTipIfRelevant prints a hint when the user has Claude Code installed
-// but the Obol skills plugin is not yet usable in their setup. Best-effort
-// and silent on any error — a missing or malformed Claude config must never
-// block stack up.
+// but the Obol skills plugin is not yet usable — or is out of date — in
+// their setup. Best-effort and silent on any error — a missing or malformed
+// Claude config (or an unreachable GitHub) must never block stack up.
 //
-// Three states the user can be in:
-//   - plugin already installed → silent (nothing to suggest)
+// States the user can be in:
+//   - marketplace not registered at all → suggest the marketplace add and install
 //   - marketplace registered but plugin not installed → suggest the install step
-//   - marketplace not registered at all → suggest both the marketplace add and install
+//   - plugin installed, newer version released → suggest the update step
+//   - plugin installed and current (or version unknowable) → silent
 func claudeTipIfRelevant(u *ui.UI) {
 	if _, err := exec.LookPath("claude"); err != nil {
 		return
 	}
-	mpName, mpRegistered := obolMarketplaceName()
-	if mpRegistered && obolPluginInstalled(mpName) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	pluginsDir := filepath.Join(home, ".claude", "plugins")
+
+	mpName, mpRegistered := obolMarketplaceName(pluginsDir)
+	if !mpRegistered {
+		u.Blank()
+		u.Dim("Tip: let your Claude Code instance manage your Obol Stack for you.")
+		u.Dim("  Add the Obol skills marketplace, then install the plugin:")
+		u.Dim("    claude plugin marketplace add ObolNetwork/skills")
+		u.Dim("    claude plugin install obol@obol")
+		return
+	}
+	pluginKey, installedVersion, installed := obolInstalledPlugin(pluginsDir, mpName)
+	if !installed {
+		u.Blank()
+		u.Dim("Tip: let your Claude Code instance manage your Obol Stack for you.")
+		u.Dim("  The Obol marketplace is registered. Install the plugin to enable it:")
+		u.Dim(fmt.Sprintf("    claude plugin install obol@%s", mpName))
+		return
+	}
+
+	// Installed: nudge only when a newer release is visible. Both sides are
+	// best-effort — an unknowable local version or an unreachable GitHub
+	// stays silent rather than nagging on guesswork.
+	latest := latestObolPluginVersion()
+	if installedVersion == "" || latest == "" || !versionLess(installedVersion, latest) {
 		return
 	}
 	u.Blank()
-	u.Dim("Tip: let your Claude Code instance manage your Obol Stack for you.")
-	if !mpRegistered {
-		u.Dim("  Add the Obol skills marketplace, then install the plugin:")
-		u.Dim("    claude plugin marketplace add ObolNetwork/skills")
-		u.Dim("    /plugin install obol@obol")
-	} else {
-		u.Dim("  The Obol marketplace is registered. Install the plugin to enable it:")
-		u.Dim(fmt.Sprintf("    /plugin install obol@%s", mpName))
-	}
+	u.Dim(fmt.Sprintf("Tip: Obol skills plugin %s is available (you have %s). Update with:", latest, installedVersion))
+	u.Dim(fmt.Sprintf("    claude plugin marketplace update %s", mpName))
+	u.Dim(fmt.Sprintf("    claude plugin update %s", pluginKey))
 }
 
 // obolMarketplaceName returns the local marketplace name that points at
 // ObolNetwork/skills (typically "obol") and a bool indicating whether it was
-// found in ~/.claude/plugins/known_marketplaces.json. The file is shaped as
-// an object keyed by marketplace name, e.g.:
+// found in <pluginsDir>/known_marketplaces.json. The file is shaped as an
+// object keyed by marketplace name, e.g.:
 //
 //	{
 //	  "obol": {"source": {"source": "github", "repo": "ObolNetwork/skills"}, ...}
 //	}
-func obolMarketplaceName() (string, bool) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", false
-	}
-	data, err := os.ReadFile(filepath.Join(home, ".claude", "plugins", "known_marketplaces.json"))
+func obolMarketplaceName(pluginsDir string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(pluginsDir, "known_marketplaces.json"))
 	if err != nil {
 		return "", false
 	}
@@ -703,32 +722,126 @@ func obolMarketplaceName() (string, bool) {
 	return "", false
 }
 
-// obolPluginInstalled reports whether any plugin from the given local
-// marketplace name is recorded in ~/.claude/plugins/installed_plugins.json.
-// Plugin keys are stored as "<plugin>@<marketplace>"; we match on the suffix
-// so we don't have to hardcode every plugin the marketplace ever publishes.
-func obolPluginInstalled(marketplaceName string) bool {
+// obolInstalledPlugin looks for a plugin from the given local marketplace in
+// <pluginsDir>/installed_plugins.json and returns its full key
+// ("<plugin>@<marketplace>"), its installed version ("" when unknowable),
+// and whether it was found at all. Plugin keys are stored as
+// "<plugin>@<marketplace>"; we match on the suffix so we don't have to
+// hardcode every plugin the marketplace ever publishes.
+//
+// The v2 file maps each key to an ARRAY of install records (one per scope —
+// user, project, ...), each carrying a "version" field that may be the
+// literal "unknown". Older shapes mapped keys to a single object; both are
+// tolerated, and any parse trouble degrades to "installed, version unknown"
+// (presence of the key is enough for the install check).
+func obolInstalledPlugin(pluginsDir, marketplaceName string) (key, version string, installed bool) {
 	if marketplaceName == "" {
-		return false
+		return "", "", false
 	}
-	home, err := os.UserHomeDir()
+	data, err := os.ReadFile(filepath.Join(pluginsDir, "installed_plugins.json"))
 	if err != nil {
-		return false
-	}
-	data, err := os.ReadFile(filepath.Join(home, ".claude", "plugins", "installed_plugins.json"))
-	if err != nil {
-		return false
+		return "", "", false
 	}
 	var doc struct {
-		Plugins map[string]any `json:"plugins"`
+		Plugins map[string]json.RawMessage `json:"plugins"`
 	}
 	if err := json.Unmarshal(data, &doc); err != nil {
-		return false
+		return "", "", false
 	}
 	suffix := "@" + marketplaceName
-	for key := range doc.Plugins {
-		if strings.HasSuffix(key, suffix) {
-			return true
+	for k, raw := range doc.Plugins {
+		if !strings.HasSuffix(k, suffix) {
+			continue
+		}
+		return k, installedPluginVersion(raw), true
+	}
+	return "", "", false
+}
+
+// installedPluginVersion extracts the best (highest) version from one
+// installed_plugins.json entry. "" when no usable version is recorded.
+func installedPluginVersion(raw json.RawMessage) string {
+	type record struct {
+		Version string `json:"version"`
+	}
+	var records []record
+	if err := json.Unmarshal(raw, &records); err != nil {
+		// Pre-v2 shape: a single object.
+		var one record
+		if err := json.Unmarshal(raw, &one); err != nil {
+			return ""
+		}
+		records = []record{one}
+	}
+	best := ""
+	for _, r := range records {
+		v := strings.TrimSpace(r.Version)
+		if v == "" || strings.EqualFold(v, "unknown") {
+			continue
+		}
+		if best == "" || versionLess(best, v) {
+			best = v
+		}
+	}
+	return best
+}
+
+// obolPluginManifestURL is the released plugin manifest on the marketplace
+// repo's default branch — the source of truth for "what's the latest
+// version". Package var so tests can point it at a local server.
+var obolPluginManifestURL = "https://raw.githubusercontent.com/ObolNetwork/skills/main/.claude-plugin/plugin.json"
+
+// latestObolPluginVersion fetches the released plugin version. Best-effort
+// with a tight timeout: "" on any failure — stack up output must never hang
+// or warn because GitHub is slow.
+func latestObolPluginVersion() string {
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get(obolPluginManifestURL)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if err != nil {
+		return ""
+	}
+	var manifest struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(body, &manifest); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(manifest.Version)
+}
+
+// versionLess reports whether version a is older than version b. Handles
+// dotted numeric versions ("1.4.0", optionally "v"-prefixed); missing
+// segments count as zero and non-numeric segments fall back to string
+// comparison. Unparseable inputs compare as not-less (never nag on noise).
+func versionLess(a, b string) bool {
+	as := strings.Split(strings.TrimPrefix(strings.TrimSpace(a), "v"), ".")
+	bs := strings.Split(strings.TrimPrefix(strings.TrimSpace(b), "v"), ".")
+	for i := 0; i < len(as) || i < len(bs); i++ {
+		av, bv := "0", "0"
+		if i < len(as) {
+			av = as[i]
+		}
+		if i < len(bs) {
+			bv = bs[i]
+		}
+		an, aerr := strconv.Atoi(av)
+		bn, berr := strconv.Atoi(bv)
+		if aerr != nil || berr != nil {
+			if av != bv {
+				return av < bv
+			}
+			continue
+		}
+		if an != bn {
+			return an < bn
 		}
 	}
 	return false

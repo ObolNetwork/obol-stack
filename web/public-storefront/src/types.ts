@@ -56,6 +56,11 @@ export interface Service {
   // for OBOL on base-sepolia and any non-mainnet OBOL deployment.
   asset?: ServiceAsset;
   description: string;
+  // descriptionHtml is the sanitized HTML rendering of description
+  // (markdown subset; sanitized by internal/storefront/richtext.go, the
+  // single markdown→HTML path). Absent on catalogs from pre-richtext
+  // controllers — fall back to the plain description.
+  descriptionHtml?: string;
   // skills are the OASF / buy-x402 skill names this offer advertises.
   // For type=agent offers it mirrors AgentResolution.Skills (the
   // resolved allow-list from the linked Agent CR); for non-agent
@@ -89,4 +94,23 @@ export interface StorefrontProfile {
   displayName: string;
   tagline: string;
   logoUrl: string;
+  // theme is the operator-selected preset name ("light" | "dark" | "obol").
+  // Absent on catalogs from pre-theming controllers — treat as "light".
+  theme?: string;
+  // themeVars is the resolved token→hex map for the theme (accent override
+  // already applied). Keys are bare token names ("bg01", "green", ...).
+  themeVars?: Record<string, string>;
+  // faviconUrl overrides the tab icon; empty falls back to the logo.
+  faviconUrl?: string;
+  // ogImageUrl overrides the link-preview image; empty uses the generated one.
+  ogImageUrl?: string;
+  // description is longer-form seller copy (markdown subset).
+  description?: string;
+  // descriptionHtml is its sanitized HTML rendering — same contract as
+  // Service.descriptionHtml.
+  descriptionHtml?: string;
+  // customCss is operator CSS injected after the theme tokens (already
+  // size-capped and breakout-checked by the controller; the layout guards
+  // again before inlining).
+  customCss?: string;
 }

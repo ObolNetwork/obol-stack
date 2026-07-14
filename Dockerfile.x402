@@ -1,0 +1,67 @@
+# syntax=docker/dockerfile:1
+#
+# Multi-target Dockerfile for all pure-Go stack-owned images.
+# CI builds every target via docker-bake.hcl from a SINGLE shared builder
+# stage (one go mod download + one multi-binary compile per platform).
+#
+# Cross-compilation: builder runs on $BUILDPLATFORM (native amd64 on GHA)
+# and emits TARGETOS/TARGETARCH binaries. CGO is off, so arm64 does NOT
+# need QEMU — that alone cuts multi-arch wall time from ~20–40m to a few
+# minutes.
+#
+# Targets: x402-verifier, x402-buyer, serviceoffer-controller, job-broker,
+# demo-server. Local one-shot:
+#   docker build -f Dockerfile.x402 --target x402-verifier -t … .
+
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+
+ARG TARGETOS=linux
+ARG TARGETARCH
+
+WORKDIR /src
+
+# Certificates for module download over TLS (alpine minimal).
+RUN apk add --no-cache ca-certificates git
+
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+	go mod download
+
+COPY . .
+
+# Build every binary in one RUN so the Go build cache is shared across
+# packages (monetizeapi, x402, embed, …). Cache mounts keep warm across CI runs.
+RUN --mount=type=cache,target=/go/pkg/mod \
+	--mount=type=cache,target=/root/.cache/go-build \
+	CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+	go build -trimpath -ldflags="-s -w" -o /out/x402-verifier ./cmd/x402-verifier && \
+	CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+	go build -trimpath -ldflags="-s -w" -o /out/x402-buyer ./cmd/x402-buyer && \
+	CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+	go build -trimpath -ldflags="-s -w" -o /out/serviceoffer-controller ./cmd/serviceoffer-controller && \
+	CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+	go build -trimpath -ldflags="-s -w" -o /out/job-broker ./cmd/job-broker && \
+	CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
+	go build -trimpath -ldflags="-s -w" -o /out/demo-server ./cmd/demo-server
+
+# ---- final images (one binary each) -----------------------------------------
+
+FROM gcr.io/distroless/static-debian12:nonroot AS x402-verifier
+COPY --from=builder /out/x402-verifier /x402-verifier
+ENTRYPOINT ["/x402-verifier"]
+
+FROM gcr.io/distroless/static-debian12:nonroot AS x402-buyer
+COPY --from=builder /out/x402-buyer /x402-buyer
+ENTRYPOINT ["/x402-buyer"]
+
+FROM gcr.io/distroless/static-debian12:nonroot AS serviceoffer-controller
+COPY --from=builder /out/serviceoffer-controller /serviceoffer-controller
+ENTRYPOINT ["/serviceoffer-controller"]
+
+FROM gcr.io/distroless/static-debian12:nonroot AS job-broker
+COPY --from=builder /out/job-broker /job-broker
+ENTRYPOINT ["/job-broker"]
+
+FROM gcr.io/distroless/static-debian12:nonroot AS demo-server
+COPY --from=builder /out/demo-server /demo-server
+ENTRYPOINT ["/demo-server"]

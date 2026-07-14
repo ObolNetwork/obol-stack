@@ -9,6 +9,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/ObolNetwork/obol-stack/internal/storefront"
 )
 
 // Per-offer discovery bundles for hostname-bound offers.
@@ -47,11 +48,15 @@ func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.Store
 		if offer == nil || offer.Spec.Hostname == "" {
 			continue
 		}
+		// The dedicated origin carries its own identity: the offer's
+		// branding block overrides the storefront profile field-wise
+		// (empty fields inherit).
+		originProfile := storefront.MergeProfile(profile, offer.Spec.Branding.ProfilePatch())
 		bundles = append(bundles,
 			offerBundleFile{
 				Key:     offerBundleKey(offer, "openapi.json"),
 				Path:    offerBundleDir(offer) + "/openapi.json",
-				Content: buildOfferScopedOpenAPI(offer, profile),
+				Content: buildOfferScopedOpenAPI(offer, originProfile),
 			},
 			offerBundleFile{
 				Key:     offerBundleKey(offer, "x402.json"),
@@ -61,7 +66,7 @@ func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.Store
 			offerBundleFile{
 				Key:     offerBundleKey(offer, "index.html"),
 				Path:    offerBundleDir(offer) + "/index.html",
-				Content: buildOfferLandingHTML(offer, profile),
+				Content: buildOfferLandingHTML(offer, originProfile),
 			},
 		)
 	}
@@ -267,36 +272,60 @@ var offerLandingTmpl = template.Must(template.New("offer_landing").Parse(`<!doct
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>{{.Title}}</title>
     <meta name="description" content="{{.Description}}" />
-    <meta name="theme-color" content="#091011" />
+    <meta name="theme-color" content="{{.ThemeColor}}" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="{{.Title}}" />
+    <meta property="og:description" content="{{.Description}}" />
+    <meta property="og:site_name" content="{{.Operator}}" />
+    {{if .OGImageURL}}<meta property="og:image" content="{{.OGImageURL}}" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="{{.OGImageURL}}" />{{end}}
+    {{if .FaviconURL}}<link rel="icon" href="{{.FaviconURL}}" />{{end}}
     <style>
-      :root { --bg01:#091011; --bg02:#111f22; --stroke:#1e3a3f; --green:#2fe4ab; --light:#d9eef3; --body:#9cc2c9; --muted:#475e64; --mono:"JetBrains Mono",ui-monospace,monospace; }
+      :root { {{.ThemeCSS}} --mono:"JetBrains Mono",ui-monospace,monospace; }
       * { box-sizing: border-box; } html, body { background: var(--bg01); }
       body { margin:0; color:var(--light); font-family:"DM Sans",system-ui,sans-serif; line-height:1.5; }
       .wrap { max-width:640px; margin:0 auto; padding:64px 24px 96px; }
-      img.logo { height:32px; width:auto; margin-bottom:24px; }
+      .brand { display:flex; align-items:center; gap:10px; margin-bottom:24px; color:var(--light); font-weight:600; font-size:15px; }
+      .brand img { height:32px; width:auto; }
       .pill { display:inline-block; font-family:var(--mono); font-size:13px; font-weight:600; color:var(--green); border:1px solid var(--green); border-radius:999px; padding:6px 14px; margin-bottom:24px; }
       h1 { font-size:28px; margin:0 0 8px; }
       p { color:var(--body); margin:0 0 12px; }
+      .richtext { color:var(--body); }
+      .richtext p { margin:0 0 10px; }
+      .richtext ul, .richtext ol { margin:0 0 10px; padding-left:22px; }
+      .richtext h3, .richtext h4 { color:var(--light); margin:14px 0 6px; font-size:16px; }
+      .richtext code { font-family:var(--mono); font-size:0.9em; }
+      .richtext pre { background:var(--bg01); border:1px solid var(--stroke); border-radius:8px; padding:12px; overflow-x:auto; }
       .card { background:var(--bg02); border:1px solid var(--stroke); border-radius:12px; padding:20px 24px; margin-top:24px; }
       .card h2 { font-size:15px; margin:0 0 8px; color:var(--light); }
       code, .mono { font-family:var(--mono); font-size:13px; color:var(--light); }
       a { color:var(--green); }
       .fineprint { color:var(--muted); font-size:13px; margin-top:32px; }
     </style>
+    {{if .CustomCSS}}<style data-obol="custom-css">{{.CustomCSS}}</style>{{end}}
   </head>
   <body>
-    <div class="wrap">
-      {{if .LogoURL}}<img class="logo" src="{{.LogoURL}}" alt="" />{{end}}
-      <span class="pill">{{.Price}}</span>
-      <h1>{{.Title}}</h1>
-      <p>{{.Description}}</p>
-      <div class="card">
+    <div class="wrap" data-obol="page-landing">
+      {{if .LogoURL}}<div class="brand" data-obol="brand"><img src="{{.LogoURL}}" alt="{{.Operator}}" />{{if .ShowName}}<span>{{.Operator}}</span>{{end}}</div>{{end}}
+      <span class="pill" data-obol="price">{{.Price}}</span>
+      <h1 data-obol="title">{{.Title}}</h1>
+      <div class="richtext" data-obol="description">{{.DescriptionHTML}}</div>
+      <!-- Reserved mount for the in-browser wallet checkout widget. -->
+      <div data-obol="checkout"></div>
+      <div class="card" data-obol="dev-links">
         <h2>For agents &amp; developers</h2>
         <p class="mono"><a href="/openapi.json">/openapi.json</a> — request shapes + per-route pricing</p>
         <p class="mono"><a href="/.well-known/x402">/.well-known/x402</a> — signable x402 payment requirements</p>
         <p>Payment is per-request via x402 micropayments: call an endpoint with no payment to receive the <code>402</code> challenge, sign one <code>accepts[]</code> entry, retry with the <code>X-PAYMENT</code> header.</p>
       </div>
-      <p class="fineprint">Sold by {{.Operator}} · Powered by <a href="https://obol.org">Obol Stack</a></p>
+      {{if .AboutHTML}}
+      <div class="card" data-obol="about">
+        <h2>About {{.Operator}}</h2>
+        <div class="richtext">{{.AboutHTML}}</div>
+      </div>
+      {{end}}
+      <p class="fineprint" data-obol="powered-by">Sold by {{.Operator}} · Powered by <a href="https://obol.org">Obol</a></p>
     </div>
   </body>
 </html>
@@ -314,16 +343,59 @@ func buildOfferLandingHTML(offer *monetizeapi.ServiceOffer, profile schemas.Stor
 	if operator == "" {
 		operator = "an Obol Stack operator"
 	}
+	theme := storefront.ResolveTheme(profile.Theme, profile.AccentColor)
+
+	// This page lives on the offer's dedicated origin, so only absolute
+	// URLs (or data: URIs) resolve reliably; the resolved profile's default
+	// logo is already absolute against the main storefront origin.
+	logo := strings.TrimSpace(profile.LogoURL)
+	custom := !storefront.IsDefaultLogoURL(logo)
+	showName := custom
+	if !custom && !theme.Dark {
+		// Default wordmark is light-on-dark: swap in the dark square mark
+		// (same origin as the wordmark) and spell out the operator name.
+		logo = strings.TrimSuffix(logo, storefront.DefaultLogoPath) + storefront.DefaultMarkPath
+		showName = true
+	}
+	favicon := crossOriginAssetURL(profile.FaviconURL)
+	if favicon == "" && custom {
+		favicon = crossOriginAssetURL(logo)
+	}
+
+	desc := offerDescription(offer, "x402 payment-gated service.")
 	var out strings.Builder
 	err := offerLandingTmpl.Execute(&out, map[string]any{
-		"Title":       title,
-		"Description": offerDescription(offer, "x402 payment-gated service."),
-		"Price":       describeOfferPrice(offer),
-		"LogoURL":     strings.TrimSpace(profile.LogoURL),
-		"Operator":    operator,
+		"Title": title,
+		// Meta/OG tags keep the plain text; the body renders the markdown.
+		"Description":     desc,
+		"DescriptionHTML": storefront.RenderRichText(desc),
+		"AboutHTML":       storefront.RenderRichText(profile.Description),
+		"CustomCSS":       template.CSS(storefront.SafeCustomCSS(profile.CustomCSS)),
+		"Price":           describeOfferPrice(offer),
+		// SafeAssetURL: inline data:image logos are a supported profile
+		// form that html/template's URL filter would otherwise reject.
+		"LogoURL":    storefront.SafeAssetURL(logo),
+		"ShowName":   showName,
+		"Operator":   operator,
+		"ThemeCSS":   template.CSS(theme.CSSVars()),
+		"ThemeColor": theme.ThemeColor(),
+		"FaviconURL": storefront.SafeAssetURL(favicon),
+		"OGImageURL": storefront.SafeAssetURL(crossOriginAssetURL(profile.OGImageURL)),
 	})
 	if err != nil {
 		return "<!doctype html><title>" + template.HTMLEscapeString(title) + "</title>"
 	}
 	return out.String()
+}
+
+// crossOriginAssetURL returns raw only when it resolves from a different
+// origin than it was authored against: absolute http(s) URLs and inline
+// data: URIs pass, site-relative paths (which would 404 on a dedicated
+// offer hostname) drop to "".
+func crossOriginAssetURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "https://") || strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "data:") {
+		return raw
+	}
+	return ""
 }

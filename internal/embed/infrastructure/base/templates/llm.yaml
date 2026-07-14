@@ -388,16 +388,10 @@ spec:
           type: RuntimeDefault
       containers:
         - name: x402-buyer
-          # Pinned by sha256 digest (multi-arch manifest list, amd64+arm64)
-          # so the deployed buyer is byte-for-byte identical across QA
-          # hosts. The :656e5f6 tag is preserved for human readability; the
-          # digest is authoritative.
-          # Previous tag-only pin allowed the local-build path to silently
-          # reuse a 5-day-old `:latest` image and ate the release-smoke 503
-          # investigation: stale buyer serialized X-PAYMENT with empty
-          # authorization fields → facilitator /verify 400 → 503 cascade
-          # across flow-08/11/14/13. See internal/embed/embed_image_pin_test.go.
-          image: ghcr.io/obolnetwork/x402-buyer:656e5f6@sha256:94ede3f4272cb9120ac845694932b1b56d414a9c003191da0137468f84e84e4d
+          # Stack-owned image: placeholder rewritten at apply time to
+          # :GitCommit@sha256:<index-digest> (prod) or :dev-<sha> (OBOL_DEVELOPMENT).
+          # Digests are never committed to git — see internal/images.
+          image: ghcr.io/obolnetwork/x402-buyer:__OBOL_IMAGE__
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

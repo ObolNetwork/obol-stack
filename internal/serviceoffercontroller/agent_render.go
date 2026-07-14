@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -71,7 +73,7 @@ func agentManifests(agent *monetizeapi.Agent, litellmKey, apiKey string) ([]*uns
 		return nil, fmt.Errorf("agentManifests: agent has no resolved model")
 	}
 
-	configYAML := renderHermesConfig(model, litellmKey)
+	configYAML := renderHermesConfig(agent, litellmKey)
 
 	out := []*unstructured.Unstructured{
 		buildAgentNamespace(agent.Namespace),
@@ -91,6 +93,10 @@ func agentManifests(agent *monetizeapi.Agent, litellmKey, apiKey string) ([]*uns
 // so the embedded indentation in the ConfigMap stays exactly as Hermes
 // expects, matching the master agent's known-good shape from
 // internal/hermes.generateConfig.
+//
+// Optional AgentSpec fields (ModelProvider, MaxTurns, DisabledToolsets,
+// MCPServers) override the historical defaults when set. When all are
+// unset, output is byte-identical to the pre-field template.
 //
 // Sub-agent constraints: every Agent CR is a sub-agent-for-sale (the
 // master is deployed via `obol agent init`, not via ServiceOffer), so the
@@ -117,30 +123,91 @@ func agentManifests(agent *monetizeapi.Agent, litellmKey, apiKey string) ([]*uns
 // agent-isolation NetworkPolicy (cluster-closed, cloud-IMDS blocked). Quote
 // "off" so the YAML parser keeps it the string "off" and never folds it to
 // the boolean false.
-func renderHermesConfig(model, litellmKey string) string {
-	return fmt.Sprintf(`model:
+func renderHermesConfig(agent *monetizeapi.Agent, litellmKey string) string {
+	model := agent.EffectiveModel()
+	var b strings.Builder
+
+	// Model block: empty/"custom" => cluster LiteLLM path (historical default).
+	// Any other provider omits base_url/api_key (credentials resolve in-pod).
+	provider := agent.Spec.ModelProvider
+	if provider == "" || provider == "custom" {
+		fmt.Fprintf(&b, `model:
   default: %q
   provider: custom
   base_url: http://litellm.llm.svc.cluster.local:4000/v1
   api_key: %q
-terminal:
+`, model, litellmKey)
+	} else {
+		fmt.Fprintf(&b, `model:
+  default: %q
+  provider: %s
+`, model, provider)
+	}
+
+	maxTurns := 30
+	if agent.Spec.MaxTurns != nil {
+		maxTurns = *agent.Spec.MaxTurns
+	}
+
+	disabled := agent.Spec.DisabledToolsets
+	if disabled == nil {
+		disabled = []string{"memory", "web"}
+	}
+
+	fmt.Fprintf(&b, `terminal:
   backend: local
   cwd: /data/.hermes/workspace
   timeout: 80
   lifetime_seconds: 90
   docker_mount_cwd_to_workspace: false
 agent:
-  max_turns: 30
+  max_turns: %d
   reasoning_effort: low
   disabled_toolsets:
-    - memory
-    - web
-approvals:
+`, maxTurns)
+	for _, ts := range disabled {
+		fmt.Fprintf(&b, "    - %s\n", ts)
+	}
+	b.WriteString(`approvals:
   mode: "off"
 skills:
   external_dirs:
     - /data/.hermes/obol-skills
-`, model, litellmKey)
+`)
+
+	// mcp_servers only when the operator listed servers; empty => omit entirely
+	// so existing agents stay byte-identical to the pre-field template.
+	if len(agent.Spec.MCPServers) > 0 {
+		b.WriteString("mcp_servers:\n")
+		for _, srv := range agent.Spec.MCPServers {
+			fmt.Fprintf(&b, "  %s:\n", srv.Name)
+			fmt.Fprintf(&b, "    command: %s\n", srv.Command)
+			if len(srv.Args) > 0 {
+				b.WriteString("    args:\n")
+				for _, arg := range srv.Args {
+					fmt.Fprintf(&b, "      - %s\n", arg)
+				}
+			}
+			if srv.Timeout != nil {
+				fmt.Fprintf(&b, "    timeout: %d\n", *srv.Timeout)
+			}
+			if len(srv.Env) > 0 {
+				b.WriteString("    env:\n")
+				keys := make([]string, 0, len(srv.Env))
+				for k := range srv.Env {
+					keys = append(keys, k)
+				}
+				sort.Strings(keys)
+				for _, k := range keys {
+					// Emit env values verbatim — do not expand ${VAR}; Hermes
+					// resolves interpolation in-pod at runtime.
+					fmt.Fprintf(&b, "      %s: %s\n", k, srv.Env[k])
+				}
+			}
+		}
+	}
+
+	return b.String()
 }
 
 func buildAgentNamespace(ns string) *unstructured.Unstructured {
@@ -195,6 +262,9 @@ func buildAgentDataPVC(agent *monetizeapi.Agent) *unstructured.Unstructured {
 }
 
 func buildAgentConfigMap(agent *monetizeapi.Agent, configYAML string) *unstructured.Unstructured {
+	// Stamp the same sha256 hex used for Deployment's checksum/hermes-config
+	// annotation so provisionAgent can skip rewrites when desired is unchanged.
+	configHash := fmt.Sprintf("%x", sha256.Sum256([]byte(configYAML)))
 	u := &unstructured.Unstructured{}
 	u.SetUnstructuredContent(map[string]any{
 		"apiVersion": "v1",
@@ -203,6 +273,9 @@ func buildAgentConfigMap(agent *monetizeapi.Agent, configYAML string) *unstructu
 			"name":      hermesConfigMap,
 			"namespace": agent.Namespace,
 			"labels":    asAnyMap(agentLabels(agent.Name)),
+			"annotations": map[string]any{
+				hermesConfigHashAnnotation: configHash,
+			},
 		},
 		"data": map[string]any{"config.yaml": configYAML},
 	})
@@ -326,6 +399,10 @@ fi
 func agentPodSpec(agent *monetizeapi.Agent) map[string]any {
 	containerEnv := []any{
 		map[string]any{"name": "HERMES_HOME", "value": "/data/.hermes"},
+		// v2026.7.x images bake HERMES_WRITE_SAFE_ROOT=/opt/data (their default
+		// HERMES_HOME); with HERMES_HOME relocated to the PVC the safe root must
+		// follow or every file-tool write is denied.
+		map[string]any{"name": "HERMES_WRITE_SAFE_ROOT", "value": "/data/.hermes:/tmp"},
 		map[string]any{"name": "HOME", "value": "/data/.hermes/home"},
 		map[string]any{"name": "API_SERVER_ENABLED", "value": "true"},
 		map[string]any{"name": "API_SERVER_HOST", "value": "0.0.0.0"},

@@ -30,6 +30,7 @@ description: Ethereum Layer 2 landscape — Arbitrum, Optimism, Base, zkSync, Sc
 | **Optimism** | Optimistic (OP Stack) | $8B+ | $0.001-0.003 | 2s | 7 days | 10 |
 | **Unichain** | Optimistic (OP Stack) | Growing | $0.001-0.003 | 1s | 7 days | 130 |
 | **Celo** | Optimistic (OP Stack) | $200M+ | <$0.001 | 5s | 7 days | 42220 |
+| **Robinhood Chain** | Optimistic (Arbitrum Nitro) | Growing | <$0.001 | ~100ms | 7 days | 4663 |
 | **Linea** | ZK | $900M+ | $0.003-0.006 | 2s | 30-60min | 59144 |
 | **zkSync Era** | ZK | $800M+ | $0.003-0.008 | 1s | 15-60min | 324 |
 | **Scroll** | ZK | $250M+ | $0.002-0.005 | 3s | 30-120min | 534352 |
@@ -119,6 +120,13 @@ Members contribute **15% of sequencer revenue** to the Optimism Collective. Cros
 - **Stylus:** Write smart contracts in Rust, C, C++ (compiles to WASM, runs alongside EVM, shares state). Use for compute-heavy operations (10-100x gas savings). Contracts must be "activated" via `ARB_WASM_ADDRESS` (0x0000…0071).
 - **Orbit:** Framework for launching L3 chains on Arbitrum. 47 live on mainnet.
 
+### Robinhood Chain
+- **What:** Robinhood's own Arbitrum Nitro stack L2 (chain ID 4663), settling to Ethereum L1. Gas token ETH, ~100ms blocks.
+- **Focus:** Consumer + tokenized assets — "Robinhood Token" tokenized stocks (AAPL, TSLA, SPY, …) as ERC-20s.
+- **Bridging:** Canonical Arbitrum-style bridge (~10 min deposits, 7-day withdrawal + L1 claim) plus partner routes: LayerZero/Stargate, CCIP, Relay, Across, LiFi.
+- **Bridged ERC-20 addresses DIFFER from Ethereum** — derive via the L2 Gateway Router, never reuse L1 addresses.
+- **Ecosystem is young (mid-2026):** Uniswap V2/V3/V4 + PancakeSwap deployed; deepest liquidity is USDG/WETH. The dominant stablecoin is Paxos **USDG, not USDC** (canonical bridged USDC exists but is near-empty; the explorer is full of scam "USDC" tokens). Verified addresses: `addresses/references/robinhood-chain.md`.
+
 ## RPCs and Explorers
 
 | L2 | RPC | Explorer |
@@ -128,11 +136,16 @@ Members contribute **15% of sequencer revenue** to the Optimism Collective. Cros
 | Optimism | `https://mainnet.optimism.io` | https://optimistic.etherscan.io |
 | Unichain | `https://mainnet.unichain.org` | https://uniscan.xyz |
 | Celo | `https://forno.celo.org` | https://celoscan.io |
+| Robinhood Chain | `https://rpc.mainnet.chain.robinhood.com` | https://robinhoodchain.blockscout.com |
 | zkSync | `https://mainnet.era.zksync.io` | https://explorer.zksync.io |
 | Scroll | `https://rpc.scroll.io` | https://scrollscan.com |
 | Linea | `https://rpc.linea.build` | https://lineascan.build |
 
 ## Bridging
+
+> **Runbooks + safety rules:** the `bridging` skill has verified contract
+> addresses, cast/signer.py recipes (deposits, withdrawals, claims), and the
+> time/cost/risk framework — use it for any actual bridge transaction.
 
 ### Official Bridges
 

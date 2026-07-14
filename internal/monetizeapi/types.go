@@ -7,6 +7,8 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 )
 
 // DefaultDrainGracePeriod is the grace period applied to a draining
@@ -167,6 +169,15 @@ type ServiceOfferSpec struct {
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`
 	Hostname string `json:"hostname,omitempty"`
 
+	// Branding overrides the storefront-wide seller identity on this
+	// offer's dedicated origin (the landing page, 402 paywall, sign-in
+	// page and discovery surfaces served under spec.hostname).
+	// Field-wise merge over the operator's storefront profile: empty
+	// fields inherit. Only meaningful when spec.hostname is set —
+	// branding is per-origin; path-shared offers ride the storefront
+	// identity. Set via `obol sell info set --hostname <host> ...`.
+	Branding *ServiceOfferBranding `json:"branding,omitempty"`
+
 	// Optional provenance metadata for the service. Tracks how the model or
 	// service was produced (e.g. autoresearch experiment data). Included in
 	// the ERC-8004 registration document when present.
@@ -205,6 +216,51 @@ type ServiceOfferSpec struct {
 // resolves Ref → Agent CR, derives Upstream from Agent.status.endpoint, and
 // surfaces the agent's model + skills in the 402 response's extra block so
 // buyers see what they're paying for.
+// ServiceOfferBranding is the per-origin seller identity override for a
+// hostname-bound offer. Shape mirrors the storefront profile's identity
+// fields; every field is optional and empty fields inherit from the
+// storefront-wide profile at render time (see ProfilePatch).
+type ServiceOfferBranding struct {
+	// +kubebuilder:validation:MaxLength=128
+	DisplayName string `json:"displayName,omitempty"`
+	// +kubebuilder:validation:MaxLength=256
+	Tagline string `json:"tagline,omitempty"`
+	// https://..., /path on the main origin, or inline data:image/...;base64.
+	LogoURL string `json:"logoUrl,omitempty"`
+	// +kubebuilder:validation:Enum=light;dark;obol
+	Theme string `json:"theme,omitempty"`
+	// +kubebuilder:validation:Pattern=`^#[0-9a-fA-F]{3,8}$`
+	AccentColor string `json:"accentColor,omitempty"`
+	FaviconURL  string `json:"faviconUrl,omitempty"`
+	OGImageURL  string `json:"ogImageUrl,omitempty"`
+	// Longer seller copy for this origin (markdown subset — rendered
+	// through the storefront richtext sanitizer).
+	Description string `json:"description,omitempty"`
+	// Operator CSS for this origin, injected after the theme tokens.
+	// Size-capped + breakout-checked at set time and again at render.
+	// +kubebuilder:validation:MaxLength=65536
+	CustomCSS string `json:"customCss,omitempty"`
+}
+
+// ProfilePatch converts the branding block into a StorefrontProfile patch
+// suitable for storefront.MergeProfile: set fields override, empty inherit.
+func (b *ServiceOfferBranding) ProfilePatch() schemas.StorefrontProfile {
+	if b == nil {
+		return schemas.StorefrontProfile{}
+	}
+	return schemas.StorefrontProfile{
+		DisplayName: b.DisplayName,
+		Tagline:     b.Tagline,
+		LogoURL:     b.LogoURL,
+		Theme:       b.Theme,
+		AccentColor: b.AccentColor,
+		FaviconURL:  b.FaviconURL,
+		OGImageURL:  b.OGImageURL,
+		Description: b.Description,
+		CustomCSS:   b.CustomCSS,
+	}
+}
+
 type ServiceOfferAgent struct {
 	Ref ServiceOfferAgentRef `json:"ref,omitempty"`
 }
@@ -901,6 +957,11 @@ type AgentSpec struct {
 	// top-of-rank on first deploy and writes status.pinnedModel.
 	// +kubebuilder:validation:MaxLength=256
 	Model string `json:"model,omitempty"`
+	// Hermes model provider. Empty or "custom" keeps the cluster LiteLLM
+	// path (base_url + api_key). Other values (e.g. "xai-oauth") omit those
+	// and resolve credentials in-pod.
+	// +kubebuilder:validation:MaxLength=64
+	ModelProvider string `json:"modelProvider,omitempty"`
 	// Allow-listed skills written to the per-agent skills dir on first
 	// reconcile. Agent can edit afterwards; this is a seed, not a sandbox.
 	// +kubebuilder:validation:MaxItems=64
@@ -910,8 +971,46 @@ type AgentSpec struct {
 	// Operator-supplied objective text. Substituted into the SOUL.md
 	// template by the seeder on first write. Agent owns SOUL.md after that.
 	// +kubebuilder:validation:MaxLength=4096
-	Objective string      `json:"objective,omitempty"`
-	Wallet    AgentWallet `json:"wallet,omitempty"`
+	Objective string `json:"objective,omitempty"`
+	// MCP servers rendered into Hermes config.yaml under mcp_servers.
+	// Empty/omitted: no mcp_servers block (byte-identical to pre-field config).
+	// +kubebuilder:validation:MaxItems=32
+	MCPServers []MCPServer `json:"mcpServers,omitempty"`
+	// Hermes agent.max_turns. Nil = 30 (historical sub-agent default).
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=10000
+	MaxTurns *int `json:"maxTurns,omitempty"`
+	// Hermes agent.disabled_toolsets. Nil = ["memory","web"] (historical
+	// default). Explicit empty list disables none.
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MaxLength=64
+	DisabledToolsets []string    `json:"disabledToolsets,omitempty"`
+	Wallet           AgentWallet `json:"wallet,omitempty"`
+}
+
+// MCPServer is one Hermes MCP server entry (stdio transport). Env values
+// may use ${VAR} interpolation; Hermes resolves them in-pod at runtime —
+// the controller does not expand them.
+type MCPServer struct {
+	// Server name used as the key under mcp_servers in config.yaml.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`
+	Name string `json:"name"`
+	// Command to launch the MCP server process.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=256
+	Command string `json:"command"`
+	// Arguments passed to Command. Omitted from YAML when empty.
+	// +kubebuilder:validation:MaxItems=64
+	Args []string `json:"args,omitempty"`
+	// Optional process timeout in seconds. Omitted from YAML when nil.
+	// +kubebuilder:validation:Minimum=1
+	Timeout *int `json:"timeout,omitempty"`
+	// Environment variables for the MCP process. Values may contain
+	// ${VAR} placeholders resolved by Hermes in-pod (not by the controller).
+	// +kubebuilder:validation:MaxProperties=64
+	Env map[string]string `json:"env,omitempty"`
 }
 
 type AgentWallet struct {

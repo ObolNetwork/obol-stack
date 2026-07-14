@@ -827,29 +827,6 @@ func TestX402VerifierRBAC_CanReadAgentAPISecrets(t *testing.T) {
 	t.Fatal("x402-verifier ClusterRole missing scoped secret get/list/watch rule")
 }
 
-// TestX402VerifierImage_CarriesAgentAuthFix: the pin VALUE is maintained by
-// the repin automation (.github/scripts/repin-x402-images.sh); what this test
-// guards is that whatever commit is pinned still descends from abfd55a (the
-// agent upstream auth fix). Bumping the pin backward past it fails here.
-func TestX402VerifierImage_CarriesAgentAuthFix(t *testing.T) {
-	tag, _ := extractEmbeddedImagePin(t, "base/templates/x402.yaml", "ghcr.io/obolnetwork/x402-verifier")
-	requireGitAncestor(t, "abfd55a", tag)
-}
-
-// TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix is the tripwire
-// for the per-agent provisioning 403 (GA blocker). The controller ClusterRole
-// in x402.yaml grants no secrets update/patch verb because the reconciler
-// treats Secret as create-only (isCreateOnlyKind). The image MUST therefore be
-// built from source that has that behaviour — the prior f5d94fc side-branch pin
-// did not, so the deployed binary Updated the per-agent Secrets on re-reconcile
-// and 403'd. b39bcaa (post-rc10 main) carries the fix.
-// The pin value itself is maintained by the repin automation; this test
-// asserts ancestry so a future downgrade can't silently re-ship the bug.
-func TestServiceOfferControllerImage_CarriesSecretCreateOnlyFix(t *testing.T) {
-	tag, _ := extractEmbeddedImagePin(t, "base/templates/x402.yaml", "ghcr.io/obolnetwork/serviceoffer-controller")
-	requireGitAncestor(t, "b39bcaa", tag)
-}
-
 // TestServiceOfferControllerSecretRBAC_Scoped guards the controller's Secret
 // access against the actual code paths in internal/serviceoffercontroller.
 // The reconciler touches exactly three Secrets by name (litellm-secrets,
