@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
@@ -1131,13 +1132,25 @@ func configuredModels(cfg *config.Config, u *ui.UI) ([]string, string, error) {
 }
 
 func generateConfig(cfg *config.Config, primary string) ([]byte, error) {
+	model := map[string]any{
+		"default":  primary,
+		"provider": "custom",
+		"base_url": "http://litellm.llm.svc.cluster.local:4000/v1",
+		"api_key":  litellmMasterKey(cfg),
+	}
+	// Hermes cannot discover the real context window through LiteLLM (its
+	// /models response strips max_model_len) and falls back to assuming
+	// 65536 — then requests max_tokens=65536, which any backend with a
+	// smaller window rejects. Hermes also refuses models it believes are
+	// <64K, so context_length must be the endpoint's true value (>=65536).
+	if n, err := strconv.Atoi(os.Getenv("OBOL_LLM_CONTEXT_LENGTH")); err == nil && n > 0 {
+		model["context_length"] = n
+	}
+	if n, err := strconv.Atoi(os.Getenv("OBOL_LLM_MAX_TOKENS")); err == nil && n > 0 {
+		model["max_tokens"] = n
+	}
 	payload := map[string]any{
-		"model": map[string]any{
-			"default":  primary,
-			"provider": "custom",
-			"base_url": "http://litellm.llm.svc.cluster.local:4000/v1",
-			"api_key":  litellmMasterKey(cfg),
-		},
+		"model": model,
 		"terminal": map[string]any{
 			"backend": "local",
 			"cwd":     "/data/.hermes/workspace",

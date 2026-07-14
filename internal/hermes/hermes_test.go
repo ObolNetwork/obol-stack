@@ -162,6 +162,53 @@ func TestGenerateConfig_PrimaryIsRoundTrippable(t *testing.T) {
 	}
 }
 
+func TestGenerateConfig_ContextEnvKnobs(t *testing.T) {
+	t.Setenv("OBOL_LLM_CONTEXT_LENGTH", "65536")
+	t.Setenv("OBOL_LLM_MAX_TOKENS", "8192")
+
+	raw, err := generateConfig(testConfig(t), "qwen36-nvfp4")
+	if err != nil {
+		t.Fatalf("generateConfig() error = %v", err)
+	}
+
+	var cfg map[string]any
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal() error = %v", err)
+	}
+	modelCfg, ok := cfg["model"].(map[string]any)
+	if !ok {
+		t.Fatalf("model config missing or wrong type: %#v", cfg["model"])
+	}
+	if got := modelCfg["context_length"]; got != 65536 {
+		t.Fatalf("model.context_length = %#v, want 65536", got)
+	}
+	if got := modelCfg["max_tokens"]; got != 8192 {
+		t.Fatalf("model.max_tokens = %#v, want 8192", got)
+	}
+}
+
+func TestGenerateConfig_ContextEnvKnobsAbsent(t *testing.T) {
+	t.Setenv("OBOL_LLM_CONTEXT_LENGTH", "")
+	t.Setenv("OBOL_LLM_MAX_TOKENS", "not-a-number")
+
+	raw, err := generateConfig(testConfig(t), "qwen36-nvfp4")
+	if err != nil {
+		t.Fatalf("generateConfig() error = %v", err)
+	}
+
+	var cfg map[string]any
+	if err := yaml.Unmarshal(raw, &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal() error = %v", err)
+	}
+	modelCfg := cfg["model"].(map[string]any)
+	if _, present := modelCfg["context_length"]; present {
+		t.Fatalf("model.context_length should be absent when env unset, got %#v", modelCfg["context_length"])
+	}
+	if _, present := modelCfg["max_tokens"]; present {
+		t.Fatalf("model.max_tokens should be absent for invalid env, got %#v", modelCfg["max_tokens"])
+	}
+}
+
 func TestGenerateConfig_UsesLiteLLMCustomProvider(t *testing.T) {
 	raw, err := generateConfig(testConfig(t), "gpt-5.2")
 	if err != nil {
