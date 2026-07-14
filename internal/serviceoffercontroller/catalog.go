@@ -51,7 +51,9 @@ func staticSiteContentMatches(cm *unstructured.Unstructured, content, servicesJS
 	if data["skill.md"] != content ||
 		data["services.json"] != servicesJSON ||
 		data["openapi.json"] != openAPIJSON ||
-		data["api.html"] != apiDocsHTML {
+		data["api.html"] != apiDocsHTML ||
+		data["chat.html"] != chatWidgetHTML ||
+		data["chat-vendor.js"] != chatWidgetVendorJS {
 		return false
 	}
 	// Per-offer bundles: every expected file present + identical, and no
@@ -87,7 +89,11 @@ func (c *Controller) staticSiteContentUnchanged(ctx context.Context, content, se
 }
 
 func computeStaticSiteContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) string {
-	return fmt.Sprintf("%x", md5Sum(content+servicesJSON+openAPIJSON+apiDocsHTML+bundleDigestInput(bundles)))[:8]
+	// The embedded chat widget is part of the served content: fold it in so
+	// a controller upgrade that changes the widget re-applies the ConfigMap
+	// and rolls the httpd (otherwise the skip-when-unchanged fast path
+	// pins the old assets forever).
+	return fmt.Sprintf("%x", md5Sum(content+servicesJSON+openAPIJSON+apiDocsHTML+chatWidgetHTML+chatWidgetVendorJS+bundleDigestInput(bundles)))[:8]
 }
 
 func staticSiteDeployedContentHash(deployment *unstructured.Unstructured) string {
