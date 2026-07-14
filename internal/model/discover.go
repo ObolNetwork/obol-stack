@@ -81,7 +81,11 @@ func buildDiscoveredProvider(ep inference.EndpointInfo) DiscoveredProvider {
 		if m.ID == "" {
 			continue
 		}
-		entries = append(entries, buildCustomEndpointEntry(m.ID, cluster, ""))
+		// The /v1 suffix is required — LiteLLM's OpenAI provider does not
+		// append it (CLAUDE.md pitfall 6). Without it, discovered vLLM
+		// endpoints 404 on /chat/completions and poison the model group
+		// alongside any correct `model setup custom` entry.
+		entries = append(entries, buildCustomEndpointEntry(m.ID, cluster+"/v1", ""))
 	}
 
 	return DiscoveredProvider{
