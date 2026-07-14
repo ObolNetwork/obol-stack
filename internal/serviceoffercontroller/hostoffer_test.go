@@ -267,3 +267,99 @@ func TestCatalogAdvertisesDedicatedOrigin(t *testing.T) {
 		t.Errorf("skill.md routes not rooted at dedicated origin:\n%.400s", skill)
 	}
 }
+
+// TestBuildHostHTTPRoute_AgentChatWidget pins the agent-only chat rules:
+// Exact /chat and /chat-vendor.js rewrite to the SHARED widget files at the
+// catalog httpd root (not the offer bundle dir), sit between the discovery
+// rules and the catch-all so they win over the payment gate, and do not
+// exist at all for non-agent offers (covered by TestBuildHostHTTPRoute's
+// rule-count pin).
+func TestBuildHostHTTPRoute_AgentChatWidget(t *testing.T) {
+	offer := hostnameOffer()
+	offer.Spec.Type = "agent"
+	route := buildHostHTTPRoute(offer)
+
+	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+	if len(rules) != 6 {
+		t.Fatalf("rules = %d, want 6 (3 discovery + /chat + /chat-vendor.js + catch-all)", len(rules))
+	}
+
+	wantShared := map[string]string{
+		"/chat":           "/chat.html",
+		"/chat-vendor.js": "/chat-vendor.js",
+	}
+	for i := 3; i <= 4; i++ {
+		rule := rules[i].(map[string]any)
+		match := rule["matches"].([]any)[0].(map[string]any)["path"].(map[string]any)
+		if match["type"] != "Exact" {
+			t.Errorf("rule %d match type = %v, want Exact", i, match["type"])
+		}
+		public := match["value"].(string)
+		want, ok := wantShared[public]
+		if !ok {
+			t.Fatalf("rule %d matches unexpected path %q", i, public)
+		}
+		filter := rule["filters"].([]any)[0].(map[string]any)
+		rewrite := filter["urlRewrite"].(map[string]any)["path"].(map[string]any)
+		if got := rewrite["replaceFullPath"]; got != want {
+			t.Errorf("rule %d (%s) rewrites to %v, want %s", i, public, got, want)
+		}
+		backend := rule["backendRefs"].([]any)[0].(map[string]any)
+		if backend["name"] != staticSiteConfigMapName || backend["namespace"] != staticSiteNamespace {
+			t.Errorf("rule %d backend = %v", i, backend)
+		}
+	}
+
+	// Catch-all must still be last.
+	last := rules[5].(map[string]any)
+	match := last["matches"].([]any)[0].(map[string]any)["path"].(map[string]any)
+	if match["type"] != "PathPrefix" {
+		t.Fatalf("last rule = %v, want the PathPrefix catch-all", match)
+	}
+}
+
+// TestOfferLandingChatEmbed pins the landing-page widget embed: agent offers
+// get the chat card iframing /chat; everything else keeps the plain landing.
+func TestOfferLandingChatEmbed(t *testing.T) {
+	profile := schemas.StorefrontProfile{DisplayName: "Acme", ContactEmail: "ops@acme.example"}
+
+	plain := buildOfferLandingHTML(hostnameOffer(), profile)
+	if strings.Contains(plain, `data-obol="chat"`) {
+		t.Fatalf("non-agent landing embeds the chat widget")
+	}
+
+	agent := hostnameOffer()
+	agent.Spec.Type = "agent"
+	withChat := buildOfferLandingHTML(agent, profile)
+	if !strings.Contains(withChat, `data-obol="chat"`) || !strings.Contains(withChat, `src="/chat"`) {
+		t.Fatalf("agent landing missing chat embed:\n%s", withChat)
+	}
+}
+
+// TestStaticSiteServesChatWidget pins the shared widget delivery: the
+// catalog ConfigMap carries the two embedded files, httpd serves .js with a
+// JavaScript MIME type (module imports hard-fail otherwise), and the volume
+// projection exposes both at the /www root.
+func TestStaticSiteServesChatWidget(t *testing.T) {
+	cm := buildStaticSiteConfigMap("# cat", `{"services":[]}`, `{}`, "<html></html>", nil)
+	data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+	if data["chat.html"] == "" || data["chat-vendor.js"] == "" {
+		t.Fatalf("catalog ConfigMap missing chat widget files")
+	}
+	if !strings.Contains(data["httpd.conf"], ".js:text/javascript") {
+		t.Fatalf("httpd.conf missing .js MIME mapping: %q", data["httpd.conf"])
+	}
+	var sawHTML, sawJS bool
+	for _, raw := range staticSiteVolumeItems(nil) {
+		item := raw.(map[string]any)
+		if item["key"] == "chat.html" && item["path"] == "chat.html" {
+			sawHTML = true
+		}
+		if item["key"] == "chat-vendor.js" && item["path"] == "chat-vendor.js" {
+			sawJS = true
+		}
+	}
+	if !sawHTML || !sawJS {
+		t.Fatalf("volume items missing chat widget projection (html=%v js=%v)", sawHTML, sawJS)
+	}
+}

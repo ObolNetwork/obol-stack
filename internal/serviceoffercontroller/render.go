@@ -270,7 +270,14 @@ func buildStaticSiteConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML st
 		"services.json": servicesJSON,
 		"openapi.json":  openAPIJSON,
 		"api.html":      apiDocsHTML,
-		"httpd.conf":    ".md:text/markdown\n.json:application/json\n.html:text/html\n",
+		// .js must map to a JavaScript MIME type: the chat widget loads
+		// chat-vendor.js as an ES module and browsers hard-fail module
+		// imports served with a non-script Content-Type.
+		"httpd.conf": ".md:text/markdown\n.json:application/json\n.html:text/html\n.js:text/javascript\n",
+		// Shared agent chat widget (one copy serves every agent offer;
+		// per-offer /chat routes rewrite here).
+		"chat.html":      chatWidgetHTML,
+		"chat-vendor.js": chatWidgetVendorJS,
 	}
 	for _, f := range bundles {
 		data[f.Key] = f.Content
@@ -293,8 +300,8 @@ func buildStaticSiteConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML st
 }
 
 // staticSiteVolumeItems projects the ConfigMap keys into the httpd's /www
-// tree: the four aggregate documents plus one file per hostname-offer
-// bundle entry (offers/<ns>/<name>/…).
+// tree: the aggregate documents, the shared agent chat widget, plus one
+// file per hostname-offer bundle entry (offers/<ns>/<name>/…).
 func staticSiteVolumeItems(bundles []offerBundleFile) []any {
 	items := []any{
 		map[string]any{"key": "skill.md", "path": "skill.md"},
@@ -305,6 +312,10 @@ func staticSiteVolumeItems(bundles []offerBundleFile) []any {
 		// HTTPRoute also matches the trailing-slash variant so the
 		// resolver kicks in either way.
 		map[string]any{"key": "api.html", "path": "api/index.html"},
+		// Shared agent chat widget, served at the /www root; agent-offer
+		// hostname routes rewrite /chat and /chat-vendor.js here.
+		map[string]any{"key": "chat.html", "path": "chat.html"},
+		map[string]any{"key": "chat-vendor.js", "path": "chat-vendor.js"},
 	}
 	for _, f := range bundles {
 		items = append(items, map[string]any{"key": f.Key, "path": f.Path})
@@ -778,6 +789,27 @@ func buildHostHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructu
 		}
 	}
 
+	// exactToShared rewrites to a file at the /www root (shared across
+	// offers) rather than into this offer's bundle directory.
+	exactToShared := func(publicPath, file string) map[string]any {
+		return map[string]any{
+			"matches": []any{
+				map[string]any{"path": map[string]any{"type": "Exact", "value": publicPath}},
+			},
+			"filters": []any{
+				map[string]any{
+					"type": "URLRewrite",
+					"urlRewrite": map[string]any{
+						"path": map[string]any{"type": "ReplaceFullPath", "replaceFullPath": "/" + file},
+					},
+				},
+			},
+			"backendRefs": []any{
+				map[string]any{"name": staticSiteConfigMapName, "namespace": staticSiteNamespace, "port": int64(8080)},
+			},
+		}
+	}
+
 	catchallFilters := []any{
 		map[string]any{
 			"type": "URLRewrite",
@@ -820,23 +852,37 @@ func buildHostHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructu
 						"sectionName": "web",
 					},
 				},
-				"rules": []any{
-					exactTo("/", "index.html"),
-					exactTo("/openapi.json", "openapi.json"),
-					exactTo("/.well-known/x402", "x402.json"),
-					map[string]any{
-						"matches": []any{
-							map[string]any{"path": map[string]any{"type": "PathPrefix", "value": "/"}},
-						},
-						"filters": catchallFilters,
-						"backendRefs": []any{
-							map[string]any{"name": "x402-verifier", "namespace": "x402", "port": int64(8080)},
-						},
-					},
-				},
+				"rules": hostRouteRules(offer, exactTo, exactToShared, catchallFilters),
 			},
 		},
 	}
+}
+
+// hostRouteRules assembles the dedicated-origin rule list: the three
+// discovery rules, the free chat widget for agent-type offers (Exact rules,
+// so they win over the verifier catch-all like the discovery paths do), and
+// the PathPrefix / payment gate last.
+func hostRouteRules(offer *monetizeapi.ServiceOffer, exactTo, exactToShared func(string, string) map[string]any, catchallFilters []any) []any {
+	rules := []any{
+		exactTo("/", "index.html"),
+		exactTo("/openapi.json", "openapi.json"),
+		exactTo("/.well-known/x402", "x402.json"),
+	}
+	if offer.IsAgent() {
+		rules = append(rules,
+			exactToShared("/chat", "chat.html"),
+			exactToShared("/chat-vendor.js", "chat-vendor.js"),
+		)
+	}
+	return append(rules, map[string]any{
+		"matches": []any{
+			map[string]any{"path": map[string]any{"type": "PathPrefix", "value": "/"}},
+		},
+		"filters": catchallFilters,
+		"backendRefs": []any{
+			map[string]any{"name": "x402-verifier", "namespace": "x402", "port": int64(8080)},
+		},
+	})
 }
 
 // sharedOriginRule is the /services/<name> PathPrefix rule → verifier,

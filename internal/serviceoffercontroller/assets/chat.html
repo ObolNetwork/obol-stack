@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent chat</title>
+<style>
+  :root {
+    --bg: #0b1416; --panel: #101d20; --edge: #1d3237; --ink: #d7e6e2; --dim: #6d8a86;
+    --mint: #96fce4; --warn: #ffb454; --err: #ff6b6b;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink); font: 15px/1.55 system-ui, sans-serif;
+    min-height: 100dvh; display: flex; flex-direction: column;
+  }
+  header {
+    padding: 14px 20px; border-bottom: 1px solid var(--edge);
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 15px; letter-spacing: .14em; color: var(--mint); font-weight: 600; }
+  header .tag { color: var(--dim); font-size: 13px; }
+  header a { color: var(--dim); font-size: 13px; margin-left: auto; text-decoration: none; }
+  header a:hover { color: var(--mint); }
+  main { flex: 1; display: flex; gap: 0; min-height: 0; }
+  #chatcol { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #log { flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 14px; }
+  .msg { max-width: 46rem; white-space: pre-wrap; overflow-wrap: break-word; }
+  .msg.user { align-self: flex-end; background: var(--panel); border: 1px solid var(--edge);
+              border-radius: 10px 10px 2px 10px; padding: 10px 14px; }
+  .msg.agent { align-self: flex-start; padding: 2px 0; }
+  .msg.agent::before { content: var(--agent-name, "agent"); display: block; font: 11px var(--mono);
+              color: var(--mint); letter-spacing: .08em; margin-bottom: 4px; }
+  .msg.sys { align-self: center; color: var(--dim); font-size: 13px; text-align: center; }
+  .msg.err { color: var(--err); }
+  #composer { display: flex; gap: 10px; padding: 14px 20px 18px; border-top: 1px solid var(--edge); }
+  #input { flex: 1; background: var(--panel); border: 1px solid var(--edge); color: var(--ink);
+           border-radius: 8px; padding: 10px 12px; font: inherit; resize: none; min-height: 44px; }
+  #input:focus { outline: 1px solid var(--mint); }
+  button {
+    background: var(--panel); color: var(--mint); border: 1px solid var(--mint);
+    border-radius: 8px; padding: 9px 16px; font: 600 14px system-ui; cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: var(--mint); color: var(--bg); }
+  button:disabled { border-color: var(--edge); color: var(--dim); cursor: default; }
+  aside {
+    width: 300px; border-left: 1px solid var(--edge); padding: 18px; background: var(--panel);
+    display: flex; flex-direction: column; gap: 16px; overflow-y: auto;
+  }
+  aside h2 { font-size: 11px; letter-spacing: .12em; color: var(--dim); font-weight: 600; text-transform: uppercase; }
+  .step { display: flex; flex-direction: column; gap: 8px; padding-bottom: 14px; border-bottom: 1px dashed var(--edge); }
+  .step p { color: var(--dim); font-size: 13px; }
+  .kv { font: 12px var(--mono); color: var(--dim); overflow-wrap: anywhere; }
+  .kv b { color: var(--ink); font-weight: 500; }
+  .kv a { color: var(--mint); text-decoration: none; }
+  #balance { font: 600 20px var(--mono); color: var(--mint); font-variant-numeric: tabular-nums; }
+  #fundrow { display: flex; gap: 8px; }
+  #fundamt { width: 80px; background: var(--bg); border: 1px solid var(--edge); color: var(--ink);
+             border-radius: 8px; padding: 8px; font: 14px var(--mono); }
+  .low { color: var(--warn) !important; }
+  #status { font-size: 12px; color: var(--dim); min-height: 1.2em; }
+  .done { opacity: .55; }
+  .spin::after { content: ""; display: inline-block; width: 10px; height: 10px; margin-left: 8px;
+                 border: 2px solid var(--dim); border-top-color: var(--mint); border-radius: 50%;
+                 animation: r 0.8s linear infinite; vertical-align: -1px; }
+  @keyframes r { to { transform: rotate(360deg); } }
+  @media (max-width: 760px) { main { flex-direction: column-reverse; } aside { width: 100%; border-left: 0; border-bottom: 1px solid var(--edge); } }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="agentname">AGENT</h1>
+  <span class="tag">autonomous agent · <span id="price">…</span> per message · <span id="netname">…</span></span>
+  <a href="/">about this agent →</a>
+</header>
+<main>
+  <div id="chatcol">
+    <div id="log">
+      <div class="msg sys">Connect a wallet and fund a session to start. Each message is paid
+automatically from your session wallet — no popups while you chat.</div>
+    </div>
+    <form id="composer">
+      <textarea id="input" placeholder="Ask the agent anything — each message is paid automatically" disabled></textarea>
+      <button id="send" disabled>Send</button>
+    </form>
+  </div>
+  <aside>
+    <h2>Session</h2>
+    <div class="step" id="s1">
+      <button id="btn-connect">Connect wallet</button>
+      <p>Any injected wallet (Rabby, MetaMask…).</p>
+      <div class="kv" id="mainaddr"></div>
+    </div>
+    <div class="step" id="s2">
+      <button id="btn-signin" disabled>Sign in with Ethereum</button>
+      <p>One signature derives a local session key. It never leaves this page and is re-derived
+by the same signature next visit — nothing is stored.</p>
+      <div class="kv" id="sessaddr"></div>
+    </div>
+    <div class="step" id="s3">
+      <div id="balance">—</div>
+      <div id="fundrow">
+        <input id="fundamt" value="1.00" inputmode="decimal" aria-label="USDC amount">
+        <button id="btn-fund" disabled>Fund session</button>
+      </div>
+      <p>USDC sent here pays the per-message price gaslessly. Keep it small; the same sign-in always
+recovers this wallet. <span id="reveal" style="cursor:pointer;color:var(--mint)">reveal key</span></p>
+      <div class="kv" id="keyout"></div>
+    </div>
+    <div id="status"></div>
+  </aside>
+</main>
+<script type="module">
+// single self-hosted vendor bundle (viem 2.21.25 + @x402/fetch + @x402/evm 2.18.0, esbuild --bundle
+// --minify from the exact versions proven by the x402trace paid harness) — no CDN at runtime
+import { createWalletClient, createPublicClient, custom, http, erc20Abi,
+         formatUnits, parseUnits, keccak256, privateKeyToAccount, base, baseSepolia,
+         wrapFetchWithPayment, x402Client, ExactEvmScheme, toClientEvmSigner } from "./chat-vendor.js";
+
+const ENDPOINT = "/v1/chat/completions";
+const AGENT = location.hostname.split(".")[0].replace(/-/g, " ");
+document.title = AGENT + " — chat";
+document.getElementById("agentname").textContent = AGENT.toUpperCase();
+document.documentElement.style.setProperty("--agent-name", JSON.stringify(AGENT));
+const MAX_PRICE = 50000n; // refuse challenges above $0.05 in 6-dec units
+const CHAINS = { "eip155:8453": base, "eip155:84532": baseSepolia };
+const $ = (id) => document.getElementById(id);
+let net, chain, asset, pub, explorer; // resolved from the 402 challenge
+
+let wallet, mainAddr, burner, payFetch, model = location.hostname.split(".")[0], price = null;
+const messages = [];
+
+const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
+const status = (t, spin) => { $("status").textContent = t; $("status").className = spin ? "spin" : ""; };
+const say = (cls, text) => {
+  const d = document.createElement("div");
+  d.className = "msg " + cls; d.textContent = text;
+  $("log").appendChild(d); $("log").scrollTop = $("log").scrollHeight;
+  return d;
+};
+
+// ---- startup: unpaid probe confirms the agent is up and shows the live price
+(async () => {
+  try {
+    const r = await fetch(ENDPOINT, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model, messages: [{ role: "user", content: "ping" }] }) });
+    if (r.status !== 402) throw new Error("expected 402, got " + r.status);
+    const c = await r.json();
+    const acc = (c.accepts || [])[0] || {};
+    net = acc.network; chain = CHAINS[net]; asset = acc.asset;
+    if (!chain || !asset) throw new Error("unsupported payment network: " + net);
+    pub = createPublicClient({ chain, transport: http() });
+    explorer = chain.blockExplorers?.default?.url || "";
+    price = BigInt(acc.amount || 0);
+    model = c.extensions?.bazaar?.info?.input?.body?.model || model;
+    $("price").textContent = "$" + formatUnits(price, 6);
+    $("netname").textContent = (acc.extra?.name || "USDC") + " on " + chain.name;
+    if (price > MAX_PRICE) { say("sys err", "Advertised price exceeds this page's safety cap — chat disabled."); price = null; }
+  } catch (e) { $("price").textContent = "?"; say("sys err", "Agent unreachable: " + e.message); }
+})();
+
+// ---- step 1: connect
+$("btn-connect").onclick = async () => {
+  try {
+    if (!window.ethereum) { say("sys err", "No wallet found. Install Rabby or MetaMask, then reload."); return; }
+    if (!chain) { status("still fetching the agent's payment details — try again in a second"); return; }
+    [mainAddr] = await window.ethereum.request({ method: "eth_requestAccounts" });
+    try { await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x" + chain.id.toString(16) }] }); } catch {}
+    wallet = createWalletClient({ account: mainAddr, chain, transport: custom(window.ethereum) });
+    $("mainaddr").innerHTML = "wallet <b>" + short(mainAddr) + "</b>";
+    $("s1").classList.add("done"); $("btn-connect").disabled = true; $("btn-signin").disabled = false;
+  } catch (e) { status("connect failed: " + (e.shortMessage || e.message)); }
+};
+
+// ---- step 2: sign in -> derive session key (deterministic, domain-bound)
+const SIGNIN = "Agent chat session key v1\n" +
+  "domain: " + location.hostname + "\n\n" +
+  "Signing derives a local session wallet used to pay this agent per chat message.\n" +
+  "Only sign this message on " + location.hostname + ".";
+$("btn-signin").onclick = async () => {
+  try {
+    status("waiting for signature…", true);
+    const sig = await wallet.signMessage({ account: mainAddr, message: SIGNIN });
+    burnerPk = keccak256(sig);
+    burner = privateKeyToAccount(burnerPk);
+    const x = new x402Client().register(net, new ExactEvmScheme(toClientEvmSigner(burner, pub)));
+    payFetch = wrapFetchWithPayment(fetch, x);
+    $("sessaddr").innerHTML = 'session <b>' + short(burner.address) + '</b>' + (explorer ? ' · <a target="_blank" rel="noopener" href="' + explorer + '/address/' + burner.address + '">explorer</a>' : '');
+    $("s2").classList.add("done"); $("btn-signin").disabled = true; $("btn-fund").disabled = false;
+    status("");
+    await refreshBalance();
+  } catch (e) { status("sign-in failed: " + (e.shortMessage || e.message)); }
+};
+
+async function refreshBalance() {
+  if (!burner) return 0n;
+  const b = await pub.readContract({ address: asset, abi: erc20Abi, functionName: "balanceOf", args: [burner.address] });
+  $("balance").textContent = "$" + formatUnits(b, 6);
+  $("balance").classList.toggle("low", price !== null && b < price * 5n);
+  const ready = price !== null && b >= price;
+  $("input").disabled = !ready; $("send").disabled = !ready;
+  return b;
+}
+
+// ---- step 3: fund the session wallet from the main wallet (one wallet confirmation)
+$("btn-fund").onclick = async () => {
+  try {
+    const amt = parseUnits($("fundamt").value || "0", 6);
+    if (amt <= 0n) return;
+    status("confirm the USDC transfer in your wallet…", true);
+    const hash = await wallet.writeContract({ account: mainAddr, chain, address: asset,
+      abi: erc20Abi, functionName: "transfer", args: [burner.address, amt] });
+    status("funding tx sent, waiting for confirmation…", true);
+    await pub.waitForTransactionReceipt({ hash });
+    status("session funded ✓");
+    await refreshBalance();
+  } catch (e) { status("funding failed: " + (e.shortMessage || e.message)); }
+};
+
+// ---- chat loop: each send is auto-paid via x402 (silent EIP-3009 signature from the session key)
+$("composer").onsubmit = async (ev) => {
+  ev.preventDefault();
+  const text = $("input").value.trim();
+  if (!text || !payFetch) return;
+  $("input").value = ""; $("send").disabled = true; $("input").disabled = true;
+  say("user", text);
+  messages.push({ role: "user", content: text });
+  status("paying $" + formatUnits(price, 6) + " and running the agent…", true);
+  try {
+    const r = await payFetch(ENDPOINT, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model, messages, stream: false }) });
+    if (r.status === 429) { say("sys err", "Agent is busy (concurrent-run cap) — try again in a minute."); messages.pop(); }
+    else if (!r.ok) { say("sys err", "Request failed (" + r.status + "). " + (await r.text()).slice(0, 160)); messages.pop(); }
+    else {
+      const j = await r.json();
+      const reply = j.choices?.[0]?.message?.content || "(empty reply)";
+      messages.push({ role: "assistant", content: reply });
+      say("agent", reply);
+      const settled = r.headers.get("x-payment-response") || r.headers.get("payment-response");
+      status(settled ? "paid & settled on Base ✓" : "paid ✓");
+    }
+  } catch (e) {
+    messages.pop();
+    say("sys err", /insufficient|funds|balance/i.test(String(e.message)) ?
+      "Payment failed — session wallet balance too low. Top it up above." :
+      "Error: " + (e.shortMessage || e.message).slice(0, 200));
+    status("");
+  }
+  await refreshBalance();
+  $("input").focus();
+};
+
+// ---- reveal session key (two-click, inline — the key is the user's own, derived client-side)
+let burnerPk = null, revealState = 0; // 0 hidden, 1 armed, 2 shown
+$("reveal").onclick = () => {
+  if (!burnerPk) return;
+  revealState = (revealState + 1) % 3;
+  $("keyout").textContent = revealState === 2 ? "importable private key: " + burnerPk : "";
+  $("reveal").textContent = ["reveal key", "click again to reveal", "hide key"][revealState];
+};
+</script>
+</body>
+</html>

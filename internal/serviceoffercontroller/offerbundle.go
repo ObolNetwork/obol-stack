@@ -308,6 +308,9 @@ func buildOfferLandingHTML(offer *monetizeapi.ServiceOffer, profile schemas.Stor
 	var out strings.Builder
 	err := offerLandingTmpl.Execute(&out, map[string]any{
 		"Title": title,
+		// Agent-type offers get the embedded chat widget: the /chat and
+		// /chat-vendor.js Exact routes exist on the hostname iff IsAgent.
+		"ChatEnabled": offer.IsAgent(),
 		// Meta/OG tags keep the plain text; the body renders the markdown.
 		"Description":     desc,
 		"DescriptionHTML": storefront.RenderRichText(desc),
