@@ -3932,30 +3932,6 @@ func envOrDefault(key, fallback string) string {
 	return fallback
 }
 
-func formatPriceTableSummary(priceTable schemas.PriceTable, symbol string) string {
-	if symbol == "" {
-		symbol = "USDC"
-	}
-	switch {
-	case priceTable.PerRequest != "":
-		return fmt.Sprintf("%s %s/request", priceTable.PerRequest, symbol)
-	case priceTable.PerMTok != "":
-		return fmt.Sprintf("%s %s/request (approx from %s %s/MTok @ %d tok/request)",
-			priceTable.EffectiveRequestPrice(), symbol,
-			priceTable.PerMTok, symbol,
-			schemas.ApproxTokensPerRequest,
-		)
-	case priceTable.PerHour != "":
-		return fmt.Sprintf("%s %s/request (approx from %s %s/hour @ %d min/request)",
-			priceTable.EffectiveRequestPrice(), symbol,
-			priceTable.PerHour, symbol,
-			schemas.ApproxMinutesPerRequest,
-		)
-	default:
-		return fmt.Sprintf("0 %s/request", symbol)
-	}
-}
-
 func formatRoutePriceSummary(route x402verifier.RouteRule) string {
 	symbol := route.AssetSymbol
 	if symbol == "" {

@@ -368,24 +368,6 @@ func extractChecksumAnnotation(t *testing.T, values, key string) string {
 	return ""
 }
 
-func TestHermesExecArgs_UsesNativeHermesBinary(t *testing.T) {
-	got := hermesExecArgs("hermes-obol-agent", []string{"skills", "audit"}, false)
-	want := []string{
-		"exec", "-i",
-		"-c", "hermes",
-		"-n", "hermes-obol-agent",
-		"deploy/hermes",
-		"--",
-		"/opt/hermes/.venv/bin/hermes",
-		"skills",
-		"audit",
-	}
-
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("hermesExecArgs() = %#v, want %#v", got, want)
-	}
-}
-
 func TestResolveCLIInvocation_DefaultsToObolAgent(t *testing.T) {
 	cfg := testConfig(t)
 	mkdirInstance(t, cfg, agentruntime.DefaultInstanceID)

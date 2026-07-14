@@ -61,12 +61,6 @@ type DashboardOptions struct {
 	NoBrowser bool
 }
 
-type instance struct {
-	ID        string `json:"id"`
-	Namespace string `json:"namespace"`
-	URL       string `json:"url"`
-}
-
 func DeploymentPath(cfg *config.Config, id string) string {
 	return agentruntime.DeploymentPath(cfg, agentruntime.Hermes, id)
 }
@@ -290,43 +284,6 @@ func Sync(cfg *config.Config, id string, u *ui.UI) error {
 func Setup(cfg *config.Config, id string, _ SetupOptions, u *ui.UI) error {
 	u.Info("Re-rendering Hermes config from the current LiteLLM model inventory...")
 	return Sync(cfg, id, u)
-}
-
-func List(cfg *config.Config, u *ui.UI) error {
-	ids, err := agentruntime.ListInstanceIDs(cfg, agentruntime.Hermes)
-	if err != nil {
-		return err
-	}
-
-	var instances []instance
-	for _, id := range ids {
-		instances = append(instances, instance{
-			ID:        id,
-			Namespace: agentruntime.Namespace(agentruntime.Hermes, id),
-			URL:       "http://" + agentruntime.Hostname(agentruntime.Hermes, id),
-		})
-	}
-
-	if u.IsJSON() {
-		return u.JSON(instances)
-	}
-
-	if len(instances) == 0 {
-		u.Print("No Hermes instances installed")
-		u.Print("\nTo create one: obol agent new --runtime hermes")
-		return nil
-	}
-
-	u.Info("Hermes instances:")
-	u.Blank()
-	for _, inst := range instances {
-		u.Bold("  " + inst.ID)
-		u.Detail("  Namespace", inst.Namespace)
-		u.Detail("  URL", inst.URL)
-		u.Blank()
-	}
-	u.Printf("Total: %d instance(s)", len(instances))
-	return nil
 }
 
 func Delete(cfg *config.Config, id string, force bool, u *ui.UI) error {
@@ -568,16 +525,8 @@ func hermesDeploymentInstalled(cfg *config.Config, id string) (bool, error) {
 	return true, nil
 }
 
-func Skills(cfg *config.Config, id string, args []string) error {
-	return cliViaKubectlExec(cfg, id, append([]string{"skills"}, args...))
-}
-
 func CLI(cfg *config.Config, id string, args []string) error {
 	return cliViaKubectlExec(cfg, id, args)
-}
-
-func ResolveInstance(cfg *config.Config, args []string) (string, []string, error) {
-	return agentruntime.ResolveInstance(cfg, agentruntime.Hermes, args)
 }
 
 func ResolveCLIInvocation(cfg *config.Config, args []string) (string, []string, error) {
@@ -662,20 +611,6 @@ func containsID(ids []string, id string) bool {
 
 func cliViaKubectlExec(cfg *config.Config, id string, args []string) error {
 	return agentruntime.ExecInPod(cfg, agentruntime.Hermes, id, append([]string{hermesBinary}, args...))
-}
-
-// hermesExecArgs preserves the legacy argv-builder signature (namespace,
-// in-pod hermes args, TTY flag) so existing tests stay valid. It composes
-// the runtime-agnostic agentruntime.BuildExecArgs with the hermes binary
-// path, deriving the instance id from the namespace suffix.
-func hermesExecArgs(namespace string, args []string, withTTY bool) []string {
-	id := strings.TrimPrefix(namespace, string(agentruntime.Hermes)+"-")
-	return agentruntime.BuildExecArgs(
-		agentruntime.Hermes,
-		id,
-		append([]string{hermesBinary}, args...),
-		withTTY,
-	)
 }
 
 func getToken(cfg *config.Config, id string) (string, error) {

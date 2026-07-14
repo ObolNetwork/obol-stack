@@ -308,7 +308,6 @@ func HasConfiguredModels(cfg *config.Config) bool {
 	return false
 }
 
-
 // LoadDotEnv reads KEY=value pairs from a .env file.
 // Returns an empty map if the file doesn't exist or is unreadable.
 // Skips comments (#) and blank lines. Does not call os.Setenv.
@@ -942,8 +941,8 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 	return nil
 }
 
-// AddCustomEndpoint adds a custom OpenAI-compatible endpoint to LiteLLM
-// after validating it works.
+// AddCustomEndpointWithOptions adds a custom OpenAI-compatible endpoint to
+// LiteLLM after validating it works.
 //
 // LiteLLM `model_name` contract — the canonical identifier is the bare
 // `modelName`. Same convention every other code path in this stack uses:
@@ -958,10 +957,6 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 // each other in the LiteLLM ConfigMap; that is the natural "repoint my
 // model" behavior an operator running `obol model setup custom` wants when
 // they re-run the command.
-func AddCustomEndpoint(cfg *config.Config, u *ui.UI, endpoint, modelName, apiKey string) error {
-	return AddCustomEndpointWithOptions(cfg, u, endpoint, modelName, apiKey, CustomEndpointOptions{})
-}
-
 func AddCustomEndpointWithOptions(cfg *config.Config, u *ui.UI, endpoint, modelName, apiKey string, options CustomEndpointOptions) error {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")

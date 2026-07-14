@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 )
@@ -117,7 +118,7 @@ func TestNewClient(t *testing.T) {
 
 	ctx := context.Background()
 
-	client, err := NewClient(ctx, srv.URL)
+	client, err := newClient(ctx, srv.URL, IdentityRegistryBaseSepolia)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -268,13 +269,18 @@ func TestRegister(t *testing.T) {
 
 	ctx := context.Background()
 
-	client, err := NewClient(ctx, srv.URL)
+	client, err := newClient(ctx, srv.URL, IdentityRegistryBaseSepolia)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
 	defer client.Close()
 
-	agentID, err := client.Register(ctx, key, "https://example.com/.well-known/agent-registration.json")
+	opts, err := bind.NewKeyedTransactorWithChainID(key, client.chainID)
+	if err != nil {
+		t.Fatalf("transactor: %v", err)
+	}
+	opts.Context = ctx
+	agentID, _, err := client.RegisterWithOptsDetailed(ctx, opts, "https://example.com/.well-known/agent-registration.json")
 	if err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -312,7 +318,7 @@ func TestGetMetadata(t *testing.T) {
 
 	ctx := context.Background()
 
-	client, err := NewClient(ctx, srv.URL)
+	client, err := newClient(ctx, srv.URL, IdentityRegistryBaseSepolia)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -355,7 +361,7 @@ func TestTokenURI(t *testing.T) {
 
 	ctx := context.Background()
 
-	client, err := NewClient(ctx, srv.URL)
+	client, err := newClient(ctx, srv.URL, IdentityRegistryBaseSepolia)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -470,13 +476,18 @@ func TestSetAgentURI(t *testing.T) {
 
 	ctx := context.Background()
 
-	client, err := NewClient(ctx, srv.URL)
+	client, err := newClient(ctx, srv.URL, IdentityRegistryBaseSepolia)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
 	defer client.Close()
 
-	err = client.SetAgentURI(ctx, key, big.NewInt(42), "https://example.com/updated")
+	opts, err := bind.NewKeyedTransactorWithChainID(key, client.chainID)
+	if err != nil {
+		t.Fatalf("transactor: %v", err)
+	}
+	opts.Context = ctx
+	_, err = client.SetAgentURIWithOpts(ctx, opts, big.NewInt(42), "https://example.com/updated")
 	if err != nil {
 		t.Fatalf("SetAgentURI: %v", err)
 	}
@@ -496,7 +507,7 @@ func TestSetMetadata(t *testing.T) {
 
 	ctx := context.Background()
 
-	client, err := NewClient(ctx, srv.URL)
+	client, err := newClient(ctx, srv.URL, IdentityRegistryBaseSepolia)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -524,7 +535,7 @@ func TestSetMetadata_TransactRevert(t *testing.T) {
 
 	ctx := context.Background()
 
-	client, err := NewClient(ctx, srv.URL)
+	client, err := newClient(ctx, srv.URL, IdentityRegistryBaseSepolia)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -567,7 +578,7 @@ func TestSetMetadata_RevertSurfacesErrorString(t *testing.T) {
 	defer srv.Close()
 
 	ctx := context.Background()
-	client, err := NewClient(ctx, srv.URL)
+	client, err := newClient(ctx, srv.URL, IdentityRegistryBaseSepolia)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -606,7 +617,7 @@ func TestSetMetadata_RevertSurfacesCustomErrorSelector(t *testing.T) {
 	defer srv.Close()
 
 	ctx := context.Background()
-	client, err := NewClient(ctx, srv.URL)
+	client, err := newClient(ctx, srv.URL, IdentityRegistryBaseSepolia)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -624,7 +635,7 @@ func TestSetMetadata_RevertSurfacesCustomErrorSelector(t *testing.T) {
 func TestNewClient_DialError(t *testing.T) {
 	ctx := context.Background()
 	// Use an unreachable address to trigger a dial/chain-id error.
-	_, err := NewClient(ctx, "http://127.0.0.1:1")
+	_, err := newClient(ctx, "http://127.0.0.1:1", IdentityRegistryBaseSepolia)
 	if err == nil {
 		t.Fatal("expected error from unreachable RPC URL, got nil")
 	}
@@ -645,13 +656,18 @@ func TestRegister_NoRegisteredEvent(t *testing.T) {
 
 	ctx := context.Background()
 
-	client, err := NewClient(ctx, srv.URL)
+	client, err := newClient(ctx, srv.URL, IdentityRegistryBaseSepolia)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
 	defer client.Close()
 
-	_, err = client.Register(ctx, key, "https://example.com/agent")
+	opts, err := bind.NewKeyedTransactorWithChainID(key, client.chainID)
+	if err != nil {
+		t.Fatalf("transactor: %v", err)
+	}
+	opts.Context = ctx
+	_, _, err = client.RegisterWithOptsDetailed(ctx, opts, "https://example.com/agent")
 	if err == nil {
 		t.Fatal("expected error when Registered event not found, got nil")
 	}
@@ -679,13 +695,18 @@ func TestRegister_TxError(t *testing.T) {
 
 	ctx := context.Background()
 
-	client, err := NewClient(ctx, srv.URL)
+	client, err := newClient(ctx, srv.URL, IdentityRegistryBaseSepolia)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
 	defer client.Close()
 
-	_, err = client.Register(ctx, key, "https://example.com/agent")
+	opts, err := bind.NewKeyedTransactorWithChainID(key, client.chainID)
+	if err != nil {
+		t.Fatalf("transactor: %v", err)
+	}
+	opts.Context = ctx
+	_, _, err = client.RegisterWithOptsDetailed(ctx, opts, "https://example.com/agent")
 	if err == nil {
 		t.Fatal("expected error from sendRawTransaction failure, got nil")
 	}
@@ -717,7 +738,7 @@ func TestGetMetadata_EmptyResult(t *testing.T) {
 
 	ctx := context.Background()
 
-	client, err := NewClient(ctx, srv.URL)
+	client, err := newClient(ctx, srv.URL, IdentityRegistryBaseSepolia)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -777,7 +798,7 @@ func TestWaitForAgent_RetriesUntilOwnerVisible(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	client, err := NewClient(ctx, srv.URL)
+	client, err := newClient(ctx, srv.URL, IdentityRegistryBaseSepolia)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
@@ -813,7 +834,7 @@ func TestWaitForAgent_TimeoutReturnsError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	client, err := NewClient(ctx, srv.URL)
+	client, err := newClient(ctx, srv.URL, IdentityRegistryBaseSepolia)
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}

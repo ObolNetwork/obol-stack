@@ -103,12 +103,6 @@ func SupportedTokens() []string {
 	return tokens
 }
 
-// TokenSupportedOnChain reports whether a named token is registered for a chain.
-func TokenSupportedOnChain(tokenName, chainName string) bool {
-	_, ok := ResolveToken(tokenName, chainName)
-	return ok
-}
-
 // TokensOnChain returns a sorted slice of token symbols registered for the
 // given chain. Returns an empty slice when no tokens are registered for that
 // chain (or the chain is unknown).

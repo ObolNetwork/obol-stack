@@ -27,12 +27,6 @@ type Client struct {
 	chainID   *big.Int
 }
 
-// NewClient connects to rpcURL and binds to the Identity Registry on Base Sepolia.
-// For multi-network support, use NewClientForNetwork instead.
-func NewClient(ctx context.Context, rpcURL string) (*Client, error) {
-	return newClient(ctx, rpcURL, IdentityRegistryBaseSepolia)
-}
-
 // NewClientForNetwork connects to the eRPC base URL and binds to the Identity
 // Registry on the given network. The RPC URL is constructed as
 // rpcBaseURL + "/" + net.ERPCNetwork.
@@ -81,36 +75,6 @@ func (c *Client) ChainID() *big.Int {
 	return new(big.Int).Set(c.chainID)
 }
 
-// ETH returns the underlying ethclient for direct RPC calls.
-func (c *Client) ETH() *ethclient.Client {
-	return c.eth
-}
-
-// Register mints a new agent NFT with the given agentURI using a raw private key.
-// Returns the minted agentId (token ID).
-func (c *Client) Register(ctx context.Context, key *ecdsa.PrivateKey, agentURI string) (*big.Int, error) {
-	agentID, _, err := c.RegisterDetailed(ctx, key, agentURI)
-	return agentID, err
-}
-
-// RegisterDetailed mints a new agent NFT with the given agentURI and returns
-// both the minted agentId and transaction hash.
-func (c *Client) RegisterDetailed(ctx context.Context, key *ecdsa.PrivateKey, agentURI string) (*big.Int, string, error) {
-	opts, err := bind.NewKeyedTransactorWithChainID(key, c.chainID)
-	if err != nil {
-		return nil, "", fmt.Errorf("erc8004: transactor: %w", err)
-	}
-	opts.Context = ctx
-	return c.RegisterWithOptsDetailed(ctx, opts, agentURI)
-}
-
-// RegisterWithOpts mints a new agent NFT using the provided TransactOpts.
-// This allows callers to supply a custom Signer (e.g. remote-signer).
-func (c *Client) RegisterWithOpts(ctx context.Context, opts *bind.TransactOpts, agentURI string) (*big.Int, error) {
-	agentID, _, err := c.RegisterWithOptsDetailed(ctx, opts, agentURI)
-	return agentID, err
-}
-
 // RegisterWithOptsDetailed mints a new agent NFT using the provided
 // TransactOpts and returns both the minted agentId and transaction hash.
 func (c *Client) RegisterWithOptsDetailed(ctx context.Context, opts *bind.TransactOpts, agentURI string) (*big.Int, string, error) {
@@ -125,23 +89,6 @@ func (c *Client) RegisterWithOptsDetailed(ctx context.Context, opts *bind.Transa
 	}
 
 	return c.parseRegisteredEvent(receipt, tx.Hash())
-}
-
-// SubmitRegister submits a registration transaction and returns its hash
-// without waiting for the receipt.
-func (c *Client) SubmitRegister(ctx context.Context, key *ecdsa.PrivateKey, agentURI string) (string, error) {
-	opts, err := bind.NewKeyedTransactorWithChainID(key, c.chainID)
-	if err != nil {
-		return "", fmt.Errorf("erc8004: transactor: %w", err)
-	}
-	opts.Context = ctx
-
-	tx, err := c.contract.Transact(opts, "register", agentURI)
-	if err != nil {
-		return "", fmt.Errorf("erc8004: register tx: %w", err)
-	}
-
-	return tx.Hash().Hex(), nil
 }
 
 // CurrentBlockNumber returns the current tip height for the connected chain.
@@ -268,17 +215,6 @@ func (c *Client) SetMetadataWithOpts(ctx context.Context, opts *bind.TransactOpt
 		return fmt.Errorf("erc8004: wait mined: %w", err)
 	}
 	return nil
-}
-
-// SetAgentURI updates the agentURI for an existing agent NFT.
-func (c *Client) SetAgentURI(ctx context.Context, key *ecdsa.PrivateKey, agentID *big.Int, uri string) error {
-	opts, err := bind.NewKeyedTransactorWithChainID(key, c.chainID)
-	if err != nil {
-		return fmt.Errorf("erc8004: transactor: %w", err)
-	}
-	opts.Context = ctx
-	_, err = c.SetAgentURIWithOpts(ctx, opts, agentID, uri)
-	return err
 }
 
 // SetAgentURIWithOpts updates the agentURI using a caller-supplied

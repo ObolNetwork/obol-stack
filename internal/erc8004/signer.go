@@ -220,7 +220,7 @@ func (s *RemoteSigner) SignTypedData(ctx context.Context, addr common.Address, d
 }
 
 // RemoteTransactOpts creates a bind.TransactOpts that delegates signing to the
-// remote-signer. The returned opts can be used with Client.RegisterWithOpts and
+// remote-signer. The returned opts can be used with Client.RegisterWithOptsDetailed and
 // Client.SetMetadataWithOpts.
 func (s *RemoteSigner) RemoteTransactOpts(ctx context.Context, addr common.Address, chainID *big.Int) *bind.TransactOpts {
 	return &bind.TransactOpts{

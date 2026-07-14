@@ -108,19 +108,6 @@ func RemoveSystemResolver() {
 	RemoveHostsEntries()
 }
 
-// IsResolverConfigured checks whether the system resolver is already set up.
-func IsResolverConfigured() bool {
-	switch runtime.GOOS {
-	case osDarwin:
-		_, err := os.Stat(filepath.Join(macResolverDir, macResolverFile))
-		return err == nil
-	case osLinux:
-		return hasNMDnsmasqConfig() && isNMResolvConfActive()
-	default:
-		return false
-	}
-}
-
 // --- /etc/hosts management ---
 //
 // macOS Sequoia (15.x) has a known issue where /etc/resolver/ files don't
