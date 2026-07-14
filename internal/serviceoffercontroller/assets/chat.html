@@ -190,12 +190,21 @@ $("btn-signin").onclick = async () => {
     $("s2").classList.add("done"); $("btn-signin").disabled = true; $("btn-fund").disabled = false;
     status("");
     await refreshBalance();
+    // Poll so a transfer sent from any wallet (not just the Fund button)
+    // unlocks the chat; the balance readout is also click-to-refresh.
+    if (!balPoll) balPoll = setInterval(() => refreshBalance(), 8000);
+    $("balance").style.cursor = "pointer"; $("balance").title = "click to refresh";
+    $("balance").onclick = () => { status("refreshing balance…", true); refreshBalance().then(() => status("")); };
   } catch (e) { status("sign-in failed: " + (e.shortMessage || e.message)); }
 };
 
+let balPoll = null;
 async function refreshBalance() {
-  if (!burner) return 0n;
-  const b = await pub.readContract({ address: asset, abi: erc20Abi, functionName: "balanceOf", args: [burner.address] });
+  if (!burner || !pub) return 0n;
+  let b;
+  try {
+    b = await pub.readContract({ address: asset, abi: erc20Abi, functionName: "balanceOf", args: [burner.address] });
+  } catch { return 0n; } // transient RPC failure: keep the last rendered state
   $("balance").textContent = "$" + formatUnits(b, 6);
   $("balance").classList.toggle("low", price !== null && b < price * 5n);
   const ready = price !== null && b >= price;
