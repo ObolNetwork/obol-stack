@@ -446,11 +446,32 @@ func TestRenderHermesConfig_UnsetFieldsByteIdentical(t *testing.T) {
 	agent.Spec.ModelProvider = ""
 	agent.Spec.MCPServers = nil
 	agent.Spec.MaxTurns = nil
+	agent.Spec.MaxConcurrentRuns = nil
 	agent.Spec.DisabledToolsets = nil
 
 	got := renderHermesConfig(agent, "lit-key")
 	if got != preChangeHermesConfigGolden {
 		t.Errorf("unset-fields config not byte-identical to pre-change golden\n--- got ---\n%q\n--- want ---\n%q", got, preChangeHermesConfigGolden)
+	}
+}
+
+func TestRenderHermesConfig_MaxConcurrentRunsZero(t *testing.T) {
+	agent := testAgentForHermesConfig("qwen3.5:9b")
+	agent.Spec.MaxConcurrentRuns = ptrInt(0)
+
+	got := renderHermesConfig(agent, "lit-key")
+	want := "gateway:\n  api_server:\n    max_concurrent_runs: 0\n"
+	if !strings.Contains(got, want) {
+		t.Errorf("config missing max_concurrent_runs: 0 block\n---\n%s", got)
+	}
+}
+
+func TestRenderHermesConfig_MaxConcurrentRunsNilOmitsGateway(t *testing.T) {
+	agent := testAgentForHermesConfig("qwen3.5:9b")
+	// MaxConcurrentRuns left nil (default/unset).
+	got := renderHermesConfig(agent, "lit-key")
+	if strings.Contains(got, "gateway:") {
+		t.Errorf("nil MaxConcurrentRuns must omit gateway block entirely; got:\n%s", got)
 	}
 }
 
