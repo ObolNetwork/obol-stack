@@ -165,6 +165,15 @@ EOF
         exit 2
     fi
 
+    # Hermes agents require a >=64K context model and cannot see the real
+    # window through LiteLLM (its /models strips max_model_len), so the
+    # deployment config must state it explicitly. Without these, hermes
+    # assumes 65536 and requests max_tokens=65536, which any endpoint with a
+    # smaller max_model_len rejects — flow-13/14 then fail their agent
+    # readiness preflight with "Context length exceeded ... Cannot compress".
+    export OBOL_LLM_CONTEXT_LENGTH="${OBOL_LLM_CONTEXT_LENGTH:-65536}"
+    export OBOL_LLM_MAX_TOKENS="${OBOL_LLM_MAX_TOKENS:-8192}"
+
     if ! preflight_openai_llm_endpoint; then
         cat >&2 <<EOF
 release-smoke: OBOL_LLM_ENDPOINT is set but did not pass the OpenAI-compatible
