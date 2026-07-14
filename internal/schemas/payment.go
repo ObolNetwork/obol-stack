@@ -109,19 +109,6 @@ type PriceTable struct {
 	PerEpoch string `json:"perEpoch,omitempty" yaml:"perEpoch,omitempty"`
 }
 
-// EffectiveRequestPrice returns the per-request price to use for x402 gating.
-// If PerRequest is set, it is returned directly. If only PerMTok is set, it is
-// temporarily approximated using ApproxTokensPerRequest until exact metering
-// exists. Invalid decimal inputs fall back to "0".
-func (p PriceTable) EffectiveRequestPrice() string {
-	price, err := p.EffectiveRequestPriceE()
-	if err != nil {
-		return "0"
-	}
-
-	return price
-}
-
 // EffectiveRequestPriceE returns the per-request price to use for x402 gating.
 // It performs the same conversion as EffectiveRequestPrice but returns parsing
 // errors to callers that need to validate input.

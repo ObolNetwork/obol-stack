@@ -1057,14 +1057,6 @@ func buildActiveRegistrationDocument(owner *monetizeapi.ServiceOffer, offers []*
 	return registration
 }
 
-func buildTombstoneRegistrationDocument(offer *monetizeapi.ServiceOffer, baseURL, agentID string) erc8004.AgentRegistration {
-	registration := buildActiveRegistrationDocument(offer, []*monetizeapi.ServiceOffer{offer}, baseURL, agentID)
-	registration.Active = false
-	registration.X402Support = false
-	registration.Description = fmt.Sprintf("%s (deactivated)", registration.Description)
-	return registration
-}
-
 func buildRegistrationServices(owner *monetizeapi.ServiceOffer, offers []*monetizeapi.ServiceOffer, baseURL string) []erc8004.ServiceDef {
 	baseURL = strings.TrimRight(baseURL, "/")
 	type offerKey struct {

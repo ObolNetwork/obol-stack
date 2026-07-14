@@ -243,23 +243,6 @@ func (c ChainInfo) DefaultAsset() AssetInfo {
 	}
 }
 
-// ResolveAssetInfo applies any route-level asset overrides on top of the
-// chain's default settlement asset.
-func ResolveAssetInfo(chain ChainInfo, rule *RouteRule) AssetInfo {
-	if rule == nil {
-		return chain.DefaultAsset()
-	}
-	// The inline asset fields describe the primary payment option.
-	return ResolveAssetInfoForPayment(chain, RoutePayment{
-		AssetAddress:        rule.AssetAddress,
-		AssetSymbol:         rule.AssetSymbol,
-		AssetDecimals:       rule.AssetDecimals,
-		AssetTransferMethod: rule.AssetTransferMethod,
-		EIP712Name:          rule.EIP712Name,
-		EIP712Version:       rule.EIP712Version,
-	})
-}
-
 // ResolveAssetInfoForPayment applies a single payment option's asset
 // overrides on top of the chain default. Same precedence and registry-flag
 // re-derivation as ResolveAssetInfo, but scoped to one accepted payment so a
@@ -381,20 +364,6 @@ func ClampMaxTimeoutSeconds(n int64) int64 {
 		return MaxMaxTimeoutSeconds
 	}
 	return n
-}
-
-// BuildV1Requirement creates a v1 PaymentRequirementsV1 for USDC payment on
-// the given chain. amount is the decimal USDC amount (e.g., "0.001" = $0.001).
-func BuildV1Requirement(chain ChainInfo, amount, recipientAddress string, maxTimeoutSeconds int64) x402types.PaymentRequirementsV1 {
-	asset := chain.DefaultAsset()
-	return x402types.PaymentRequirementsV1{
-		Scheme:            "exact",
-		Network:           chain.NetworkID,
-		MaxAmountRequired: decimalToAtomic(amount, asset.Decimals),
-		Asset:             asset.Address,
-		PayTo:             recipientAddress,
-		MaxTimeoutSeconds: int(ClampMaxTimeoutSeconds(maxTimeoutSeconds)),
-	}
 }
 
 // BuildV2Requirement creates a v2 PaymentRequirements for USDC payment on the

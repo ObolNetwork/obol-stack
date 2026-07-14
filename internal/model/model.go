@@ -308,41 +308,6 @@ func HasConfiguredModels(cfg *config.Config) bool {
 	return false
 }
 
-// HasProviderConfigured returns true if LiteLLM already has at least one
-// model entry for the given provider (e.g., "anthropic", "openai").
-func HasProviderConfigured(cfg *config.Config, provider string) bool {
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
-		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.config\\.yaml}")
-	if err != nil {
-		return false
-	}
-
-	var litellmConfig LiteLLMConfig
-	if err := yaml.Unmarshal([]byte(raw), &litellmConfig); err != nil {
-		return false
-	}
-
-	for _, entry := range litellmConfig.ModelList {
-		// Check wildcard entries like "anthropic/*"
-		if entry.ModelName == provider+"/*" {
-			return true
-		}
-		// Check if the model's litellm_params.model starts with "provider/"
-		if strings.HasPrefix(entry.LiteLLMParams.Model, provider+"/") {
-			return true
-		}
-		// Check via model name inference
-		if ProviderFromModelName(entry.ModelName) == provider {
-			return true
-		}
-	}
-
-	return false
-}
-
 // LoadDotEnv reads KEY=value pairs from a .env file.
 // Returns an empty map if the file doesn't exist or is unreadable.
 // Skips comments (#) and blank lines. Does not call os.Setenv.
@@ -976,8 +941,8 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 	return nil
 }
 
-// AddCustomEndpoint adds a custom OpenAI-compatible endpoint to LiteLLM
-// after validating it works.
+// AddCustomEndpointWithOptions adds a custom OpenAI-compatible endpoint to
+// LiteLLM after validating it works.
 //
 // LiteLLM `model_name` contract — the canonical identifier is the bare
 // `modelName`. Same convention every other code path in this stack uses:
@@ -992,10 +957,6 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 // each other in the LiteLLM ConfigMap; that is the natural "repoint my
 // model" behavior an operator running `obol model setup custom` wants when
 // they re-run the command.
-func AddCustomEndpoint(cfg *config.Config, u *ui.UI, endpoint, modelName, apiKey string) error {
-	return AddCustomEndpointWithOptions(cfg, u, endpoint, modelName, apiKey, CustomEndpointOptions{})
-}
-
 func AddCustomEndpointWithOptions(cfg *config.Config, u *ui.UI, endpoint, modelName, apiKey string, options CustomEndpointOptions) error {
 	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")

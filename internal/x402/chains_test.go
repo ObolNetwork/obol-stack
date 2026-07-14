@@ -60,27 +60,6 @@ func TestChainUSDCAddresses(t *testing.T) {
 	}
 }
 
-func TestBuildV1Requirement(t *testing.T) {
-	req := BuildV1Requirement(ChainBaseSepolia, "0.001", "0xRecipient", 0)
-
-	if req.Scheme != "exact" {
-		t.Errorf("Scheme = %q, want %q", req.Scheme, "exact")
-	}
-	if req.Network != "base-sepolia" {
-		t.Errorf("Network = %q, want %q", req.Network, "base-sepolia")
-	}
-	// 0.001 USDC = 1000 atomic units (6 decimals)
-	if req.MaxAmountRequired != "1000" {
-		t.Errorf("MaxAmountRequired = %q, want %q", req.MaxAmountRequired, "1000")
-	}
-	if req.Asset != ChainBaseSepolia.USDCAddress {
-		t.Errorf("Asset = %q, want %q", req.Asset, ChainBaseSepolia.USDCAddress)
-	}
-	if req.PayTo != "0xRecipient" {
-		t.Errorf("PayTo = %q, want %q", req.PayTo, "0xRecipient")
-	}
-}
-
 func TestResolveAssetInfo_Override(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -101,7 +80,7 @@ func TestResolveAssetInfo_Override(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			asset := ResolveAssetInfo(tc.chain, &RouteRule{
+			asset := ResolveAssetInfoForPayment(tc.chain, RoutePayment{
 				AssetAddress:        tc.assetAddress,
 				AssetSymbol:         "OBOL",
 				AssetDecimals:       18,
@@ -133,7 +112,7 @@ func TestResolveAssetInfo_Override(t *testing.T) {
 // NOT inherit the gasless-approve flag from the registry, otherwise a buyer
 // would skip the on-chain approve and the payment would fail at settlement.
 func TestResolveAssetInfo_RejectAddressMismatch(t *testing.T) {
-	asset := ResolveAssetInfo(ChainEthereumMainnet, &RouteRule{
+	asset := ResolveAssetInfoForPayment(ChainEthereumMainnet, RoutePayment{
 		AssetAddress:        "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 		AssetSymbol:         "OBOL",
 		AssetDecimals:       18,
@@ -175,7 +154,7 @@ func TestBuildExtensionsForAsset(t *testing.T) {
 		}
 	}
 
-	baseSepoliaOBOL := ResolveAssetInfo(ChainBaseSepolia, &RouteRule{
+	baseSepoliaOBOL := ResolveAssetInfoForPayment(ChainBaseSepolia, RoutePayment{
 		AssetAddress:        "0x0a09371a8b011d5110656ceBCc70603e53FD2c78",
 		AssetSymbol:         "OBOL",
 		AssetDecimals:       18,

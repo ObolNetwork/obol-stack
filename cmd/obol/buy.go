@@ -806,18 +806,6 @@ func authMultiplier(priceUnit string) int {
 	return 1
 }
 
-// perRequestEstimate divides a per-MTok atomic price by the temporary
-// tokens-per-request constant the controller uses today. Until the
-// facilitator implements usage-based settlement, this is the actual
-// flat per-call charge a buyer pays — surface it so users can compare
-// against perRequest offers without converting in their head.
-func perRequestEstimate(perMTokAtomic *big.Int) *big.Int {
-	if perMTokAtomic == nil {
-		return nil
-	}
-	return new(big.Int).Quo(perMTokAtomic, big.NewInt(int64(schemas.ApproxTokensPerRequest)))
-}
-
 func pricePerAuth(price *big.Int, multiplier int) (*big.Int, error) {
 	if price == nil || price.Sign() <= 0 {
 		return nil, errors.New("internal: price is non-positive")

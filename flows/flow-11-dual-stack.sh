@@ -411,30 +411,6 @@ PY
     exit 1
 }
 
-run_tail_or_fail() {
-    local desc="$1"
-    local success="$2"
-    local success_lines="${3:-3}"
-    shift 3
-
-    step "$desc"
-    local out rc
-    set +e
-    out=$("$@" 2>&1)
-    rc=$?
-    set -e
-
-    if [ "$rc" -ne 0 ]; then
-        printf '%s\n' "$out" | tail -120
-        fail "$desc failed (exit $rc)"
-        emit_metrics
-        exit "$rc"
-    fi
-
-    printf '%s\n' "$out" | tail -"$success_lines"
-    pass "$success"
-}
-
 refresh_alice_ports() {
     ALICE_HTTP_PORT="${FLOW11_ALICE_HTTP_PORT:-$(pick_free_port)}"
     ALICE_HTTP_ALT_PORT="${FLOW11_ALICE_HTTP_ALT_PORT:-$(pick_free_port)}"
@@ -1456,9 +1432,9 @@ else
     mkdir -p "$diag_dir"
     echo "  [diag] capturing cluster state to $diag_dir" >&2
     alice kubectl logs -n x402 deploy/x402-verifier --tail=200 > "$diag_dir/alice-verifier.log" 2>&1 || true
-    alice kubectl logs -n llm deploy/litellm -c x402-buyer --tail=200 > "$diag_dir/alice-buyer.log" 2>&1 || true
+    alice kubectl logs -n llm deploy/x402-buyer --tail=200 > "$diag_dir/alice-buyer.log" 2>&1 || true
     bob   kubectl logs -n x402 deploy/x402-verifier --tail=200 > "$diag_dir/bob-verifier.log"   2>&1 || true
-    bob   kubectl logs -n llm deploy/litellm -c x402-buyer --tail=200 > "$diag_dir/bob-buyer.log"     2>&1 || true
+    bob   kubectl logs -n llm deploy/x402-buyer --tail=200 > "$diag_dir/bob-buyer.log" 2>&1 || true
     alice kubectl get serviceoffer -A -o yaml > "$diag_dir/alice-serviceoffers.yaml" 2>&1 || true
     bob   kubectl get purchaserequest -A -o yaml > "$diag_dir/bob-purchaserequests.yaml" 2>&1 || true
     cleanup_pid "$PF_AGENT"

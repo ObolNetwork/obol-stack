@@ -238,21 +238,3 @@ func TestChainsForToken(t *testing.T) {
 		t.Errorf("ChainsForToken(WETH) = %v, want nil", got)
 	}
 }
-
-func TestTokenSupportedOnChain(t *testing.T) {
-	if !TokenSupportedOnChain("USDC", "base") {
-		t.Error("USDC should be supported on base")
-	}
-	if !TokenSupportedOnChain("OBOL", "ethereum") {
-		t.Error("OBOL should be supported on ethereum")
-	}
-	if !TokenSupportedOnChain("OBOL", "base-sepolia") {
-		t.Error("OBOL should be supported on base-sepolia")
-	}
-	if TokenSupportedOnChain("OBOL", "base") {
-		t.Error("OBOL should not be supported on base mainnet")
-	}
-	if TokenSupportedOnChain("OBOL", "polygon") {
-		t.Error("OBOL should not be supported on polygon")
-	}
-}

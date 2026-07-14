@@ -7,28 +7,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestEffectiveRequestPrice_PerRequest(t *testing.T) {
-	p := PriceTable{PerRequest: "0.001"}
-	if got := p.EffectiveRequestPrice(); got != "0.001" {
-		t.Errorf("EffectiveRequestPrice() = %q, want %q", got, "0.001")
-	}
-}
-
-func TestEffectiveRequestPrice_PerMTok(t *testing.T) {
-	p := PriceTable{PerMTok: "0.50"}
-	if got := p.EffectiveRequestPrice(); got != "0.0005" {
-		t.Errorf("EffectiveRequestPrice() = %q, want %q", got, "0.0005")
-	}
-}
-
-func TestEffectiveRequestPrice_PerHour(t *testing.T) {
-	// 6.00 USDC/hour * (5 min / 60 min) = 0.50 USDC/request
-	p := PriceTable{PerHour: "6.00"}
-	if got := p.EffectiveRequestPrice(); got != "0.5" {
-		t.Errorf("EffectiveRequestPrice() = %q, want %q", got, "0.5")
-	}
-}
-
 func TestApproximateRequestPriceFromPerHour(t *testing.T) {
 	// 0.50 USDC/hour * (5/60) = 0.04166...
 	got, err := ApproximateRequestPriceFromPerHour("0.50")
@@ -53,20 +31,6 @@ func TestApproximateRequestPriceFromPerHour(t *testing.T) {
 func TestApproximateRequestPriceFromPerHour_Invalid(t *testing.T) {
 	if _, err := ApproximateRequestPriceFromPerHour("bad"); err == nil {
 		t.Fatal("ApproximateRequestPriceFromPerHour() error = nil, want non-nil")
-	}
-}
-
-func TestEffectiveRequestPrice_Empty(t *testing.T) {
-	p := PriceTable{}
-	if got := p.EffectiveRequestPrice(); got != "0" {
-		t.Errorf("EffectiveRequestPrice() = %q, want %q", got, "0")
-	}
-}
-
-func TestEffectiveRequestPrice_PerRequestPrecedence(t *testing.T) {
-	p := PriceTable{PerRequest: "0.001", PerMTok: "0.50"}
-	if got := p.EffectiveRequestPrice(); got != "0.001" {
-		t.Errorf("EffectiveRequestPrice() = %q, want %q (PerRequest should take precedence)", got, "0.001")
 	}
 }
 

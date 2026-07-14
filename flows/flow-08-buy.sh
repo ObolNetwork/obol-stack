@@ -59,10 +59,6 @@ purchase_request_ready() {
         -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>&1 || true
 }
 
-purchase_request_absent() {
-    ! "$OBOL" kubectl get purchaserequests.obol.org "$PURCHASE_NAME" -n "$AGENT_NS" >/dev/null 2>&1
-}
-
 buyer_sidecar_status() {
     "$OBOL" kubectl exec -n llm deployment/litellm -c litellm -- \
         python3 -c "
@@ -84,12 +80,6 @@ import urllib.request
 urllib.request.urlopen('http://localhost:4000/health/readiness', timeout=5).read()
 print('ready')
 " 2>&1 || true
-}
-
-agent_buy_skill_balance() {
-    "$OBOL" kubectl exec \
-        -n "$AGENT_NS" "deploy/$AGENT_DEPLOY" -c "$AGENT_CONTAINER" -- \
-        python3 "$AGENT_BUY_PY" balance --chain base-sepolia 2>&1 || true
 }
 
 agent_wallet_anvil_balance() {

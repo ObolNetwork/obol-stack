@@ -61,27 +61,6 @@ if [ -n "$TUNNEL_URL" ]; then
     TUNNEL_IP=$(resolve_public_ipv4 "$TUNNEL_HOST" || true)
 fi
 
-tunnel_get_code() {
-    local url="$1"
-    local code
-    if [ -n "$TUNNEL_HOST" ] && [ -n "$TUNNEL_IP" ]; then
-        if code=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' \
-            --resolve "$TUNNEL_HOST:443:$TUNNEL_IP" \
-            "$url" 2>/dev/null); then
-            printf '%s\n' "$code"
-        else
-            printf '000\n'
-        fi
-    else
-        if code=$(curl -sS --max-time 15 -o /dev/null -w '%{http_code}' \
-            "$url" 2>/dev/null); then
-            printf '%s\n' "$code"
-        else
-            printf '000\n'
-        fi
-    fi
-}
-
 tunnel_get_file_code() {
     local url="$1"
     local outfile="$2"

@@ -175,16 +175,8 @@ func ollamaHostIPForBackend(backendName string) (string, error) {
 	return stackdefaults.OllamaHostIPForBackend(backendName)
 }
 
-func dockerDesktopGatewayIP() string {
-	return stackdefaults.DockerDesktopGatewayIP()
-}
-
 func dockerBridgeGatewayIP() (string, error) {
 	return stackdefaults.DockerBridgeGatewayIP()
-}
-
-func bridgeInterfaceIP(name string) (string, error) {
-	return stackdefaults.BridgeInterfaceIP(name)
 }
 
 // Up starts the cluster using the configured backend
@@ -393,11 +385,6 @@ func getStackID(cfg *config.Config) string {
 	}
 
 	return strings.TrimSpace(string(data))
-}
-
-// GetStackID reads the stored stack ID (exported for use in main)
-func GetStackID(cfg *config.Config) string {
-	return getStackID(cfg)
 }
 
 // syncDefaults deploys the default infrastructure using helmfile.
