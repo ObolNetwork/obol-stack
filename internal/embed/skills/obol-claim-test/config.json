@@ -1,5 +1,0 @@
-{
-  "distributor": "",
-  "network": "mainnet",
-  "note": "Set distributor to the deployed TEST MerkleDistributorWithDeadline address (or pass OBOL_CLAIM_DISTRIBUTOR env). Test tree = operator agent wallets, 100 OBOL each, root 0x413b9960..."
-}
