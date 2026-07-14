@@ -199,6 +199,11 @@ func (in *AgentSpec) DeepCopyInto(out *AgentSpec) {
 		*out = new(int)
 		**out = **in
 	}
+	if in.MaxConcurrentRuns != nil {
+		in, out := &in.MaxConcurrentRuns, &out.MaxConcurrentRuns
+		*out = new(int)
+		**out = **in
+	}
 	if in.DisabledToolsets != nil {
 		in, out := &in.DisabledToolsets, &out.DisabledToolsets
 		*out = make([]string, len(*in))

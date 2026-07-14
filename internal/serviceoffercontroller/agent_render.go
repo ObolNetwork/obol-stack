@@ -175,6 +175,15 @@ skills:
     - /data/.hermes/obol-skills
 `)
 
+	// gateway block only when the operator set maxConcurrentRuns; nil =>
+	// omit entirely so existing agents stay byte-identical.
+	if agent.Spec.MaxConcurrentRuns != nil {
+		fmt.Fprintf(&b, `gateway:
+  api_server:
+    max_concurrent_runs: %d
+`, *agent.Spec.MaxConcurrentRuns)
+	}
+
 	// mcp_servers only when the operator listed servers; empty => omit entirely
 	// so existing agents stay byte-identical to the pre-field template.
 	if len(agent.Spec.MCPServers) > 0 {
