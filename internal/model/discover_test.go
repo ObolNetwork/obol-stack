@@ -99,8 +99,9 @@ func TestBuildDiscoveredProvider_TranslatesHost(t *testing.T) {
 	if first.LiteLLMParams.Model != "openai/meta-llama/Llama-3.1-8B-Instruct" {
 		t.Errorf("LiteLLMParams.Model = %q, want openai/meta-llama/Llama-3.1-8B-Instruct", first.LiteLLMParams.Model)
 	}
-	if first.LiteLLMParams.APIBase != "http://host.k3d.internal:8000" {
-		t.Errorf("APIBase = %q, want http://host.k3d.internal:8000", first.LiteLLMParams.APIBase)
+	// /v1 suffix required — LiteLLM's OpenAI provider does not append it.
+	if first.LiteLLMParams.APIBase != "http://host.k3d.internal:8000/v1" {
+		t.Errorf("APIBase = %q, want http://host.k3d.internal:8000/v1", first.LiteLLMParams.APIBase)
 	}
 	// buildCustomEndpointEntry sets api_key to "none" when no key is given.
 	if first.LiteLLMParams.APIKey != "none" {

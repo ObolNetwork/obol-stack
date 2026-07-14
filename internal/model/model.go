@@ -1574,6 +1574,12 @@ func buildCustomEndpointEntry(modelName, clusterEndpoint, apiKey string) ModelEn
 	return buildCustomEndpointEntryWithOptions(modelName, clusterEndpoint, apiKey, CustomEndpointOptions{})
 }
 
+// INVARIANT: clusterEndpoint must be the full OpenAI-compatible base
+// INCLUDING the /v1 suffix — LiteLLM's `openai/` provider sends requests
+// to <api_base>/chat/completions verbatim and never appends /v1
+// (CLAUDE.md pitfall 6). Both callers uphold this: AddCustomEndpoint
+// validates by probing <endpoint>/chat/completions, and discovery only
+// registers endpoints that answered <base>/v1/models (and appends /v1).
 func buildCustomEndpointEntryWithOptions(modelName, clusterEndpoint, apiKey string, options CustomEndpointOptions) ModelEntry {
 	entry := ModelEntry{
 		ModelName: modelName,
@@ -1696,20 +1702,6 @@ func decodeBase64(s string) (string, error) {
 	return string(decoded[:n]), nil
 }
 
-// WarnAndStripV1Suffix checks if an endpoint URL has a trailing /v1 suffix,
-// warns the user, and returns the stripped URL. For OpenAI-compatible providers,
-// LiteLLM auto-appends /v1, causing double /v1/v1 if the user includes it.
-func WarnAndStripV1Suffix(endpoint string) string {
-	trimmed := strings.TrimRight(endpoint, "/")
-	if strings.HasSuffix(trimmed, "/v1") {
-		fmt.Printf("  Warning: stripping trailing /v1 from endpoint URL (LiteLLM adds it automatically)\n")
-		fmt.Printf("  %s → %s\n", trimmed, strings.TrimSuffix(trimmed, "/v1"))
-
-		return strings.TrimSuffix(trimmed, "/v1")
-	}
-
-	return endpoint
-}
 
 // localhostToClusterEndpoint translates localhost URLs to k3d-internal URLs
 // so that services running on the host are reachable from inside the k3d cluster.
