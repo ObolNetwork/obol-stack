@@ -598,14 +598,18 @@ func facilitatorSettle(ctx context.Context, client *http.Client, facilitatorURL 
 }
 
 func buildResourceURL(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
-		scheme = "https"
-	}
 	host := r.Host
 	if forwardedHost := r.Header.Get("X-Forwarded-Host"); forwardedHost != "" {
 		host = forwardedHost
 	}
+	// resolveScheme, not X-Forwarded-Proto alone: behind the Cloudflare
+	// tunnel the ForwardAuth hop sees plaintext (XFP=http), which rendered
+	// http:// resource URLs in 402 challenges on public hostnames whenever a
+	// route lacked the X-Forwarded-Proto:https RequestHeaderModifier — the
+	// shared-origin so-<name> routes don't carry it (#679). Public hosts
+	// default to https; only local plain-HTTP hosts (obol.stack, loopback,
+	// *.localhost/*.local) stay http.
+	scheme := resolveScheme(r, host)
 	uri := r.RequestURI
 	if forwardedURI := r.Header.Get("X-Forwarded-Uri"); forwardedURI != "" {
 		uri = forwardedURI
