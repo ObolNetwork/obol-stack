@@ -105,6 +105,20 @@ releases:
             # renovate: datasource=github-releases depName=erigontech/erigon
             tag: v3.5.1
             {{- end }}
+          {{- if eq .Values.executionClient "reth" }}
+          # reth keeps p2p (30303) closed while running post-crash consistency
+          # recovery, which can exceed any bounded probe window on a large
+          # datadir. The chart's default tcp liveness probe then SIGKILLs it
+          # mid-recovery, forcing a longer recovery on the next start — a
+          # permanent crash loop. A genuinely dead process exits the container
+          # on its own, so make the probe effectively never fire.
+          livenessProbe:
+            tcpSocket:
+              port: p2p-tcp
+            initialDelaySeconds: 60
+            periodSeconds: 120
+            failureThreshold: 10000
+          {{- end }}
           persistence:
             enabled: true
             size: {{ if (index .Values "executionStorageSize" | default "") }}{{ index .Values "executionStorageSize" }}{{ else }}{{ if eq .Values.network "mainnet" }}{{ if eq .Values.mode "archive" }}4500Gi{{ else }}500Gi{{ end }}{{ else }}{{ if eq .Values.mode "archive" }}300Gi{{ else }}100Gi{{ end }}{{ end }}{{ end }}
