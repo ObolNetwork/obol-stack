@@ -316,6 +316,14 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 						return true
 					}
 
+					// Buyer already gone (client disconnect propagated) —
+					// don't take their money for a response nobody receives.
+					if err := r.Context().Err(); err != nil {
+						log.Printf("x402: buyer disconnected before settlement, skipping settlement: %v", err)
+						reportFailure("client_disconnected")
+						return false
+					}
+
 					settleResp, err := facilitatorSettle(r.Context(), settleClient, cfg.FacilitatorURL, payloadBytes, matchedReq)
 					if err != nil {
 						log.Printf("x402: settlement failed: %v", err)

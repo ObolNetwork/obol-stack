@@ -2,6 +2,7 @@ package x402
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -568,6 +569,42 @@ func TestForwardAuth_NoSettleOnHandlerError(t *testing.T) {
 	}
 	if settleCalled.Load() != 0 {
 		t.Errorf("settle called %d times, want 0 (handler failed)", settleCalled.Load())
+	}
+}
+
+func TestForwardAuth_NoSettleOnClientDisconnect(t *testing.T) {
+	var verifyCalled, settleCalled atomic.Int32
+	fac := mockFacilitatorV1(true, true, &verifyCalled, &settleCalled)
+	defer fac.Close()
+
+	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL: fac.URL,
+		VerifyOnly:     false,
+	}, testRequirements())
+
+	// Cancel after verify succeeds but before WriteHeader triggers
+	// settlement. Cancelling before ServeHTTP aborts facilitator verify
+	// (same r.Context()) so settleFunc never runs and verifyCalled stays 0.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cancel() // buyer disconnects after verify, before response commits
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"result":"ok"}`))
+	})
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req = req.WithContext(ctx)
+	req.Header.Set("X-PAYMENT", validPaymentHeader())
+	rec := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rec, req)
+
+	if verifyCalled.Load() != 1 {
+		t.Errorf("verify called %d times, want 1", verifyCalled.Load())
+	}
+	if settleCalled.Load() != 0 {
+		t.Errorf("settle called %d times, want 0 (client disconnected)", settleCalled.Load())
 	}
 }
 
