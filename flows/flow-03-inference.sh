@@ -48,15 +48,28 @@ for i in $(seq 1 15); do
     sleep 2
 done
 
-out=$(curl -sf --max-time 120 -X POST http://localhost:8001/v1/chat/completions \
-    -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $LITELLM_KEY" \
-    -d "{\"model\":\"$LITELLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"What is 2+2? Reply with the number only.\"}],\"max_tokens\":10,\"stream\":false}" 2>&1) || true
+# First completion after stack-up is flaky (port-forward/router warm-up race:
+# observed failing with empty output under curl -f while the very next request
+# succeeds). Retry a few times and keep the HTTP status so a real failure is
+# diagnosable instead of an empty string.
+out="" code=""
+for attempt in 1 2 3; do
+    out=$(curl -s --max-time 120 -w "\n%{http_code}" -X POST http://localhost:8001/v1/chat/completions \
+        -H "Content-Type: application/json" \
+        -H "Authorization: Bearer $LITELLM_KEY" \
+        -d "{\"model\":\"$LITELLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"What is 2+2? Reply with the number only.\"}],\"max_tokens\":10,\"stream\":false}" 2>&1) || true
+    code="${out##*$'\n'}"
+    out="${out%$'\n'*}"
+    if echo "$out" | grep -q "choices"; then
+        break
+    fi
+    sleep 10
+done
 
 if echo "$out" | grep -q "choices"; then
-    pass "LiteLLM inference returned choices"
+    pass "LiteLLM inference returned choices (attempt $attempt)"
 else
-    fail "LiteLLM inference failed — ${out:0:300}"
+    fail "LiteLLM inference failed — HTTP ${code:-000}: ${out:0:300}"
 fi
 
 # §3d: Tool-call passthrough
