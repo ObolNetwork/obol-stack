@@ -116,7 +116,7 @@ recovers this wallet. <span id="reveal" style="cursor:pointer;color:var(--mint)"
 // --minify from the exact versions proven by the x402trace paid harness) — no CDN at runtime
 import { createWalletClient, createPublicClient, custom, http, erc20Abi,
          formatUnits, parseUnits, keccak256, privateKeyToAccount, base, baseSepolia,
-         wrapFetchWithPayment, x402Client, ExactEvmScheme, toClientEvmSigner } from "./chat-vendor.js";
+         wrapFetchWithPayment, x402Client, ExactEvmScheme, toClientEvmSigner } from "./chat-vendor.js?v=895fd923";
 
 const ENDPOINT = "/v1/chat/completions";
 const AGENT = location.hostname.split(".")[0].replace(/-/g, " ");

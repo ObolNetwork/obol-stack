@@ -24,6 +24,10 @@ npx esbuild vendor-entry.mjs --bundle --format=esm --minify --target=es2022 \
   --outfile=chat-vendor.js
 ```
 
+When the bundle is rebuilt, bump the `?v=` cache-buster on the
+`chat-vendor.js` import in `chat.html` to the new sha256's first 8 hex
+chars — intermediaries (e.g. Cloudflare) cache `.js` aggressively.
+
 sha256 of the committed bundle:
 `895fd923aa84d7cf80e2b1df299068aa38dba7307a9a380526c0b5426489724d`
 
