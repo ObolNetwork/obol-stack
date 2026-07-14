@@ -107,7 +107,7 @@ tool_out=$(curl -sf --max-time 120 -X POST http://localhost:8001/v1/chat/complet
         "messages":[{"role":"user","content":"Call the get_weather tool for London. Do not answer in text."}],
         "tools":[{"type":"function","function":{"name":"get_weather","description":"Get current weather","parameters":{"type":"object","properties":{"location":{"type":"string"}},"required":["location"]}}}],
         "tool_choice":{"type":"function","function":{"name":"get_weather"}},
-        "temperature":0,"max_tokens":100,"stream":false
+        "temperature":0,"max_tokens":2048,"stream":false
     }' 2>&1) || true
 
 if echo "$tool_out" | tool_call_name >/dev/null 2>&1; then
@@ -121,7 +121,7 @@ else
             "model":"'"$LITELLM_MODEL"'",
             "messages":[{"role":"user","content":"Call the get_weather tool with location London. Do not answer in text."}],
             "tools":[{"type":"function","function":{"name":"get_weather","description":"Get current weather","parameters":{"type":"object","properties":{"location":{"type":"string"}},"required":["location"]}}}],
-            "temperature":0,"max_tokens":100,"stream":false
+            "temperature":0,"max_tokens":2048,"stream":false
         }' 2>&1) || true
 
     if echo "$tool_out" | tool_call_name >/dev/null 2>&1; then
