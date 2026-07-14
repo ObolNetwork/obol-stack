@@ -1,7 +1,6 @@
 package agentruntime
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -144,10 +143,6 @@ func WorkspacePath(cfg *config.Config, runtime Runtime, id string) string {
 	return filepath.Join(HomePath(cfg, runtime, id), "workspace")
 }
 
-func SkillsPath(cfg *config.Config, runtime Runtime, id string) string {
-	return filepath.Join(HomePath(cfg, runtime, id), "skills")
-}
-
 func KeystoreVolumePath(cfg *config.Config, runtime Runtime, id string) string {
 	return filepath.Join(cfg.DataDir, Namespace(runtime, id), "remote-signer-keystores")
 }
@@ -173,50 +168,4 @@ func ListInstanceIDs(cfg *config.Config, runtime Runtime) ([]string, error) {
 	}
 
 	return ids, nil
-}
-
-func ResolveInstance(cfg *config.Config, runtime Runtime, args []string) (id string, remaining []string, err error) {
-	instances, err := ListInstanceIDs(cfg, runtime)
-	if err != nil {
-		return "", nil, err
-	}
-
-	desc := Describe(runtime)
-
-	switch len(instances) {
-	case 0:
-		return "", nil, fmt.Errorf("no %s instances found — run 'obol agent new --runtime %s' to create one", desc.DisplayName, runtime)
-	case 1:
-		return instances[0], args, nil
-	default:
-		if len(args) > 0 {
-			for _, inst := range instances {
-				if args[0] == inst {
-					return inst, args[1:], nil
-				}
-			}
-		}
-
-		return "", nil, fmt.Errorf("multiple %s instances found, specify one: %s", desc.DisplayName, strings.Join(instances, ", "))
-	}
-}
-
-func MustDefaultDeploymentPath(cfg *config.Config) string {
-	return DeploymentPath(cfg, Hermes, DefaultInstanceID)
-}
-
-func ResolveSingleDefaultNamespace(cfg *config.Config, runtime Runtime) (string, error) {
-	ids, err := ListInstanceIDs(cfg, runtime)
-	if err != nil {
-		return "", err
-	}
-
-	switch len(ids) {
-	case 0:
-		return "", errors.New("no instances found")
-	case 1:
-		return Namespace(runtime, ids[0]), nil
-	default:
-		return "", fmt.Errorf("multiple %s instances found (%s), specify an instance", Describe(runtime).DisplayName, strings.Join(ids, ", "))
-	}
 }

@@ -142,11 +142,6 @@ func resolvedProbePorts() []portProbe {
 // probeTimeout is the per-endpoint HTTP timeout.
 const probeTimeout = 2 * time.Second
 
-// ProbeEndpoint hits host:port/v1/models and returns discovered info.
-func ProbeEndpoint(host string, port int) (*EndpointInfo, error) {
-	return ProbeEndpointContext(context.Background(), host, port)
-}
-
 // ProbeEndpointContext is the context-aware version of ProbeEndpoint.
 // It creates a shared HTTP client used for both server type detection
 // and model fetching to avoid redundant connections.
@@ -170,11 +165,6 @@ func ProbeEndpointContext(ctx context.Context, host string, port int) (*Endpoint
 		Models:     models,
 		Healthy:    true,
 	}, nil
-}
-
-// ScanLocalEndpoints probes all common local ports and returns any that respond.
-func ScanLocalEndpoints() ([]EndpointInfo, error) {
-	return ScanLocalEndpointsContext(context.Background())
 }
 
 // ScanLocalEndpointsContext probes common ports concurrently with context support.
@@ -231,13 +221,6 @@ func ScanLocalEndpointsContext(ctx context.Context) ([]EndpointInfo, error) {
 		}
 	}
 	return found, nil
-}
-
-// DetectServerType probes baseURL to determine the server software.
-// Returns "ollama", "llama-server", "openai-compat", or "".
-func DetectServerType(ctx context.Context, baseURL string) string {
-	client := &http.Client{Timeout: probeTimeout}
-	return detectServerTypeWithClient(ctx, client, baseURL)
 }
 
 // detectServerTypeWithClient probes baseURL using the provided client.
@@ -302,16 +285,6 @@ func fetchModels(ctx context.Context, client *http.Client, baseURL string) ([]Mo
 	var mr modelsResponse
 	if err := json.NewDecoder(limited).Decode(&mr); err != nil {
 		return nil, fmt.Errorf("decoding models response: %w", err)
-	}
-	return mr.Data, nil
-}
-
-// ParseModelsResponse parses raw JSON bytes into a slice of ModelInfo.
-// Exported for testing.
-func ParseModelsResponse(data []byte) ([]ModelInfo, error) {
-	var mr modelsResponse
-	if err := json.Unmarshal(data, &mr); err != nil {
-		return nil, fmt.Errorf("parsing models JSON: %w", err)
 	}
 	return mr.Data, nil
 }

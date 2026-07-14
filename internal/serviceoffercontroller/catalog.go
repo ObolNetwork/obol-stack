@@ -97,14 +97,3 @@ func skillCatalogDeployedContentHash(deployment *unstructured.Unstructured) stri
 	hash, _, _ := unstructured.NestedString(deployment.Object, "spec", "template", "metadata", "annotations", "obol.org/content-hash")
 	return hash
 }
-
-func (c *Controller) skillCatalogDeployedContentHash(ctx context.Context) (string, error) {
-	deployment, err := c.deployments.Namespace(skillCatalogNamespace).Get(ctx, skillCatalogConfigMapName, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	return skillCatalogDeployedContentHash(deployment), nil
-}

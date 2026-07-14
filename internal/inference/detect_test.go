@@ -20,7 +20,7 @@ func TestProbeEndpoint_NotRunning(t *testing.T) {
 	port := ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
 
-	_, err = ProbeEndpoint("127.0.0.1", port)
+	_, err = ProbeEndpointContext(context.Background(), "127.0.0.1", port)
 	if err == nil {
 		t.Fatal("expected error probing non-running port, got nil")
 	}
@@ -32,7 +32,7 @@ func TestProbeEndpoint_NotRunning(t *testing.T) {
 func TestScanLocalEndpoints_NoneFound(t *testing.T) {
 	// When nothing is running on any common port, should return empty list.
 	// This test is safe because CI/test environments rarely run inference servers.
-	endpoints, err := ScanLocalEndpoints()
+	endpoints, err := ScanLocalEndpointsContext(context.Background())
 	if err != nil {
 		t.Fatalf("ScanLocalEndpoints returned error: %v", err)
 	}
@@ -79,55 +79,11 @@ func TestDetectServerType(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			got := DetectServerType(context.Background(), srv.URL)
+			got := detectServerTypeWithClient(context.Background(), &http.Client{Timeout: probeTimeout}, srv.URL)
 			if got != tt.want {
 				t.Errorf("DetectServerType() = %q, want %q", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestParseModelsResponse(t *testing.T) {
-	payload := modelsResponse{
-		Data: []ModelInfo{
-			{ID: "llama-3.2-3b", OwnedBy: "meta", Created: 1700000000},
-			{ID: "qwen-2.5-coder", OwnedBy: "alibaba", Created: 1700000001},
-		},
-	}
-	raw, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatalf("failed to marshal test payload: %v", err)
-	}
-
-	models, err := ParseModelsResponse(raw)
-	if err != nil {
-		t.Fatalf("ParseModelsResponse returned error: %v", err)
-	}
-	if len(models) != 2 {
-		t.Fatalf("expected 2 models, got %d", len(models))
-	}
-	if models[0].ID != "llama-3.2-3b" {
-		t.Errorf("models[0].ID = %q, want %q", models[0].ID, "llama-3.2-3b")
-	}
-	if models[1].OwnedBy != "alibaba" {
-		t.Errorf("models[1].OwnedBy = %q, want %q", models[1].OwnedBy, "alibaba")
-	}
-}
-
-func TestParseModelsResponse_Invalid(t *testing.T) {
-	_, err := ParseModelsResponse([]byte(`{invalid json`))
-	if err == nil {
-		t.Fatal("expected error for invalid JSON, got nil")
-	}
-}
-
-func TestParseModelsResponse_Empty(t *testing.T) {
-	models, err := ParseModelsResponse([]byte(`{"data":[]}`))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(models) != 0 {
-		t.Fatalf("expected 0 models, got %d", len(models))
 	}
 }
 

@@ -392,18 +392,6 @@ func buildTypeCopy(siteURL, endpoint string, d PaymentDisplay) typeCopy {
 	}
 }
 
-// x402GuideRef returns the self-contained "how to pay" pointer interpolated
-// into the "other AI agent" copy prompts. Rather than send a foreign agent
-// to the broad obol.org/llms.txt, we point it at THIS operator's own
-// catalog (`/skill.md`, human + agent readable, with the full x402 v2 loop)
-// and OpenAPI document (`/openapi.json`, exact request shapes) — both served
-// over the same tunnel as the paid endpoint, so a single fetch is enough to
-// learn how to pay. siteURL is the public origin (scheme://host); when empty
-// the prompt degrades to a generic x402 mention.
-func x402GuideRef(siteURL string) string {
-	return buyprompts.GuideRef(siteURL)
-}
-
 // normalizeOfferType collapses the spec.type values into the three render
 // branches. Empty falls back to "inference" historically (the original
 // default), but the storefront defaults new offers to "http" — match that

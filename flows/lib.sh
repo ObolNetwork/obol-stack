@@ -1376,20 +1376,4 @@ PY
     }
 fi
 
-ensure_image_in_k3d() {
-    local img="$1"
-    local cluster="$2"
-    local node="k3d-${cluster}-server-0"
-    if ! docker exec "$node" crictl images 2>/dev/null | grep -q "$(echo "$img" | cut -d: -f1)\b"; then
-        docker_pull_public_image "$img" "${K3D_IMAGE_PULL_TIMEOUT:-300}" || return 1
-        local tar
-        tar=$(mktemp -t k3d-img-XXXXXX.tar)
-        docker save "$img" -o "$tar"
-        docker cp "$tar" "$node:/tmp/$(basename "$tar")"
-        docker exec "$node" ctr -n k8s.io images import "/tmp/$(basename "$tar")"
-        docker exec "$node" rm -f "/tmp/$(basename "$tar")"
-        rm -f "$tar"
-    fi
-}
-
 init_obol_ingress_env_static
