@@ -15,6 +15,8 @@ import (
 	x402types "github.com/x402-foundation/x402/go/v2/types"
 
 	"github.com/ObolNetwork/obol-stack/internal/buyprompts"
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/ObolNetwork/obol-stack/internal/storefront"
 )
 
 // displayTokenRe is the allowed charset for ServiceOffer-sourced strings
@@ -120,6 +122,11 @@ type PaymentDisplay struct {
 	// card. Empty for non-agent offers and for agents that haven't yet
 	// resolved their skill list.
 	AgentSkills []string
+
+	// BrandingPatch is the originating rule's per-origin identity
+	// override (RouteRule.Branding). Nil renders storefront-wide
+	// branding.
+	BrandingPatch *schemas.StorefrontProfile
 }
 
 // SendPaymentRequiredFunc is the renderer signature compatible with the
@@ -250,21 +257,22 @@ func sendPaymentRequiredHTML(w http.ResponseWriter, r *http.Request, requirement
 	payToDisplay := truncateAddress(payToFull)
 
 	typeCopy := buildTypeCopy(siteURL, endpoint, display)
+	branding := resolveBranding(siteURL, display.BrandingPatch)
 
 	data := struct {
 		Title               string
 		Description         string
 		PageURL             string
 		StorefrontURL       string
-		WordmarkURL         string
-		OGImageURL          string
+		Branding            Branding
 		Endpoint            string
 		NetworkLabel        string
 		PriceDisplay        string
 		PayToDisplay        string
 		PayToFull           string
 		ExplorerURL         string
-		OfferDescription    string
+		OfferName           string
+		OfferDescription    template.HTML
 		Skills              []string
 		Lede                template.HTML
 		ShowPrimary         bool
@@ -278,19 +286,19 @@ func sendPaymentRequiredHTML(w http.ResponseWriter, r *http.Request, requirement
 		ChatCompletionsNote string
 		ChatCompletionsBody string
 	}{
-		Title:               "Payment required — Obol Stack",
+		Title:               "Payment required — " + branding.SiteName,
 		Description:         buildMetaDescription(display),
 		PageURL:             pageURL,
 		StorefrontURL:       siteURL,
-		WordmarkURL:         siteURL + "/obol-stack-logo.png",
-		OGImageURL:          siteURL + "/og-payment-required.png",
+		Branding:            branding,
 		Endpoint:            endpoint,
 		NetworkLabel:        networkLabel,
 		PriceDisplay:        priceDisplay,
 		PayToDisplay:        payToDisplay,
 		PayToFull:           payToFull,
 		ExplorerURL:         display.ExplorerURL,
-		OfferDescription:    display.OfferDescription,
+		OfferName:           display.OfferName,
+		OfferDescription:    storefront.RenderRichText(display.OfferDescription),
 		Skills:              display.AgentSkills,
 		Lede:                typeCopy.Lede,
 		ShowPrimary:         typeCopy.ShowPrimary,

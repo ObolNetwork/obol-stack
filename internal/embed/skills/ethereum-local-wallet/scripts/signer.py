@@ -28,6 +28,8 @@ CHAIN_IDS = {
     "base-sepolia": 84532,
     "sepolia":      11155111,
     "hoodi":        560048,
+    "arbitrum":     42161,
+    "robinhood":    4663,
 }
 
 # Friendly aliases that resolve to canonical eRPC names.
@@ -39,6 +41,11 @@ CHAIN_ALIASES = {
     "eip155:84532":     "base-sepolia",
     "eip155:11155111":  "sepolia",
     "eip155:560048":    "hoodi",
+    "arb":              "arbitrum",
+    "arbitrum-one":     "arbitrum",
+    "eip155:42161":     "arbitrum",
+    "robinhood-chain":  "robinhood",
+    "eip155:4663":      "robinhood",
 }
 
 _GWEI = 1_000_000_000
@@ -87,6 +94,25 @@ FEE_BOUNDS = {
         "fallback_tip":    1 * _GWEI,
         "fallback_max":   20 * _GWEI,
         "min_max_fee":     5 * _GWEI,
+    },
+    # Arbitrum-stack L2s: base fee floor on Arbitrum One is 0.01 gwei and
+    # tips are effectively unused (first-come-first-served), so keep tips
+    # near-zero like base.
+    "arbitrum": {
+        "min_tip":        1_000_000,         # 0.001 gwei
+        "max_tip":       50_000_000,         # 0.05 gwei
+        "fallback_base": 10_000_000,         # 0.01 gwei (chain base-fee floor)
+        "fallback_tip":   1_000_000,
+        "fallback_max":  50_000_000,
+        "min_max_fee":   10_000_000,
+    },
+    "robinhood": {
+        "min_tip":        1_000_000,         # 0.001 gwei
+        "max_tip":       50_000_000,         # 0.05 gwei
+        "fallback_base":  5_000_000,
+        "fallback_tip":   1_000_000,
+        "fallback_max":  50_000_000,
+        "min_max_fee":    5_000_000,
     },
 }
 

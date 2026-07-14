@@ -108,6 +108,51 @@ spec:
                       Defaults to 72h. Status pages return 410 Gone afterwards.
                     type: string
                 type: object
+              branding:
+                description: |-
+                  Branding overrides the storefront-wide seller identity on this
+                  offer's dedicated origin (the landing page, 402 paywall, sign-in
+                  page and discovery surfaces served under spec.hostname).
+                  Field-wise merge over the operator's storefront profile: empty
+                  fields inherit. Only meaningful when spec.hostname is set —
+                  branding is per-origin; path-shared offers ride the storefront
+                  identity. Set via `obol sell info set --hostname <host> ...`.
+                properties:
+                  accentColor:
+                    pattern: ^#[0-9a-fA-F]{3,8}$
+                    type: string
+                  customCss:
+                    description: |-
+                      Operator CSS for this origin, injected after the theme tokens.
+                      Size-capped + breakout-checked at set time and again at render.
+                    maxLength: 65536
+                    type: string
+                  description:
+                    description: |-
+                      Longer seller copy for this origin (markdown subset — rendered
+                      through the storefront richtext sanitizer).
+                    type: string
+                  displayName:
+                    maxLength: 128
+                    type: string
+                  faviconUrl:
+                    type: string
+                  logoUrl:
+                    description: https://..., /path on the main origin, or inline
+                      data:image/...;base64.
+                    type: string
+                  ogImageUrl:
+                    type: string
+                  tagline:
+                    maxLength: 256
+                    type: string
+                  theme:
+                    enum:
+                    - light
+                    - dark
+                    - obol
+                    type: string
+                type: object
               drainAt:
                 description: |-
                   DrainAt marks the offer as draining when non-nil. While the offer

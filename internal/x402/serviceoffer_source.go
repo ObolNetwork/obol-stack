@@ -296,6 +296,11 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 		Payments:               routePayments,
 	}
 
+	if offer.Spec.Branding != nil {
+		patch := offer.Spec.Branding.ProfilePatch()
+		rule.Branding = &patch
+	}
+
 	if offer.IsAgent() && offer.Status.AgentResolution != nil {
 		res := offer.Status.AgentResolution
 		rule.AgentModel = res.Model

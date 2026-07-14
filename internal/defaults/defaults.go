@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"net"
 	"os"
 	"os/exec"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/images"
 )
 
 const (
@@ -104,21 +104,23 @@ func CopyInfrastructure(cfg *config.Config, backendName, stackID string) error {
 		return err
 	}
 
-	// Under OBOL_DEVELOPMENT we build images from the working tree and
-	// import them into k3d. The embedded templates pin published digests for
-	// production safety, which means the cluster ignores our locally-built
-	// images and silently uses stale ghcr.io binaries. Rewrite the digest
-	// pins to a per-commit `dev-<sha>` tag after copy so the dev cycle Just
-	// Works without operators having to kubectl-set-image every loop, and so
-	// parallel worktree stacks don't collide on a shared `:latest`. Persist
-	// the tag so internal/stack builds/imports the exact tag we pinned here.
-	if os.Getenv("OBOL_DEVELOPMENT") == "true" {
+	// Rewrite stack-owned image placeholders (and any legacy pin form) to
+	// the policy from internal/images. Digests are never stored in git —
+	// production binds short-SHA + registry digest at apply time; dev uses
+	// the per-commit local-import tag. See internal/images package docs.
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("OBOL_DEVELOPMENT")), "true") {
 		devTag := DevImageTag()
-		if err := rewriteDevDigestPins(defaultsDir, devTag); err != nil {
-			return fmt.Errorf("rewrite dev digest pins: %w", err)
+		if err := images.RewriteTree(defaultsDir, func(repo string) string {
+			return images.ResolveDev(repo, devTag)
+		}); err != nil {
+			return fmt.Errorf("rewrite managed image refs (dev): %w", err)
 		}
 		if err := os.WriteFile(filepath.Join(cfg.ConfigDir, devImageTagFile), []byte(devTag), 0o600); err != nil {
 			return fmt.Errorf("persist dev image tag: %w", err)
+		}
+	} else {
+		if err := images.RewriteTree(defaultsDir, images.Resolve); err != nil {
+			return fmt.Errorf("rewrite managed image refs: %w", err)
 		}
 	}
 
@@ -128,86 +130,6 @@ func CopyInfrastructure(cfg *config.Config, backendName, stackID string) error {
 	}
 
 	return os.WriteFile(filepath.Join(defaultsDir, stampFile), []byte(stamp), 0o600)
-}
-
-// devLocallyBuiltImageBases lists the image refs whose digests we want
-// to swap for :latest under OBOL_DEVELOPMENT. Must stay in lockstep
-// with internal/stack.baseLocalImages — duplication is intentional to
-// avoid an import cycle (defaults → stack would form a loop).
-var devLocallyBuiltImageBases = []string{
-	"ghcr.io/obolnetwork/x402-verifier",
-	"ghcr.io/obolnetwork/serviceoffer-controller",
-	"ghcr.io/obolnetwork/x402-buyer",
-	"ghcr.io/obolnetwork/job-broker",
-	"ghcr.io/obolnetwork/demo-server",
-	"ghcr.io/obolnetwork/obol-stack-public-storefront",
-}
-
-// rewriteDevDigestPins walks the copied defaults tree and replaces
-// every `<base>@sha256:<hex>` or `<base>:<short-sha>` reference whose
-// base is in devLocallyBuiltImageBases with `<base>:latest`. Only
-// operates on .yaml and .yml files so we don't risk corrupting binaries
-// or charts.
-//
-// Both pin styles are matched because release pipelines may publish
-// either digest pins (immutable) or short-SHA tag pins (e.g. `:b13254e`)
-// — in either case the local dev build is tagged `:latest`, so the
-// rewrite needs to catch both forms or `obol stack up` would pull from
-// the registry instead of using the freshly-built local image.
-func rewriteDevDigestPins(defaultsDir, devTag string) error {
-	patterns := make([]*regexp.Regexp, 0, len(devLocallyBuiltImageBases))
-	replaceWith := make([]string, 0, len(devLocallyBuiltImageBases))
-	for _, base := range devLocallyBuiltImageBases {
-		// Match all four pin styles we ship across the infrastructure
-		// templates and rewrite to the dev tag so the local-dev build wins.
-		// Patterns covered (single regex, left-to-right alternation):
-		//   <base>:<7-40 hex>@sha256:<64 hex>   tag + digest combo
-		//   <base>@sha256:<64 hex>              digest-only pin
-		//   <base>:<7-40 hex>                   short-SHA tag pin (e.g. b13254e)
-		//   <base>:latest                       unpinned (e.g. job-broker, an
-		//                                       image not yet published to ghcr,
-		//                                       so it ships as :latest and has
-		//                                       no digest for the release
-		//                                       pipeline to stamp)
-		// The combo form MUST come first so the engine doesn't stop at the
-		// shorter `:<hex>` match and leave a stray `@sha256:<digest>` suffix,
-		// which Docker still resolves to the immutable registry image and
-		// silently bypasses the local build (root cause of the no-debug-logs
-		// regression in flow-11 step 43 chase, May 2026). :latest is matched
-		// last because a locally-built base always resolves to the dev build,
-		// so an unpinned ref must point at it too — without this the :latest
-		// deployment stays :latest, the image isn't present under that tag
-		// (the build imports :dev-<sha>), and the pod ImagePullBackOffs against
-		// the unpublished registry ref.
-		patterns = append(patterns, regexp.MustCompile(regexp.QuoteMeta(base)+"(:[a-f0-9]{7,40}@sha256:[a-f0-9]{64}|@sha256:[a-f0-9]{64}|:[a-f0-9]{7,40}|:latest)"))
-		replaceWith = append(replaceWith, base+":"+devTag)
-	}
-
-	return filepath.WalkDir(defaultsDir, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
-		ext := strings.ToLower(filepath.Ext(d.Name()))
-		if ext != ".yaml" && ext != ".yml" {
-			return nil
-		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		updated := data
-		for i, p := range patterns {
-			updated = p.ReplaceAll(updated, []byte(replaceWith[i]))
-		}
-		if string(updated) == string(data) {
-			return nil
-		}
-		return os.WriteFile(path, updated, 0o600)
-	})
 }
 
 // InfrastructureReplacements returns the placeholder values used when copying
@@ -259,7 +181,11 @@ func infrastructureStamp(backendName, stackID string) (string, error) {
 		return "", err
 	}
 
-	return fmt.Sprintf("digest=%s\nbackend=%s\nstackID=%s\n", digest, backendName, stackID), nil
+	// image= forces a re-copy when the binary's GitCommit (or dev mode)
+	// changes so image pins track the running CLI even if template bytes
+	// are unchanged.
+	return fmt.Sprintf("digest=%s\nbackend=%s\nstackID=%s\nimage=%s\n",
+		digest, backendName, stackID, images.StampIdentity()), nil
 }
 
 // OllamaHostForBackend returns the hostname/IP that reaches the host Ollama

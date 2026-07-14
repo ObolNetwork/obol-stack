@@ -66,6 +66,14 @@ python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/ethereum-local-wallet/scripts
 
 This is one tx, ~46k gas, valid forever (unless the user later revokes). EIP-3009 flows (USDC `TransferWithAuthorization`) do **not** need this approval. Sellers that advertise `eip2612GasSponsoring` in their 402 extensions also bypass it (per-request signed permits).
 
+## Verify Before You Pay
+
+Before paying an unfamiliar seller or signing payment authorizations for a new
+endpoint, vet it with the `inspect` skill: `contract.py check <payTo>` runs
+due-diligence on the recipient (code? proxy? verified source? labels?), and
+`decode.py calldata` explains any calldata you are asked to sign (e.g. the
+Permit2 approval above).
+
 ## Pitfalls
 
 - **`extra.name` is NOT the EIP-712 signing domain name.** The 402 response
@@ -114,6 +122,11 @@ This is one tx, ~46k gas, valid forever (unless the user later revokes). EIP-300
   slash separator (e.g. `vendor--model`); buyers signing against a
   legacy slashed name need the controller to insert an explicit LiteLLM
   entry for the alias (`addLiteLLMModelEntry`).
+- **Interop smoke-testing against a non-Obol seller.** A known third-party
+  public x402 endpoint is `POST https://swiss-knife.xyz/api/usdc-pay`
+  (x402 exact scheme, USDC on Base / Base-Sepolia, PayAI facilitator; body
+  `{"to","amount","network"}`). Probing it with `probe <url> --type http
+  --method POST` should yield standard 402 requirements.
 
 ## When to Use
 

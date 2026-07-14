@@ -1,6 +1,6 @@
 ---
 name: addresses
-description: Verified contract addresses for major Ethereum protocols across mainnet and L2s. Use this instead of guessing. SKILL.md is an index — load the appropriate references/*.md file for the addresses you need. Start with references/obol-payments.md for the Stack's own rails (USDC + OBOL + Permit2 + ERC-8004 on the supported chains). Other categories include stablecoins, staking + Obol/Splits, DEXs, lending and DeFi, L2-native protocols, infrastructure (Safe, AA, Chainlink, EigenLayer, ENS, OpenSea), bridges (CCIP, Across), and major token addresses. Always verify on-chain via eth_getCode + eth_call before sending value.
+description: Verified contract addresses for major Ethereum protocols across mainnet and L2s. Use this instead of guessing. SKILL.md is an index — load the appropriate references/*.md file for the addresses you need. Start with references/obol-payments.md for the Stack's own rails (USDC + OBOL + Permit2 + ERC-8004 on the supported chains). Other categories include stablecoins, staking + Obol/Splits, DEXs, lending and DeFi, L2-native protocols, infrastructure (Safe, AA, Chainlink, EigenLayer, ENS, OpenSea), bridges (CCIP, Across, Arbitrum One + Robinhood Chain canonical), Robinhood Chain, and major token addresses. Always verify on-chain via eth_getCode + eth_call before sending value.
 ---
 
 # Contract Addresses
@@ -26,7 +26,8 @@ Open the file that matches the category you need:
 | [`references/defi.md`](references/defi.md) | Aave, Compound, MakerDAO/Sky, sDAI, Curve, Balancer, Yearn V3 |
 | [`references/l2-native.md`](references/l2-native.md) | Aerodrome (Base), Velodrome (OP), GMX, Pendle, Camelot, SyncSwap, Morpho |
 | [`references/infrastructure.md`](references/infrastructure.md) | Safe, ERC-4337 EntryPoint, Chainlink, EigenLayer, OpenSea Seaport, ENS, deterministic deployer |
-| [`references/bridges.md`](references/bridges.md) | Chainlink CCIP Router, Across SpokePool |
+| [`references/bridges.md`](references/bridges.md) | Chainlink CCIP Router, Across SpokePool, Arbitrum One + Robinhood Chain canonical bridges |
+| [`references/robinhood-chain.md`](references/robinhood-chain.md) | Robinhood Chain (4663) — chain metadata, canonical bridge L1+L2 contracts, tokens (bridged USDC, USDG, WETH), ecosystem notes |
 | [`references/agents-and-tokens.md`](references/agents-and-tokens.md) | ERC-8004 registries, major tokens (UNI, AAVE, COMP, MKR, LDO, WBTC, stETH, rETH) |
 
 ## Verify any address at runtime

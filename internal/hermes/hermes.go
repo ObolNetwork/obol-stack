@@ -935,6 +935,13 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
               env:
                 - name: HERMES_HOME
                   value: /data/.hermes
+                # v2026.7.x images bake HERMES_WRITE_SAFE_ROOT=/opt/data (their
+                # default HERMES_HOME). We relocate HERMES_HOME to the PVC, so
+                # the safe root must follow or every file-tool write is denied
+                # as a "protected system/credential file". /tmp allows scratch
+                # scripts; the static credential denylist still applies inside.
+                - name: HERMES_WRITE_SAFE_ROOT
+                  value: /data/.hermes:/tmp
                 - name: HOME
                   value: /data/.hermes/home
                 - name: API_SERVER_ENABLED

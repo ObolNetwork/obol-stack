@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"net/http"
 	"net/mail"
 	"os"
@@ -15,10 +16,16 @@ import (
 )
 
 const (
-	ProfileNamespace    = "x402"
-	ProfileConfigMap    = "obol-storefront-profile"
-	ProfileDataKey      = "profile.json"
-	DefaultLogoPath     = "/obol-stack-logo.png"
+	ProfileNamespace = "x402"
+	ProfileConfigMap = "obol-storefront-profile"
+	ProfileDataKey   = "profile.json"
+	// DefaultLogoPath is the light-on-dark Obol wordmark; only legible on
+	// the dark/obol themes.
+	DefaultLogoPath = "/obol-stack-logo.png"
+	// DefaultMarkPath is the dark square Obol mark used as the default
+	// brand image on the light theme (paired with the display name as
+	// text), where the wordmark would be invisible.
+	DefaultMarkPath     = "/obol-logo.png"
 	profileLocalRelPath = "storefront/profile.json"
 )
 
@@ -29,6 +36,10 @@ func ResolvePublished(explicit *schemas.StorefrontProfile, baseURL string) schem
 		DisplayName: "Obol Stack",
 		Tagline:     "Unlock Agent and API services with digital payments.",
 		LogoURL:     baseURL + DefaultLogoPath,
+		Theme:       DefaultTheme,
+		// AccentColor/FaviconURL/OGImageURL/Description default to empty:
+		// renderers fall back to the preset accent, the logo, and the
+		// generated preview image respectively.
 	}
 	if explicit == nil {
 		return profile
@@ -44,6 +55,24 @@ func ResolvePublished(explicit *schemas.StorefrontProfile, baseURL string) schem
 	}
 	if v := strings.TrimSpace(explicit.ContactEmail); v != "" {
 		profile.ContactEmail = v
+	}
+	if v := strings.TrimSpace(explicit.Theme); v != "" {
+		profile.Theme = v
+	}
+	if v := strings.TrimSpace(explicit.AccentColor); v != "" {
+		profile.AccentColor = v
+	}
+	if v := strings.TrimSpace(explicit.FaviconURL); v != "" {
+		profile.FaviconURL = v
+	}
+	if v := strings.TrimSpace(explicit.OGImageURL); v != "" {
+		profile.OGImageURL = v
+	}
+	if v := strings.TrimSpace(explicit.Description); v != "" {
+		profile.Description = v
+	}
+	if v := strings.TrimSpace(explicit.CustomCSS); v != "" {
+		profile.CustomCSS = v
 	}
 	return profile
 }
@@ -85,6 +114,24 @@ func MergeProfile(base, patch schemas.StorefrontProfile) schemas.StorefrontProfi
 	if v := strings.TrimSpace(patch.ContactEmail); v != "" {
 		out.ContactEmail = v
 	}
+	if v := strings.TrimSpace(patch.Theme); v != "" {
+		out.Theme = v
+	}
+	if v := strings.TrimSpace(patch.AccentColor); v != "" {
+		out.AccentColor = v
+	}
+	if v := strings.TrimSpace(patch.FaviconURL); v != "" {
+		out.FaviconURL = v
+	}
+	if v := strings.TrimSpace(patch.OGImageURL); v != "" {
+		out.OGImageURL = v
+	}
+	if v := strings.TrimSpace(patch.Description); v != "" {
+		out.Description = v
+	}
+	if v := strings.TrimSpace(patch.CustomCSS); v != "" {
+		out.CustomCSS = v
+	}
 	return out
 }
 
@@ -98,10 +145,11 @@ func ProfileLocalPath(cfg *config.Config) string {
 // a hard 1 MiB object limit, so the logo must stay well under that.
 const maxInlineLogoBytes = 256 << 10 // 256 KiB
 
-// ValidateLogoURL accepts absolute http(s) URLs, site-relative paths, or
+// ValidateImageURL accepts absolute http(s) URLs, site-relative paths, or
 // inline data:image/...;base64 URIs (self-contained — immune to CORS,
-// hotlink protection, and dead hosts).
-func ValidateLogoURL(raw string) error {
+// hotlink protection, and dead hosts). what names the field in errors
+// ("logo", "favicon", "OG image").
+func ValidateImageURL(raw, what string) error {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil
@@ -113,31 +161,61 @@ func ValidateLogoURL(raw string) error {
 		return nil
 	}
 	if strings.HasPrefix(raw, "data:") {
-		return validateInlineLogo(raw)
+		return validateInlineImage(raw, what)
 	}
-	return fmt.Errorf("logo URL must be https://..., http://..., a path starting with /, or an inline data:image/...;base64 URI")
+	return fmt.Errorf("%s URL must be https://..., http://..., a path starting with /, or an inline data:image/...;base64 URI", what)
 }
 
-// InlineLogoFromFile reads a local image file and returns it as a
-// data:image/...;base64 URI suitable for StorefrontProfile.LogoURL. Inline
-// logos are self-contained — immune to CORS, hotlink protection, and dead
-// hosts — but must fit the ConfigMap budget (maxInlineLogoBytes).
-func InlineLogoFromFile(path string) (string, error) {
+// ValidateLogoURL is ValidateImageURL for the logo field.
+func ValidateLogoURL(raw string) error { return ValidateImageURL(raw, "logo") }
+
+// InlineImageFromFile reads a local image file and returns it as a
+// data:image/...;base64 URI suitable for the profile's image fields. Inline
+// images are self-contained — immune to CORS, hotlink protection, and dead
+// hosts — but must fit the ConfigMap budget (maxInlineLogoBytes). what names
+// the field in errors ("logo", "favicon", "OG image").
+func InlineImageFromFile(path, what string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return "", fmt.Errorf("read logo file: %w", err)
+		return "", fmt.Errorf("read %s file: %w", what, err)
 	}
 	if len(data) == 0 {
-		return "", fmt.Errorf("logo file %s is empty", path)
+		return "", fmt.Errorf("%s file %s is empty", what, path)
 	}
 	if len(data) > maxInlineLogoBytes {
-		return "", fmt.Errorf("logo file is %d KiB; max %d KiB for an inline logo (it is embedded in the catalog ConfigMap) — host larger images at an https URL instead", len(data)>>10, maxInlineLogoBytes>>10)
+		return "", fmt.Errorf("%s file is %d KiB; max %d KiB for an inline image (it is embedded in the catalog ConfigMap) — host larger images at an https URL instead", what, len(data)>>10, maxInlineLogoBytes>>10)
 	}
 	mime := detectImageMIME(path, data)
 	if mime == "" {
-		return "", fmt.Errorf("logo file %s does not look like an image (png, jpeg, gif, webp, svg, ico)", path)
+		return "", fmt.Errorf("%s file %s does not look like an image (png, jpeg, gif, webp, svg, ico)", what, path)
 	}
 	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data), nil
+}
+
+// InlineLogoFromFile is InlineImageFromFile for the logo field.
+func InlineLogoFromFile(path string) (string, error) { return InlineImageFromFile(path, "logo") }
+
+// SafeAssetURL marks a profile asset URL as safe for html/template URL
+// contexts. The template engine's URL sanitizer rejects data: URIs outright
+// (renders #ZgotmplZ), but inline data:image/...;base64 logos/favicons are a
+// supported profile form (`sell info set --logo-file`) — validated at set
+// time AND re-checked here before the bypass. Everything else must be plain
+// http(s); unexpected shapes collapse to "".
+func SafeAssetURL(raw string) template.URL {
+	raw = strings.TrimSpace(raw)
+	switch {
+	case raw == "":
+		return ""
+	case strings.HasPrefix(raw, "https://"), strings.HasPrefix(raw, "http://"):
+		return template.URL(raw)
+	case strings.HasPrefix(raw, "data:image/"):
+		if validateInlineImage(raw, "asset") != nil {
+			return ""
+		}
+		return template.URL(raw)
+	default:
+		return ""
+	}
 }
 
 // detectImageMIME sniffs an image content-type from file bytes, falling back
@@ -156,23 +234,23 @@ func detectImageMIME(path string, data []byte) string {
 	return ""
 }
 
-func validateInlineLogo(raw string) error {
+func validateInlineImage(raw, what string) error {
 	meta, payload, ok := strings.Cut(strings.TrimPrefix(raw, "data:"), ",")
 	if !ok {
-		return fmt.Errorf("inline logo: malformed data: URI (missing comma separator)")
+		return fmt.Errorf("inline %s: malformed data: URI (missing comma separator)", what)
 	}
 	if !strings.HasPrefix(meta, "image/") {
-		return fmt.Errorf("inline logo must be a data:image/... URI, got data:%s", meta)
+		return fmt.Errorf("inline %s must be a data:image/... URI, got data:%s", what, meta)
 	}
 	if !strings.HasSuffix(meta, ";base64") {
-		return fmt.Errorf("inline logo must be base64-encoded (data:image/...;base64,...)")
+		return fmt.Errorf("inline %s must be base64-encoded (data:image/...;base64,...)", what)
 	}
 	decoded, err := base64.StdEncoding.DecodeString(payload)
 	if err != nil {
-		return fmt.Errorf("inline logo: invalid base64 payload: %w", err)
+		return fmt.Errorf("inline %s: invalid base64 payload: %w", what, err)
 	}
 	if len(decoded) > maxInlineLogoBytes {
-		return fmt.Errorf("inline logo is %d KiB decoded; max %d KiB (it is embedded in the catalog ConfigMap)", len(decoded)>>10, maxInlineLogoBytes>>10)
+		return fmt.Errorf("inline %s is %d KiB decoded; max %d KiB (it is embedded in the catalog ConfigMap)", what, len(decoded)>>10, maxInlineLogoBytes>>10)
 	}
 	return nil
 }

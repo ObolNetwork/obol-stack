@@ -113,6 +113,9 @@ func TestAgentManifests_DeploymentEnvCarriesContext(t *testing.T) {
 		"AGENT_NAMESPACE":       "agent-quant",
 		"AGENT_WALLET_ADDRESS":  agent.Status.WalletAddress,
 		"OBOL_SKILLS_DIR":       "/data/.hermes/obol-skills",
+		// Must track HERMES_HOME: the upstream image bakes /opt/data and
+		// denies all file-tool writes outside the safe root.
+		"HERMES_WRITE_SAFE_ROOT": "/data/.hermes:/tmp",
 	}
 	got := make(map[string]string)
 	for _, e := range envs {
@@ -344,8 +347,47 @@ func agentConfigChecksum(t *testing.T, agent *monetizeapi.Agent) string {
 	return ""
 }
 
+// preChangeHermesConfigGolden is the exact byte output of the historical
+// renderHermesConfig(model, litellmKey) template for model=qwen3.5:9b and
+// litellmKey=lit-key, before AgentSpec gained ModelProvider/MaxTurns/
+// DisabledToolsets/MCPServers. When those fields are unset, output MUST
+// remain byte-identical to this golden string.
+const preChangeHermesConfigGolden = `model:
+  default: "qwen3.5:9b"
+  provider: custom
+  base_url: http://litellm.llm.svc.cluster.local:4000/v1
+  api_key: "lit-key"
+terminal:
+  backend: local
+  cwd: /data/.hermes/workspace
+  timeout: 80
+  lifetime_seconds: 90
+  docker_mount_cwd_to_workspace: false
+agent:
+  max_turns: 30
+  reasoning_effort: low
+  disabled_toolsets:
+    - memory
+    - web
+approvals:
+  mode: "off"
+skills:
+  external_dirs:
+    - /data/.hermes/obol-skills
+`
+
+func testAgentForHermesConfig(model string) *monetizeapi.Agent {
+	a := &monetizeapi.Agent{}
+	a.Name = "quant"
+	a.Namespace = "agent-quant"
+	a.Spec.Model = model
+	return a
+}
+
+func ptrInt(n int) *int { return &n }
+
 func TestRenderHermesConfig_HasModelAndSkillsDir(t *testing.T) {
-	cfg := renderHermesConfig("qwen3.5:9b", "lit-key")
+	cfg := renderHermesConfig(testAgentForHermesConfig("qwen3.5:9b"), "lit-key")
 	for _, must := range []string{
 		`default: "qwen3.5:9b"`,
 		`api_key: "lit-key"`,
@@ -363,7 +405,7 @@ func TestRenderHermesConfig_HasModelAndSkillsDir(t *testing.T) {
 // knobs so a single sale stays inside the 100s Cloudflare free-tunnel
 // window. If any of these drift it should fail loudly.
 func TestRenderHermesConfig_SubAgentConstraints(t *testing.T) {
-	cfg := renderHermesConfig("qwen3.5:9b", "lit-key")
+	cfg := renderHermesConfig(testAgentForHermesConfig("qwen3.5:9b"), "lit-key")
 	for _, must := range []string{
 		`timeout: 80`,
 		`lifetime_seconds: 90`,
@@ -392,6 +434,60 @@ func TestRenderHermesConfig_SubAgentConstraints(t *testing.T) {
 	lifetime := parseTerminalInt(t, cfg, "lifetime_seconds")
 	if timeout > lifetime {
 		t.Errorf("terminal.timeout (%d) must be <= lifetime_seconds (%d)\n---\n%s", timeout, lifetime, cfg)
+	}
+}
+
+// TestRenderHermesConfig_UnsetFieldsByteIdentical proves that with all new
+// AgentSpec fields at zero value, rendered config matches the pre-change
+// template exactly (no accidental whitespace/quoting/order drift).
+func TestRenderHermesConfig_UnsetFieldsByteIdentical(t *testing.T) {
+	agent := testAgentForHermesConfig("qwen3.5:9b")
+	// Explicit zero values — defensive against accidental defaults.
+	agent.Spec.ModelProvider = ""
+	agent.Spec.MCPServers = nil
+	agent.Spec.MaxTurns = nil
+	agent.Spec.DisabledToolsets = nil
+
+	got := renderHermesConfig(agent, "lit-key")
+	if got != preChangeHermesConfigGolden {
+		t.Errorf("unset-fields config not byte-identical to pre-change golden\n--- got ---\n%q\n--- want ---\n%q", got, preChangeHermesConfigGolden)
+	}
+}
+
+// TestRenderHermesConfig_OptionalSpecOverrides covers non-default
+// ModelProvider, MaxTurns, and MCPServers (incl. unexpanded ${VAR} env).
+func TestRenderHermesConfig_OptionalSpecOverrides(t *testing.T) {
+	agent := testAgentForHermesConfig("grok-4")
+	agent.Spec.ModelProvider = "xai-oauth"
+	agent.Spec.MaxTurns = ptrInt(300)
+	agent.Spec.MCPServers = []monetizeapi.MCPServer{
+		{
+			Name:    "search",
+			Command: "npx",
+			Args:    []string{"-y", "some-mcp"},
+			Env:     map[string]string{"API_KEY": "${SEARCH_API_KEY}"},
+		},
+	}
+
+	got := renderHermesConfig(agent, "unused-litellm-key")
+
+	for _, must := range []string{
+		`provider: xai-oauth`,
+		`max_turns: 300`,
+		`mcp_servers:`,
+		`search:`,
+		`command: npx`,
+		`${SEARCH_API_KEY}`,
+	} {
+		if !strings.Contains(got, must) {
+			t.Errorf("config missing %q\n---\n%s", must, got)
+		}
+	}
+	if strings.Contains(got, "litellm") {
+		t.Errorf("xai-oauth provider must omit litellm base_url/api_key; got:\n%s", got)
+	}
+	if strings.Contains(got, "unused-litellm-key") {
+		t.Errorf("non-custom provider must not emit api_key; got:\n%s", got)
 	}
 }
 

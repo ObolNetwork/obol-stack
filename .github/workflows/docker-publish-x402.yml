@@ -1,20 +1,16 @@
 name: Build and Publish x402 Images
 
+# Publishes stack-owned pure-Go images via docker bake (Dockerfile.x402):
+# one shared builder stage, native cross-compile (no QEMU), shared GHA cache.
+# Tags: short SHA (images.Resolve), long SHA (Trivy), latest on main.
+# Release gate: .github/scripts/verify-release-images.sh
+
 on:
   push:
     branches:
       - main
-      # Release trains get the same build + auto-repin treatment, so a tag
-      # cut on the branch never needs a manual workflow_dispatch first.
-      - 'release/**'
     tags:
       - 'v*'
-    # Approximates the import graph of the built binaries (verifier,
-    # controller, buyer pull in far more than internal/x402 — agent
-    # rendering, embed, erc8004, tunnel, ...). The release-gate script
-    # .github/scripts/verify-x402-pins.sh computes the EXACT graph via
-    # `go list -deps` at tag time, so anything this list misses fails the
-    # release instead of shipping stale; keep the list generous.
     paths:
       - 'internal/agentruntime/**'
       - 'internal/config/**'
@@ -26,6 +22,7 @@ on:
       - 'internal/helmcmd/**'
       - 'internal/images/**'
       - 'internal/inference/**'
+      - 'internal/jobbroker/**'
       - 'internal/kubectl/**'
       - 'internal/model/**'
       - 'internal/monetizeapi/**'
@@ -43,14 +40,19 @@ on:
       - 'cmd/x402-buyer/**'
       - 'cmd/serviceoffer-controller/**'
       - 'cmd/demo-server/**'
-      - 'Dockerfile.x402-verifier'
-      - 'Dockerfile.x402-buyer'
+      - 'cmd/job-broker/**'
+      - 'Dockerfile.x402'
+      - 'Dockerfile.x402-*'
       - 'Dockerfile.serviceoffer-controller'
       - 'Dockerfile.demo-server'
+      - 'Dockerfile.job-broker'
+      - 'docker-bake.hcl'
       - 'go.mod'
       - 'go.sum'
+      - '.dockerignore'
       - '.github/workflows/docker-publish-x402.yml'
-      - '.github/scripts/repin-x402-images.sh'
+      - '.github/scripts/lib-ghcr.sh'
+      - '.github/scripts/verify-release-images.sh'
   workflow_dispatch:
 
 concurrency:
@@ -62,43 +64,34 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Build each x402 component and publish its image.
+  # One bake job builds all five images for amd64+arm64. Pure-Go cross-compile
+  # from BUILDPLATFORM means we do NOT need QEMU (the old multi-arch tax).
   # ---------------------------------------------------------------------------
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - component: x402-verifier
-            image: obolnetwork/x402-verifier
-            dockerfile: Dockerfile.x402-verifier
-            description: x402 payment verification sidecar for Obol Stack
-          - component: x402-buyer
-            image: obolnetwork/x402-buyer
-            dockerfile: Dockerfile.x402-buyer
-            description: x402 buy-side payment sidecar for Obol Stack
-          - component: serviceoffer-controller
-            image: obolnetwork/serviceoffer-controller
-            dockerfile: Dockerfile.serviceoffer-controller
-            description: ServiceOffer reconciler for Obol Stack monetization
-          - component: demo-server
-            image: obolnetwork/demo-server
-            dockerfile: Dockerfile.demo-server
-            description: Demo HTTP services for Obol Stack sell demo
-
+    outputs:
+      short_sha: ${{ steps.sha.outputs.short }}
+      long_sha: ${{ steps.sha.outputs.long }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      - name: Resolve SHAs
+        id: sha
+        run: |
+          {
+            echo "long=$(git rev-parse HEAD)"
+            echo "short=$(git rev-parse --short=7 HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
+      # No QEMU: Dockerfile.x402 uses FROM --platform=$BUILDPLATFORM and
+      # GOARCH=$TARGETARCH. Emulation was the dominant cost (~15–25m/job).
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
@@ -107,48 +100,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract image metadata
-        id: meta
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
+      - name: Bake and push all x402 images
+        uses: docker/bake-action@d3418bd7d0e9324001bca92fa8ba175ea7e6dc9b # v7.3.0
         with:
-          images: ${{ env.REGISTRY }}/${{ matrix.image }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            # format=long + empty prefix emits the full 40-char commit SHA so the
-            # security-scan job's `image-ref: ...:${{ github.sha }}` reference resolves.
-            # Previously `type=sha,prefix=` produced the 7-char short SHA,
-            # causing Trivy to fail with MANIFEST_UNKNOWN on every run.
-            type=sha,format=long,prefix=
-            # Also publish the 7-char short SHA as a separate tag. The obol
-            # binary embeds version.GitCommit (short SHA) via ldflags and uses
-            # it through internal/images.Resolve to commit-pin the deployments
-            # it manages. Without this, binary upgrades wouldn't roll the pods.
-            type=sha,format=short,prefix=
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/feat/secure-enclave-inference' }}
-          labels: |
-            org.opencontainers.image.title=${{ matrix.component }}
-            org.opencontainers.image.description=${{ matrix.description }}
-            org.opencontainers.image.vendor=Obol
-            org.opencontainers.image.source=https://github.com/ObolNetwork/obol-stack
-
-      - name: Build and push
-        id: build-push
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64,linux/arm64
+          files: docker-bake.hcl
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=${{ matrix.component }}
-          cache-to: type=gha,scope=${{ matrix.component }},mode=max
           provenance: true
           sbom: true
+          vars: |
+            REGISTRY=ghcr.io/obolnetwork
+            SHA_SHORT=${{ steps.sha.outputs.short }}
+            SHA_LONG=${{ steps.sha.outputs.long }}
+            PUSH_LATEST=${{ github.ref == 'refs/heads/main' }}
 
   # ---------------------------------------------------------------------------
-  # Security scan each published image using the exact SHA tag from the build.
+  # Trivy still fans out; scans are cheap vs the old multi-arch QEMU builds.
   # ---------------------------------------------------------------------------
   security-scan:
     needs: build
@@ -158,21 +124,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - component: x402-verifier
-            image: obolnetwork/x402-verifier
-          - component: x402-buyer
-            image: obolnetwork/x402-buyer
-          - component: serviceoffer-controller
-            image: obolnetwork/serviceoffer-controller
-          - component: demo-server
-            image: obolnetwork/demo-server
-
+        image:
+          - obolnetwork/x402-verifier
+          - obolnetwork/x402-buyer
+          - obolnetwork/serviceoffer-controller
+          - obolnetwork/demo-server
+          - obolnetwork/job-broker
     steps:
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ${{ env.REGISTRY }}/${{ matrix.image }}:${{ github.sha }}
+          image-ref: ${{ env.REGISTRY }}/${{ matrix.image }}:${{ needs.build.outputs.long_sha }}
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'

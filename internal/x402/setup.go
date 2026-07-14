@@ -80,10 +80,9 @@ func EnsureVerifier(cfg *config.Config) error {
 	}
 
 	// Refresh the defaults tree so the helmfile sync below reads the
-	// most recent embedded manifests. Under OBOL_DEVELOPMENT=true this
-	// also applies the canonical digest-pin -> :latest rewrite via
-	// defaults.rewriteDevDigestPins so freshly built local images are
-	// honored. No-op when the stamp is up to date.
+	// most recent embedded manifests. This also rewrites stack-owned
+	// :__OBOL_IMAGE__ placeholders via internal/images (dev tag or
+	// GitCommit@digest). No-op when the stamp is up to date.
 	backendName := stackdefaults.DetectedBackendName(cfg)
 	stackID := stackdefaults.StackID(cfg)
 	if stackID == "" {

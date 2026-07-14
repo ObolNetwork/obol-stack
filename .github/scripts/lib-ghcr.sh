@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Shared helper: resolve the multi-arch index digest GHCR serves for an
-# obolnetwork image tag. Sourced by repin-x402-images.sh (to write pins) and
-# verify-x402-pins.sh (to bind embedded digests to their tags).
+# obolnetwork image tag. Sourced by verify-release-images.sh (release gate).
+# Apply-time binding lives in Go (internal/images.FetchIndexDigest).
 #
 # fetch_index_digest <image> <tag>  →  prints "sha256:<64 hex>" or returns 1.
 # The value matches `docker buildx imagetools inspect --format
