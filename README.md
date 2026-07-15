@@ -65,6 +65,17 @@ obol agent list
 obol agent auth obol-agent
 ```
 
+Open the Hermes dashboard (root edge-redirects to the password form):
+
+```
+http://obol-agent.obol.stack
+```
+
+- **Username:** `obol`
+- **Password:** the agent API token from `obol agent auth obol-agent`
+
+Details: [Hermes dashboard login](docs/guides/hermes-dashboard-login.md).
+
 `obol stack up` provisions the cluster, auto-detects your local Ollama models into the LiteLLM gateway, deploys the default Hermes agent (with its own wallet behind a remote signer), and starts a Cloudflare quick-tunnel. From here you can chat with your agent locally at `http://obol.stack:8080` — or go straight to selling.
 
 ## Sell: Your First Paid Service
