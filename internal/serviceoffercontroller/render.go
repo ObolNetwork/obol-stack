@@ -875,7 +875,11 @@ func buildReferenceGrant(offer *monetizeapi.ServiceOffer) *unstructured.Unstruct
 			"apiVersion": "gateway.networking.k8s.io/v1beta1",
 			"kind":       "ReferenceGrant",
 			"metadata": map[string]any{
-				"name":      backendReferenceGrantName(offer.Name),
+				// Name must include the offer namespace: grants live in x402 and
+				// two offers with the same name in different namespaces would
+				// otherwise overwrite each other's ReferenceGrant (HTTP 500 /
+				// flapping backendRefs for one of the two).
+				"name":      backendReferenceGrantName(offer.Namespace, offer.Name),
 				"namespace": "x402",
 				"labels": map[string]any{
 					"obol.org/serviceoffer-namespace": offer.Namespace,
@@ -934,8 +938,10 @@ func childName(name string) string {
 	return safeName("so-", name, "")
 }
 
-func backendReferenceGrantName(name string) string {
-	return safeName("so-", name, "-backend-grant")
+func backendReferenceGrantName(namespace, name string) string {
+	// Prefix with namespace so cluster-scoped-looking names in x402 stay unique
+	// per (namespace, offer). safeName still truncates+hashes long names.
+	return safeName("so-", namespace+"-"+name, "-backend-grant")
 }
 
 func registrationRequestName(name string) string {

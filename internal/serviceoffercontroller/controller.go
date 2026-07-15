@@ -1341,7 +1341,7 @@ func (c *Controller) deleteRouteChildren(ctx context.Context, offer *monetizeapi
 		resource dynamic.ResourceInterface
 		name     string
 	}{
-		{resource: c.referenceGrants.Namespace("x402"), name: backendReferenceGrantName(offer.Name)},
+		{resource: c.referenceGrants.Namespace("x402"), name: backendReferenceGrantName(offer.Namespace, offer.Name)},
 		{resource: c.httpRoutes.Namespace(offer.Namespace), name: childName(offer.Name)},
 		{resource: c.httpRoutes.Namespace(offer.Namespace), name: hostChildName(offer.Name)},
 		{resource: c.middlewares.Namespace(offer.Namespace), name: limitsMiddlewareName(offer.Name)},
