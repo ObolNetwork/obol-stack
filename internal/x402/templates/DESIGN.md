@@ -9,8 +9,32 @@ Canonical design system:
 [`@obolnetwork/obol-ui`](../../../../obol-packages/packages/obol-ui/DESIGN.md).
 Sister surface that this page is closest to:
 [`obol-stack/web/public-storefront`](../../../web/public-storefront/DESIGN.md).
-This page is deliberately the **smallest, most constrained** of the four
-surfaces.
+
+## 0. The five public surfaces
+
+Each is identified by a `data-obol="page-*"` marker on its root element —
+the stable hook custom CSS targets. All but the storefront are Go-rendered.
+
+| Marker | Surface | Rendered by |
+| --- | --- | --- |
+| `page-storefront` | Catalog storefront — lists every offer | `web/public-storefront` (Next.js) |
+| `page-landing` | Per-offer landing, on the offer's own hostname | `internal/serviceoffercontroller/offerbundle.go` |
+| `page-402` | **This page** — the payment gate | `internal/x402/paymentrequired.go` |
+| `page-signin` | SIWX challenge | `internal/x402/authgate.go` |
+| `page-error` | Auth/verifier error | `internal/x402/authgate.go` |
+
+Two distinctions worth holding onto, because both are easy to get backwards:
+
+- **`page-402` is not the storefront and not the landing page.** It is served
+  on a *paid resource path*, and only when `Accept` advertises `text/html`
+  (`prefersHTML`, `paymentrequired.go`); everything else gets the JSON
+  challenge. For a root-priced offer the paid resource is `POST /`, so a
+  browser visiting that origin's `/` gets `page-landing`, never this page.
+- **`data-obol="checkout"` is not this page.** It is a reserved mount div that
+  appears on *both* `page-402` and `page-landing`. Custom CSS targeting it
+  hits two surfaces at once.
+
+This page is deliberately the **smallest, most constrained** of the five.
 
 ---
 
@@ -37,24 +61,30 @@ buttons.
 
 ---
 
-## 2. Brand contract (mirrored)
+## 2. Brand contract (server-resolved)
 
 Same palette, type, and shape language as
 [`obol-ui/DESIGN.md § 1`](../../../../obol-packages/packages/obol-ui/DESIGN.md#1-brand-contract).
-Token values are duplicated inline at the top of the `<style>` block:
 
-```css
-:root {
-  --bg01: #091011; --bg02: #111f22; --bg03: #182d32; --bg04: #243d42;
-  --stroke: #1e3a3f;
-  --green: #2fe4ab; --green-dim: #1a7a5c;
-  --light: #d9eef3; --body: #9cc2c9; --muted: #475e64;
-}
+This page hardcodes **no** token values. The `:root` block is a single
+template action:
+
+```html
+<style>
+  :root {
+    {{.Branding.ThemeCSS}}
 ```
 
-These mirror `obol-packages/packages/obol-ui/stitches.config.ts` and
-`obol-stack/web/public-storefront/src/app/globals.css`. The mirror is by
-hand — see § 5 for the drift check.
+`ThemeCSS` is produced by `internal/storefront/theme.go` —
+`ResolveTheme(profile.Theme, profile.AccentColor).CSSVars()` — wired in at
+`internal/x402/branding.go`. That package is the **single owner** of the
+token palette for every Go-rendered surface; the seller's resolved profile
+(theme preset + accent override + per-offer `spec.branding` patch) therefore
+reaches this page and the offer landing page identically, with no per-file
+copy to keep in step.
+
+Do not paste hex values into this template. Add or change tokens in
+`theme.go`'s `themePresets` and they render here automatically.
 
 ---
 
@@ -118,21 +148,34 @@ the human-facing prompts.
 
 ## 5. Token-sync contract
 
-This file owns *one of three* hand-mirrored copies of the obol-ui token
-palette. When any of those move, all three must move together. To verify:
+This file owns **no** copy of the palette (§ 2), so it cannot drift. Neither
+can the offer landing page — both render `storefront.ResolveTheme(...).CSSVars()`
+at request/reconcile time from the same Go source.
+
+One hand-mirror survives, and it is on the TypeScript side:
+`web/public-storefront/src/lib/theme.ts` → `LIGHT_THEME_VARS`. It is the
+storefront's **fallback** only (`theme.ts` → `LIGHT_THEME_VARS[token] ?? "#000000"`),
+used when `/api/services.json` doesn't carry `themeVars`; the happy path takes
+its tokens from the feed, which the controller renders from `theme.go`. So
+drift here degrades the no-feed fallback, it does not affect a healthy page —
+which is precisely why it can rot unnoticed. To verify:
 
 ```bash
-diff <(grep -E '#[0-9a-f]{6}' internal/x402/templates/payment_required.html | sort -u) \
-     <(grep -E '#[0-9a-f]{6}' web/public-storefront/src/app/globals.css | sort -u)
+diff <(sed -n '/ThemeLight: {/,/^\t},$/p' internal/storefront/theme.go \
+        | grep -oE '"[a-z0-9-]+": *"#[0-9a-f]{6}"' | tr -d '" ' | sort) \
+     <(sed -n '/^export const LIGHT_THEME_VARS/,/^};$/p' web/public-storefront/src/lib/theme.ts \
+        | grep -oE '"?[a-z0-9-]+"?: *"#[0-9a-f]{6}"' | tr -d '" ' | sort)
 ```
 
-Both files must reference identical hex values for `bg01..bg04`, `stroke`,
-`green`, `green-dim`, `light`, `body`, `muted`. The fifth value `bg05` is
-optional here (not yet used by this page; add when the storefront introduces
-a card that needs a third elevation).
+Silence means they agree. Both sides must yield 13 `token:#hex` pairs — if
+either yields zero the check is vacuously passing and the extractor needs
+fixing, not the palette. (The previous version of this section diffed hex out
+of `payment_required.html`, which stopped containing any once theming moved to
+`theme.go`; it compared an empty set forever.)
 
-Whenever you edit token CSS in this file, also update the storefront and
-verify the canonical Stitches theme is the authoritative source.
+`internal/storefront/theme.go` is the authoritative source. Changing a preset
+there is sufficient for every Go-rendered surface; update `theme.ts` in the
+same commit.
 
 ---
 
