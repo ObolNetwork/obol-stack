@@ -8,6 +8,28 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+func TestUpstreamHealthStatusOK(t *testing.T) {
+	// 2xx only — 404/3xx/5xx must not flip UpstreamHealthy=True.
+	cases := map[int]bool{
+		200: true,
+		201: true,
+		204: true,
+		301: false,
+		302: false,
+		400: false,
+		401: false,
+		404: false,
+		500: false,
+		503: false,
+		0:   false,
+	}
+	for code, want := range cases {
+		if got := upstreamHealthStatusOK(code); got != want {
+			t.Errorf("upstreamHealthStatusOK(%d) = %v, want %v", code, got, want)
+		}
+	}
+}
+
 func TestSelectRegistrationOwnerPrefersOldestEnabledOffer(t *testing.T) {
 	now := time.Now().UTC()
 	offers := []*monetizeapi.ServiceOffer{
