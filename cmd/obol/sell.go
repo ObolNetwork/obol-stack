@@ -3332,11 +3332,49 @@ Examples:
 				return fmt.Errorf("registration failed on all networks")
 			}
 
+			// Offers created with --no-register stay registration.enabled=false
+			// and never flip to Registered/Active even after a successful CLI
+			// register. Enable them so the controller attaches them to the
+			// shared AgentIdentity and discovery surfaces services.
+			if n, err := enableRegistrationOnOffers(cfg, u); err != nil {
+				u.Warnf("could not enable registration on existing ServiceOffers: %v", err)
+				u.Dim("  Manually set registration.enabled=true on offers created with --no-register.")
+			} else if n > 0 {
+				u.Infof("Enabled registration on %d ServiceOffer(s) previously created with --no-register", n)
+			}
+
 			u.Blank()
 			u.Successf("Agent registered on %d/%d networks.", successes, len(networks))
 			return nil
 		},
 	}
+}
+
+// enableRegistrationOnOffers patches every ServiceOffer that still has
+// registration.enabled=false to true so post-hoc `obol sell register` activates
+// existing offers instead of leaving them Disabled while the AgentIdentity
+// is already on-chain.
+func enableRegistrationOnOffers(cfg *config.Config, u *ui.UI) (int, error) {
+	offers, err := listServiceOffers(cfg)
+	if err != nil {
+		return 0, err
+	}
+	enabled := 0
+	for _, o := range offers {
+		if o.Spec.Registration.Enabled {
+			continue
+		}
+		// Merge-patch only the enabled flag; leave name/description/skills alone.
+		patch := `{"spec":{"registration":{"enabled":true}}}`
+		if _, err := kubectlOutput(cfg, "patch", "serviceoffer.obol.org", o.Name,
+			"-n", o.Namespace, "--type", "merge", "-p", patch); err != nil {
+			u.Warnf("  %s/%s: %v", o.Namespace, o.Name, err)
+			continue
+		}
+		u.Dim(fmt.Sprintf("  %s/%s: registration.enabled → true", o.Namespace, o.Name))
+		enabled++
+	}
+	return enabled, nil
 }
 
 // registerAgentOnNetworks runs the per-network ERC-8004 registration loop used

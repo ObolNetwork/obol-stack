@@ -1443,8 +1443,16 @@ func applySharedRegistrationStatus(status *monetizeapi.ServiceOfferStatus, offer
 		return
 	}
 
-	if requestPhaseReady(request.Status.Phase) {
+	// Prefer a completed RegistrationRequest phase. Also treat a non-empty
+	// agentId (including one filled from AgentIdentity after CLI register)
+	// as Registered=True so non-owner offers and post-hoc enables leave
+	// Pending once the on-chain id is known — even when RegistrationTxHash
+	// is still empty (CLI path does not always populate the request tx).
+	if requestPhaseReady(request.Status.Phase) || strings.TrimSpace(request.Status.AgentID) != "" {
 		message := defaultString(request.Status.Message, "Registration reconciled")
+		if request.Status.AgentID != "" {
+			message = defaultString(request.Status.Message, fmt.Sprintf("Recorded agent %s", request.Status.AgentID))
+		}
 		if owner != nil && (owner.Namespace != offer.Namespace || owner.Name != offer.Name) {
 			if request.Status.AgentID != "" {
 				message = fmt.Sprintf("Shared registration via %s/%s recorded agent %s", owner.Namespace, owner.Name, request.Status.AgentID)
@@ -1452,7 +1460,11 @@ func applySharedRegistrationStatus(status *monetizeapi.ServiceOfferStatus, offer
 				message = fmt.Sprintf("Shared registration via %s/%s is active", owner.Namespace, owner.Name)
 			}
 		}
-		setCondition(status, "Registered", "True", request.Status.Phase, message)
+		reason := defaultString(request.Status.Phase, "Active")
+		if !requestPhaseReady(request.Status.Phase) && request.Status.AgentID != "" {
+			reason = "Active"
+		}
+		setCondition(status, "Registered", "True", reason, message)
 		return
 	}
 

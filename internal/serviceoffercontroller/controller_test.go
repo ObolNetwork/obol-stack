@@ -164,3 +164,29 @@ func TestApplySharedRegistrationStatus_WaitsForRoute(t *testing.T) {
 		t.Fatalf("registered should remain false until route is published: %+v", status.Conditions)
 	}
 }
+
+// CLI `obol sell register` may leave RegistrationRequest phase empty while
+// AgentIdentity already has the agentId — non-owner offers must still flip
+// Registered=True so status/checkmarks agree.
+func TestApplySharedRegistrationStatus_AgentIDWithoutPhase(t *testing.T) {
+	status := &monetizeapi.ServiceOfferStatus{
+		Conditions: []monetizeapi.Condition{{Type: "RoutePublished", Status: "True"}},
+	}
+	owner := &monetizeapi.ServiceOffer{ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "demo"}}
+	offer := &monetizeapi.ServiceOffer{ObjectMeta: metav1.ObjectMeta{Name: "beta", Namespace: "other"}}
+	request := &monetizeapi.RegistrationRequest{
+		Status: monetizeapi.RegistrationRequestStatus{
+			AgentID: "8104",
+			// Phase empty / Pending — common after CLI-only registration path
+		},
+	}
+
+	applySharedRegistrationStatus(status, offer, owner, request)
+
+	if status.AgentID != "8104" {
+		t.Fatalf("AgentID = %q, want 8104", status.AgentID)
+	}
+	if !isConditionTrue(*status, "Registered") {
+		t.Fatalf("Registered should be True when agentId is known: %+v", status.Conditions)
+	}
+}
