@@ -747,13 +747,23 @@ func (c *Controller) reconcileUpstream(ctx context.Context, status *monetizeapi.
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode >= 500 {
-		setCondition(status, "UpstreamHealthy", "False", "Unhealthy", fmt.Sprintf("HTTP %d from upstream", response.StatusCode))
+	// Require a 2xx health response. Treating any <500 (including 404) as
+	// healthy left agents with a wrong healthPath (or a never-started API)
+	// stuck in UpstreamHealthy=True and then Ready=True while paid traffic
+	// 404'd end-to-end.
+	if !upstreamHealthStatusOK(response.StatusCode) {
+		setCondition(status, "UpstreamHealthy", "False", "Unhealthy", fmt.Sprintf("HTTP %d from upstream health path %s", response.StatusCode, offer.EffectiveHealthPath()))
 		return false, nil
 	}
 
 	setCondition(status, "UpstreamHealthy", "True", "Healthy", fmt.Sprintf("Upstream responded with HTTP %d", response.StatusCode))
 	return true, nil
+}
+
+// upstreamHealthStatusOK reports whether an HTTP status from the offer's
+// healthPath should count as UpstreamHealthy=True.
+func upstreamHealthStatusOK(code int) bool {
+	return code >= 200 && code < 300
 }
 
 func (c *Controller) reconcilePaymentGate(ctx context.Context, status *monetizeapi.ServiceOfferStatus, offer *monetizeapi.ServiceOffer) error {
