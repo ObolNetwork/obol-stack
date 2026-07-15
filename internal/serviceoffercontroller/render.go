@@ -670,50 +670,91 @@ func hasLimits(offer *monetizeapi.ServiceOffer) bool {
 	return offer.Spec.Limits.MaxInFlight > 0 || offer.Spec.Limits.RPS > 0
 }
 
-// buildLimitsMiddleware renders the Traefik protection middleware for
-// spec.limits: inFlightReq (concurrency cap — the unbounded-concurrency
-// hole on paid agents is pentest-proven) and/or rateLimit. Lives in the
-// offer's namespace because Gateway API ExtensionRef resolves there.
-func buildLimitsMiddleware(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured {
-	spec := map[string]any{}
+// buildLimitsMiddlewares renders one Traefik Middleware CR per limit type.
+// Traefik rejects a single Middleware CR that declares both inFlightReq and
+// rateLimit ("invalid middleware type" / incompatible types). Combining
+// --max-in-flight and --rps therefore must produce two CRs and two
+// ExtensionRef filters. Lives in the offer's namespace because Gateway API
+// ExtensionRef resolves there.
+func buildLimitsMiddlewares(offer *monetizeapi.ServiceOffer) []*unstructured.Unstructured {
+	var out []*unstructured.Unstructured
 	if offer.Spec.Limits.MaxInFlight > 0 {
-		spec["inFlightReq"] = map[string]any{"amount": offer.Spec.Limits.MaxInFlight}
+		out = append(out, &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "traefik.io/v1alpha1",
+				"kind":       "Middleware",
+				"metadata": map[string]any{
+					"name":            limitsInFlightMiddlewareName(offer.Name),
+					"namespace":       offer.Namespace,
+					"ownerReferences": []any{ownerRefMap(offer)},
+				},
+				"spec": map[string]any{
+					"inFlightReq": map[string]any{"amount": offer.Spec.Limits.MaxInFlight},
+				},
+			},
+		})
 	}
 	if offer.Spec.Limits.RPS > 0 {
-		spec["rateLimit"] = map[string]any{
-			"average": offer.Spec.Limits.RPS,
-			"burst":   offer.Spec.Limits.RPS * 2,
-		}
-	}
-	return &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "traefik.io/v1alpha1",
-			"kind":       "Middleware",
-			"metadata": map[string]any{
-				"name":            limitsMiddlewareName(offer.Name),
-				"namespace":       offer.Namespace,
-				"ownerReferences": []any{ownerRefMap(offer)},
+		out = append(out, &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "traefik.io/v1alpha1",
+				"kind":       "Middleware",
+				"metadata": map[string]any{
+					"name":            limitsRPSMiddlewareName(offer.Name),
+					"namespace":       offer.Namespace,
+					"ownerReferences": []any{ownerRefMap(offer)},
+				},
+				"spec": map[string]any{
+					"rateLimit": map[string]any{
+						"average": offer.Spec.Limits.RPS,
+						"burst":   offer.Spec.Limits.RPS * 2,
+					},
+				},
 			},
-			"spec": spec,
-		},
+		})
 	}
+	return out
 }
 
-func limitsMiddlewareName(offerName string) string {
+func limitsInFlightMiddlewareName(offerName string) string {
+	return safeName("so-", offerName, "-inflight")
+}
+
+func limitsRPSMiddlewareName(offerName string) string {
+	return safeName("so-", offerName, "-ratelimit")
+}
+
+// legacyLimitsMiddlewareName is the pre-split combined CR name; still deleted
+// on reconcile so upgrades tear down the broken object.
+func legacyLimitsMiddlewareName(offerName string) string {
 	return safeName("so-", offerName, "-limits")
 }
 
-// limitsFilter is the ExtensionRef filter attached to gated rules when
-// spec.limits is set.
-func limitsFilter(offer *monetizeapi.ServiceOffer) map[string]any {
-	return map[string]any{
-		"type": "ExtensionRef",
-		"extensionRef": map[string]any{
-			"group": "traefik.io",
-			"kind":  "Middleware",
-			"name":  limitsMiddlewareName(offer.Name),
-		},
+// limitsFilters returns ExtensionRef filters for every configured limit
+// middleware (zero, one, or both).
+func limitsFilters(offer *monetizeapi.ServiceOffer) []any {
+	var filters []any
+	if offer.Spec.Limits.MaxInFlight > 0 {
+		filters = append(filters, map[string]any{
+			"type": "ExtensionRef",
+			"extensionRef": map[string]any{
+				"group": "traefik.io",
+				"kind":  "Middleware",
+				"name":  limitsInFlightMiddlewareName(offer.Name),
+			},
+		})
 	}
+	if offer.Spec.Limits.RPS > 0 {
+		filters = append(filters, map[string]any{
+			"type": "ExtensionRef",
+			"extensionRef": map[string]any{
+				"group": "traefik.io",
+				"kind":  "Middleware",
+				"name":  limitsRPSMiddlewareName(offer.Name),
+			},
+		})
+	}
+	return filters
 }
 
 func buildHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured {
@@ -799,7 +840,7 @@ func buildHostHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructu
 		},
 	}
 	if hasLimits(offer) {
-		catchallFilters = append(catchallFilters, limitsFilter(offer))
+		catchallFilters = append(catchallFilters, limitsFilters(offer)...)
 	}
 
 	return &unstructured.Unstructured{
@@ -860,7 +901,7 @@ func sharedOriginRule(offer *monetizeapi.ServiceOffer) map[string]any {
 		},
 	}
 	if hasLimits(offer) {
-		rule["filters"] = []any{limitsFilter(offer)}
+		rule["filters"] = limitsFilters(offer)
 	}
 	return rule
 }

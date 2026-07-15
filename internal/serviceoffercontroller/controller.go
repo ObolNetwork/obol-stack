@@ -793,14 +793,32 @@ func (c *Controller) reconcilePaymentGate(ctx context.Context, status *monetizea
 
 func (c *Controller) reconcileRoute(ctx context.Context, status *monetizeapi.ServiceOfferStatus, offer *monetizeapi.ServiceOffer) error {
 	// Protection middleware must exist before the routes that reference it
-	// (Traefik drops routes with a dangling ExtensionRef).
-	if hasLimits(offer) {
-		if err := c.applyObject(ctx, c.middlewares.Namespace(offer.Namespace), buildLimitsMiddleware(offer)); err != nil {
+	// (Traefik drops routes with a dangling ExtensionRef). inFlightReq and
+	// rateLimit are separate Middleware CRs — a combined CR is rejected by
+	// Traefik while the ServiceOffer still looked Ready.
+	for _, mw := range buildLimitsMiddlewares(offer) {
+		if err := c.applyObject(ctx, c.middlewares.Namespace(offer.Namespace), mw); err != nil {
 			setCondition(status, "RoutePublished", "False", "ApplyFailed", err.Error())
 			return err
 		}
-	} else {
-		err := c.middlewares.Namespace(offer.Namespace).Delete(ctx, limitsMiddlewareName(offer.Name), metav1.DeleteOptions{})
+	}
+	// Tear down unused limit CRs (including the legacy combined -limits name).
+	for _, name := range []string{
+		limitsInFlightMiddlewareName(offer.Name),
+		limitsRPSMiddlewareName(offer.Name),
+		legacyLimitsMiddlewareName(offer.Name),
+	} {
+		wanted := false
+		for _, mw := range buildLimitsMiddlewares(offer) {
+			if mw.GetName() == name {
+				wanted = true
+				break
+			}
+		}
+		if wanted {
+			continue
+		}
+		err := c.middlewares.Namespace(offer.Namespace).Delete(ctx, name, metav1.DeleteOptions{})
 		if err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
@@ -1344,7 +1362,9 @@ func (c *Controller) deleteRouteChildren(ctx context.Context, offer *monetizeapi
 		{resource: c.referenceGrants.Namespace("x402"), name: backendReferenceGrantName(offer.Name)},
 		{resource: c.httpRoutes.Namespace(offer.Namespace), name: childName(offer.Name)},
 		{resource: c.httpRoutes.Namespace(offer.Namespace), name: hostChildName(offer.Name)},
-		{resource: c.middlewares.Namespace(offer.Namespace), name: limitsMiddlewareName(offer.Name)},
+		{resource: c.middlewares.Namespace(offer.Namespace), name: limitsInFlightMiddlewareName(offer.Name)},
+		{resource: c.middlewares.Namespace(offer.Namespace), name: limitsRPSMiddlewareName(offer.Name)},
+		{resource: c.middlewares.Namespace(offer.Namespace), name: legacyLimitsMiddlewareName(offer.Name)},
 	} {
 		err := deletion.resource.Delete(ctx, deletion.name, metav1.DeleteOptions{})
 		if err != nil && !apierrors.IsNotFound(err) {

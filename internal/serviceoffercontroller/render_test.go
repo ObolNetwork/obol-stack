@@ -90,6 +90,55 @@ func TestBuildHTTPRoute(t *testing.T) {
 	}
 }
 
+func TestBuildLimitsMiddlewares_SplitsInFlightAndRPS(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "gated", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Limits: monetizeapi.ServiceOfferLimits{MaxInFlight: 4, RPS: 10},
+		},
+	}
+	mws := buildLimitsMiddlewares(offer)
+	if len(mws) != 2 {
+		t.Fatalf("len(middlewares) = %d, want 2 (one per Traefik type)", len(mws))
+	}
+	names := map[string]map[string]any{}
+	for _, mw := range mws {
+		spec, _ := mw.Object["spec"].(map[string]any)
+		names[mw.GetName()] = spec
+		// Each CR must carry exactly one middleware type key.
+		if len(spec) != 1 {
+			t.Fatalf("middleware %q has %d spec keys; Traefik requires one type per CR: %v", mw.GetName(), len(spec), spec)
+		}
+	}
+	if _, ok := names[limitsInFlightMiddlewareName("gated")]["inFlightReq"]; !ok {
+		t.Fatal("missing inFlightReq middleware")
+	}
+	if _, ok := names[limitsRPSMiddlewareName("gated")]["rateLimit"]; !ok {
+		t.Fatal("missing rateLimit middleware")
+	}
+	filters := limitsFilters(offer)
+	if len(filters) != 2 {
+		t.Fatalf("len(filters) = %d, want 2 ExtensionRefs", len(filters))
+	}
+}
+
+func TestBuildLimitsMiddlewares_SingleType(t *testing.T) {
+	onlyInFlight := buildLimitsMiddlewares(&monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "llm"},
+		Spec:       monetizeapi.ServiceOfferSpec{Limits: monetizeapi.ServiceOfferLimits{MaxInFlight: 2}},
+	})
+	if len(onlyInFlight) != 1 {
+		t.Fatalf("maxInFlight only: len = %d", len(onlyInFlight))
+	}
+	onlyRPS := buildLimitsMiddlewares(&monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "llm"},
+		Spec:       monetizeapi.ServiceOfferSpec{Limits: monetizeapi.ServiceOfferLimits{RPS: 5}},
+	})
+	if len(onlyRPS) != 1 {
+		t.Fatalf("rps only: len = %d", len(onlyRPS))
+	}
+}
+
 func TestBuildReferenceGrant(t *testing.T) {
 	offer := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{
