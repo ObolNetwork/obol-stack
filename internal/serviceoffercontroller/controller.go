@@ -76,7 +76,7 @@ type Controller struct {
 	identityQueue             workqueue.TypedRateLimitingInterface[string]
 	purchaseQueue             workqueue.TypedRateLimitingInterface[string]
 	agentQueue                workqueue.TypedRateLimitingInterface[string]
-	catalogMu                 sync.Mutex
+	staticSiteMu              sync.Mutex
 
 	pendingAuths sync.Map // key: "ns/name" → []map[string]string
 
@@ -351,25 +351,25 @@ func (c *Controller) enqueueStorefrontProfileRefresh(obj any) {
 	if u.GetNamespace() != storefront.ProfileNamespace || u.GetName() != storefront.ProfileConfigMap {
 		return
 	}
-	log.Printf("serviceoffer-controller: storefront profile change detected, refreshing skill catalog")
-	c.enqueueSkillCatalogRefresh()
+	log.Printf("serviceoffer-controller: storefront profile change detected, refreshing static site")
+	c.enqueueStaticSiteRefresh()
 }
 
-func (c *Controller) enqueueSkillCatalogRefresh() {
+func (c *Controller) enqueueStaticSiteRefresh() {
 	items := c.offerInformer.GetStore().List()
 	if len(items) > 0 {
 		// Any single offer reconcile rebuilds the full catalog.
 		c.enqueueOffer(items[0])
 		return
 	}
-	go c.refreshSkillCatalogAsync()
+	go c.refreshStaticSiteAsync()
 }
 
-func (c *Controller) refreshSkillCatalogAsync() {
+func (c *Controller) refreshStaticSiteAsync() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := c.reconcileSkillCatalog(ctx, nil); err != nil {
-		log.Printf("serviceoffer-controller: refresh skill catalog: %v", err)
+	if err := c.reconcileStaticSite(ctx, nil); err != nil {
+		log.Printf("serviceoffer-controller: refresh static site: %v", err)
 	}
 }
 
@@ -467,7 +467,7 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 			now := metav1.Now()
 			tombstone.DeletionTimestamp = &now
 		}
-		if err := c.reconcileSkillCatalog(ctx, &tombstone); err != nil {
+		if err := c.reconcileStaticSite(ctx, &tombstone); err != nil {
 			return err
 		}
 		return c.removeFinalizer(ctx, raw, serviceOfferFinalizer)
@@ -661,10 +661,10 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		// requiring a spec mutation or unrelated ConfigMap update.
 		c.offerQueue.AddAfter(offer.Namespace+"/"+offer.Name, 5*time.Second)
 	}
-	// Rebuild the skill catalog on every reconcile so tunnel URL changes and
-	// offer status updates propagate immediately. reconcileSkillCatalog skips
+	// Rebuild the static site on every reconcile so tunnel URL changes and
+	// offer status updates propagate immediately. reconcileStaticSite skips
 	// ConfigMap/Deployment writes when the rendered hash is unchanged.
-	return c.reconcileSkillCatalog(ctx, nil)
+	return c.reconcileStaticSite(ctx, nil)
 }
 
 func (c *Controller) reconcileDeletingOffer(ctx context.Context, offer *monetizeapi.ServiceOffer) error {
@@ -1246,16 +1246,16 @@ func (c *Controller) loadStorefrontProfile(ctx context.Context) (*schemas.Storef
 	return storefront.ParseProfile(raw)
 }
 
-// reconcileSkillCatalog rebuilds the /skill.md ConfigMap/Deployment/Service/
+// reconcileStaticSite rebuilds the /skill.md ConfigMap/Deployment/Service/
 // HTTPRoute from the current set of operationally-ready ServiceOffers. Offers
 // are listed from the API server so every reconcile sees a consistent snapshot;
 // override replaces or appends a just-created offer the list has not observed yet.
 // ConfigMap and Deployment are only applied when the rendered catalog hash differs
 // from the live obol-skill-md Deployment annotation, so idle reconciles do not
-// roll the skill-catalog pod.
-func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *monetizeapi.ServiceOffer) error {
-	c.catalogMu.Lock()
-	defer c.catalogMu.Unlock()
+// roll the static-site pod.
+func (c *Controller) reconcileStaticSite(ctx context.Context, override *monetizeapi.ServiceOffer) error {
+	c.staticSiteMu.Lock()
+	defer c.staticSiteMu.Unlock()
 
 	baseURL, err := c.registrationBaseURL(ctx)
 	if err != nil {
@@ -1271,7 +1271,7 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	if err != nil {
 		return err
 	}
-	content := buildSkillCatalogMarkdown(offers, baseURL, storefrontProfile)
+	content := buildSkillMarkdown(offers, baseURL, storefrontProfile)
 	servicesJSON := buildServiceCatalogJSON(offers, baseURL, storefrontProfile)
 	resolvedProfile := storefront.ResolvePublished(storefrontProfile, baseURL)
 	// buildOpenAPIDocument prefers the tunnel URL for the public `servers[0]`
@@ -1283,9 +1283,9 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	openAPIJSON := buildOpenAPIDocument(offers, baseURL, resolvedProfile)
 	apiDocsHTML := scalarHTML(resolvedProfile)
 	bundles := buildOfferBundles(offers, resolvedProfile)
-	contentHash := computeSkillCatalogContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)
+	contentHash := computeStaticSiteContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)
 
-	unchanged, err := c.skillCatalogContentUnchanged(ctx, content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)
+	unchanged, err := c.staticSiteContentUnchanged(ctx, content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)
 	if err != nil {
 		return err
 	}
@@ -1295,30 +1295,30 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 		return nil
 	}
 
-	if err := c.applyObject(ctx, c.configMaps.Namespace(skillCatalogNamespace), buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)); err != nil {
+	if err := c.applyObject(ctx, c.configMaps.Namespace(staticSiteNamespace), buildStaticSiteConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)); err != nil {
 		return err
 	}
-	if err := c.applyObject(ctx, c.deployments.Namespace(skillCatalogNamespace), buildSkillCatalogDeployment(contentHash, bundles)); err != nil {
+	if err := c.applyObject(ctx, c.deployments.Namespace(staticSiteNamespace), buildStaticSiteDeployment(contentHash, bundles)); err != nil {
 		return err
 	}
-	if err := c.applyObject(ctx, c.services.Namespace(skillCatalogNamespace), buildSkillCatalogService()); err != nil {
+	if err := c.applyObject(ctx, c.services.Namespace(staticSiteNamespace), buildStaticSiteService()); err != nil {
 		return err
 	}
 	// Headers Middleware must exist before the routes that reference it, or
 	// Traefik drops the routes for a dangling ExtensionRef.
-	if err := c.applyObject(ctx, c.middlewares.Namespace(skillCatalogNamespace), buildCatalogHeadersMiddleware()); err != nil {
+	if err := c.applyObject(ctx, c.middlewares.Namespace(staticSiteNamespace), buildCatalogHeadersMiddleware()); err != nil {
 		return err
 	}
-	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildSkillCatalogHTTPRoute()); err != nil {
+	if err := c.applyObject(ctx, c.httpRoutes.Namespace(staticSiteNamespace), buildStaticSiteHTTPRoute()); err != nil {
 		return err
 	}
-	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildServicesJSONHTTPRoute()); err != nil {
+	if err := c.applyObject(ctx, c.httpRoutes.Namespace(staticSiteNamespace), buildServicesJSONHTTPRoute()); err != nil {
 		return err
 	}
-	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildOpenAPIHTTPRoute()); err != nil {
+	if err := c.applyObject(ctx, c.httpRoutes.Namespace(staticSiteNamespace), buildOpenAPIHTTPRoute()); err != nil {
 		return err
 	}
-	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildAPIDocsHTTPRoute()); err != nil {
+	if err := c.applyObject(ctx, c.httpRoutes.Namespace(staticSiteNamespace), buildAPIDocsHTTPRoute()); err != nil {
 		return err
 	}
 	readyOffers := countReadyServiceOffers(offers)

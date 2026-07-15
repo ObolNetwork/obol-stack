@@ -59,7 +59,7 @@ func TestBuildHostHTTPRoute(t *testing.T) {
 			t.Errorf("rule %d (%s) rewrites to %v, want %s", i, public, got, wantExact[public])
 		}
 		backend := rule["backendRefs"].([]any)[0].(map[string]any)
-		if backend["name"] != skillCatalogConfigMapName || backend["namespace"] != skillCatalogNamespace {
+		if backend["name"] != staticSiteConfigMapName || backend["namespace"] != staticSiteNamespace {
 			t.Errorf("rule %d backend = %v", i, backend)
 		}
 	}
@@ -262,7 +262,7 @@ func TestCatalogAdvertisesDedicatedOrigin(t *testing.T) {
 		t.Fatalf("catalog endpoint = %+v, want dedicated origin", catalog.Services)
 	}
 
-	skill := buildSkillCatalogMarkdown([]*monetizeapi.ServiceOffer{offer}, "https://shared.example", nil)
+	skill := buildSkillMarkdown([]*monetizeapi.ServiceOffer{offer}, "https://shared.example", nil)
 	if !strings.Contains(skill, "`POST https://audit.v1337.example/submit`") {
 		t.Errorf("skill.md routes not rooted at dedicated origin:\n%.400s", skill)
 	}

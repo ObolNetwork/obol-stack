@@ -22,12 +22,21 @@ import (
 )
 
 const (
-	skillCatalogNamespace     = "x402"
-	skillCatalogConfigMapName = "obol-skill-md"
-	skillCatalogRouteName     = "obol-skill-md-route"
-	servicesJSONRouteName     = "obol-services-json-route"
-	openAPIRouteName          = "obol-openapi-route"
-	apiDocsRouteName          = "obol-api-docs-route"
+	// The static site is the busybox httpd that serves every public artifact:
+	// skill.md, services.json (the storefront's own backend), openapi.json,
+	// the API docs, and one bundle per hostname-bound offer (landing page,
+	// scoped openapi.json, .well-known/x402). The "obol-skill-md" object names
+	// predate all but the first of those and are load-bearing — they are
+	// referenced by internal/tunnel (SERVICES_URL), cmd/obol/sell_info.go,
+	// internal/stackbackup, the embedded x402.yaml, and the storefront's
+	// next.config.ts. Renaming them is a live-cluster migration, so the Go
+	// identifiers say what this is and the wire names stay put.
+	staticSiteNamespace     = "x402"
+	staticSiteConfigMapName = "obol-skill-md"
+	staticSiteRouteName     = "obol-skill-md-route"
+	servicesJSONRouteName   = "obol-services-json-route"
+	openAPIRouteName        = "obol-openapi-route"
+	apiDocsRouteName        = "obol-api-docs-route"
 
 	// catalogHeadersMiddlewareName is the Traefik headers Middleware attached
 	// to the public catalog HTTPRoutes (/skill.md, /openapi.json, /api,
@@ -255,7 +264,7 @@ func agentIdentityLabels(identity *monetizeapi.AgentIdentity, appName string) ma
 	}
 }
 
-func buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) *unstructured.Unstructured {
+func buildStaticSiteConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) *unstructured.Unstructured {
 	data := map[string]any{
 		"skill.md":      content,
 		"services.json": servicesJSON,
@@ -271,10 +280,10 @@ func buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML 
 			"apiVersion": "v1",
 			"kind":       "ConfigMap",
 			"metadata": map[string]any{
-				"name":      skillCatalogConfigMapName,
-				"namespace": skillCatalogNamespace,
+				"name":      staticSiteConfigMapName,
+				"namespace": staticSiteNamespace,
 				"labels": map[string]any{
-					"app":                 skillCatalogConfigMapName,
+					"app":                 staticSiteConfigMapName,
 					"obol.org/managed-by": "serviceoffer-controller",
 				},
 			},
@@ -283,10 +292,10 @@ func buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML 
 	}
 }
 
-// skillCatalogVolumeItems projects the ConfigMap keys into the httpd's /www
+// staticSiteVolumeItems projects the ConfigMap keys into the httpd's /www
 // tree: the four aggregate documents plus one file per hostname-offer
 // bundle entry (offers/<ns>/<name>/…).
-func skillCatalogVolumeItems(bundles []offerBundleFile) []any {
+func staticSiteVolumeItems(bundles []offerBundleFile) []any {
 	items := []any{
 		map[string]any{"key": "skill.md", "path": "skill.md"},
 		map[string]any{"key": "services.json", "path": "api/services.json"},
@@ -303,9 +312,9 @@ func skillCatalogVolumeItems(bundles []offerBundleFile) []any {
 	return items
 }
 
-func buildSkillCatalogDeployment(contentHash string, bundles []offerBundleFile) *unstructured.Unstructured {
+func buildStaticSiteDeployment(contentHash string, bundles []offerBundleFile) *unstructured.Unstructured {
 	labels := map[string]any{
-		"app":                 skillCatalogConfigMapName,
+		"app":                 staticSiteConfigMapName,
 		"obol.org/managed-by": "serviceoffer-controller",
 	}
 	return &unstructured.Unstructured{
@@ -313,8 +322,8 @@ func buildSkillCatalogDeployment(contentHash string, bundles []offerBundleFile) 
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
 			"metadata": map[string]any{
-				"name":      skillCatalogConfigMapName,
-				"namespace": skillCatalogNamespace,
+				"name":      staticSiteConfigMapName,
+				"namespace": staticSiteNamespace,
 				"labels":    labels,
 			},
 			"spec": map[string]any{
@@ -354,14 +363,14 @@ func buildSkillCatalogDeployment(contentHash string, bundles []offerBundleFile) 
 							map[string]any{
 								"name": "content",
 								"configMap": map[string]any{
-									"name":  skillCatalogConfigMapName,
-									"items": skillCatalogVolumeItems(bundles),
+									"name":  staticSiteConfigMapName,
+									"items": staticSiteVolumeItems(bundles),
 								},
 							},
 							map[string]any{
 								"name": "httpdconf",
 								"configMap": map[string]any{
-									"name":  skillCatalogConfigMapName,
+									"name":  staticSiteConfigMapName,
 									"items": []any{map[string]any{"key": "httpd.conf", "path": "httpd.conf"}},
 								},
 							},
@@ -373,9 +382,9 @@ func buildSkillCatalogDeployment(contentHash string, bundles []offerBundleFile) 
 	}
 }
 
-func buildSkillCatalogService() *unstructured.Unstructured {
+func buildStaticSiteService() *unstructured.Unstructured {
 	labels := map[string]any{
-		"app":                 skillCatalogConfigMapName,
+		"app":                 staticSiteConfigMapName,
 		"obol.org/managed-by": "serviceoffer-controller",
 	}
 	return &unstructured.Unstructured{
@@ -383,8 +392,8 @@ func buildSkillCatalogService() *unstructured.Unstructured {
 			"apiVersion": "v1",
 			"kind":       "Service",
 			"metadata": map[string]any{
-				"name":      skillCatalogConfigMapName,
-				"namespace": skillCatalogNamespace,
+				"name":      staticSiteConfigMapName,
+				"namespace": staticSiteNamespace,
 				"labels":    labels,
 			},
 			"spec": map[string]any{
@@ -417,7 +426,7 @@ func buildCatalogHeadersMiddleware() *unstructured.Unstructured {
 			"kind":       "Middleware",
 			"metadata": map[string]any{
 				"name":      catalogHeadersMiddlewareName,
-				"namespace": skillCatalogNamespace,
+				"namespace": staticSiteNamespace,
 				"labels": map[string]any{
 					"obol.org/managed-by": "serviceoffer-controller",
 				},
@@ -451,14 +460,14 @@ func catalogHeadersFilters() []any {
 	}
 }
 
-func buildSkillCatalogHTTPRoute() *unstructured.Unstructured {
+func buildStaticSiteHTTPRoute() *unstructured.Unstructured {
 	return &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "gateway.networking.k8s.io/v1",
 			"kind":       "HTTPRoute",
 			"metadata": map[string]any{
-				"name":      skillCatalogRouteName,
-				"namespace": skillCatalogNamespace,
+				"name":      staticSiteRouteName,
+				"namespace": staticSiteNamespace,
 				"labels": map[string]any{
 					"obol.org/managed-by": "serviceoffer-controller",
 				},
@@ -484,8 +493,8 @@ func buildSkillCatalogHTTPRoute() *unstructured.Unstructured {
 						"filters": catalogHeadersFilters(),
 						"backendRefs": []any{
 							map[string]any{
-								"name":      skillCatalogConfigMapName,
-								"namespace": skillCatalogNamespace,
+								"name":      staticSiteConfigMapName,
+								"namespace": staticSiteNamespace,
 								"port":      int64(8080),
 							},
 						},
@@ -511,7 +520,7 @@ func buildOpenAPIHTTPRoute() *unstructured.Unstructured {
 			"kind":       "HTTPRoute",
 			"metadata": map[string]any{
 				"name":      openAPIRouteName,
-				"namespace": skillCatalogNamespace,
+				"namespace": staticSiteNamespace,
 				"labels": map[string]any{
 					"obol.org/managed-by": "serviceoffer-controller",
 				},
@@ -537,8 +546,8 @@ func buildOpenAPIHTTPRoute() *unstructured.Unstructured {
 						"filters": catalogHeadersFilters(),
 						"backendRefs": []any{
 							map[string]any{
-								"name":      skillCatalogConfigMapName,
-								"namespace": skillCatalogNamespace,
+								"name":      staticSiteConfigMapName,
+								"namespace": staticSiteNamespace,
 								"port":      int64(8080),
 							},
 						},
@@ -567,7 +576,7 @@ func buildAPIDocsHTTPRoute() *unstructured.Unstructured {
 			"kind":       "HTTPRoute",
 			"metadata": map[string]any{
 				"name":      apiDocsRouteName,
-				"namespace": skillCatalogNamespace,
+				"namespace": staticSiteNamespace,
 				"labels": map[string]any{
 					"obol.org/managed-by": "serviceoffer-controller",
 				},
@@ -599,8 +608,8 @@ func buildAPIDocsHTTPRoute() *unstructured.Unstructured {
 						"filters": catalogHeadersFilters(),
 						"backendRefs": []any{
 							map[string]any{
-								"name":      skillCatalogConfigMapName,
-								"namespace": skillCatalogNamespace,
+								"name":      staticSiteConfigMapName,
+								"namespace": staticSiteNamespace,
 								"port":      int64(8080),
 							},
 						},
@@ -618,7 +627,7 @@ func buildServicesJSONHTTPRoute() *unstructured.Unstructured {
 			"kind":       "HTTPRoute",
 			"metadata": map[string]any{
 				"name":      servicesJSONRouteName,
-				"namespace": skillCatalogNamespace,
+				"namespace": staticSiteNamespace,
 				"labels": map[string]any{
 					"obol.org/managed-by": "serviceoffer-controller",
 				},
@@ -644,8 +653,8 @@ func buildServicesJSONHTTPRoute() *unstructured.Unstructured {
 						"filters": catalogHeadersFilters(),
 						"backendRefs": []any{
 							map[string]any{
-								"name":      skillCatalogConfigMapName,
-								"namespace": skillCatalogNamespace,
+								"name":      staticSiteConfigMapName,
+								"namespace": staticSiteNamespace,
 								"port":      int64(8080),
 							},
 						},
@@ -738,7 +747,7 @@ func buildHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured 
 // offer. Topology (proven live before being generalized here — see
 // docs/proposals/multistore-storefront-routing.md appendix):
 //
-//   - Exact /, /openapi.json, /.well-known/x402 → the catalog httpd, with
+//   - Exact /, /openapi.json, /.well-known/x402 → the static-site httpd, with
 //     full-path rewrites into the offer's generated bundle files. These are
 //     structurally free — they never touch the payment gate.
 //   - PathPrefix / → x402-verifier, with the public path rewritten into the
@@ -764,7 +773,7 @@ func buildHostHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructu
 				},
 			},
 			"backendRefs": []any{
-				map[string]any{"name": skillCatalogConfigMapName, "namespace": skillCatalogNamespace, "port": int64(8080)},
+				map[string]any{"name": staticSiteConfigMapName, "namespace": staticSiteNamespace, "port": int64(8080)},
 			},
 		}
 	}
@@ -890,11 +899,11 @@ func buildReferenceGrant(offer *monetizeapi.ServiceOffer) *unstructured.Unstruct
 					},
 					// Hostname-bound offers backend their discovery bundle
 					// (Exact / + /openapi.json + /.well-known/x402 rules)
-					// to the catalog httpd in this namespace.
+					// to the static-site httpd in this namespace.
 					map[string]any{
 						"group": "",
 						"kind":  "Service",
-						"name":  skillCatalogConfigMapName,
+						"name":  staticSiteConfigMapName,
 					},
 				},
 			},
@@ -1140,7 +1149,7 @@ func offerPublishedForRegistration(offer *monetizeapi.ServiceOffer) bool {
 		isConditionTrue(offer.Status, "RoutePublished")
 }
 
-func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL string, explicit *schemas.StorefrontProfile) string {
+func buildSkillMarkdown(offers []*monetizeapi.ServiceOffer, baseURL string, explicit *schemas.StorefrontProfile) string {
 	baseURL = strings.TrimRight(baseURL, "/")
 	profile := storefront.ResolvePublished(explicit, baseURL)
 
@@ -1186,7 +1195,7 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 		"",
 	}
 
-	lines = append(lines, skillCatalogHowToPay(baseURL)...)
+	lines = append(lines, skillMarkdownHowToPay(baseURL)...)
 
 	if len(ready) == 0 {
 		lines = append(lines, "## Services", "", "**No services currently available.**", "")
@@ -1250,7 +1259,7 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 				lines = append(lines, fmt.Sprintf("  %d. %s", i+1, describePaymentDetail(payments[i])))
 			}
 		}
-		lines = append(lines, skillCatalogRouteLines(offer, endpoint)...)
+		lines = append(lines, skillMarkdownRouteLines(offer, endpoint)...)
 		if offer.Spec.Async.Enabled {
 			access := "results are gated to the paying wallet (SIWX sign-in) or the `jobToken` from the 202 body"
 			if offer.Spec.Async.EffectiveResultVisibility() == monetizeapi.ResultVisibilityPublic {
@@ -1268,17 +1277,17 @@ func buildSkillCatalogMarkdown(offers []*monetizeapi.ServiceOffer, baseURL strin
 			description = fmt.Sprintf("x402 payment-gated %s service", fallbackOfferType(offer))
 		}
 		lines = append(lines, fmt.Sprintf("- **Description**: %s", description), "")
-		lines = append(lines, skillCatalogTryIt(offer, endpoint)...)
+		lines = append(lines, skillMarkdownTryIt(offer, endpoint)...)
 	}
 
 	return strings.Join(lines, "\n")
 }
 
-// skillCatalogHowToPay returns the self-contained "How to pay" section. It
+// skillMarkdownHowToPay returns the self-contained "How to pay" section. It
 // is written so any LLM agent — not just one running on Obol Stack — can
 // pay these endpoints by following the x402 v2 loop, without first reading
 // any external doc. baseURL points the reader at the machine-readable specs.
-func skillCatalogHowToPay(baseURL string) []string {
+func skillMarkdownHowToPay(baseURL string) []string {
 	return []string{
 		"## How to pay (x402)",
 		"",
@@ -1330,12 +1339,12 @@ func catalogModelName(offer *monetizeapi.ServiceOffer) string {
 	return ""
 }
 
-// skillCatalogTryIt renders the per-offer "Try it" subsection: one curl that
+// skillMarkdownTryIt renders the per-offer "Try it" subsection: one curl that
 // probes the 402 pricing, and one worked paid request. The paid example for
 // chat-shaped offers is buyprompts.Build's Example — the exact same bytes
 // /api/services.json publishes in the entry's buy.example — so the two
 // surfaces cannot drift. Agent buyers convert off copy-paste, not prose.
-func skillCatalogTryIt(offer *monetizeapi.ServiceOffer, endpoint string) []string {
+func skillMarkdownTryIt(offer *monetizeapi.ServiceOffer, endpoint string) []string {
 	// Route-table offers: probe + pay against the primary paid route, not
 	// the offer root (which may not be served at all when the table has no
 	// catch-all).
@@ -1391,7 +1400,7 @@ func skillCatalogTryIt(offer *monetizeapi.ServiceOffer, endpoint string) []strin
 // active, and upstream healthy serves buyers correctly regardless of
 // whether the on-chain identity has been minted yet.
 //
-// Used by the storefront catalog (and the skill catalog) so an offer that
+// Used by the services.json catalog (and skill.md) so an offer that
 // is functionally usable doesn't disappear from the operator's own
 // dashboard just because the agent wallet hasn't been funded with gas
 // yet. Callers should set ServiceCatalogEntry.RegistrationPending = true
@@ -1877,12 +1886,12 @@ func describePaymentDetail(p monetizeapi.ServiceOfferPayment) string {
 	return b.String()
 }
 
-// skillCatalogRouteLines renders the per-route list for offers with a
+// skillMarkdownRouteLines renders the per-route list for offers with a
 // declared route table (spec.routes). One line per route: methods, full
 // URL, gate/price, and the route summary. Offers without a route table
 // contribute nothing — their single implicit catch-all is already fully
 // described by the Endpoint/Payment lines above.
-func skillCatalogRouteLines(offer *monetizeapi.ServiceOffer, endpoint string) []string {
+func skillMarkdownRouteLines(offer *monetizeapi.ServiceOffer, endpoint string) []string {
 	if len(offer.Spec.Routes) == 0 {
 		return nil
 	}

@@ -74,14 +74,14 @@ func assertRestrictedPSS(t *testing.T, deploymentName string, spec map[string]an
 	}
 }
 
-// TestBuildSkillCatalogDeployment_RestrictedPSS verifies the skill-md
+// TestBuildStaticSiteDeployment_RestrictedPSS verifies the skill-md
 // httpd Deployment ships a Restricted-PSS-compliant securityContext.
 // Regression test for the cross-PR interaction with #521 surfaced by
 // the 14-PR integration test (Bug #3).
-func TestBuildSkillCatalogDeployment_RestrictedPSS(t *testing.T) {
-	d := buildSkillCatalogDeployment("hash-x", nil)
+func TestBuildStaticSiteDeployment_RestrictedPSS(t *testing.T) {
+	d := buildStaticSiteDeployment("hash-x", nil)
 	spec, _ := d.Object["spec"].(map[string]any)
-	assertRestrictedPSS(t, skillCatalogConfigMapName, spec)
+	assertRestrictedPSS(t, staticSiteConfigMapName, spec)
 }
 
 // TestBuildAgentIdentityRegistrationDeployment_RestrictedPSS verifies the
@@ -100,16 +100,16 @@ func TestBuildAgentIdentityRegistrationDeployment_RestrictedPSS(t *testing.T) {
 	assertRestrictedPSS(t, agentIdentityRegistrationName(identity), spec)
 }
 
-// TestBuildSkillCatalogConfigMap: exposes skill.md + services.json + openapi.json
+// TestBuildStaticSiteConfigMap: exposes skill.md + services.json + openapi.json
 // + api docs HTML + httpd conf.
-func TestBuildSkillCatalogConfigMap(t *testing.T) {
-	cm := buildSkillCatalogConfigMap("# Catalog", `{"displayName":"Acme","tagline":"t","logoUrl":"https://x/logo.png","services":[{"name":"a"}]}`, `{"openapi":"3.1.0"}`, "<html>shell</html>", nil)
+func TestBuildStaticSiteConfigMap(t *testing.T) {
+	cm := buildStaticSiteConfigMap("# Catalog", `{"displayName":"Acme","tagline":"t","logoUrl":"https://x/logo.png","services":[{"name":"a"}]}`, `{"openapi":"3.1.0"}`, "<html>shell</html>", nil)
 
-	if cm.GetName() != skillCatalogConfigMapName {
-		t.Errorf("name = %q, want %q", cm.GetName(), skillCatalogConfigMapName)
+	if cm.GetName() != staticSiteConfigMapName {
+		t.Errorf("name = %q, want %q", cm.GetName(), staticSiteConfigMapName)
 	}
-	if cm.GetNamespace() != skillCatalogNamespace {
-		t.Errorf("namespace = %q, want %q", cm.GetNamespace(), skillCatalogNamespace)
+	if cm.GetNamespace() != staticSiteNamespace {
+		t.Errorf("namespace = %q, want %q", cm.GetNamespace(), staticSiteNamespace)
 	}
 	data, _ := cm.Object["data"].(map[string]any)
 	if data["skill.md"] != "# Catalog" {
@@ -134,11 +134,11 @@ func TestBuildSkillCatalogConfigMap(t *testing.T) {
 	}
 }
 
-// TestBuildSkillCatalogDeployment: content-hash annotation + correct volume wiring
+// TestBuildStaticSiteDeployment: content-hash annotation + correct volume wiring
 // (skill.md and api/services.json paths).
-func TestBuildSkillCatalogDeployment(t *testing.T) {
-	d1 := buildSkillCatalogDeployment("hash-1", nil)
-	d2 := buildSkillCatalogDeployment("hash-2", nil)
+func TestBuildStaticSiteDeployment(t *testing.T) {
+	d1 := buildStaticSiteDeployment("hash-1", nil)
+	d2 := buildStaticSiteDeployment("hash-2", nil)
 
 	spec1, _ := d1.Object["spec"].(map[string]any)
 	template1, _ := spec1["template"].(map[string]any)
@@ -187,13 +187,13 @@ func TestBuildSkillCatalogDeployment(t *testing.T) {
 	}
 }
 
-// TestBuildSkillCatalogService: ClusterIP service on port 8080 with the
+// TestBuildStaticSiteService: ClusterIP service on port 8080 with the
 // managed-by selector.
-func TestBuildSkillCatalogService(t *testing.T) {
-	svc := buildSkillCatalogService()
+func TestBuildStaticSiteService(t *testing.T) {
+	svc := buildStaticSiteService()
 
-	if svc.GetName() != skillCatalogConfigMapName {
-		t.Errorf("name = %q, want %q", svc.GetName(), skillCatalogConfigMapName)
+	if svc.GetName() != staticSiteConfigMapName {
+		t.Errorf("name = %q, want %q", svc.GetName(), staticSiteConfigMapName)
 	}
 	spec, _ := svc.Object["spec"].(map[string]any)
 	if spec["type"] != "ClusterIP" {
