@@ -611,7 +611,7 @@ func TestRegistrationDataURL(t *testing.T) {
 	}
 }
 
-func TestBuildSkillCatalogMarkdown(t *testing.T) {
+func TestBuildSkillMarkdown(t *testing.T) {
 	readyOffer := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "flow-qwen", Namespace: "llm"},
 		Spec: monetizeapi.ServiceOfferSpec{
@@ -639,7 +639,7 @@ func TestBuildSkillCatalogMarkdown(t *testing.T) {
 		},
 	}
 
-	content := buildSkillCatalogMarkdown([]*monetizeapi.ServiceOffer{readyOffer, notReadyOffer}, "https://example.com", nil)
+	content := buildSkillMarkdown([]*monetizeapi.ServiceOffer{readyOffer, notReadyOffer}, "https://example.com", nil)
 
 	if !strings.Contains(content, "# Obol Stack Service Catalog") {
 		t.Fatalf("catalog missing title:\n%s", content)
@@ -655,13 +655,13 @@ func TestBuildSkillCatalogMarkdown(t *testing.T) {
 	}
 }
 
-// TestBuildSkillCatalogMarkdown_DrainAdditiveDetail locks in the
+// TestBuildSkillMarkdown_DrainAdditiveDetail locks in the
 // pure-additive markdown surface: active offers must NOT emit a
 // `- **Available**:` detail bullet (that wire was removed when drain
 // landed). Draining offers may have a `- **Drain ends at**:` bullet
 // but never a separate Available bullet, because consumers detect
 // drain solely via the timestamp's presence.
-func TestBuildSkillCatalogMarkdown_DrainAdditiveDetail(t *testing.T) {
+func TestBuildSkillMarkdown_DrainAdditiveDetail(t *testing.T) {
 	readyCond := []monetizeapi.Condition{{Type: "Ready", Status: "True"}}
 	activeOffer := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "llm"},
@@ -693,7 +693,7 @@ func TestBuildSkillCatalogMarkdown_DrainAdditiveDetail(t *testing.T) {
 		Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
 	}
 
-	content := buildSkillCatalogMarkdown(
+	content := buildSkillMarkdown(
 		[]*monetizeapi.ServiceOffer{activeOffer, drainingOffer},
 		"https://example.com",
 		nil,
@@ -717,10 +717,10 @@ func TestBuildSkillCatalogMarkdown_DrainAdditiveDetail(t *testing.T) {
 	}
 }
 
-func TestBuildSkillCatalogHTTPRoute(t *testing.T) {
-	route := buildSkillCatalogHTTPRoute()
-	if route.GetName() != skillCatalogRouteName {
-		t.Fatalf("route name = %q, want %q", route.GetName(), skillCatalogRouteName)
+func TestBuildStaticSiteHTTPRoute(t *testing.T) {
+	route := buildStaticSiteHTTPRoute()
+	if route.GetName() != staticSiteRouteName {
+		t.Fatalf("route name = %q, want %q", route.GetName(), staticSiteRouteName)
 	}
 	spec := route.Object["spec"].(map[string]any)
 	rules := spec["rules"].([]any)
@@ -732,8 +732,8 @@ func TestBuildSkillCatalogHTTPRoute(t *testing.T) {
 	}
 	backends := firstRule["backendRefs"].([]any)
 	backend := backends[0].(map[string]any)
-	if backend["name"] != skillCatalogConfigMapName {
-		t.Fatalf("backend name = %v, want %s", backend["name"], skillCatalogConfigMapName)
+	if backend["name"] != staticSiteConfigMapName {
+		t.Fatalf("backend name = %v, want %s", backend["name"], staticSiteConfigMapName)
 	}
 }
 
@@ -1622,8 +1622,8 @@ func TestBuildCatalogHeadersMiddleware(t *testing.T) {
 	if mw.GetName() != catalogHeadersMiddlewareName {
 		t.Fatalf("name = %q, want %q", mw.GetName(), catalogHeadersMiddlewareName)
 	}
-	if mw.GetNamespace() != skillCatalogNamespace {
-		t.Fatalf("namespace = %q, want %q", mw.GetNamespace(), skillCatalogNamespace)
+	if mw.GetNamespace() != staticSiteNamespace {
+		t.Fatalf("namespace = %q, want %q", mw.GetNamespace(), staticSiteNamespace)
 	}
 
 	headers := mw.Object["spec"].(map[string]any)["headers"].(map[string]any)
@@ -1648,7 +1648,7 @@ func TestBuildCatalogHeadersMiddleware(t *testing.T) {
 // (locked separately by TestBuildHTTPRoute's no-filters assertion).
 func TestCatalogRoutesCarryHeadersFilter(t *testing.T) {
 	routes := map[string]*unstructured.Unstructured{
-		"/skill.md":          buildSkillCatalogHTTPRoute(),
+		"/skill.md":          buildStaticSiteHTTPRoute(),
 		"/api/services.json": buildServicesJSONHTTPRoute(),
 		"/openapi.json":      buildOpenAPIHTTPRoute(),
 		"/api":               buildAPIDocsHTTPRoute(),
@@ -1699,12 +1699,12 @@ func TestBuildServiceCatalogJSON_SchemaVersion(t *testing.T) {
 	}
 }
 
-// TestBuildSkillCatalogMarkdown_TryIt asserts every offer detail block ends
+// TestBuildSkillMarkdown_TryIt asserts every offer detail block ends
 // with a copy-paste "Try it" section: a 402 probe curl plus a worked paid
 // request. Chat-shaped offers must show the REAL model id (including the
 // AgentResolution fallback for type=agent) — the same id services.json
 // publishes — and http offers a curl of the gated path.
-func TestBuildSkillCatalogMarkdown_TryIt(t *testing.T) {
+func TestBuildSkillMarkdown_TryIt(t *testing.T) {
 	readyCond := []monetizeapi.Condition{{Type: "Ready", Status: "True"}}
 	inferenceOffer := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "flow-qwen", Namespace: "llm"},
@@ -1747,7 +1747,7 @@ func TestBuildSkillCatalogMarkdown_TryIt(t *testing.T) {
 		Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
 	}
 
-	content := buildSkillCatalogMarkdown(
+	content := buildSkillMarkdown(
 		[]*monetizeapi.ServiceOffer{inferenceOffer, agentOffer, httpOffer},
 		"https://seller.example", nil,
 	)
