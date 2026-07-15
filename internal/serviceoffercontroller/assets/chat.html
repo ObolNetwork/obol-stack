@@ -34,8 +34,8 @@
   .msg.err { color: var(--red); }
 
   /* session strip */
-  #strip { display: none; align-items: center; gap: 10px; flex-wrap: wrap;
-           padding: 4px 16px; border-top: 1px solid var(--stroke); font: 11px var(--mono); color: var(--muted); }
+  #strip { display: none; align-items: center; gap: 12px; flex-wrap: wrap;
+           padding: 7px 16px; border-top: 1px solid var(--stroke); font: 11px var(--mono); color: var(--muted); }
   #strip.on { display: flex; }
   #strip b { font-weight: 500; color: var(--light); }
   #strip .bal { color: var(--green); font-variant-numeric: tabular-nums; cursor: pointer; }
@@ -43,9 +43,10 @@
   #strip a, #strip .lnk { color: var(--green); text-decoration: none; cursor: pointer; }
 
   /* staged composer: connect -> sign in -> fund -> chat */
-  #composer { display: flex; align-items: stretch; gap: 8px; padding: 10px 16px 14px; border-top: 1px solid var(--stroke); }
+  #composer { display: flex; align-items: stretch; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--stroke); }
   #input, #fundamt { background: var(--bg02); border: 1px solid var(--stroke); border-radius: 8px; color: var(--light); }
-  #input { flex: 1; min-height: 40px; padding: 9px 12px; font: inherit; resize: none; }
+  #input { flex: 1; min-height: 42px; padding: 10px 14px; font: inherit; resize: none; }
+  #input::placeholder { color: var(--muted); }
   #input:focus { outline: 1px solid var(--green); }
   #fundamt { width: 76px; padding: 9px 10px; font: 13px var(--mono); text-align: right; }
   button { background: var(--bg02); color: var(--green); border: 1px solid var(--green); border-radius: 8px;
@@ -148,7 +149,7 @@ function renderComposer() {
   } else {
     const ta = document.createElement("textarea");
     ta.id = "input"; ta.rows = 1;
-    ta.placeholder = "Ask " + AGENT + " anything — " + priceStr() + " per message, paid automatically";
+    ta.placeholder = "Ask anything — " + priceStr() + "/message";
     ta.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); c.requestSubmit(); } };
     const b = document.createElement("button"); b.type = "submit"; b.textContent = "Send";
     c.appendChild(ta); c.appendChild(b);
