@@ -893,14 +893,6 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                       key: API_SERVER_KEY
                 - name: API_SERVER_MODEL_NAME
                   value: %s
-                # Hermes 403s any Origin-bearing request whose origin is not
-                # in its CORS allowlist — which rejects every browser POST
-                # (browsers attach Origin even same-origin), breaking the
-                # /chat widget. The API server sits behind the x402 verifier;
-                # payment is the gate and there are no ambient credentials,
-                # so a wildcard is safe and keeps browser buyers working.
-                - name: API_SERVER_CORS_ORIGINS
-                  value: "*"
                 - name: REMOTE_SIGNER_URL
                   value: http://remote-signer:9000
                 - name: AGENT_NAMESPACE

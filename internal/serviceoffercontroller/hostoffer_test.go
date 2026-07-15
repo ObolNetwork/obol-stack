@@ -285,7 +285,7 @@ func TestBuildHostHTTPRoute_AgentChatWidget(t *testing.T) {
 	}
 
 	wantShared := map[string]string{
-		"/chat":           "/chat.html",
+		"/chat":           "/offers/sec/audit/chat.html",
 		"/chat-vendor.js": "/chat-vendor.js",
 	}
 	for i := 3; i <= 4; i++ {
@@ -336,30 +336,78 @@ func TestOfferLandingChatEmbed(t *testing.T) {
 	}
 }
 
-// TestStaticSiteServesChatWidget pins the shared widget delivery: the
-// catalog ConfigMap carries the two embedded files, httpd serves .js with a
-// JavaScript MIME type (module imports hard-fail otherwise), and the volume
-// projection exposes both at the /www root.
+// TestStaticSiteServesChatWidget pins the widget delivery: the shared
+// vendor bundle sits in the catalog ConfigMap (served with a JavaScript
+// MIME type — module imports hard-fail otherwise), while the chat page is
+// rendered per agent offer into its bundle with the offer's title and the
+// same resolved theme tokens as its landing page.
 func TestStaticSiteServesChatWidget(t *testing.T) {
 	cm := buildStaticSiteConfigMap("# cat", `{"services":[]}`, `{}`, "<html></html>", nil)
 	data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
-	if data["chat.html"] == "" || data["chat-vendor.js"] == "" {
-		t.Fatalf("catalog ConfigMap missing chat widget files")
+	if data["chat-vendor.js"] == "" {
+		t.Fatalf("catalog ConfigMap missing the shared chat vendor bundle")
 	}
 	if !strings.Contains(data["httpd.conf"], ".js:text/javascript") {
 		t.Fatalf("httpd.conf missing .js MIME mapping: %q", data["httpd.conf"])
 	}
-	var sawHTML, sawJS bool
+	var sawJS bool
 	for _, raw := range staticSiteVolumeItems(nil) {
 		item := raw.(map[string]any)
-		if item["key"] == "chat.html" && item["path"] == "chat.html" {
-			sawHTML = true
-		}
 		if item["key"] == "chat-vendor.js" && item["path"] == "chat-vendor.js" {
 			sawJS = true
 		}
 	}
-	if !sawHTML || !sawJS {
-		t.Fatalf("volume items missing chat widget projection (html=%v js=%v)", sawHTML, sawJS)
+	if !sawJS {
+		t.Fatalf("volume items missing the chat vendor projection")
+	}
+
+	// Per-offer page: agent offers gain a chat.html bundle file carrying
+	// the landing page's theme tokens and title; non-agent offers do not.
+	profile := schemas.StorefrontProfile{DisplayName: "Acme"}
+	plain := buildOfferBundles([]*monetizeapi.ServiceOffer{hostnameOffer()}, profile)
+	for _, f := range plain {
+		if strings.HasSuffix(f.Path, "chat.html") {
+			t.Fatalf("non-agent offer rendered a chat page: %s", f.Path)
+		}
+	}
+	agent := hostnameOffer()
+	agent.Spec.Type = "agent"
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{agent}, profile)
+	var chat string
+	for _, f := range bundles {
+		if f.Path == "offers/sec/audit/chat.html" {
+			chat = f.Content
+		}
+	}
+	if chat == "" {
+		t.Fatalf("agent offer bundle missing chat.html (got %d files)", len(bundles))
+	}
+	theme := storefront.ResolveTheme(profile.Theme, profile.AccentColor)
+	if !strings.Contains(chat, "--bg01:"+theme.Vars["bg01"]) {
+		t.Errorf("chat page missing resolved theme tokens")
+	}
+	if !strings.Contains(chat, "chat-vendor.js?v=") {
+		t.Errorf("chat page missing cache-busted vendor import")
+	}
+}
+
+// TestHostRouteDiscoveryRulesAreGETOnly pins the method scoping: a
+// root-priced offer advertises POST <origin>/ as its paid resource, so the
+// Exact "/" discovery rule must only capture GETs — POSTs fall through to
+// the PathPrefix payment gate.
+func TestHostRouteDiscoveryRulesAreGETOnly(t *testing.T) {
+	offer := hostnameOffer()
+	offer.Spec.Type = "agent"
+	route := buildHostHTTPRoute(offer)
+	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+	for i, raw := range rules[:len(rules)-1] { // all but the catch-all
+		match := raw.(map[string]any)["matches"].([]any)[0].(map[string]any)
+		if match["method"] != "GET" {
+			t.Errorf("rule %d (%v) method = %v, want GET", i, match["path"], match["method"])
+		}
+	}
+	last := rules[len(rules)-1].(map[string]any)["matches"].([]any)[0].(map[string]any)
+	if _, scoped := last["method"]; scoped {
+		t.Errorf("catch-all must match every method")
 	}
 }

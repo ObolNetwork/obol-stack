@@ -274,9 +274,8 @@ func buildStaticSiteConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML st
 		// chat-vendor.js as an ES module and browsers hard-fail module
 		// imports served with a non-script Content-Type.
 		"httpd.conf": ".md:text/markdown\n.json:application/json\n.html:text/html\n.js:text/javascript\n",
-		// Shared agent chat widget (one copy serves every agent offer;
-		// per-offer /chat routes rewrite here).
-		"chat.html":      chatWidgetHTML,
+		// The chat widget's shared vendor bundle (per-offer /chat pages are
+		// rendered into the offer bundles; this one heavy file is common).
 		"chat-vendor.js": chatWidgetVendorJS,
 	}
 	for _, f := range bundles {
@@ -312,9 +311,8 @@ func staticSiteVolumeItems(bundles []offerBundleFile) []any {
 		// HTTPRoute also matches the trailing-slash variant so the
 		// resolver kicks in either way.
 		map[string]any{"key": "api.html", "path": "api/index.html"},
-		// Shared agent chat widget, served at the /www root; agent-offer
-		// hostname routes rewrite /chat and /chat-vendor.js here.
-		map[string]any{"key": "chat.html", "path": "chat.html"},
+		// The chat widget's shared vendor bundle at the /www root;
+		// agent-offer hostname routes rewrite /chat-vendor.js here.
 		map[string]any{"key": "chat-vendor.js", "path": "chat-vendor.js"},
 	}
 	for _, f := range bundles {
@@ -770,10 +768,31 @@ func buildHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured 
 // win their paths and everything else reaches the gate.
 func buildHostHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructured {
 	dir := "/" + offerBundleDir(offer)
+	// The catalog httpd (busybox) sends no Cache-Control, so browsers
+	// heuristically cache these documents — a landing page or chat widget
+	// fix then never reaches returning visitors (an iframe kept replaying a
+	// stale /chat for hours). no-cache forces revalidation on every use;
+	// the vendor bundle is immutable behind its ?v= content hash instead.
+	cacheFilter := func(value string) map[string]any {
+		return map[string]any{
+			"type": "ResponseHeaderModifier",
+			"responseHeaderModifier": map[string]any{
+				"set": []any{map[string]any{"name": "Cache-Control", "value": value}},
+			},
+		}
+	}
 	exactTo := func(publicPath, file string) map[string]any {
 		return map[string]any{
+			// Method-scoped to GET: discovery documents are read-only, and a
+			// root-priced offer (route pattern "/") advertises POST <origin>/
+			// as its paid resource — an unscoped Exact "/" match would
+			// shadow that POST into the static httpd (501) instead of the
+			// payment gate.
 			"matches": []any{
-				map[string]any{"path": map[string]any{"type": "Exact", "value": publicPath}},
+				map[string]any{
+					"path":   map[string]any{"type": "Exact", "value": publicPath},
+					"method": "GET",
+				},
 			},
 			"filters": []any{
 				map[string]any{
@@ -782,6 +801,7 @@ func buildHostHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructu
 						"path": map[string]any{"type": "ReplaceFullPath", "replaceFullPath": dir + "/" + file},
 					},
 				},
+				cacheFilter("no-cache"),
 			},
 			"backendRefs": []any{
 				map[string]any{"name": staticSiteConfigMapName, "namespace": staticSiteNamespace, "port": int64(8080)},
@@ -792,9 +812,16 @@ func buildHostHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructu
 	// exactToShared rewrites to a file at the /www root (shared across
 	// offers) rather than into this offer's bundle directory.
 	exactToShared := func(publicPath, file string) map[string]any {
+		cache := "no-cache"
+		if strings.HasSuffix(file, ".js") {
+			cache = "public, max-age=31536000, immutable"
+		}
 		return map[string]any{
 			"matches": []any{
-				map[string]any{"path": map[string]any{"type": "Exact", "value": publicPath}},
+				map[string]any{
+					"path":   map[string]any{"type": "Exact", "value": publicPath},
+					"method": "GET",
+				},
 			},
 			"filters": []any{
 				map[string]any{
@@ -803,6 +830,7 @@ func buildHostHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructu
 						"path": map[string]any{"type": "ReplaceFullPath", "replaceFullPath": "/" + file},
 					},
 				},
+				cacheFilter(cache),
 			},
 			"backendRefs": []any{
 				map[string]any{"name": staticSiteConfigMapName, "namespace": staticSiteNamespace, "port": int64(8080)},
@@ -870,7 +898,7 @@ func hostRouteRules(offer *monetizeapi.ServiceOffer, exactTo, exactToShared func
 	}
 	if offer.IsAgent() {
 		rules = append(rules,
-			exactToShared("/chat", "chat.html"),
+			exactTo("/chat", "chat.html"),
 			exactToShared("/chat-vendor.js", "chat-vendor.js"),
 		)
 	}
