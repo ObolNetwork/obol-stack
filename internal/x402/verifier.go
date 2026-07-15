@@ -352,6 +352,9 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 			"This path is not part of any published service. The operator's catalog lists every live endpoint.")
 		return
 	}
+	// Carry the matched rule so 402 resource.URL builders can map the
+	// Traefik-rewritten internal path back to the public dedicated-origin path.
+	r = r.WithContext(withRouteRule(r.Context(), rule))
 
 	// Declared free carve-out: proxy straight to the upstream, no payment
 	// middleware. buildUpstreamProxy still injects upstream auth and strips
