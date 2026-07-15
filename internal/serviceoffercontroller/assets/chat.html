@@ -18,6 +18,9 @@
            padding: 10px 16px; border-bottom: 1px solid var(--stroke); }
   header h1 { font-size: 13px; font-weight: 600; letter-spacing: .14em; color: var(--light); text-transform: uppercase; }
   header .tag { font-size: 12px; color: var(--muted); }
+  /* Framed on the landing page, the header duplicates the page around it
+     (title, price) — hide it; the price still shows in the composer. */
+  .embed header { display: none; }
 
   /* transcript */
   #log { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; }
@@ -60,6 +63,7 @@
                  animation: r .8s linear infinite; }
   @keyframes r { to { transform: rotate(360deg); } }
 </style>
+<script>if (self !== top) document.documentElement.classList.add("embed");</script>
 </head>
 <body>
 <header>

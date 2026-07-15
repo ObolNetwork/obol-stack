@@ -35,11 +35,11 @@
       code, .mono { font-family:var(--mono); font-size:13px; color:var(--light); }
       a { color:var(--green); }
       .fineprint { color:var(--muted); font-size:13px; margin-top:32px; }
-      /* Full-bleed inside .card: negative margins swallow the card's
-         20px/24px padding; only a top hairline separates it from the h2,
-         and the bottom corners nest inside the card's 12px radius. */
-      .chatframe { display:block; width:calc(100% + 48px); height:480px; margin:12px -24px -20px;
-                   border:0; border-top:1px solid var(--stroke); border-radius:0 0 11px 11px; background:var(--bg01); }
+      /* The chat card is nothing but the widget: no heading, no padding —
+         the page around it already carries the title and price. */
+      .chatcard { padding:0; overflow:hidden; }
+      .chatframe { display:block; width:100%; height:480px; border:0; background:var(--bg01); }
+      .chatlink { text-align:right; font-size:12px; margin:6px 2px 0; }
     </style>
     {{if .CustomCSS}}<style data-obol="custom-css">{{.CustomCSS}}</style>{{end}}
   </head>
@@ -52,10 +52,10 @@
       <!-- Reserved mount for the in-browser wallet checkout widget. -->
       <div data-obol="checkout"></div>
       {{if .ChatEnabled}}
-      <div class="card" data-obol="chat">
-        <h2>Chat with this agent <a href="/chat" style="float:right;font-size:12px;font-weight:400">full page ↗</a></h2>
+      <div class="card chatcard" data-obol="chat">
         <iframe class="chatframe" src="/chat" title="agent chat"></iframe>
       </div>
+      <p class="chatlink"><a href="/chat">full-page chat ↗</a></p>
       {{end}}
       <div class="card" data-obol="dev-links">
         <h2>For agents &amp; developers</h2>
