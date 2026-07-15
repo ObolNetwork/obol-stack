@@ -231,20 +231,43 @@ fi
 # stack configures basic-auth. Assert the dashboard container is UP (public
 # /api/status → 200) and ENFORCES auth (protected /api/sessions → 401 for an
 # unauthenticated caller; /api routes gate on the session token, not basic-auth).
+#
+# Also probe /auth/password-login (working form) and Exact "/" on the
+# dashboard host. Obol edge-redirects "/" → /auth/password-login so operators
+# can open the pretty host; Hermes's own /auth/login?provider=basic still 500s.
+# See docs/guides/hermes-dashboard-login.md.
 dash_code() { curl --resolve "${HERMES_DASHBOARD_HOST}:${ingress_port}:127.0.0.1" \
     -s -o /dev/null -w "%{http_code}" --max-time 10 "$@" 2>/dev/null; }
-dash_status="" dash_protected=""
+# -L follows redirect once so we can assert the pretty root lands on a non-500 page.
+dash_code_follow() { curl --resolve "${HERMES_DASHBOARD_HOST}:${ingress_port}:127.0.0.1" \
+    -s -o /dev/null -w "%{http_code}" --max-time 10 -L --max-redirs 3 "$@" 2>/dev/null; }
+dash_status="" dash_protected="" dash_login="" dash_root="" dash_root_final=""
 for i in $(seq 1 15); do
     dash_status=$(dash_code "$HERMES_DASHBOARD_URL/api/status")
     dash_protected=$(dash_code "$HERMES_DASHBOARD_URL/api/sessions")
-    if [ "$dash_status" = "200" ] && [ "$dash_protected" = "401" ]; then
-        pass "Hermes dashboard up + auth-gated (status=$dash_status protected=$dash_protected)"
+    dash_login=$(dash_code "$HERMES_DASHBOARD_URL/auth/password-login")
+    dash_root=$(dash_code "$HERMES_DASHBOARD_URL/")
+    dash_root_final=$(dash_code_follow "$HERMES_DASHBOARD_URL/")
+    if [ "$dash_status" = "200" ] && [ "$dash_protected" = "401" ] && \
+       [ "$dash_login" != "500" ] && [ -n "$dash_login" ] && [ "$dash_login" != "000" ] && \
+       [ "$dash_root" != "500" ] && [ -n "$dash_root" ] && [ "$dash_root" != "000" ] && \
+       [ "$dash_root_final" != "500" ] && [ -n "$dash_root_final" ] && [ "$dash_root_final" != "000" ]; then
+        pass "Hermes dashboard up + auth-gated + root/login ok (status=$dash_status protected=$dash_protected login=$dash_login root=$dash_root final=$dash_root_final)"
         break
     fi
     sleep 2
 done
 if [ "$dash_status" != "200" ] || [ "$dash_protected" != "401" ]; then
     fail "Hermes dashboard check failed — status=$dash_status protected=$dash_protected"
+fi
+if [ -z "$dash_login" ] || [ "$dash_login" = "000" ] || [ "$dash_login" = "500" ]; then
+    fail "Hermes dashboard password-login path failed — expected non-500 HTML login page, got HTTP $dash_login"
+fi
+if [ -z "$dash_root" ] || [ "$dash_root" = "000" ] || [ "$dash_root" = "500" ]; then
+    fail "Hermes dashboard root failed — expected edge 302 (or non-500) to password-login, got HTTP $dash_root"
+fi
+if [ -z "$dash_root_final" ] || [ "$dash_root_final" = "000" ] || [ "$dash_root_final" = "500" ]; then
+    fail "Hermes dashboard root follow failed — expected non-500 after redirect, got HTTP $dash_root_final"
 fi
 
 # §4: Verify Hermes config still has the expected model/provider wiring.

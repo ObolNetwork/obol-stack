@@ -75,6 +75,16 @@ All pods should show `Running` or `Completed` within ~2 minutes:
 
 Open the frontend: http://obol.stack/
 
+The Hermes agent dashboard is separate from the frontend. Open the pretty host
+(edge-redirects to the password form — see
+[Hermes dashboard login](guides/hermes-dashboard-login.md)):
+
+```
+http://obol-agent.obol.stack
+```
+
+Username `obol`, password from `obol agent auth obol-agent`.
+
 ## Step 3 -- Test LLM Inference
 
 The stack routes all LLM requests through LiteLLM, an OpenAI-compatible gateway that forwards to your host Ollama.

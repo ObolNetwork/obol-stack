@@ -45,6 +45,18 @@ const (
 	containerUID  = 1000
 	containerGID  = 1000
 	dashboardPort = 9119
+
+	// DashboardPasswordLoginPath is the browser entry that works with Hermes
+	// basic-auth. Hermes root "/" auto-redirects to
+	// /auth/login?provider=basic, which raises
+	// NotImplementedError: BasicAuthProvider is password-only (HTTP 500).
+	// See docs/guides/hermes-dashboard-login.md.
+	DashboardPasswordLoginPath = "/auth/password-login"
+
+	// DashboardBasicAuthUsername is the fixed username Obol wires into
+	// HERMES_DASHBOARD_BASIC_AUTH_USERNAME. The password is the agent API
+	// token (same value as HERMES_DASHBOARD_BASIC_AUTH_PASSWORD / API_SERVER_KEY).
+	DashboardBasicAuthUsername = "obol"
 )
 
 type OnboardOptions struct {
@@ -266,10 +278,7 @@ func Sync(cfg *config.Config, id string, u *ui.UI) error {
 	u.Success("Hermes installed successfully!")
 	u.Detail("Namespace", agentruntime.Namespace(agentruntime.Hermes, id))
 	u.Detail("URL", "http://"+agentruntime.Hostname(agentruntime.Hermes, id))
-	u.Detail("Dashboard", "http://"+dashboardHostname(id))
-	u.Blank()
-	u.Dim("[Optional] Retrieve an API server token:")
-	u.Printf("  obol agent auth %s", id)
+	printDashboardAccessGuidance(u, id)
 	u.Blank()
 	u.Dim("[Optional] Port-forward fallback:")
 	u.Printf("  obol kubectl -n %s port-forward svc/%s %d:%d",
@@ -718,6 +727,48 @@ func dashboardHostname(id string) string {
 	return agentruntime.DashboardHostname(agentruntime.Hermes, id)
 }
 
+// dashboardURL is the pretty operator URL for the Hermes dashboard host.
+// An HTTPRoute RequestRedirect on Exact "/" rewrites to the password form
+// so operators never need to type /auth/password-login.
+func dashboardURL(id string) string {
+	return "http://" + dashboardHostname(id)
+}
+
+// dashboardPasswordLoginURL is the form path Hermes actually serves (and the
+// target of the edge redirect from "/").
+func dashboardPasswordLoginURL(id string) string {
+	return dashboardURL(id) + DashboardPasswordLoginPath
+}
+
+// dashboardAccessGuidance returns operator-facing lines that name the pretty
+// dashboard URL and how credentials map to the agent API token.
+// Pure for unit tests; printDashboardAccessGuidance is the Sync success path.
+func dashboardAccessGuidance(id string) []string {
+	return []string{
+		"Dashboard: " + dashboardURL(id),
+		"  Username: " + DashboardBasicAuthUsername,
+		"  Password: agent API token from `obol agent auth " + id + "`",
+		"  (root edge-redirects to " + DashboardPasswordLoginPath + ")",
+	}
+}
+
+func printDashboardAccessGuidance(u *ui.UI, id string) {
+	// Drive UI from the pure guidance lines so unit tests cover the shipped path.
+	for i, line := range dashboardAccessGuidance(id) {
+		if i == 0 {
+			const prefix = "Dashboard: "
+			if strings.HasPrefix(line, prefix) {
+				u.Detail("Dashboard", strings.TrimPrefix(line, prefix))
+				continue
+			}
+		}
+		u.Dim(line)
+	}
+	u.Blank()
+	u.Dim("[Optional] Retrieve the dashboard password (API token):")
+	u.Printf("  obol agent auth %s", id)
+}
+
 func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token, primary string, configData []byte) string {
 	desc := agentruntime.Describe(agentruntime.Hermes)
 	configChecksum := sha256.Sum256(configData)
@@ -963,7 +1014,7 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                 # existing API token as the password (already surfaced to the
                 # operator). Probe path /api/status stays auth-exempt.
                 - name: HERMES_DASHBOARD_BASIC_AUTH_USERNAME
-                  value: obol
+                  value: %s
                 - name: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
                   value: %s
               readinessProbe:
@@ -1041,15 +1092,33 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
           namespace: traefik
           sectionName: web
       rules:
+        # Hermes root "/" auto-redirects to /auth/login?provider=basic which
+        # 500s for password-only basic-auth. Edge-redirect Exact "/" to the
+        # working password form so operators can open the pretty dashboard
+        # host. Dashboard hostname only — agent API host is untouched.
+        - matches:
+            - path:
+                type: Exact
+                value: /
+          filters:
+            - type: RequestRedirect
+              requestRedirect:
+                path:
+                  type: ReplaceFullPath
+                  replaceFullPath: %s
+                statusCode: 302
         - backendRefs:
             - name: %s
               port: %d
 `, desc.DefaultPort, desc.DefaultPort, desc.DefaultPort,
-		quoteYAML(image()), quoteYAML(hermesBinary), dashboardPort, dashboardPort, desc.DefaultPort, quoteYAML(token), dashboardPort, dashboardPort, dashboardPort,
+		quoteYAML(image()), quoteYAML(hermesBinary), dashboardPort, dashboardPort, desc.DefaultPort,
+		quoteYAML(DashboardBasicAuthUsername), quoteYAML(token),
+		dashboardPort, dashboardPort, dashboardPort,
 		desc.DataPVCName,
 		desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.DefaultPort, dashboardPort,
 		desc.ServiceName, namespace, quoteYAML(hostname), desc.ServiceName, desc.DefaultPort,
-		desc.ServiceName, namespace, quoteYAML(dashboardHostname), desc.ServiceName, dashboardPort)
+		desc.ServiceName, namespace, quoteYAML(dashboardHostname),
+		DashboardPasswordLoginPath, desc.ServiceName, dashboardPort)
 
 	return strings.ReplaceAll(b.String(), "\t", "")
 }
