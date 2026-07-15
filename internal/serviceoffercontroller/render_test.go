@@ -103,6 +103,12 @@ func TestBuildReferenceGrant(t *testing.T) {
 	if grant.GetNamespace() != "x402" {
 		t.Fatalf("grant namespace = %q, want x402", grant.GetNamespace())
 	}
+	if grant.GetName() != backendReferenceGrantName("llm", "demo") {
+		t.Fatalf("grant name = %q, want namespaced unique name", grant.GetName())
+	}
+	if !strings.Contains(grant.GetName(), "llm") || !strings.Contains(grant.GetName(), "demo") {
+		t.Fatalf("grant name %q must include offer namespace and name", grant.GetName())
+	}
 	spec := grant.Object["spec"].(map[string]any)
 	from := spec["from"].([]any)[0].(map[string]any)
 	to := spec["to"].([]any)[0].(map[string]any)
@@ -111,6 +117,26 @@ func TestBuildReferenceGrant(t *testing.T) {
 	}
 	if to["name"] != "x402-verifier" {
 		t.Fatalf("grant to.name = %v, want x402-verifier", to["name"])
+	}
+}
+
+// Two offers with the same name in different namespaces must not share a
+// ReferenceGrant object name in x402 (overwrite / flapping 500s).
+func TestBuildReferenceGrant_DisambiguatesByNamespace(t *testing.T) {
+	a := buildReferenceGrant(&monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "canary402", Namespace: "ns-a"},
+	})
+	b := buildReferenceGrant(&monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "canary402", Namespace: "ns-b"},
+	})
+	if a.GetName() == b.GetName() {
+		t.Fatalf("same-named offers in different namespaces must get distinct grant names; both = %q", a.GetName())
+	}
+	if a.Object["spec"].(map[string]any)["from"].([]any)[0].(map[string]any)["namespace"] != "ns-a" {
+		t.Fatal("grant A from.namespace must be ns-a")
+	}
+	if b.Object["spec"].(map[string]any)["from"].([]any)[0].(map[string]any)["namespace"] != "ns-b" {
+		t.Fatal("grant B from.namespace must be ns-b")
 	}
 }
 
