@@ -38,8 +38,6 @@
   #strip .bal { color: var(--green); font-variant-numeric: tabular-nums; cursor: pointer; }
   #strip .bal.low { color: var(--amber); }
   #strip a, #strip .lnk { color: var(--green); text-decoration: none; cursor: pointer; }
-  #strip .spacer { flex: 1; }
-  #keyout { padding: 0 16px 4px; font: 11px var(--mono); color: var(--amber); overflow-wrap: anywhere; }
 
   /* staged composer: connect -> sign in -> fund -> chat */
   #composer { display: flex; align-items: stretch; gap: 8px; padding: 10px 16px 14px; border-top: 1px solid var(--stroke); }
@@ -69,18 +67,14 @@
   <span class="tag"><span id="price">…</span>/message · <span id="netname">…</span></span>
 </header>
 <div id="log">
-  <div class="msg sys">Pay-per-message chat. Connect a wallet below — one signature creates a local
-session wallet, fund it once, then every message is paid automatically. No account, no popups while chatting.</div>
+  <div class="msg sys">Pay-per-message chat — connect a wallet, fund a small session once, then every message is paid automatically. No account needed.</div>
 </div>
 <div id="strip">
   <span>session <b id="sessaddr">—</b></span>
   <span class="bal" id="balance" title="click to refresh">$0.00</span>
   <span class="lnk" id="fundlink">+ fund</span>
   <a id="explorer" target="_blank" rel="noopener" style="display:none">explorer</a>
-  <span class="spacer"></span>
-  <span class="lnk" id="reveal">reveal key</span>
 </div>
-<div id="keyout"></div>
 <form id="composer"></form>
 <div id="status"></div>
 <script type="module">
@@ -97,7 +91,7 @@ const MAX_PRICE = 50000n; // refuse challenges above $0.05 in 6-dec units
 const CHAINS = { "eip155:8453": base, "eip155:84532": baseSepolia };
 const $ = (id) => document.getElementById(id);
 let net, chain, asset, pub, explorer; // resolved from the 402 challenge
-let wallet, mainAddr, burner, burnerPk, payFetch, balPoll = null;
+let wallet, mainAddr, burner, payFetch, balPoll = null;
 let model = {{.OfferName}}, price = null, balance = 0n, busy = false;
 const messages = [];
 
@@ -125,10 +119,12 @@ function renderComposer() {
   c.dataset.stage = s;
   c.innerHTML = "";
   if (s === "connect") {
-    const b = mkbtn("Connect wallet to chat", "Rabby, MetaMask or any injected wallet");
+    const b = mkbtn("Connect wallet", "");
     b.onclick = connect;
     c.appendChild(b);
   } else if (s === "signin") {
+    // Fallback only: connect() chains into signin() automatically; this
+    // stage renders when the user rejected that signature and needs a retry.
     const b = mkbtn("Sign in with Ethereum", "one signature derives your local session wallet — nothing is stored");
     b.onclick = signin;
     c.appendChild(b);
@@ -195,6 +191,10 @@ async function connect() {
     wallet = createWalletClient({ account: mainAddr, chain, transport: custom(window.ethereum) });
     status("");
     renderComposer();
+    // One click does both: the connect gesture keeps the signature request
+    // user-triggered, so chain straight into sign-in. If the user rejects,
+    // signin() surfaces the error and the composer stays on its retry stage.
+    await signin();
   } catch (e) { status("connect failed: " + (e.shortMessage || e.message)); }
 }
 
@@ -209,8 +209,7 @@ async function signin() {
   try {
     status("waiting for signature…", true);
     const sig = await wallet.signMessage({ account: mainAddr, message: SIGNIN });
-    burnerPk = keccak256(sig);
-    burner = privateKeyToAccount(burnerPk);
+    burner = privateKeyToAccount(keccak256(sig));
     const x = new x402Client().register(net, new ExactEvmScheme(toClientEvmSigner(burner, pub)));
     payFetch = wrapFetchWithPayment(fetch, x);
     $("sessaddr").textContent = short(burner.address);
@@ -295,14 +294,6 @@ $("composer").onsubmit = async (ev) => {
   $("input")?.focus();
 };
 
-// ---- reveal session key (two-click; the key is the user's own, client-side)
-let revealState = 0; // 0 hidden, 1 armed, 2 shown
-$("reveal").onclick = () => {
-  if (!burnerPk) return;
-  revealState = (revealState + 1) % 3;
-  $("keyout").textContent = revealState === 2 ? "importable private key: " + burnerPk : "";
-  $("reveal").textContent = ["reveal key", "click again to reveal", "hide key"][revealState];
-};
 </script>
 </body>
 </html>
