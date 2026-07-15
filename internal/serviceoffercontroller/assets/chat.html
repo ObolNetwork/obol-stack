@@ -92,7 +92,6 @@ import { createWalletClient, createPublicClient, custom, http, erc20Abi,
 const ENDPOINT = "/v1/chat/completions";
 const AGENT = {{.Title}};
 document.documentElement.style.setProperty("--agent-name", JSON.stringify(AGENT));
-const MAX_PRICE = 50000n; // refuse challenges above $0.05 in 6-dec units
 const CHAINS = { "eip155:8453": base, "eip155:84532": baseSepolia };
 const $ = (id) => document.getElementById(id);
 let net, chain, asset, pub, explorer; // resolved from the 402 challenge
@@ -181,7 +180,6 @@ const priceStr = () => price === null ? "…" : "$" + formatUnits(price, 6);
     model = c.extensions?.bazaar?.info?.input?.body?.model || model;
     $("price").textContent = priceStr();
     $("netname").textContent = (acc.extra?.name || "USDC") + " on " + chain.name;
-    if (price > MAX_PRICE) { say("sys err", "Advertised price exceeds this page's safety cap — chat disabled."); price = null; }
     renderComposer();
   } catch (e) { $("price").textContent = "?"; say("sys err", "Agent unreachable: " + e.message); }
 })();
@@ -215,7 +213,12 @@ async function signin() {
     status("waiting for signature…", true);
     const sig = await wallet.signMessage({ account: mainAddr, message: SIGNIN });
     burner = privateKeyToAccount(keccak256(sig));
-    const x = new x402Client().register(net, new ExactEvmScheme(toClientEvmSigner(burner, pub)));
+    // Per-payment ceiling = the session balance: whatever the seller prices
+    // a turn at, the widget never signs an authorization for more than the
+    // user chose to park in the session wallet. No arbitrary price cap.
+    const x = new x402Client()
+      .register(net, new ExactEvmScheme(toClientEvmSigner(burner, pub)))
+      .registerPolicy((_v, reqs) => reqs.filter((q) => BigInt(q.amount ?? q.maxAmountRequired ?? "0") <= balance));
     payFetch = wrapFetchWithPayment(fetch, x);
     $("sessaddr").textContent = short(burner.address);
     if (explorer) { $("explorer").href = explorer + "/address/" + burner.address; $("explorer").style.display = ""; }
@@ -274,10 +277,38 @@ $("composer").onsubmit = async (ev) => {
   status("paying " + priceStr() + " and running the agent…", true);
   try {
     const r = await payFetch(ENDPOINT, { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model, messages, stream: false }) });
+      body: JSON.stringify({ model, messages, stream: true }) });
     if (r.status === 429) { say("sys err", "Agent is busy — try again in a minute."); messages.pop(); }
     else if (!r.ok) { say("sys err", "Request failed (" + r.status + "). " + (await r.text()).slice(0, 160)); messages.pop(); }
-    else {
+    else if ((r.headers.get("content-type") || "").includes("text/event-stream")) {
+      const d = say("agent", "");
+      let reply = "", buf = "", first = true, done = false;
+      const reader = r.body.getReader(), dec = new TextDecoder();
+      while (!done) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        buf += dec.decode(chunk.value, {stream:true});
+        const lines = buf.split("\n");
+        buf = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6).trim();
+          if (data === "[DONE]") { done = true; break; }
+          try {
+            const frag = JSON.parse(data).choices?.[0]?.delta?.content ?? "";
+            if (!frag) continue;
+            if (first) { status(""); first = false; }
+            reply += frag; d.textContent += frag;
+            $("log").scrollTop = $("log").scrollHeight;
+          } catch {}
+        }
+      }
+      if (!reply) d.textContent = "(empty reply)";
+      messages.push({ role: "assistant", content: reply });
+      const settled = r.headers.get("x-payment-response") || r.headers.get("payment-response");
+      status(settled ? "paid & settled ✓" : "paid ✓");
+    } else {
+      // Upstream ignored stream:true — fall back to full JSON body.
       const j = await r.json();
       const reply = j.choices?.[0]?.message?.content || "(empty reply)";
       messages.push({ role: "assistant", content: reply });
@@ -287,8 +318,11 @@ $("composer").onsubmit = async (ev) => {
     }
   } catch (e) {
     messages.pop();
-    say("sys err", /insufficient|funds|balance/i.test(String(e.message)) ?
+    const msg = String(e.message || "");
+    say("sys err", /insufficient|funds|balance/i.test(msg) ?
       "Payment failed — session balance too low. Top it up with + fund above." :
+      /filtered out by policies/i.test(msg) ?
+      "Price changed above this page's safety cap — payment refused." :
       "Error: " + (e.shortMessage || e.message).slice(0, 200));
     status("");
   }
