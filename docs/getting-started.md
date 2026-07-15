@@ -11,9 +11,18 @@ This guide walks you through installing the Obol Stack, starting a local Kuberne
 - **Docker** -- The stack runs a local Kubernetes cluster via [k3d](https://k3d.io), which requires Docker.
   - Linux: [Docker Engine](https://docs.docker.com/engine/install/)
   - macOS / Windows: [Docker Desktop](https://docs.docker.com/desktop/)
-- **Ollama** -- For LLM inference. Install from [ollama.com](https://ollama.com) and start with `ollama serve`.
+- **LLM access** -- Either:
+  - **Ollama** (local) — install from [ollama.com](https://ollama.com), start `ollama serve`, pull a chat model (e.g. `ollama pull qwen3.5:4b`), **or**
+  - **Cloud / custom** — after `stack up`, run `obol model setup` (OpenRouter, Anthropic, OpenAI, Venice, custom vLLM, …).
 - **Foundry** (optional) -- For on-chain payment testing. Install from [getfoundry.sh](https://getfoundry.sh).
 - **Go 1.25+** (development mode only) -- For building from source.
+
+> [!IMPORTANT]
+> Declining the installer’s Ollama prompt **without** later configuring a model means **no LiteLLM models**, so `stack up` **skips the default Hermes agent**. Fix with:
+> ```bash
+> obol model setup
+> obol agent init
+> ```
 
 ## Install
 
@@ -23,7 +32,26 @@ Run the bootstrap installer:
 bash <(curl -fsSL https://stack.obol.org)
 ```
 
-This installs the `obol` CLI and all required tools (kubectl, helm, k3d, helmfile, k9s) to `~/.local/bin/`.
+Pin a current release (see [GitHub releases](https://github.com/ObolNetwork/obol-stack/releases)):
+
+```bash
+OBOL_RELEASE=v0.13.0 bash <(curl -fsSL https://stack.obol.org)
+```
+
+This installs the `obol` CLI and all required tools (kubectl, helm, k3d, helmfile, k9s) to `~/.local/bin/`, and tries to add `127.0.0.1 obol.stack` to `/etc/hosts`.
+
+### If `/etc/hosts` cannot be updated
+
+The installer prints the manual hosts line and still completes. Resume:
+
+```bash
+echo "127.0.0.1 obol.stack" | sudo tee -a /etc/hosts
+obol stack init
+obol stack up
+obol agent init   # if Hermes was skipped (no model configured yet)
+```
+
+`obol stack up` will attempt hosts again (including agent hostnames). A failed write is a **warning** — the cluster still starts. For automation without a sudo prompt, set `OBOL_NONINTERACTIVE=true` (hosts update fails fast unless sudo is already cached / NOPASSWD).
 
 > [!TIP]
 > **Development mode** -- Contributors working from source can use:
@@ -42,15 +70,15 @@ obol stack up
 
 `stack init` generates a unique stack ID (e.g., `vast-flounder`) and writes cluster configuration to `~/.config/obol/`.
 
-`stack up` creates a local k3d cluster, deploys all infrastructure, and sets up a default AI agent with an Ethereum wallet.
+`stack up` creates a local k3d cluster, deploys infrastructure, configures **LiteLLM**, and (when a model is available) deploys the default **Hermes** agent with an Ethereum wallet. The **Cloudflare tunnel stays dormant** until you sell something (`obol sell …`) or run `obol tunnel restart` / `obol tunnel setup`.
 
 On first run, `stack up` will:
 1. Create the k3d cluster
-2. Deploy infrastructure (Traefik, monitoring, LLM gateway, etc.)
-3. Build and import the x402-verifier image (development mode only)
-4. Deploy a default Hermes agent instance with embedded Obol skills
+2. Deploy infrastructure (Traefik, monitoring, LiteLLM gateway, etc.)
+3. Build and import local-dev images (development mode only)
+4. Deploy a default Hermes agent with embedded Obol skills **if** LiteLLM has a model
 5. Generate an Ethereum signing wallet for the agent
-6. Import runtime state for the stack-managed agent
+6. Leave the public tunnel dormant (or restore a previously configured permanent tunnel)
 
 ## Step 2 -- Verify the Cluster
 
@@ -63,21 +91,32 @@ All pods should show `Running` or `Completed` within ~2 minutes:
 | Component | Namespace | Description |
 |-----------|-----------|-------------|
 | **Traefik** | `traefik` | Gateway API ingress controller |
-| **Cloudflared** | `traefik` | Quick tunnel for public access |
-| **LiteLLM** | `llm` | OpenAI-compatible LLM gateway (proxies to host Ollama) |
+| **Cloudflared** | `traefik` | Tunnel connector chart (often 0 replicas until first sell / `tunnel restart`) |
+| **LiteLLM** | `llm` | OpenAI-compatible LLM gateway (Ollama, cloud providers, custom endpoints) |
 | **eRPC** | `erpc` | Unified RPC load balancer |
-| **Frontend** | `obol-frontend` | Web interface at http://obol.stack/ |
+| **Frontend** | `obol-frontend` | Web UI — local only, `Host: obol.stack` |
 | **Monitoring** | `monitoring` | Prometheus + kube-prometheus-stack |
 | **Reloader** | `reloader` | Auto-restarts workloads on config changes |
 | **x402 Gateway** | `x402` | Shared seller-owned payment gateway for priced HTTP routes |
-| **Hermes** | `hermes-obol-agent` | Default AI agent with Ethereum wallet |
+| **Hermes** | `hermes-obol-agent` | Default AI agent with Ethereum wallet (if a model was configured) |
 | **Remote Signer** | `hermes-obol-agent` | Ethereum transaction signing service |
 
-Open the frontend: http://obol.stack/
+### Local URLs (important)
+
+Open the frontend at:
+
+```text
+http://obol.stack:8080
+```
+
+Use the **`obol.stack` hostname**, not `localhost`. Traefik matches `Host: obol.stack` for the frontend and eRPC. **`http://localhost:8080` returns 404** even when the stack is healthy.
+
+- On many Mac setups port **8080** is the reliable mapping; port 80 may need root or be disabled in `k3d.yaml`.
+- Hermes dashboard (separate host): `http://obol-agent.obol.stack` (add `:8080` if that is your ingress). Login username `obol`, password from `obol agent auth obol-agent`.
 
 ## Step 3 -- Test LLM Inference
 
-The stack routes all LLM requests through LiteLLM, an OpenAI-compatible gateway that forwards to your host Ollama.
+The stack routes all LLM requests through LiteLLM, an OpenAI-compatible gateway (host Ollama when present, or cloud / custom endpoints from `obol model setup`).
 
 ### 3a. Verify Ollama has models
 
