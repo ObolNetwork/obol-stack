@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>{{.Title}}</title>
+    <meta name="description" content="{{.Description}}" />
+    <meta name="theme-color" content="{{.ThemeColor}}" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="{{.Title}}" />
+    <meta property="og:description" content="{{.Description}}" />
+    <meta property="og:site_name" content="{{.Operator}}" />
+    {{if .OGImageURL}}<meta property="og:image" content="{{.OGImageURL}}" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="{{.OGImageURL}}" />{{end}}
+    {{if .FaviconURL}}<link rel="icon" href="{{.FaviconURL}}" />{{end}}
+    <style>
+      :root { {{.ThemeCSS}} --mono:"JetBrains Mono",ui-monospace,monospace; }
+      * { box-sizing: border-box; } html, body { background: var(--bg01); }
+      body { margin:0; color:var(--light); font-family:"DM Sans",system-ui,sans-serif; line-height:1.5; }
+      .wrap { max-width:640px; margin:0 auto; padding:64px 24px 96px; }
+      .brand { display:flex; align-items:center; gap:10px; margin-bottom:24px; color:var(--light); font-weight:600; font-size:15px; }
+      .brand img { height:32px; width:auto; }
+      .pill { display:inline-block; font-family:var(--mono); font-size:13px; font-weight:600; color:var(--green); border:1px solid var(--green); border-radius:999px; padding:6px 14px; margin-bottom:24px; }
+      h1 { font-size:28px; margin:0 0 8px; }
+      p { color:var(--body); margin:0 0 12px; }
+      .richtext { color:var(--body); }
+      .richtext p { margin:0 0 10px; }
+      .richtext ul, .richtext ol { margin:0 0 10px; padding-left:22px; }
+      .richtext h3, .richtext h4 { color:var(--light); margin:14px 0 6px; font-size:16px; }
+      .richtext code { font-family:var(--mono); font-size:0.9em; }
+      .richtext pre { background:var(--bg01); border:1px solid var(--stroke); border-radius:8px; padding:12px; overflow-x:auto; }
+      .card { background:var(--bg02); border:1px solid var(--stroke); border-radius:12px; padding:20px 24px; margin-top:24px; }
+      .card h2 { font-size:15px; margin:0 0 8px; color:var(--light); }
+      code, .mono { font-family:var(--mono); font-size:13px; color:var(--light); }
+      a { color:var(--green); }
+      .fineprint { color:var(--muted); font-size:13px; margin-top:32px; }
+    </style>
+    {{if .CustomCSS}}<style data-obol="custom-css">{{.CustomCSS}}</style>{{end}}
+  </head>
+  <body>
+    <div class="wrap" data-obol="page-landing">
+      {{if .LogoURL}}<div class="brand" data-obol="brand"><img src="{{.LogoURL}}" alt="{{.Operator}}" />{{if .ShowName}}<span>{{.Operator}}</span>{{end}}</div>{{end}}
+      <span class="pill" data-obol="price">{{.Price}}</span>
+      <h1 data-obol="title">{{.Title}}</h1>
+      <div class="richtext" data-obol="description">{{.DescriptionHTML}}</div>
+      <!-- Reserved mount for the in-browser wallet checkout widget. -->
+      <div data-obol="checkout"></div>
+      <div class="card" data-obol="dev-links">
+        <h2>For agents &amp; developers</h2>
+        <p class="mono"><a href="/openapi.json">/openapi.json</a> — request shapes + per-route pricing</p>
+        <p class="mono"><a href="/.well-known/x402">/.well-known/x402</a> — signable x402 payment requirements</p>
+        <p>Payment is per-request via x402 micropayments: call an endpoint with no payment to receive the <code>402</code> challenge, sign one <code>accepts[]</code> entry, retry with the <code>X-PAYMENT</code> header.</p>
+      </div>
+      {{if .AboutHTML}}
+      <div class="card" data-obol="about">
+        <h2>About {{.Operator}}</h2>
+        <div class="richtext">{{.AboutHTML}}</div>
+      </div>
+      {{end}}
+      <p class="fineprint" data-obol="powered-by">Sold by {{.Operator}} · Powered by <a href="https://obol.org">Obol</a></p>
+    </div>
+  </body>
+</html>
