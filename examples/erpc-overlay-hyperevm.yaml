@@ -1,11 +1,10 @@
 # Example eRPC operator overlay — HyperEVM (chain 999) basket.
 #
-# Durable multi-upstream baskets that survive `obol stack up`. Apply with:
+# Durable operator eRPC config so local baskets survive `obol stack up`. Set with:
 #
-#   obol network overlay apply -f examples/erpc-overlay-hyperevm.yaml
-#   obol network overlay status
-#   obol network overlay reconcile   # re-apply without re-reading -f
-#
+#   obol network erpc set -f examples/erpc-overlay-hyperevm.yaml
+#   obol network erpc status
+#   
 # Host copy lives at $OBOL_CONFIG_DIR/rpc/erpc-overlay.yaml (0600) and is
 # re-merged after recorded remotes on every stack up (see #763).
 #

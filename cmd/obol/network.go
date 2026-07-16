@@ -76,7 +76,7 @@ func networkCommand(cfg *config.Config) *cli.Command {
 			networkAddCommand(cfg),
 			networkRemoveCommand(cfg),
 			networkStatusCommand(cfg),
-			networkOverlayCommand(cfg),
+			networkERPCCommand(cfg),
 		},
 	}
 }
@@ -535,47 +535,48 @@ func networkStatusCommand(cfg *config.Config) *cli.Command {
 	}
 }
 
-// network overlay — durable multi-upstream eRPC baskets (ObolNetwork/obol-stack#763)
+// network erpc — durable operator eRPC config that survives stack up (#763).
+// Verbs match sell-info set/reset (host-side intent) + status.
 // ---------------------------------------------------------------------------
 
-func networkOverlayCommand(cfg *config.Config) *cli.Command {
+func networkERPCCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
-		Name:  "overlay",
-		Usage: "Manage durable eRPC operator overlays (multi-upstream baskets that survive stack up)",
+		Name:  "erpc",
+		Usage: "Manage durable operator eRPC config (host-side; re-applied on stack up so local baskets are not lost)",
 		Commands: []*cli.Command{
 			{
-				Name:  "apply",
-				Usage: "Apply an eRPC overlay YAML: save under $CONFIG_DIR/rpc/erpc-overlay.yaml and merge into the live ConfigMap",
+				Name:  "set",
+				Usage: "Set durable eRPC config from a YAML file and merge it into the live ConfigMap",
 				Flags: []cli.Flag{
 					&cli.StringFlag{
 						Name:     "file",
 						Aliases:  []string{"f"},
-						Usage:    "Path to erpc-overlay.yaml (version, networks, upstreams, rateLimiters, cachePoliciesAdd)",
+						Usage:    "YAML fragment: networks, upstreams, rateLimiters, cachePoliciesAdd (saved to $CONFIG_DIR/rpc/erpc-overlay.yaml)",
 						Required: true,
 					},
 				},
 				Action: func(_ context.Context, cmd *cli.Command) error {
-					return network.ApplyERPCOverlayFile(cfg, getUI(cmd), cmd.String("file"))
+					return network.SetERPC(cfg, getUI(cmd), cmd.String("file"))
 				},
 			},
 			{
 				Name:  "status",
-				Usage: "Show the on-disk eRPC overlay (networks, upstreams, content hash)",
+				Usage: "Show the durable eRPC config on disk",
 				Action: func(_ context.Context, cmd *cli.Command) error {
 					u := getUI(cmd)
-					st, err := network.StatusERPCOverlay(cfg)
+					st, err := network.StatusERPC(cfg)
 					if err != nil {
 						return err
 					}
-					u.Printf("eRPC Operator Overlay\n")
-					u.Printf("=====================\n\n")
+					u.Printf("eRPC operator config\n")
+					u.Printf("====================\n\n")
 					u.Printf("Path: %s\n", st.Path)
 					if !st.Present {
-						u.Info("Status: not configured")
-						u.Info("Apply one with: obol network overlay apply -f <overlay.yaml>")
+						u.Info("Status: not set")
+						u.Info("Set with: obol network erpc set -f <file.yaml>")
 						return nil
 					}
-					u.Printf("Status: present (v%d, hash %s)\n", st.Version, st.ContentHash)
+					u.Printf("Status: set (v%d, hash %s)\n", st.Version, st.ContentHash)
 					u.Printf("Networks (%d):\n", st.NetworkCount)
 					for _, k := range st.NetworkKeys {
 						u.Printf("  - %s\n", k)
@@ -596,19 +597,10 @@ func networkOverlayCommand(cfg *config.Config) *cli.Command {
 				},
 			},
 			{
-				Name:  "clear",
-				Usage: "Remove overlay networks/upstreams from live eRPC and delete the host-side overlay file",
+				Name:  "reset",
+				Usage: "Reset durable eRPC config (strip from live ConfigMap and delete host file)",
 				Action: func(_ context.Context, cmd *cli.Command) error {
-					return network.ClearERPCOverlay(cfg, getUI(cmd))
-				},
-			},
-			{
-				Name:  "reconcile",
-				Usage: "Re-apply the on-disk overlay into the live eRPC ConfigMap (same as stack-up resume)",
-				Action: func(_ context.Context, cmd *cli.Command) error {
-					u := getUI(cmd)
-					network.ReconcileERPCOverlay(cfg, u)
-					return nil
+					return network.ResetERPC(cfg, getUI(cmd))
 				},
 			},
 		},

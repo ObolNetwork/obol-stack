@@ -80,23 +80,23 @@ func erpcOverlayPath(cfg *config.Config) string {
 func ReconcileERPCOverlay(cfg *config.Config, u *ui.UI) {
 	ov, err := readERPCOverlay(cfg)
 	if err != nil {
-		u.Warnf("Could not read eRPC overlay: %v", err)
+		u.Warnf("Could not read durable eRPC config: %v", err)
 		return
 	}
 	if ov == nil {
 		return
 	}
 	if err := applyOverlayToCluster(cfg, ov, "reconcile"); err != nil {
-		u.Warnf("Could not apply eRPC operator overlay: %v", err)
+		u.Warnf("Could not restore durable eRPC operator config: %v", err)
 		return
 	}
-	u.Successf("Applied eRPC operator overlay (%d network(s), %d upstream(s))",
+	u.Successf("Restored durable eRPC operator config (%d network(s), %d upstream(s))",
 		len(ov.Networks), len(ov.Upstreams))
 }
 
 // ApplyERPCOverlayFile loads an overlay YAML from path, persists it under
 // ConfigDir, and merges it into the live eRPC ConfigMap.
-func ApplyERPCOverlayFile(cfg *config.Config, u *ui.UI, path string) error {
+func SetERPC(cfg *config.Config, u *ui.UI, path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return fmt.Errorf("read overlay file: %w", err)
@@ -111,7 +111,7 @@ func ApplyERPCOverlayFile(cfg *config.Config, u *ui.UI, path string) error {
 	if err := applyOverlayToCluster(cfg, ov, filepath.Base(path)); err != nil {
 		return err
 	}
-	u.Successf("eRPC overlay applied and saved to %s", erpcOverlayPath(cfg))
+	u.Successf("eRPC config set and saved to %s", erpcOverlayPath(cfg))
 	u.Infof("  networks=%d upstreams=%d cachePoliciesAdd=%d",
 		len(ov.Networks), len(ov.Upstreams), len(ov.CachePoliciesAdd))
 	return nil
@@ -119,20 +119,20 @@ func ApplyERPCOverlayFile(cfg *config.Config, u *ui.UI, path string) error {
 
 // ClearERPCOverlay removes overlay-owned fragments from the live ConfigMap
 // (best-effort), then deletes the host-side overlay file.
-func ClearERPCOverlay(cfg *config.Config, u *ui.UI) error {
+func ResetERPC(cfg *config.Config, u *ui.UI) error {
 	ov, err := readERPCOverlay(cfg)
 	if err != nil {
 		return err
 	}
 	if ov == nil {
-		u.Info("No eRPC overlay on disk")
+		u.Info("No durable eRPC config on disk")
 		return nil
 	}
 
 	if err := removeOverlayFromCluster(cfg, ov); err != nil {
-		u.Warnf("Could not strip overlay from live eRPC ConfigMap (will still clear host file): %v", err)
+		u.Warnf("Could not strip eRPC config from live ConfigMap (will still reset host file): %v", err)
 	} else {
-		u.Success("Removed overlay networks/upstreams from live eRPC ConfigMap")
+		u.Success("Removed operator eRPC networks/upstreams from live ConfigMap")
 	}
 
 	path := erpcOverlayPath(cfg)
@@ -141,13 +141,13 @@ func ClearERPCOverlay(cfg *config.Config, u *ui.UI) error {
 	}
 	// Best-effort annotation clear
 	_ = annotateERPCOverlay(cfg, "", "")
-	u.Successf("Cleared eRPC overlay at %s", path)
+	u.Successf("Reset eRPC config at %s", path)
 	u.Info("Chart base + recorded remotes remain; re-run `obol stack up` if you need a full eRPC re-render")
 	return nil
 }
 
 // StatusERPCOverlay returns a summary of the on-disk overlay (no cluster I/O).
-func StatusERPCOverlay(cfg *config.Config) (*ERPCOverlayStatus, error) {
+func StatusERPC(cfg *config.Config) (*ERPCOverlayStatus, error) {
 	path := erpcOverlayPath(cfg)
 	st := &ERPCOverlayStatus{Path: path}
 	ov, err := readERPCOverlay(cfg)

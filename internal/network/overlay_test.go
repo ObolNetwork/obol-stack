@@ -86,7 +86,7 @@ func TestERPCOverlayRoundTrip(t *testing.T) {
 		t.Errorf("upstream id = %v", got.Upstreams[0]["id"])
 	}
 
-	st, err := StatusERPCOverlay(cfg)
+	st, err := StatusERPC(cfg)
 	if err != nil || !st.Present {
 		t.Fatalf("status: %+v err=%v", st, err)
 	}
