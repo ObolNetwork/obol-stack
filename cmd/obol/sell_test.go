@@ -804,6 +804,11 @@ func TestNormalizeAgentOrigin(t *testing.T) {
 		{in: "https://store.example.com/.well-known/agent-registration.json", errPart: "no path"},
 		{in: "not a url", errPart: "no path"},
 		{in: "", errPart: "no path"},
+		// Scheme-less and non-HTTP origins must be rejected, not silently
+		// accepted — a bare "//host" or "ftp://host" would mint a malformed,
+		// unfetchable on-chain agentURI.
+		{in: "//store.example.com", errPart: "http or https"},
+		{in: "ftp://store.example.com", errPart: "http or https"},
 	} {
 		got, err := normalizeAgentOrigin(tc.in)
 		if tc.errPart != "" {
@@ -837,6 +842,9 @@ func TestOfferEligibleForAutoEnable(t *testing.T) {
 		}
 	}
 
+	optedOut := offer("base", false)
+	optedOut.Annotations = map[string]string{autoRegisterOptOutAnnotation: "true"}
+
 	tests := []struct {
 		name string
 		o    monetizeapi.ServiceOffer
@@ -846,12 +854,41 @@ func TestOfferEligibleForAutoEnable(t *testing.T) {
 		{"disabled offer on a different, unregistered network", offer("ethereum", false), false},
 		{"already-enabled offer on a just-registered network", offer("base", true), false},
 		{"disabled offer on an unregistered network stays disabled", offer("polygon", false), false},
+		{"opt-out annotation exempts an otherwise-eligible offer", optedOut, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := offerEligibleForAutoEnable(tc.o, registered); got != tc.want {
 				t.Errorf("offerEligibleForAutoEnable(network=%s, enabled=%v) = %v, want %v",
 					tc.o.Spec.Payment.Network, tc.o.Spec.Registration.Enabled, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDefaultHealthPathForUpstream pins the --upstream-specific health-path
+// defaults: ollama serves 2xx only at "/" (neither /health nor
+// /health/readiness), so under the 2xx-only UpstreamHealthy gate the plain
+// "/health" default would leave the offer permanently un-Ready.
+func TestDefaultHealthPathForUpstream(t *testing.T) {
+	tests := []struct {
+		name       string
+		upstream   string
+		healthPath string
+		want       string
+	}{
+		{"ollama gets / when health-path unset", "ollama", "", "/"},
+		{"ollama gets / when health-path left at the flag default", "ollama", "/health", "/"},
+		{"ollama case-insensitive", "Ollama", "/health", "/"},
+		{"ollama explicit override is respected", "ollama", "/custom-health", "/custom-health"},
+		{"litellm still defaults to /health/readiness", "litellm", "/health", "/health/readiness"},
+		{"other upstream keeps the flag default", "my-svc", "/health", "/health"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := defaultHealthPathForUpstream(tc.upstream, tc.healthPath); got != tc.want {
+				t.Errorf("defaultHealthPathForUpstream(%q, %q) = %q, want %q",
+					tc.upstream, tc.healthPath, got, tc.want)
 			}
 		})
 	}
@@ -933,6 +970,16 @@ func TestIsTransientRegistrationError(t *testing.T) {
 		{name: "rpc 500", err: errors.New("erc8004: register tx: 500 Internal Server Error"), want: true},
 		{name: "timeout", err: errors.New("context deadline exceeded while waiting for headers"), want: true},
 		{name: "revert", err: errors.New("erc8004: register tx: execution reverted"), want: false},
+		// registerWithRecovery pins and reuses the same nonce across a
+		// broadcast-timeout retry, so these three responses mean no new tx
+		// was accepted (no double-mint risk) — they must be transient so the
+		// retry loop keeps giving recoverRegistrationByOwnerAndURI time to
+		// see the original broadcast land, instead of reporting an
+		// already-landed mint as failed.
+		{name: "already known", err: errors.New("already known"), want: true},
+		{name: "nonce too low", err: errors.New("nonce too low"), want: true},
+		{name: "replacement underpriced", err: errors.New("replacement transaction underpriced"), want: true},
+		{name: "nonce error uppercase variant", err: errors.New("Nonce Too Low"), want: true},
 	}
 
 	for _, tt := range tests {

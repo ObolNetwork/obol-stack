@@ -747,8 +747,10 @@ Examples:
 				Value: 8080,
 			},
 			&cli.StringFlag{
-				Name:  "health-path",
-				Usage: "Upstream health check path",
+				Name: "health-path",
+				Usage: "Upstream health check path. When left at the default, --upstream litellm " +
+					"defaults to /health/readiness and --upstream ollama defaults to / — " +
+					"neither serves a usable /health.",
 				Value: "/health",
 			},
 			&cli.StringFlag{
@@ -969,11 +971,9 @@ Examples:
 
 			upstreamSvc := cmd.String("upstream")
 			healthPath := cmd.String("health-path")
-			// LiteLLM's /health requires the master key (401 unauthenticated).
-			// Its readiness/liveliness probes are public and return 2xx — the
-			// only useful default once UpstreamHealthy requires 2xx.
-			if strings.EqualFold(upstreamSvc, "litellm") && (healthPath == "" || healthPath == "/health") {
-				healthPath = "/health/readiness"
+			if defaulted := defaultHealthPathForUpstream(upstreamSvc, healthPath); defaulted != healthPath {
+				healthPath = defaulted
+				u.Dim(fmt.Sprintf("  --upstream %s: no usable /health, defaulting --health-path to %q", upstreamSvc, healthPath))
 			}
 			spec := map[string]any{
 				"type": "http",
@@ -3394,6 +3394,29 @@ Examples:
 	}
 }
 
+// defaultHealthPathForUpstream fills in a working health-check path for
+// upstreams whose generic "/health" default (the --health-path flag's zero
+// value) never returns 2xx, which would permanently fail UpstreamHealthy's
+// 2xx-only probe gate. Returns healthPath unchanged for any explicit,
+// non-default value or an upstream with no special case.
+func defaultHealthPathForUpstream(upstreamSvc, healthPath string) string {
+	if healthPath != "" && healthPath != "/health" {
+		return healthPath
+	}
+	switch {
+	case strings.EqualFold(upstreamSvc, "litellm"):
+		// LiteLLM's /health requires the master key (401 unauthenticated).
+		// Its readiness/liveliness probes are public and return 2xx.
+		return "/health/readiness"
+	case strings.EqualFold(upstreamSvc, "ollama"):
+		// Ollama serves neither /health nor /health/readiness — only "/"
+		// returns 2xx.
+		return "/"
+	default:
+		return healthPath
+	}
+}
+
 // normalizeAgentOrigin validates that raw is a bare storefront origin
 // (scheme://host[:port], no path) and returns it with any trailing slash
 // stripped. The controller only ever publishes agent-registration.json at
@@ -3408,17 +3431,32 @@ func normalizeAgentOrigin(raw string) (string, error) {
 	if err != nil || parsed.Host == "" {
 		return "", fmt.Errorf("--origin must be a bare host with no path (got %q): expected scheme://host[:port]", raw)
 	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("--origin must use http or https (got %q): expected scheme://host[:port]", raw)
+	}
 	if parsed.Path != "" && parsed.Path != "/" {
 		return "", fmt.Errorf("--origin must be a bare host with no path (got %q); agent-registration.json is served at the storefront root, not a service path", raw)
 	}
 	return strings.TrimRight(parsed.Scheme+"://"+parsed.Host, "/"), nil
 }
 
+// autoRegisterOptOutAnnotation lets an offer opt out of
+// enableRegistrationOnOffers' cluster-wide sweep permanently — e.g. an
+// operator who deliberately created an offer with --no-register and wants it
+// to stay unlisted even after a later `obol sell register` succeeds on its
+// network. Not set by --no-register itself (that would defeat the sweep for
+// every ordinary --no-register offer); it's an explicit escape hatch.
+const autoRegisterOptOutAnnotation = "obol.stack/no-auto-register"
+
 // offerEligibleForAutoEnable reports whether an offer should have
-// registration.enabled flipped on: it must still be disabled and pinned to
-// one of the networks the triggering `obol sell register` call actually
-// succeeded on (registeredNetworks, keyed by erc8004.NetworkConfig.Name).
+// registration.enabled flipped on: it must still be disabled, pinned to one
+// of the networks the triggering `obol sell register` call actually
+// succeeded on (registeredNetworks, keyed by erc8004.NetworkConfig.Name),
+// and not carrying the autoRegisterOptOutAnnotation opt-out.
 func offerEligibleForAutoEnable(o monetizeapi.ServiceOffer, registeredNetworks map[string]bool) bool {
+	if o.Annotations[autoRegisterOptOutAnnotation] == "true" {
+		return false
+	}
 	return !o.Spec.Registration.Enabled && registeredNetworks[o.Spec.Payment.Network]
 }
 
@@ -3707,6 +3745,15 @@ func isTransientRegistrationError(err error) bool {
 		"connection reset",
 		"eof",
 		"too many requests",
+		// registerWithRecovery pins the nonce for the whole call and reuses
+		// it across retries, so a broadcast-timeout retry can resubmit the
+		// exact tx the node already has: these three responses mean no new
+		// tx was accepted (no double-mint risk), and retrying gives
+		// recoverRegistrationByOwnerAndURI more time to see the original
+		// broadcast land instead of reporting a landed mint as failed.
+		"already known",
+		"nonce too low",
+		"replacement transaction underpriced",
 	} {
 		if strings.Contains(msg, needle) {
 			return true

@@ -156,6 +156,12 @@ obol sell http my-qwen \
     --port 11434
 ```
 
+Ollama doesn't serve `/health` or `/health/readiness` — only `/` returns
+2xx — so `obol sell http` automatically defaults `--health-path` to `/` when
+`--upstream ollama` is left at its default `/health`. No extra flag is
+needed for the example above; pass `--health-path` yourself only if you're
+fronting a different health endpoint.
+
 By default this also registers the seller agent on ERC-8004. Use
 `--no-register` only for local or private-only testing where on-chain
 discovery is intentionally skipped.
