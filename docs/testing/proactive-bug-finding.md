@@ -104,3 +104,53 @@ author's expectation was wrong, so an assertion written from the same mental
 model can't catch them. Invariants encode what must be true for *any* input, and
 the three generators (sequence fuzzer, canary CLI matrix, hostile-operator
 agent) explore the input space the author didn't think to.
+
+## Second run — 2026-07-16, whole product surface
+
+The first run covered the serviceoffer/x402/sell core. This run pointed layer 4
+at the **14 subsystems it had not touched** — wallet/key handling, backup
+export/import, stack lifecycle, self-update, chain networking, buyer flow,
+hermes runtime, openclaw import, model/inference serving, storefront serving,
+secrets/config, infra shell-out, and CRD validation — each finder given the
+full known-issue list so it would not re-report. 14 lenses × 2 adversarial
+refuters (68 agents). **21 findings survived** verification (excluding two
+TEE findings tracked separately); 4 rejected by a refuter.
+
+The subsystems the first pass never reached held the most severe bugs — three
+criticals, none in the already-hardened core:
+
+| Sev | Finding | Location | Subsystem | Status |
+|-----|---------|----------|-----------|--------|
+| CRITICAL | `obol stack init --force --backend <X>` destroys the live cluster with zero confirmation, and do | `internal/stack/stack.go` | stack-lifecycle | open |
+| CRITICAL | Unescaped openclaw.json fields interpolated into Helm values YAML → arbitrary value injection (i | `internal/openclaw/openclaw.go` | openclaw-import | **fixing** |
+| CRITICAL | obol sell inference: default (cluster-available) deployment binds the payment-gated port to ALL  | `cmd/obol/sell.go` | model-serving | open |
+| HIGH | Secret material (keystore password, wallet metadata) keeps a pre-existing file's permissions on  | `internal/openclaw/wallet.go` | wallet-key-security | open |
+| HIGH | Import silently clobbers preserved DataDir with no --force gate or confirmation | `internal/stackbackup/import.go` | backup-export-import | open |
+| HIGH | `obol stack up` silently reverts operator hand-edits to the local defaults tree (e.g. eRPC value | `internal/defaults/defaults.go` | stack-lifecycle | open |
+| HIGH | k3s backend Down()/Destroy() sends `sudo kill -TERM`/`sudo kill -9` to a stale PID with no proce | `internal/stack/backend_k3s.go` | stack-lifecycle | open |
+| HIGH | kubectl/helm/k3d/helmfile/k9s (and Ollama's third-party installer) are downloaded and installed  | `obolup.sh` | self-update-integrity | open |
+| HIGH | One-shot buyer flows (pay / pay-agent / go) sign the seller's quoted price verbatim with no ceil | `internal/embed/skills/buy-x402/scripts/buy.py` | buy-flow | open |
+| HIGH | Hermes-dashboard messaging gateway defaults to GATEWAY_ALLOW_ALL_USERS=true with no override tha | `internal/hermes/hermes.go` | hermes-agent-runtime | open |
+| HIGH | x402 inference gateway's unauthenticated catch-all route lets clients hit the upstream's native  | `internal/inference/gateway.go` | model-serving | open |
+| HIGH | Stored XSS via </script> breakout in the JSON-LD structured-data block on every storefront page | `web/public-storefront/src/app/layout.tsx` | storefront-serving | open |
+| HIGH | obol stack import trusts archive-declared file mode when extracting secrets into cfg.ConfigDir/c | `internal/stackbackup/tar.go` | secrets-config-defaults | open |
+| HIGH | Unsanitized agent instance ID injects arbitrary lines into /etc/hosts (root-owned) via sudo tee | `internal/dns/resolver.go` | infra-plumbing-injection | **fixing** |
+| HIGH | AgentWallet.Create has no immutability/reset guard — toggling it off strands a live signing key  | `internal/monetizeapi/types.go` | crd-validation-consistency | open |
+| MEDIUM | readArchiveManifest (Import's first action) has no decompression-bomb guard — CPU-exhaustion DoS | `internal/stackbackup/tar.go` | backup-export-import | open |
+| MEDIUM | verify_release_checksum fails open (silently skips verification) instead of failing closed, unde | `obolup.sh` | self-update-integrity | **fixing** |
+| MEDIUM | Seller-controlled catalog `endpoint` field is used verbatim as an outbound request target with n | `cmd/obol/buy.go` | buy-flow | open |
+| MEDIUM | Unsanitized --id flows into filesystem paths and a recursive-delete target, enabling directory t | `internal/hermes/hermes.go` | hermes-agent-runtime | open |
+| MEDIUM | Unvalidated `agents.defaults.workspace` path + symlink-following recursive copy lets an imported | `internal/openclaw/import.go` | openclaw-import | open |
+| MEDIUM | ServiceOfferPriceTable's decimal price fields have no CRD pattern — a malformed value written ou | `internal/monetizeapi/types.go` | crd-validation-consistency | open |
+
+Fixing this round: the openclaw→Helm-YAML injection (arbitrary Helm values incl.
+container image → RCE via `helmfile sync`), the agent `--id` → /etc/hosts
+injection (which also closes the sibling `--id` path-traversal), the
+`stack init --force` unconfirmed-destroy, and the self-update checksum
+fail-open. The rest are a ranked worklist. Two clusters stand out: **destructive
+ops without the confirmation gate** that Down/Purge already have (stack init,
+backup import clobber, k3s kill-by-stale-PID), and **untrusted input reaching a
+privileged sink** (openclaw.json → YAML/helm, agent id → /etc/hosts & fs paths,
+backup tar → file modes & paths, catalog endpoint → outbound request). The
+`obol stack up` hand-edit reversion is the exact risk your ops runbook already
+works around by hand.
