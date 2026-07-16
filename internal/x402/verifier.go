@@ -818,18 +818,24 @@ func buildUpstreamProxy(rule *RouteRule) (http.Handler, error) {
 			pr.Out.URL.Path = singleJoiningSlash(target.Path, strippedPath)
 			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 			pr.Out.Host = target.Host
-			// The verifier is the browser-facing boundary: it authenticates
-			// the request (payment / SIWX) and re-issues it upstream under
-			// its own authority. Browser fetch-context headers must not leak
-			// through — an upstream with its own origin allowlist (hermes's
-			// API server 403s any Origin it has not allowlisted, and
-			// browsers attach Origin to every POST) would otherwise reject
-			// paid browser requests after the payment already verified.
-			pr.Out.Header.Del("Origin")
-			pr.Out.Header.Del("Sec-Fetch-Site")
-			pr.Out.Header.Del("Sec-Fetch-Mode")
-			pr.Out.Header.Del("Sec-Fetch-Dest")
-			pr.Out.Header.Del("Sec-Fetch-User")
+			// The verifier is the browser-facing boundary ONLY on routes it
+			// actually gates (payment / SIWX): it authenticates the request
+			// and re-issues it upstream under its own authority, so browser
+			// fetch-context headers must not leak through — an upstream with
+			// its own origin allowlist (hermes's API server 403s any Origin
+			// it has not allowlisted, and browsers attach Origin to every
+			// POST) would otherwise reject paid browser requests after the
+			// payment already verified. gate:free routes are the opposite:
+			// the verifier performs no auth and doesn't own CSRF for them,
+			// so stripping Origin here would instead break the upstream's
+			// own Origin-based CSRF defense.
+			if !rule.IsFree() {
+				pr.Out.Header.Del("Origin")
+				pr.Out.Header.Del("Sec-Fetch-Site")
+				pr.Out.Header.Del("Sec-Fetch-Mode")
+				pr.Out.Header.Del("Sec-Fetch-Dest")
+				pr.Out.Header.Del("Sec-Fetch-User")
+			}
 			if rule.Async && rule.BrokerURL != "" {
 				pr.Out.Header.Set(headerBrokerUpstreamURL, rule.UpstreamURL)
 				pr.Out.Header.Set(headerBrokerOffer, rule.OfferNamespace+"/"+rule.OfferName)

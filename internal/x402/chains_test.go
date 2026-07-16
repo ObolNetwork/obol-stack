@@ -293,6 +293,31 @@ func TestDecimalToAtomic_RejectsMalformedInput(t *testing.T) {
 	}
 }
 
+// TestBuildV2RequirementWithAsset_RejectsZeroAtomicAmount pins the
+// Canary402 zero-price finding: decimalToAtomic only rejected parse errors
+// and negative amounts, so a "0" price — or a sub-atomic price like
+// "0.0000001" at 6 decimals, which rounds to 0 — sailed through and
+// BuildV2RequirementWithAsset returned a payment requirement with
+// Amount "0", contradicting its own doc promise to never do that.
+// resolvePaidRoute must fail this option closed instead of advertising a
+// free accepts[] entry.
+func TestBuildV2RequirementWithAsset_RejectsZeroAtomicAmount(t *testing.T) {
+	asset := AssetInfo{
+		Address:        ChainBaseSepolia.USDCAddress,
+		Symbol:         "USDC",
+		Decimals:       6,
+		TransferMethod: "eip3009",
+	}
+	for _, amount := range []string{"0", "0.0000001", "0.00000049"} {
+		t.Run(amount, func(t *testing.T) {
+			req, err := BuildV2RequirementWithAsset(ChainBaseSepolia, asset, amount, "0xRecipient", 0)
+			if err == nil {
+				t.Fatalf("BuildV2RequirementWithAsset(%q) = %+v, want error (0 atomic units)", amount, req)
+			}
+		})
+	}
+}
+
 func TestDecimalToAtomic_ValidInput(t *testing.T) {
 	tests := []struct {
 		amount   string
