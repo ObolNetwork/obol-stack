@@ -43,7 +43,16 @@ func offerBundleKey(offer *monetizeapi.ServiceOffer, file string) string {
 // buildOfferBundles renders the discovery bundle for every hostname-bound,
 // operationally-included offer. Deterministic order (bundle keys sorted) so
 // content hashing is stable.
-func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.StorefrontProfile) []offerBundleFile {
+//
+// upstreamOpenAPI supplies each offer's (possibly nil) upstream OpenAPI
+// document. It must be a cache read, never a live fetch: this function runs
+// under staticSiteMu on every offer's reconcile (see reconcileStaticSite),
+// so a live HTTP call here would serialize every reconcile behind the
+// slowest upstream and — on a flapping upstream — flip-flop the rebuilt
+// content hash and roll the shared discovery pod. The production caller
+// passes the Controller's upstreamOpenAPICache.get, refreshed independently
+// from each offer's own reconcile.
+func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.StorefrontProfile, upstreamOpenAPI func(*monetizeapi.ServiceOffer) map[string]any) []offerBundleFile {
 	var bundles []offerBundleFile
 	for _, offer := range offers {
 		if offer == nil || offer.Spec.Hostname == "" {
@@ -53,7 +62,7 @@ func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.Store
 		// branding block overrides the storefront profile field-wise
 		// (empty fields inherit).
 		originProfile := storefront.MergeProfile(profile, offer.Spec.Branding.ProfilePatch())
-		upstreamDoc := tryUpstreamOpenAPI(offer)
+		upstreamDoc := upstreamOpenAPI(offer)
 		openapiContent := buildOfferScopedOpenAPI(offer, originProfile)
 		x402Content := buildOfferWellKnownX402(offer)
 		if upstreamDoc != nil {
