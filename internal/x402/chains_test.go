@@ -41,6 +41,32 @@ func TestResolveChainInfo(t *testing.T) {
 	}
 }
 
+func TestIsTestnetCAIP2(t *testing.T) {
+	tests := []struct {
+		caip2 string
+		want  bool
+	}{
+		{ChainBaseSepolia.CAIP2Network, true},
+		{ChainPolygonAmoy.CAIP2Network, true},
+		{ChainAvalancheFuji.CAIP2Network, true},
+		{ChainArbitrumSepolia.CAIP2Network, true},
+		{ChainBaseMainnet.CAIP2Network, false},
+		{ChainEthereumMainnet.CAIP2Network, false},
+		{ChainPolygonMainnet.CAIP2Network, false},
+		{ChainAvalancheMainnet.CAIP2Network, false},
+		{ChainArbitrumOne.CAIP2Network, false},
+		{"eip155:999999", false}, // unknown chain — not a known testnet
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.caip2, func(t *testing.T) {
+			if got := IsTestnetCAIP2(tt.caip2); got != tt.want {
+				t.Errorf("IsTestnetCAIP2(%q) = %v, want %v", tt.caip2, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestChainUSDCAddresses(t *testing.T) {
 	// Verify USDC addresses are non-empty and start with 0x.
 	chains := []ChainInfo{

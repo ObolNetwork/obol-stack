@@ -91,12 +91,17 @@ type SIWXResource struct {
 }
 
 // registryError is the {"success":false,"error":{...}} failure envelope.
+// FailedDetails mirrors RegisterResult.FailedList: the registry may carry
+// the same per-endpoint probe diagnostics on a 422 rejection as it does on
+// a 200-with-partial-failures response, so a genuinely-no-402 origin can be
+// told apart from a per-endpoint reason (wrong network, timeout, ...).
 type registryError struct {
 	Success bool `json:"success"`
 	Error   struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
+	FailedDetails []FailedResource `json:"failedDetails,omitempty"`
 }
 
 // challengeBody is the subset of the 402 response we need: the SIWX
@@ -229,7 +234,18 @@ func parseRegisterResponse(status int, body []byte) (*RegisterResult, error) {
 func registryErrorMessage(body []byte) string {
 	var e registryError
 	if err := json.Unmarshal(body, &e); err == nil && e.Error.Message != "" {
-		return e.Error.Message
+		if len(e.FailedDetails) == 0 {
+			return e.Error.Message
+		}
+		var b strings.Builder
+		b.WriteString(e.Error.Message)
+		for _, f := range e.FailedDetails {
+			fmt.Fprintf(&b, "\n  - %s — %s", f.URL, f.Error)
+			if f.Status != 0 {
+				fmt.Fprintf(&b, " (status %d)", f.Status)
+			}
+		}
+		return b.String()
 	}
 	return strings.TrimSpace(fmt.Sprintf("%.300s", body))
 }

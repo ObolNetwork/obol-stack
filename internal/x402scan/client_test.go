@@ -187,6 +187,26 @@ func TestRegisterOrigin_NoValidResources(t *testing.T) {
 	}
 }
 
+func TestRegisterOrigin_NoValidResources_FailedDetails(t *testing.T) {
+	// Mirrors the 200-partial-failure golden fixture's failedDetails shape,
+	// but on the 422 rejection path — the asymmetry that dropped per-endpoint
+	// diagnostics before registryError grew a FailedDetails field.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"success":false,"error":{"type":"no_valid_resources","message":"0 of 2 endpoints answered a 402"},"failedDetails":[{"url":"https://s.example/services/x","error":"wrong network: eip155:84532 not indexed","status":402}]}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	key, _ := crypto.GenerateKey()
+	_, err := NewClient(srv.URL).RegisterOrigin(context.Background(), "https://seller.example", crypto.PubkeyToAddress(key.PublicKey), localSigner{key})
+	if !errors.Is(err, ErrNoValidResources) {
+		t.Fatalf("expected ErrNoValidResources, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "https://s.example/services/x") || !strings.Contains(err.Error(), "wrong network: eip155:84532 not indexed") || !strings.Contains(err.Error(), "status 402") {
+		t.Fatalf("expected per-endpoint failure detail in error, got %v", err)
+	}
+}
+
 func TestFormatSIWEMessage_Golden(t *testing.T) {
 	info := SIWXInfo{
 		Domain:         "x402scan.com",
