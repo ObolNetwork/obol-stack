@@ -304,7 +304,9 @@ func TestDestroyOldBackendIfSwitching_CleansStaleConfigs(t *testing.T) {
 
 	// Switch to k3s — k3d config should be cleaned up
 	// (Destroy will fail because no real cluster, but cleanup should still work)
-	destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3s, "test-id")
+	if err := destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3s, "test-id", false); err != nil {
+		t.Fatalf("destroyOldBackendIfSwitching: %v", err)
+	}
 
 	if _, err := os.Stat(k3dPath); !os.IsNotExist(err) {
 		t.Error("k3d.yaml should be removed when switching to k3s")
@@ -325,7 +327,9 @@ func TestDestroyOldBackendIfSwitching_NoopSameBackend(t *testing.T) {
 	os.WriteFile(k3dPath, []byte("k3d config"), 0o644)
 
 	// Same backend — nothing should be cleaned up
-	destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3d, "test-id")
+	if err := destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3d, "test-id", false); err != nil {
+		t.Fatalf("destroyOldBackendIfSwitching: %v", err)
+	}
 
 	if _, err := os.Stat(k3dPath); os.IsNotExist(err) {
 		t.Error("k3d.yaml should NOT be removed when re-initing same backend")
@@ -347,7 +351,9 @@ func TestDestroyOldBackendIfSwitching_K3sToK3d(t *testing.T) {
 	}
 
 	// Switch to k3d — k3s files should be cleaned up
-	destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3d, "test-id")
+	if err := destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3d, "test-id", false); err != nil {
+		t.Fatalf("destroyOldBackendIfSwitching: %v", err)
+	}
 
 	for _, f := range []string{k3sConfigFile, k3sPidFile, k3sLogFile} {
 		if _, err := os.Stat(filepath.Join(tmpDir, f)); !os.IsNotExist(err) {
@@ -367,7 +373,78 @@ func TestDestroyOldBackendIfSwitching_NoBackendFile(t *testing.T) {
 	}
 
 	// Should not panic or error
-	destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3d, "test-id")
+	if err := destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3d, "test-id", false); err != nil {
+		t.Fatalf("destroyOldBackendIfSwitching: %v", err)
+	}
+}
+
+// TestDestroyOldBackendIfSwitching_LiveServicesRefusesNonInteractiveWithoutYes
+// is the regression test for the Canary402 `stack init --force --backend <X>`
+// finding: destroying the old backend's cluster is exactly as dangerous as
+// `obol stack down`/`purge`, so it must be gated on the same
+// ConfirmRunningServicesLoss safety bar instead of running unconditionally.
+func TestDestroyOldBackendIfSwitching_LiveServicesRefusesNonInteractiveWithoutYes(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		ConfigDir: tmpDir,
+		DataDir:   filepath.Join(tmpDir, "data"),
+		BinDir:    filepath.Join(tmpDir, "bin"),
+		StateDir:  filepath.Join(tmpDir, "state"),
+	}
+
+	SaveBackend(cfg, BackendK3d)
+	k3dPath := filepath.Join(tmpDir, k3dConfigFile)
+	os.WriteFile(k3dPath, []byte("k3d config"), 0o644)
+
+	// A live sell-inference gateway makes this stack "serving traffic".
+	writeGatewayPID(t, cfg, "aeon", os.Getpid())
+
+	var buf bytes.Buffer
+	u := ui.NewForTest(&buf, &buf) // isTTY defaults false, no --yes
+
+	err := destroyOldBackendIfSwitching(cfg, u, BackendK3s, "test-id", false)
+	if err == nil {
+		t.Fatal("expected error when switching backends non-interactively with live services and no --yes")
+	}
+	if !strings.Contains(err.Error(), "--yes") {
+		t.Errorf("error should mention --yes (operator escape hatch): %v", err)
+	}
+
+	// Destroy (and the cleanup that follows it) must not have run: the old
+	// backend's stale config file must survive the refused call.
+	if _, statErr := os.Stat(k3dPath); statErr != nil {
+		t.Errorf("k3d.yaml should NOT be removed when the safety gate refuses: %v", statErr)
+	}
+}
+
+// TestDestroyOldBackendIfSwitching_SkipConfirmStillDestroys ensures --yes
+// keeps working as the non-interactive escape hatch after the safety gate
+// was added, mirroring Down/Purge's --yes behavior.
+func TestDestroyOldBackendIfSwitching_SkipConfirmStillDestroys(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := &config.Config{
+		ConfigDir: tmpDir,
+		DataDir:   filepath.Join(tmpDir, "data"),
+		BinDir:    filepath.Join(tmpDir, "bin"),
+		StateDir:  filepath.Join(tmpDir, "state"),
+	}
+
+	SaveBackend(cfg, BackendK3d)
+	k3dPath := filepath.Join(tmpDir, k3dConfigFile)
+	os.WriteFile(k3dPath, []byte("k3d config"), 0o644)
+
+	writeGatewayPID(t, cfg, "aeon", os.Getpid())
+
+	var buf bytes.Buffer
+	u := ui.NewForTest(&buf, &buf)
+
+	if err := destroyOldBackendIfSwitching(cfg, u, BackendK3s, "test-id", true); err != nil {
+		t.Fatalf("destroyOldBackendIfSwitching with skipConfirm: %v", err)
+	}
+
+	if _, statErr := os.Stat(k3dPath); !os.IsNotExist(statErr) {
+		t.Error("k3d.yaml should be removed when --yes overrides the confirmation")
+	}
 }
 
 func TestOllamaHostIPForBackend_K3s(t *testing.T) {
