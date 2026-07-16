@@ -78,6 +78,7 @@
   <span>session <b id="sessaddr">—</b></span>
   <span class="bal" id="balance" title="click to refresh">$0.00</span>
   <span class="lnk" id="fundlink">+ fund</span>
+  <span class="lnk" id="withdraw">withdraw</span>
   <a id="explorer" target="_blank" rel="noopener" style="display:none">explorer</a>
 </div>
 <form id="composer"></form>
@@ -94,9 +95,9 @@ const AGENT = {{.Title}};
 document.documentElement.style.setProperty("--agent-name", JSON.stringify(AGENT));
 const CHAINS = { "eip155:8453": base, "eip155:84532": baseSepolia };
 const $ = (id) => document.getElementById(id);
-let net, chain, asset, pub, explorer; // resolved from the 402 challenge
+let net, chain, asset, assetExtra, pub, explorer; // resolved from the 402 challenge
 let wallet, mainAddr, burner, payFetch, balPoll = null;
-let model = {{.OfferName}}, price = null, balance = 0n, busy = false;
+let model = {{.OfferName}}, price = null, balance = 0n, busy = false, withdrawing = false;
 const messages = [];
 
 const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
@@ -173,6 +174,7 @@ const priceStr = () => price === null ? "…" : "$" + formatUnits(price, 6);
     const c = await r.json();
     const acc = (c.accepts || [])[0] || {};
     net = acc.network; chain = CHAINS[net]; asset = acc.asset;
+    assetExtra = acc.extra;
     if (!chain || !asset) throw new Error("unsupported payment network: " + net);
     pub = createPublicClient({ chain, transport: http() });
     explorer = chain.blockExplorers?.default?.url || "";
@@ -190,6 +192,15 @@ async function connect() {
     if (!window.ethereum) { say("sys err", "No wallet found. Install Rabby or MetaMask, then reload."); return; }
     if (!chain) { status("still fetching the agent's payment details — try again in a second"); return; }
     [mainAddr] = await window.ethereum.request({ method: "eth_requestAccounts" });
+    // Non-deterministic ERC-1271 signatures would strand session funds: the
+    // session key is derived from a signature a contract wallet cannot reproduce.
+    const code = await pub.getCode({ address: mainAddr });
+    if (code && code !== "0x" && !code.startsWith("0xef0100")) {
+      say("sys err", "Smart-contract wallets aren't supported: their signatures aren't deterministic, so the session wallet this page derives could not be recovered later. Connect a regular (EOA) wallet.");
+      mainAddr = null;
+      renderComposer();
+      return;
+    }
     try { await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x" + chain.id.toString(16) }] }); } catch {}
     wallet = createWalletClient({ account: mainAddr, chain, transport: custom(window.ethereum) });
     status("");
@@ -248,6 +259,59 @@ $("fundlink").onclick = () => {
   if (!burner || forceFund) return;
   forceFund = true; $("composer").dataset.stage = ""; renderComposer();
 };
+$("withdraw").onclick = withdraw;
+
+// EIP-3009 transferWithAuthorization — withdraw reuses the same primitive as
+// x402 payments, but settles directly on-chain (not via payFetch/x402Client).
+const TWA_ABI = [{
+  name: "transferWithAuthorization", type: "function", stateMutability: "nonpayable", outputs: [],
+  inputs: [
+    { name: "from", type: "address" }, { name: "to", type: "address" },
+    { name: "value", type: "uint256" }, { name: "validAfter", type: "uint256" },
+    { name: "validBefore", type: "uint256" }, { name: "nonce", type: "bytes32" },
+    { name: "v", type: "uint8" }, { name: "r", type: "bytes32" }, { name: "s", type: "bytes32" },
+  ],
+}];
+async function withdraw() {
+  if (!burner || !wallet || balance <= 0n || withdrawing) return;
+  withdrawing = true;
+  const amt = balance;
+  try {
+    status("withdrawing to your wallet…", true);
+    const validBefore = BigInt(Math.floor(Date.now() / 1000) + 3600);
+    const nonceBytes = new Uint8Array(32);
+    crypto.getRandomValues(nonceBytes);
+    const nonce = "0x" + Array.from(nonceBytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    const domain = {
+      name: assetExtra?.name || "USD Coin", version: assetExtra?.version || "2",
+      chainId: chain.id, verifyingContract: asset,
+    };
+    const types = {
+      TransferWithAuthorization: [
+        { name: "from", type: "address" }, { name: "to", type: "address" },
+        { name: "value", type: "uint256" }, { name: "validAfter", type: "uint256" },
+        { name: "validBefore", type: "uint256" }, { name: "nonce", type: "bytes32" },
+      ],
+    };
+    const message = {
+      from: burner.address, to: mainAddr, value: amt,
+      validAfter: 0n, validBefore, nonce,
+    };
+    const sig = await burner.signTypedData({ domain, types, primaryType: "TransferWithAuthorization", message });
+    const r = sig.slice(0, 66);
+    const s = "0x" + sig.slice(66, 130);
+    const v = parseInt(sig.slice(130, 132), 16);
+    await wallet.writeContract({
+      account: mainAddr, chain, address: asset, abi: TWA_ABI,
+      functionName: "transferWithAuthorization",
+      args: [burner.address, mainAddr, amt, 0n, validBefore, nonce, v, r, s],
+    });
+    say("sys", "Withdrew $" + formatUnits(amt, 6) + " to " + short(mainAddr));
+    await refreshBalance();
+    status("");
+  } catch (e) { status("withdraw failed: " + (e.shortMessage || e.message)); }
+  finally { withdrawing = false; }
+}
 
 // ---- stage 3: fund the session wallet from the main wallet (one confirmation)
 async function fund(val) {
