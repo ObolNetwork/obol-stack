@@ -180,6 +180,30 @@ func TestVerifier_PaidRoute_NoPayment_Returns402(t *testing.T) {
 	}
 }
 
+// TestVerifier_MalformedStoredPrice_FailsClosed is the resolvePaidRoute seam
+// for the Canary402 finding: a ServiceOffer applied directly via kubectl
+// bypasses CLI (`validate.Price`) entirely, so a malformed stored price
+// (e.g. EU comma decimal "0,01", or "abc") must never reach the buyer as a
+// free ($0) or crashing route. resolvePaidRoute must skip the unresolvable
+// option; with no other options the route fails closed with 403, not a 402
+// advertising a free/mispriced requirement.
+func TestVerifier_MalformedStoredPrice_FailsClosed(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	v := newTestVerifier(t, fac.URL, []RouteRule{
+		{Pattern: "/rpc/*", Price: "0,01"},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
+	req.Header.Set("X-Forwarded-Host", "obol.stack")
+	w := httptest.NewRecorder()
+	v.HandleVerify(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403 fail-closed for malformed stored price, got %d", w.Code)
+	}
+}
+
 func TestVerifier_PaidRoute_ValidPayment_Returns200(t *testing.T) {
 	fac := newMockFacilitator(t, mockFacilitatorOpts{})
 	v := newTestVerifier(t, fac.URL, []RouteRule{

@@ -3959,6 +3959,10 @@ func resolvePriceTable(cmd *cli.Command, allowPerHour bool) (schemas.PriceTable,
 
 	switch {
 	case perRequest != "":
+		if err := validate.Price(perRequest); err != nil {
+			return schemas.PriceTable{}, fmt.Errorf("invalid --price/--per-request value %q: %w", perRequest, err)
+		}
+
 		return schemas.PriceTable{PerRequest: perRequest}, nil
 	case perMTok != "":
 		if _, err := schemas.ApproximateRequestPriceFromPerMTok(perMTok); err != nil {
