@@ -17,6 +17,7 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/accounts/abi/bind"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 )
 
@@ -846,5 +847,135 @@ func TestWaitForAgent_TimeoutReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "timed out") {
 		t.Errorf("expected 'timed out' in error, got: %v", err)
+	}
+}
+
+// decodeSentNonce extracts the nonce from a raw eth_sendRawTransaction
+// param, mirroring the RLP/EIP-2718 decode RemoteSigner.RemoteTransactOpts
+// does on the way back from the remote-signer.
+func decodeSentNonce(t *testing.T, params []json.RawMessage) uint64 {
+	t.Helper()
+
+	var rawHex string
+	if err := json.Unmarshal(params[0], &rawHex); err != nil {
+		t.Fatalf("decode sendRawTransaction param: %v", err)
+	}
+	raw, err := hex.DecodeString(strings.TrimPrefix(rawHex, "0x"))
+	if err != nil {
+		t.Fatalf("hex decode raw tx: %v", err)
+	}
+	var tx types.Transaction
+	if err := tx.UnmarshalBinary(raw); err != nil {
+		t.Fatalf("unmarshal raw tx: %v", err)
+	}
+	return tx.Nonce()
+}
+
+// TestPinnedNonce_SequentialWritesDoNotCollide guards the fix for
+// registerDirectViaSigner's "nonce too low" failure: pinning the nonce
+// locally (PendingNonceAt once, bump after each successful send) must
+// produce increasing on-chain nonces across sequential writes even when
+// eth_getTransactionCount keeps reporting the same value — exactly what a
+// lagging eRPC upstream does immediately after a just-broadcast tx.
+func TestPinnedNonce_SequentialWritesDoNotCollide(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handlers := txMockHandlers(common.HexToHash("0x4444"))
+	handlers["eth_getTransactionCount"] = func(_ []json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`"0x5"`), nil // stale: never advances on its own
+	}
+	var sentNonces []uint64
+	handlers["eth_sendRawTransaction"] = func(params []json.RawMessage) (json.RawMessage, error) {
+		sentNonces = append(sentNonces, decodeSentNonce(t, params))
+		return json.RawMessage(`"0x4444"`), nil
+	}
+
+	srv := mockRPC(t, handlers)
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := newClient(ctx, srv.URL, IdentityRegistryBaseSepolia)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	opts, err := bind.NewKeyedTransactorWithChainID(key, client.chainID)
+	if err != nil {
+		t.Fatalf("transactor: %v", err)
+	}
+	opts.Context = ctx
+
+	// Pin, exactly as registerDirectViaSigner does, instead of leaving
+	// opts.Nonce nil (which re-queries eth_getTransactionCount every call).
+	nonce, err := client.PendingNonceAt(ctx, crypto.PubkeyToAddress(key.PublicKey))
+	if err != nil {
+		t.Fatalf("PendingNonceAt: %v", err)
+	}
+	opts.Nonce = new(big.Int).SetUint64(nonce)
+
+	if _, err := client.SetAgentURIWithOpts(ctx, opts, big.NewInt(1), "https://example.com/a"); err != nil {
+		t.Fatalf("SetAgentURIWithOpts: %v", err)
+	}
+	opts.Nonce = new(big.Int).Add(opts.Nonce, big.NewInt(1))
+
+	if err := client.SetMetadataWithOpts(ctx, opts, big.NewInt(1), "x402", []byte(`{"x402":true}`)); err != nil {
+		t.Fatalf("SetMetadataWithOpts: %v", err)
+	}
+
+	if want := []uint64{5, 6}; len(sentNonces) != 2 || sentNonces[0] != want[0] || sentNonces[1] != want[1] {
+		t.Errorf("nonces = %v, want %v — sequential writes must not collide even when the RPC reports a stale pending nonce", sentNonces, want)
+	}
+}
+
+// TestUnpinnedNonce_StaleRPCCollides documents the bug the pinning fix
+// closes: without it, two sequential Transact calls against a stale
+// eth_getTransactionCount submit the same colliding nonce.
+func TestUnpinnedNonce_StaleRPCCollides(t *testing.T) {
+	key, err := crypto.GenerateKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handlers := txMockHandlers(common.HexToHash("0x5555"))
+	handlers["eth_getTransactionCount"] = func(_ []json.RawMessage) (json.RawMessage, error) {
+		return json.RawMessage(`"0x5"`), nil
+	}
+	var sentNonces []uint64
+	handlers["eth_sendRawTransaction"] = func(params []json.RawMessage) (json.RawMessage, error) {
+		sentNonces = append(sentNonces, decodeSentNonce(t, params))
+		return json.RawMessage(`"0x5555"`), nil
+	}
+
+	srv := mockRPC(t, handlers)
+	defer srv.Close()
+
+	ctx := context.Background()
+	client, err := newClient(ctx, srv.URL, IdentityRegistryBaseSepolia)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	defer client.Close()
+
+	opts, err := bind.NewKeyedTransactorWithChainID(key, client.chainID)
+	if err != nil {
+		t.Fatalf("transactor: %v", err)
+	}
+	opts.Context = ctx
+	// opts.Nonce left nil on purpose: bind re-queries eth_getTransactionCount
+	// on every call, which here always returns the same stale value.
+
+	if _, err := client.SetAgentURIWithOpts(ctx, opts, big.NewInt(1), "https://example.com/a"); err != nil {
+		t.Fatalf("SetAgentURIWithOpts: %v", err)
+	}
+	if err := client.SetMetadataWithOpts(ctx, opts, big.NewInt(1), "x402", []byte(`{"x402":true}`)); err != nil {
+		t.Fatalf("SetMetadataWithOpts: %v", err)
+	}
+
+	if len(sentNonces) != 2 || sentNonces[0] != sentNonces[1] {
+		t.Fatalf("nonces = %v, want both == the stale RPC nonce (5) to demonstrate the collision this fix avoids", sentNonces)
 	}
 }

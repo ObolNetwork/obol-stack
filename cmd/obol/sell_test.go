@@ -777,7 +777,9 @@ func TestSellRegister_Flags(t *testing.T) {
 
 	requireFlags(t, flags,
 		"chain",
-		"endpoint", "name", "description", "image",
+		// "endpoint" is kept as a deprecated alias of "origin" so existing
+		// scripts (e.g. flows/flow-14-live-obol-base-sepolia.sh) keep working.
+		"origin", "endpoint", "name", "description", "image",
 		// --sponsored is intentionally retained as a deprecated flag that
 		// errors with a clear message; users with old muscle memory or stale
 		// docs need a louder signal than "unknown flag".
@@ -787,6 +789,72 @@ func TestSellRegister_Flags(t *testing.T) {
 	assertStringDefault(t, flags, "chain", "mainnet")
 	assertStringDefault(t, flags, "name", "Obol Agent")
 	assertStringDefault(t, flags, "description", "Obol Stack AI agent with x402 payment-gated services")
+}
+
+func TestNormalizeAgentOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		in      string
+		want    string
+		errPart string
+	}{
+		{in: "https://store.example.com", want: "https://store.example.com"},
+		{in: "https://store.example.com/", want: "https://store.example.com"},
+		{in: "https://abc-def.trycloudflare.com", want: "https://abc-def.trycloudflare.com"},
+		{in: "https://store.example.com/services/myagent", errPart: "no path"},
+		{in: "https://store.example.com/.well-known/agent-registration.json", errPart: "no path"},
+		{in: "not a url", errPart: "no path"},
+		{in: "", errPart: "no path"},
+	} {
+		got, err := normalizeAgentOrigin(tc.in)
+		if tc.errPart != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.errPart) {
+				t.Fatalf("%q: expected error containing %q, got %v", tc.in, tc.errPart, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%q: %v", tc.in, err)
+		}
+		if got != tc.want {
+			t.Fatalf("%q: got %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestOfferEligibleForAutoEnable guards enableRegistrationOnOffers' chain
+// filter: `obol sell register --network base` must not flip on an offer
+// pinned to a different, never-registered network (84dcbf83 originally
+// enabled every disabled offer cluster-wide with no chain check at all).
+func TestOfferEligibleForAutoEnable(t *testing.T) {
+	registered := map[string]bool{"base": true, "base-sepolia": true}
+
+	offer := func(network string, enabled bool) monetizeapi.ServiceOffer {
+		return monetizeapi.ServiceOffer{
+			Spec: monetizeapi.ServiceOfferSpec{
+				Payment:      monetizeapi.ServiceOfferPayment{Network: network},
+				Registration: monetizeapi.ServiceOfferRegistration{Enabled: enabled},
+			},
+		}
+	}
+
+	tests := []struct {
+		name string
+		o    monetizeapi.ServiceOffer
+		want bool
+	}{
+		{"disabled offer on a just-registered network", offer("base", false), true},
+		{"disabled offer on a different, unregistered network", offer("ethereum", false), false},
+		{"already-enabled offer on a just-registered network", offer("base", true), false},
+		{"disabled offer on an unregistered network stays disabled", offer("polygon", false), false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := offerEligibleForAutoEnable(tc.o, registered); got != tc.want {
+				t.Errorf("offerEligibleForAutoEnable(network=%s, enabled=%v) = %v, want %v",
+					tc.o.Spec.Payment.Network, tc.o.Spec.Registration.Enabled, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestSellPricing_Flags(t *testing.T) {
