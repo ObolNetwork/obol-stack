@@ -11,6 +11,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -1403,18 +1404,26 @@ func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI,
 		u.Info(note)
 	}
 
-	agentURI := strings.TrimRight(opts.Endpoint, "/") + "/.well-known/agent-registration.json"
+	origin, err := normalizeAgentOrigin(opts.Endpoint)
+	if err != nil {
+		return err
+	}
+	agentURI := origin + "/.well-known/agent-registration.json"
 	u.Printf("  Agent URI: %s", agentURI)
 
-	var successes int
+	var successes, metadataFailures int
 	for _, net := range networks {
 		u.Blank()
 		u.Printf("  [%s] (chain ID %d)", net.Name, net.ChainID)
 		u.Printf("    Registry: %s", net.RegistryAddress)
 
-		if err := registerDirectViaSigner(ctx, cfg, u, net, agentURI, signerNS); err != nil {
+		metadataOK, err := registerDirectViaSigner(ctx, cfg, u, net, agentURI, signerNS)
+		if err != nil {
 			u.Warnf("direct registration failed: %v", err)
 			continue
+		}
+		if !metadataOK {
+			metadataFailures++
 		}
 
 		u.Printf("    Name:     %s", opts.AgentName)
@@ -1429,6 +1438,9 @@ func autoRegisterServiceOffer(ctx context.Context, cfg *config.Config, u *ui.UI,
 
 	u.Blank()
 	u.Successf("Seller agent registered on %d/%d networks.", successes, len(networks))
+	if metadataFailures > 0 {
+		u.Warnf("x402 metadata missing on %d/%d network(s); mint + agentURI are registered — see warnings above, re-run 'obol sell register' to retry the metadata write.", metadataFailures, successes)
+	}
 	return nil
 }
 
@@ -1989,12 +2001,16 @@ func autoRegisterDemo(ctx context.Context, cfg *config.Config, u *ui.UI, chain, 
 	}
 
 	agentURI := strings.TrimRight(tunnelURL, "/") + "/.well-known/agent-registration.json"
-	if registerAgentOnNetworks(ctx, cfg, u, agentURI, signerNS, []erc8004.NetworkConfig{net}) == 0 {
+	succeeded, metadataFailures := registerAgentOnNetworks(ctx, cfg, u, agentURI, signerNS, []erc8004.NetworkConfig{net})
+	if len(succeeded) == 0 {
 		u.Warn("Auto-register did not succeed.")
 		u.Dim("  Retry with: obol sell register --network " + chain)
 		return
 	}
 	u.Successf("Agent registered on %s.", net.Name)
+	if metadataFailures > 0 {
+		u.Warnf("x402 metadata missing; mint + agentURI are registered — re-run 'obol sell register --network %s' to retry the metadata write.", chain)
+	}
 }
 
 // waitForOfferReady polls a ServiceOffer's Ready condition for up to `timeout`.
@@ -3221,8 +3237,9 @@ Examples:
 				Value:   "mainnet",
 			},
 			&cli.StringFlag{
-				Name:  "endpoint",
-				Usage: "Service endpoint URL (auto-detected from tunnel if not set)",
+				Name:    "origin",
+				Aliases: []string{"endpoint"},
+				Usage:   "Storefront origin (scheme://host[:port]) — agent-registration.json is always served at its root, never a service path (auto-detected from tunnel if not set)",
 			},
 			&cli.StringFlag{
 				Name:  "name",
@@ -3292,23 +3309,27 @@ Examples:
 				}
 			}
 
-			// Resolve endpoint.
-			endpoint := cmd.String("endpoint")
-			if endpoint == "" {
+			// Resolve origin.
+			origin := cmd.String("origin")
+			if origin == "" {
 				tunnelURL, err := tunnel.GetTunnelURL(cfg)
 				if err != nil {
 					if u.IsTTY() {
-						endpoint, _ = u.Input("Service endpoint URL", "")
+						origin, _ = u.Input("Storefront origin", "")
 					}
-					if endpoint == "" {
-						return fmt.Errorf("--endpoint required (tunnel auto-detect failed: %v)", err)
+					if origin == "" {
+						return fmt.Errorf("--origin required (tunnel auto-detect failed: %v)", err)
 					}
 				} else {
-					endpoint = tunnelURL
-					u.Infof("Auto-detected endpoint from tunnel: %s", endpoint)
+					origin = tunnelURL
+					u.Infof("Auto-detected origin from tunnel: %s", origin)
 				}
 			}
-			agentURI := endpoint + "/.well-known/agent-registration.json"
+			origin, err = normalizeAgentOrigin(origin)
+			if err != nil {
+				return err
+			}
+			agentURI := origin + "/.well-known/agent-registration.json"
 
 			// All signing happens via the agent's remote-signer; the CLI never
 			// sees raw key material. If no Hermes default agent is configured,
@@ -3327,16 +3348,18 @@ Examples:
 			u.Printf("  Agent URI: %s", agentURI)
 			u.Printf("  Networks:  %s", chainCSV)
 
-			successes := registerAgentOnNetworks(ctx, cfg, u, agentURI, signerNS, networks)
-			if successes == 0 {
+			succeeded, metadataFailures := registerAgentOnNetworks(ctx, cfg, u, agentURI, signerNS, networks)
+			if len(succeeded) == 0 {
 				return fmt.Errorf("registration failed on all networks")
 			}
 
 			// Offers created with --no-register stay registration.enabled=false
 			// and never flip to Registered/Active even after a successful CLI
 			// register. Enable them so the controller attaches them to the
-			// shared AgentIdentity and discovery surfaces services.
-			if n, err := enableRegistrationOnOffers(cfg, u); err != nil {
+			// shared AgentIdentity and discovery surfaces services. Scoped to
+			// the networks that just succeeded so a register on one chain
+			// doesn't flip on offers pinned to a different, unregistered chain.
+			if n, err := enableRegistrationOnOffers(cfg, u, succeeded); err != nil {
 				u.Warnf("could not enable registration on existing ServiceOffers: %v", err)
 				u.Dim("  Manually set registration.enabled=true on offers created with --no-register.")
 			} else if n > 0 {
@@ -3344,24 +3367,61 @@ Examples:
 			}
 
 			u.Blank()
-			u.Successf("Agent registered on %d/%d networks.", successes, len(networks))
+			u.Successf("Agent registered on %d/%d networks.", len(succeeded), len(networks))
+			if metadataFailures > 0 {
+				u.Warnf("x402 metadata missing on %d/%d network(s); mint + agentURI are registered — see warnings above, re-run 'obol sell register' to retry the metadata write.", metadataFailures, len(succeeded))
+			}
 			return nil
 		},
 	}
 }
 
-// enableRegistrationOnOffers patches every ServiceOffer that still has
-// registration.enabled=false to true so post-hoc `obol sell register` activates
-// existing offers instead of leaving them Disabled while the AgentIdentity
-// is already on-chain.
-func enableRegistrationOnOffers(cfg *config.Config, u *ui.UI) (int, error) {
+// normalizeAgentOrigin validates that raw is a bare storefront origin
+// (scheme://host[:port], no path) and returns it with any trailing slash
+// stripped. The controller only ever publishes agent-registration.json at
+// the storefront origin root (never a per-offer service path — see
+// serviceoffercontroller's PublishedURL/HTTPRoute construction), so a
+// path-bearing value would mint an on-chain agentURI that resolves to a
+// route the controller never serves. Reject rather than silently truncate:
+// silent truncation is exactly what produces a broken, payment-gated
+// metadata URI in the field.
+func normalizeAgentOrigin(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return "", fmt.Errorf("--origin must be a bare host with no path (got %q): expected scheme://host[:port]", raw)
+	}
+	if parsed.Path != "" && parsed.Path != "/" {
+		return "", fmt.Errorf("--origin must be a bare host with no path (got %q); agent-registration.json is served at the storefront root, not a service path", raw)
+	}
+	return strings.TrimRight(parsed.Scheme+"://"+parsed.Host, "/"), nil
+}
+
+// offerEligibleForAutoEnable reports whether an offer should have
+// registration.enabled flipped on: it must still be disabled and pinned to
+// one of the networks the triggering `obol sell register` call actually
+// succeeded on (registeredNetworks, keyed by erc8004.NetworkConfig.Name).
+func offerEligibleForAutoEnable(o monetizeapi.ServiceOffer, registeredNetworks map[string]bool) bool {
+	return !o.Spec.Registration.Enabled && registeredNetworks[o.Spec.Payment.Network]
+}
+
+// enableRegistrationOnOffers patches every ServiceOffer on one of the given
+// networks that still has registration.enabled=false to true, so post-hoc
+// `obol sell register` activates existing offers instead of leaving them
+// Disabled while the AgentIdentity is already on-chain. Scoped to
+// networks — a register call for one chain must not enable offers pinned to
+// a different chain that was never registered.
+func enableRegistrationOnOffers(cfg *config.Config, u *ui.UI, networks []erc8004.NetworkConfig) (int, error) {
 	offers, err := listServiceOffers(cfg)
 	if err != nil {
 		return 0, err
 	}
+	registered := make(map[string]bool, len(networks))
+	for _, n := range networks {
+		registered[n.Name] = true
+	}
 	enabled := 0
 	for _, o := range offers {
-		if o.Spec.Registration.Enabled {
+		if !offerEligibleForAutoEnable(o, registered) {
 			continue
 		}
 		// Merge-patch only the enabled flag; leave name/description/skills alone.
@@ -3380,24 +3440,29 @@ func enableRegistrationOnOffers(cfg *config.Config, u *ui.UI) (int, error) {
 // registerAgentOnNetworks runs the per-network ERC-8004 registration loop used
 // by both `obol sell register` and the auto-register step of `obol sell demo`.
 // Each registration is signed by the Hermes remote-signer and pays gas from
-// the agent's wallet. Returns the number of networks that registered
-// successfully.
-func registerAgentOnNetworks(ctx context.Context, cfg *config.Config, u *ui.UI, agentURI, signerNS string, networks []erc8004.NetworkConfig) int {
-	var successes int
+// the agent's wallet. Returns the networks that registered successfully (so
+// callers can scope follow-up actions to exactly those networks) and a count
+// of networks where the mint/URI stage succeeded but the trailing x402
+// metadata write failed.
+func registerAgentOnNetworks(ctx context.Context, cfg *config.Config, u *ui.UI, agentURI, signerNS string, networks []erc8004.NetworkConfig) (succeeded []erc8004.NetworkConfig, metadataFailures int) {
 	for _, net := range networks {
 		u.Blank()
 		u.Printf("  [%s] (chain ID %d)", net.Name, net.ChainID)
 		u.Printf("    Registry: %s", net.RegistryAddress)
 
-		if err := registerDirectViaSigner(ctx, cfg, u, net, agentURI, signerNS); err != nil {
+		metadataOK, err := registerDirectViaSigner(ctx, cfg, u, net, agentURI, signerNS)
+		if err != nil {
 			u.Warnf("registration failed: %v", err)
 			continue
 		}
+		if !metadataOK {
+			metadataFailures++
+		}
 
 		u.Printf("    CAIP-10:  %s", net.CAIP10Registry())
-		successes++
+		succeeded = append(succeeded, net)
 	}
-	return successes
+	return succeeded, metadataFailures
 }
 
 // registerDirectViaSigner performs an idempotent ERC-8004 registration via
@@ -3409,34 +3474,52 @@ func registerAgentOnNetworks(ctx context.Context, cfg *config.Config, u *ui.UI, 
 //
 // The AgentIdentity CR persists only durable ERC-8004 identity keys:
 // status.registrations[] entries keyed by chain.
-func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, net erc8004.NetworkConfig, agentURI, namespace string) error {
+//
+// Returns metadataOK=false (with a nil error) when the mint/URI-update stage
+// succeeded but the trailing x402 metadata write failed — that's reported as
+// a distinct, non-fatal stage by the caller rather than swallowed.
+func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, net erc8004.NetworkConfig, agentURI, namespace string) (metadataOK bool, err error) {
 	u.Printf("    Using direct on-chain registration via remote-signer...")
 
 	pf, err := startSignerPortForward(cfg, namespace)
 	if err != nil {
-		return fmt.Errorf("port-forward to remote-signer: %w", err)
+		return true, fmt.Errorf("port-forward to remote-signer: %w", err)
 	}
 	defer pf.Stop()
 
 	signer := erc8004.NewRemoteSigner(fmt.Sprintf("http://localhost:%d", pf.localPort))
 	addr, err := signer.GetAddress(ctx)
 	if err != nil {
-		return err
+		return true, err
 	}
 	u.Printf("    Wallet:   %s", addr.Hex())
 
 	rpcBaseURL := stack.LocalIngressURL(cfg) + "/rpc"
 	client, err := erc8004.NewClientForNetwork(ctx, rpcBaseURL, net)
 	if err != nil {
-		return fmt.Errorf("connect to %s via eRPC: %w", net.Name, err)
+		return true, fmt.Errorf("connect to %s via eRPC: %w", net.Name, err)
 	}
 	defer client.Close()
 
 	opts := signer.RemoteTransactOpts(ctx, addr, client.ChainID())
 
+	// Pin the nonce locally for the whole call instead of letting each
+	// Transact re-query PendingNonceAt: this function sends up to two
+	// sequential txs (e.g. setAgentURI then setMetadata), and the eRPC
+	// gateway fans requests out to independent upstreams per call, so a
+	// nonce read immediately following a just-broadcast tx can hit a
+	// lagging upstream and return a stale (too-low) nonce. bumpNonce below
+	// advances the pinned value after each successful send.
+	nonce, err := client.PendingNonceAt(ctx, addr)
+	if err != nil {
+		return true, fmt.Errorf("read pending nonce for %s on %s: %w", addr.Hex(), net.Name, err)
+	}
+	opts.Nonce = new(big.Int).SetUint64(nonce)
+	bumpNonce := func() { opts.Nonce = new(big.Int).Add(opts.Nonce, big.NewInt(1)) }
+
 	identity, err := ensureAgentIdentity(cfg, monetizeapi.AgentIdentityDefaultNamespace, monetizeapi.AgentIdentityDefaultName, monetizeapi.AgentIdentitySpec{})
 	if err != nil {
-		return fmt.Errorf("load AgentIdentity: %w", err)
+		return true, fmt.Errorf("load AgentIdentity: %w", err)
 	}
 	existingAgentID := monetizeapi.AgentIdentityAgentIDForChain(identity.Status, net.Name)
 
@@ -3444,21 +3527,21 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 	if existingAgentID != "" {
 		agentID, ok := new(big.Int).SetString(existingAgentID, 10)
 		if !ok {
-			return fmt.Errorf("AgentIdentity %s/%s has malformed agentId %q for chain %s",
+			return true, fmt.Errorf("AgentIdentity %s/%s has malformed agentId %q for chain %s",
 				identity.Metadata.Namespace, identity.Metadata.Name, existingAgentID, net.Name)
 		}
 		owner, walletErr := client.AgentWallet(ctx, agentID)
 		if walletErr != nil {
-			return fmt.Errorf("verify agent %s on %s: %w", agentID, net.Name, walletErr)
+			return true, fmt.Errorf("verify agent %s on %s: %w", agentID, net.Name, walletErr)
 		}
 		if owner != addr {
-			return fmt.Errorf("signer %s does not control AgentIdentity agent %s (on-chain owner: %s)", addr.Hex(), agentID, owner.Hex())
+			return true, fmt.Errorf("signer %s does not control AgentIdentity agent %s (on-chain owner: %s)", addr.Hex(), agentID, owner.Hex())
 		}
 
 		u.Printf("    Agent ID: %s (existing)", agentID.String())
 		currentURI, err := client.TokenURI(ctx, agentID)
 		if err != nil {
-			return fmt.Errorf("read tokenURI(%s): %w", agentID, err)
+			return true, fmt.Errorf("read tokenURI(%s): %w", agentID, err)
 		}
 		if currentURI == agentURI {
 			u.Printf("    URI:      unchanged, skipping setAgentURI")
@@ -3466,15 +3549,21 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 			u.Printf("    Updating agentURI via setAgentURI...")
 			uriTx, err := client.SetAgentURIWithOpts(ctx, opts, agentID, agentURI)
 			if err != nil {
-				return fmt.Errorf("setAgentURI: %w", err)
+				return true, fmt.Errorf("setAgentURI: %w", err)
 			}
 			u.Printf("    Tx:       %s", uriTx)
+			bumpNonce()
+			// No WaitForAgent here: the agent already existed before this
+			// branch (AgentWallet above already confirmed the reader sees
+			// it), so there's no token-visibility race to close — only the
+			// nonce race, which the pinning above already handles.
 		}
 		// Refresh x402 metadata to keep parity with first-mint behavior.
 		if err := client.SetMetadataWithOpts(ctx, opts, agentID, "x402", []byte(`{"x402":true}`)); err != nil {
 			u.Warnf("failed to set x402 metadata: %v", err)
+			return false, nil
 		}
-		return nil
+		return true, nil
 	}
 
 	// No recorded agentId: try owner+URI recovery from genesis before
@@ -3484,13 +3573,14 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 		u.Printf("    Agent ID: %s (recovered via owner+URI)", recoveredID.String())
 		identity.Status = monetizeapi.UpsertAgentIdentityRegistration(identity.Status, net.Name, recoveredID.String())
 		if err := applyAgentIdentity(cfg, identity); err != nil {
-			return fmt.Errorf("persist recovered AgentIdentity registration %s on %s: %w", recoveredID, net.Name, err)
+			return true, fmt.Errorf("persist recovered AgentIdentity registration %s on %s: %w", recoveredID, net.Name, err)
 		}
 		_, _ = client.WaitForAgent(ctx, recoveredID, 30*time.Second)
 		if err := client.SetMetadataWithOpts(ctx, opts, recoveredID, "x402", []byte(`{"x402":true}`)); err != nil {
 			u.Warnf("failed to set x402 metadata: %v", err)
+			return false, nil
 		}
-		return nil
+		return true, nil
 	}
 
 	// Fresh mint.
@@ -3499,8 +3589,9 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 		return client.RegisterWithOptsDetailed(ctx, opts, agentURI)
 	})
 	if err != nil {
-		return err
+		return true, err
 	}
+	bumpNonce()
 
 	u.Printf("    Agent ID: %s", agentID.String())
 	u.Printf("    Owner:    %s", addr.Hex())
@@ -3514,13 +3605,16 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 
 	if err := client.SetMetadataWithOpts(ctx, opts, agentID, "x402", []byte(`{"x402":true}`)); err != nil {
 		u.Warnf("failed to set x402 metadata: %v", err)
+		metadataOK = false
+	} else {
+		metadataOK = true
 	}
 
 	identity.Status = monetizeapi.UpsertAgentIdentityRegistration(identity.Status, net.Name, agentID.String())
 	if err := applyAgentIdentity(cfg, identity); err != nil {
-		return fmt.Errorf("persist AgentIdentity registration %s on %s: %w\n\n  The on-chain registration succeeded; recover with `obol sell identity import --network %s --agent-id %s`.", agentID, net.Name, err, net.Name, agentID)
+		return metadataOK, fmt.Errorf("persist AgentIdentity registration %s on %s: %w\n\n  The on-chain registration succeeded; recover with `obol sell identity import --network %s --agent-id %s`.", agentID, net.Name, err, net.Name, agentID)
 	}
-	return nil
+	return metadataOK, nil
 }
 
 func registrationRecoveryStartBlock(ctx context.Context, client *erc8004.Client, u *ui.UI) uint64 {
