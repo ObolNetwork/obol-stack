@@ -40,7 +40,6 @@
   #strip b { font-weight: 500; color: var(--light); }
   #strip .bal { color: var(--green); font-variant-numeric: tabular-nums; cursor: pointer; }
   #strip .bal.low { color: var(--amber); }
-  #strip a, #strip .lnk { color: var(--green); text-decoration: none; cursor: pointer; }
 
   /* staged composer: connect -> sign in -> fund -> chat */
   #composer { display: flex; align-items: stretch; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--stroke); }
@@ -53,6 +52,15 @@
            padding: 9px 16px; font: 600 13px "DM Sans", system-ui; cursor: pointer; white-space: nowrap; }
   button:hover:not(:disabled) { background: var(--green); color: var(--bg01); }
   button:disabled { border-color: var(--stroke); color: var(--muted); cursor: default; }
+  /* mirrors 402 page's canonical .icon-btn */
+  #strip .icon-btn { display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; padding: 0; border-radius: 5px;
+    background: var(--bg03); border: 1px solid var(--stroke); color: var(--body);
+    cursor: pointer; text-decoration: none; flex: none;
+    transition: color 120ms, border-color 120ms, background 120ms; }
+  #strip .icon-btn:hover { color: var(--green); border-color: var(--green); background: var(--bg04); }
+  #strip .icon-btn svg { width: 12px; height: 12px; display: block; }
+  #strip .icon-btn.copied { color: var(--green); border-color: var(--green); }
   .stagebtn { flex: 1; padding: 11px 16px; }
   .stagebtn small { display: block; margin-top: 2px; font-weight: 400; color: var(--muted); }
   .stagebtn:hover:not(:disabled) small { color: var(--bg01); }
@@ -76,10 +84,11 @@
 </div>
 <div id="strip">
   <span>session <b id="sessaddr">—</b></span>
+  <button type="button" class="icon-btn" id="copyaddr" title="Copy session address" aria-label="Copy session address"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
   <span class="bal" id="balance" title="click to refresh">$0.00</span>
-  <span class="lnk" id="fundlink">+ fund</span>
-  <span class="lnk" id="withdraw">withdraw</span>
-  <a id="explorer" target="_blank" rel="noopener" style="display:none">explorer</a>
+  <button type="button" class="icon-btn" id="fundlink" title="Fund session" aria-label="Fund session"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+  <button type="button" class="icon-btn" id="withdraw" title="Withdraw to wallet" aria-label="Withdraw to wallet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></button>
+  <a class="icon-btn" id="explorer" target="_blank" rel="noopener" style="display:none" title="View on explorer" aria-label="View session on block explorer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>
 </div>
 <form id="composer"></form>
 <div id="status"></div>
@@ -282,6 +291,13 @@ $("fundlink").onclick = () => {
   forceFund = true; $("composer").dataset.stage = ""; renderComposer();
 };
 $("withdraw").onclick = withdraw;
+$("copyaddr").onclick = async () => {
+  if (!burner) return;
+  try { await navigator.clipboard.writeText(burner.address); } catch { return; }
+  const b = $("copyaddr");
+  b.classList.add("copied"); b.title = "Copied";
+  setTimeout(() => { b.classList.remove("copied"); b.title = "Copy session address"; }, 1500);
+};
 
 // EIP-3009 transferWithAuthorization — withdraw reuses the same primitive as
 // x402 payments, but settles directly on-chain (not via payFetch/x402Client).
