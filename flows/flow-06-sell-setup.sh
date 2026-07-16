@@ -16,6 +16,8 @@ else
 fi
 
 apply_flow_qwen_inference_offer() {
+    # LiteLLM: unauthenticated readiness probe. /health requires the master
+    # key (401) and fails UpstreamHealthy under the 2xx-only probe gate.
     "$OBOL" sell http flow-qwen --namespace llm --from-json - <<JSON
 {
   "type": "inference",
@@ -23,7 +25,7 @@ apply_flow_qwen_inference_offer() {
     "service": "$SELL_UPSTREAM_SERVICE",
     "namespace": "llm",
     "port": $SELL_UPSTREAM_PORT,
-    "healthPath": "/health"
+    "healthPath": "/health/readiness"
   },
   "model": {
     "name": "$FLOW_MODEL",
