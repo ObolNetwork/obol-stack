@@ -213,16 +213,38 @@ async function connect() {
 }
 
 // ---- stage 2: sign in -> derive session key (deterministic, domain-bound).
-// This message must stay byte-identical forever: it re-derives existing
-// users' session wallets. Changing it strands their funds.
-const SIGNIN = "Agent chat session key v1\n" +
-  "domain: " + location.hostname + "\n\n" +
-  "Signing derives a local session wallet used to pay this agent per chat message.\n" +
-  "Only sign this message on " + location.hostname + ".";
+// Session-key message v2: EIP-4361-formatted so wallets enforce domain
+// binding (deceptive-site warning when origin ≠ message domain). Every field
+// is deliberately static — nonce and Issued At are constants because the
+// signature IS the key material (keccak256 of it derives the session wallet),
+// never a server-replayable proof; replay protection is meaningless here and
+// determinism is what protects users' funds. This message must never change
+// again: changing it re-derives different session wallets and strands funds.
+// v1 ("Agent chat session key v1") predates this and was retired after its
+// only funded session was swept.
+function checksumAddr(addr) {
+  const a = addr.toLowerCase().slice(2);
+  const h = keccak256(new TextEncoder().encode(a)).slice(2);
+  let out = "0x";
+  for (let i = 0; i < 40; i++) out += parseInt(h[i], 16) >= 8 ? a[i].toUpperCase() : a[i];
+  return out;
+}
+function signinMessage() {
+  return location.hostname + " wants you to sign in with your Ethereum account:\n" +
+    checksumAddr(mainAddr) + "\n" +
+    "\n" +
+    "Signing derives this site's local pay-per-message chat session wallet. Only sign on " + location.hostname + ".\n" +
+    "\n" +
+    "URI: https://" + location.hostname + "\n" +
+    "Version: 1\n" +
+    "Chain ID: " + chain.id + "\n" +
+    "Nonce: obolchat" + "\n" +
+    "Issued At: 2026-01-01T00:00:00Z";
+}
 async function signin() {
   try {
     status("waiting for signature…", true);
-    const sig = await wallet.signMessage({ account: mainAddr, message: SIGNIN });
+    const sig = await wallet.signMessage({ account: mainAddr, message: signinMessage() });
     burner = privateKeyToAccount(keccak256(sig));
     // Per-payment ceiling = the session balance: whatever the seller prices
     // a turn at, the widget never signs an authorization for more than the
