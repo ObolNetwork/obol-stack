@@ -365,7 +365,7 @@ func stripERPCOverlay(erpcConfig map[string]any, ov *ERPCOverlay) error {
 }
 
 func mergeNetworksByKey(existing []any, overlay []map[string]any) []any {
-	out := make([]any, 0, len(existing)+len(overlay))
+	out := make([]any, 0) // no capacity hint: len(a)+len(b) trips CodeQL allocation-size-overflow
 	index := map[string]int{} // mergeKey → index in out
 	for _, n := range existing {
 		nm, ok := n.(map[string]any)
@@ -396,7 +396,7 @@ func mergeNetworksByKey(existing []any, overlay []map[string]any) []any {
 }
 
 func mergeUpstreamsByID(existing []any, overlay []map[string]any) []any {
-	out := make([]any, 0, len(existing)+len(overlay))
+	out := make([]any, 0) // no capacity hint: len(a)+len(b) trips CodeQL allocation-size-overflow
 	index := map[string]int{}
 	for _, u := range existing {
 		um, ok := u.(map[string]any)
