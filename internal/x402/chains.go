@@ -33,6 +33,12 @@ type ChainInfo struct {
 
 	// EIP3009Version is the EIP-712 domain version.
 	EIP3009Version string
+
+	// Testnet marks a chain as a test network rather than a production
+	// mainnet. Consumers that only care about "real money" chains (e.g. the
+	// x402scan registry preflight, which indexes mainnet resources only)
+	// key off this instead of pattern-matching chain names.
+	Testnet bool
 }
 
 // AssetInfo describes the token and EIP-712 metadata used for x402 settlement.
@@ -71,6 +77,7 @@ var (
 		CAIP2Network: "eip155:84532",
 		USDCAddress:  "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
 		Decimals:     6,
+		Testnet:      true,
 		// Base-Sepolia USDC is FiatTokenV2_2 whose EIP-712 domain name is
 		// "USDC", NOT the mainnet "USD Coin". Advertising "USD Coin" makes a
 		// real facilitator reject otherwise-valid signatures — the recurring
@@ -107,6 +114,7 @@ var (
 		Decimals:       6,
 		EIP3009Name:    "USD Coin",
 		EIP3009Version: "2",
+		Testnet:        true,
 	}
 
 	ChainAvalancheMainnet = ChainInfo{
@@ -127,6 +135,7 @@ var (
 		Decimals:       6,
 		EIP3009Name:    "USD Coin",
 		EIP3009Version: "2",
+		Testnet:        true,
 	}
 
 	ChainArbitrumOne = ChainInfo{
@@ -147,8 +156,32 @@ var (
 		Decimals:       6,
 		EIP3009Name:    "USD Coin",
 		EIP3009Version: "2",
+		Testnet:        true,
+	}
+
+	// allChains lists every chain the registry knows about, used to answer
+	// "is this CAIP-2 id a testnet" without a second hardcoded id list.
+	allChains = []ChainInfo{
+		ChainBaseMainnet, ChainBaseSepolia,
+		ChainEthereumMainnet,
+		ChainPolygonMainnet, ChainPolygonAmoy,
+		ChainAvalancheMainnet, ChainAvalancheFuji,
+		ChainArbitrumOne, ChainArbitrumSepolia,
 	}
 )
+
+// IsTestnetCAIP2 reports whether caip2 (e.g. "eip155:84532") identifies a
+// known testnet chain. Unknown ids return false — callers that need to
+// distinguish "known mainnet" from "unrecognized" should check membership
+// separately.
+func IsTestnetCAIP2(caip2 string) bool {
+	for _, c := range allChains {
+		if c.CAIP2Network == caip2 {
+			return c.Testnet
+		}
+	}
+	return false
+}
 
 // NormalizeNetworkID maps a human-friendly chain name to its CAIP-2 network
 // identifier. Already-normalized CAIP-2 values are returned as-is.

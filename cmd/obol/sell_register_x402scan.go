@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
+	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	"github.com/ObolNetwork/obol-stack/internal/x402scan"
 	"github.com/urfave/cli/v3"
 )
@@ -72,8 +74,10 @@ Examples:
 			// Non-fatal preflight: x402scan discovers services from the
 			// origin's /openapi.json, so a missing/empty doc means the
 			// registration will come back "no discovery" or "no valid
-			// resources". Warn early with the local fix.
-			preflightOpenAPI(ctx, u, origin)
+			// resources". Warn early with the local fix. allTestnet feeds
+			// the ErrNoValidResources message below with the accurate cause
+			// when every advertised offer prices on a testnet.
+			allTestnet := preflightOpenAPI(ctx, u, origin)
 
 			// Same signer posture as ERC-8004 registration: all signing via
 			// the agent's remote-signer, no key material in the CLI.
@@ -114,8 +118,13 @@ Examples:
 					u.Dim(fmt.Sprintf("  Check that %s/openapi.json is publicly reachable and the tunnel is up (obol tunnel status).", origin))
 				case errors.Is(err, x402scan.ErrNoValidResources):
 					u.Error(err.Error())
-					u.Dim("  A discovery document was found, but no endpoint answered with a live x402 402 challenge.")
-					u.Dim("  Check offers are Ready (obol sell status) and publicly reachable through the tunnel.")
+					if allTestnet {
+						u.Dim("  This origin's offers price on a testnet — x402scan indexes mainnet resources only.")
+						u.Dim("  Switch the payment network to base (mainnet) and re-register.")
+					} else {
+						u.Dim("  A discovery document was found, but no endpoint answered with a live x402 402 challenge.")
+						u.Dim("  Check offers are Ready (obol sell status) and publicly reachable through the tunnel.")
+					}
 				}
 				return err
 			}
@@ -181,33 +190,36 @@ func resolveX402scanOrigin(cfg *config.Config, explicit string) (string, error) 
 
 // preflightOpenAPI warns (never fails) when the origin's /openapi.json is
 // unreachable or advertises no operations — the two states that make the
-// remote registration a guaranteed no-op.
-func preflightOpenAPI(ctx context.Context, u *ui.UI, origin string) {
+// remote registration a guaranteed no-op. It returns true when every paid
+// operation it found prices exclusively on testnet networks — x402scan
+// indexes mainnet resources only, so that's a third guaranteed no-op the
+// caller can use to explain an ErrNoValidResources accurately.
+func preflightOpenAPI(ctx context.Context, u *ui.UI, origin string) bool {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin+"/openapi.json", nil)
 	if err != nil {
-		return
+		return false
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		u.Warnf("could not fetch %s/openapi.json (%v) — x402scan discovers services from it; check the tunnel is up", origin, err)
-		return
+		return false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		u.Warnf("%s/openapi.json returned HTTP %d — x402scan discovers services from it; check the tunnel is up", origin, resp.StatusCode)
-		return
+		return false
 	}
 	var doc struct {
 		Paths map[string]json.RawMessage `json:"paths"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
-		return
+		return false
 	}
 	if len(doc.Paths) == 0 {
 		u.Warn("the published /openapi.json advertises no operations — put at least one offer on sale (obol sell inference|http|agent) before registering")
-		return
+		return false
 	}
 	// x402scan indexes per ORIGIN — it crawls this one /openapi.json and
 	// lists everything it finds under the origin we submit. On the shared
@@ -224,6 +236,60 @@ func preflightOpenAPI(ctx context.Context, u *ui.UI, origin string) {
 	if len(offers) > 1 {
 		u.Warnf("this origin advertises %d offers in one /openapi.json — x402scan indexes per origin, so all of them will be listed together under %s rather than as distinct products. For clean discovery, give each offer its own subdomain (obol tunnel hostname add <host>) and register that origin.", len(offers), origin)
 	}
+
+	networks := paidNetworksFromOpenAPI(doc.Paths)
+	if len(networks) == 0 {
+		return false
+	}
+	allTestnet := true
+	for net := range networks {
+		if !x402verifier.IsTestnetCAIP2(net) {
+			allTestnet = false
+			break
+		}
+	}
+	if allTestnet {
+		list := make([]string, 0, len(networks))
+		for net := range networks {
+			list = append(list, net)
+		}
+		sort.Strings(list)
+		u.Warnf("this origin's offers price on %s (testnet) — x402scan indexes mainnet resources only; switch payment network to base (mainnet) and re-register", strings.Join(list, ", "))
+	}
+	return allTestnet
+}
+
+// paidNetworksFromOpenAPI collects the distinct CAIP-2 network ids
+// advertised across every paid operation's `x-payment-info.accepts[]`
+// (published by internal/serviceoffercontroller/openapi.go's
+// paymentInfoAccept). Operations without x-payment-info (free/auth-gated
+// routes) contribute nothing.
+func paidNetworksFromOpenAPI(paths map[string]json.RawMessage) map[string]struct{} {
+	networks := map[string]struct{}{}
+	for _, pathRaw := range paths {
+		var methods map[string]json.RawMessage
+		if err := json.Unmarshal(pathRaw, &methods); err != nil {
+			continue
+		}
+		for _, opRaw := range methods {
+			var op struct {
+				PaymentInfo *struct {
+					Accepts []struct {
+						Network string `json:"network"`
+					} `json:"accepts"`
+				} `json:"x-payment-info"`
+			}
+			if err := json.Unmarshal(opRaw, &op); err != nil || op.PaymentInfo == nil {
+				continue
+			}
+			for _, accept := range op.PaymentInfo.Accepts {
+				if accept.Network != "" {
+					networks[accept.Network] = struct{}{}
+				}
+			}
+		}
+	}
+	return networks
 }
 
 // servicesOfferName extracts the offer name from a shared-origin OpenAPI path
