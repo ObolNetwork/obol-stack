@@ -1922,8 +1922,8 @@ func patchOverlayModelList(content string, models []string) (string, bool) {
 			} else {
 				result = append(result, indent+"models:")
 				for _, m := range models {
-					result = append(result, indent+"  - id: "+m)
-					result = append(result, indent+"    name: "+ollamaModelDisplayName(m))
+					result = append(result, indent+"  - id: "+yamlScalar(m))
+					result = append(result, indent+"    name: "+yamlScalar(ollamaModelDisplayName(m)))
 				}
 			}
 
@@ -2070,7 +2070,7 @@ models:
 		b.WriteString("    models:\n")
 
 		for _, m := range ollamaModels {
-			fmt.Fprintf(&b, "      - id: %s\n        name: %s\n", m, ollamaModelDisplayName(m))
+			fmt.Fprintf(&b, "      - id: %s\n        name: %s\n", yamlScalar(m), yamlScalar(ollamaModelDisplayName(m)))
 		}
 	} else {
 		b.WriteString("    models: []\n")
