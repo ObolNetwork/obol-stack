@@ -967,13 +967,21 @@ Examples:
 			}
 			wallet = primaryPayTo
 
+			upstreamSvc := cmd.String("upstream")
+			healthPath := cmd.String("health-path")
+			// LiteLLM's /health requires the master key (401 unauthenticated).
+			// Its readiness/liveliness probes are public and return 2xx — the
+			// only useful default once UpstreamHealthy requires 2xx.
+			if strings.EqualFold(upstreamSvc, "litellm") && (healthPath == "" || healthPath == "/health") {
+				healthPath = "/health/readiness"
+			}
 			spec := map[string]any{
 				"type": "http",
 				"upstream": map[string]any{
-					"service":    cmd.String("upstream"),
+					"service":    upstreamSvc,
 					"namespace":  ns,
 					"port":       cmd.Int("port"),
-					"healthPath": cmd.String("health-path"),
+					"healthPath": healthPath,
 				},
 				"payment": paymentBlock,
 			}

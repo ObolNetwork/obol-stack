@@ -105,6 +105,7 @@ run_step_grep "sell http $OFFER_NAME --async" \
     --namespace "$NS" \
     --upstream litellm \
     --port 4000 \
+    --health-path /health/readiness \
     --no-register \
     --async \
     --job-ttl 15m
