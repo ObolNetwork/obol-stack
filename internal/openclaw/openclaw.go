@@ -175,6 +175,12 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 	if err := validate.Name(id); err != nil {
 		return fmt.Errorf("invalid agent id: %w", err)
 	}
+	// validate.Name alone allows ids up to 63 chars, but Onboard derives the
+	// "openclaw-<id>" DNS label below — bound id here so that stays ≤63
+	// instead of failing later with an opaque Kubernetes error.
+	if max := agentruntime.MaxIDLength(agentruntime.OpenClaw); len(id) > max {
+		return fmt.Errorf("agent id %q is too long (%d chars): must be at most %d chars so %q-<id> fits the 63-character DNS label limit", id, len(id), max, appName)
+	}
 
 	deploymentDir := DeploymentPath(cfg, id)
 

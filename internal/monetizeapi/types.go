@@ -1162,7 +1162,10 @@ func RemoveAgentIdentityRegistration(status AgentIdentityStatus, chain string) A
 	if chain == "" {
 		return status
 	}
-	out := status.Registrations[:0]
+	// Allocate rather than filter status.Registrations in place: this is an
+	// exported helper and a future caller could pass in an informer-cached
+	// object whose backing array must not be mutated out from under it.
+	out := make([]AgentIdentityRegistration, 0, len(status.Registrations))
 	for _, registration := range status.Registrations {
 		if strings.EqualFold(strings.TrimSpace(registration.Chain), chain) {
 			continue
