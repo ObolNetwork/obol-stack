@@ -927,15 +927,17 @@ func buildHostHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructu
 	}
 }
 
-// hostRouteRules assembles the dedicated-origin rule list: the three
-// discovery rules, the free chat widget for agent-type offers (Exact rules,
-// so they win over the verifier catch-all like the discovery paths do), and
-// the PathPrefix / payment gate last.
+// hostRouteRules assembles the dedicated-origin rule list: the four
+// discovery rules (landing, openapi, x402, agent-registration), the free
+// chat widget for agent-type offers (Exact rules, so they win over the
+// verifier catch-all like the discovery paths do), and the PathPrefix /
+// payment gate last.
 func hostRouteRules(offer *monetizeapi.ServiceOffer, exactTo, exactToShared func(string, string) map[string]any, catchallFilters []any) []any {
 	rules := []any{
 		exactTo("/", "index.html"),
 		exactTo("/openapi.json", "openapi.json"),
 		exactTo("/.well-known/x402", "x402.json"),
+		exactTo("/.well-known/agent-registration.json", "agent-registration.json"),
 	}
 	if offer.IsAgent() {
 		rules = append(rules,

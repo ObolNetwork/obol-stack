@@ -35,8 +35,8 @@ func TestBuildHostHTTPRoute(t *testing.T) {
 	}
 
 	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
-	if len(rules) != 4 {
-		t.Fatalf("rules = %d, want 4 (/, /openapi.json, /.well-known/x402, catch-all)", len(rules))
+	if len(rules) != 5 {
+		t.Fatalf("rules = %d, want 5 (/, openapi, x402, agent-registration, catch-all)", len(rules))
 	}
 
 	// Rule shapes: first three Exact → catalog httpd with full-path
@@ -45,8 +45,9 @@ func TestBuildHostHTTPRoute(t *testing.T) {
 		"/":                 "/offers/sec/audit/index.html",
 		"/openapi.json":     "/offers/sec/audit/openapi.json",
 		"/.well-known/x402": "/offers/sec/audit/x402.json",
+		"/.well-known/agent-registration.json": "/offers/sec/audit/agent-registration.json",
 	}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		rule := rules[i].(map[string]any)
 		match := rule["matches"].([]any)[0].(map[string]any)["path"].(map[string]any)
 		if match["type"] != "Exact" {
@@ -64,7 +65,7 @@ func TestBuildHostHTTPRoute(t *testing.T) {
 		}
 	}
 
-	catchall := rules[3].(map[string]any)
+	catchall := rules[4].(map[string]any)
 	match := catchall["matches"].([]any)[0].(map[string]any)["path"].(map[string]any)
 	if match["type"] != "PathPrefix" || match["value"] != "/" {
 		t.Fatalf("catch-all match = %v", match)
@@ -104,14 +105,17 @@ func TestBuildHostHTTPRoute(t *testing.T) {
 func TestBuildOfferBundles(t *testing.T) {
 	profile := schemas.StorefrontProfile{DisplayName: "Acme", ContactEmail: "ops@acme.example"}
 	offer := hostnameOffer()
+	prev := tryUpstreamOpenAPI
+	tryUpstreamOpenAPI = func(*monetizeapi.ServiceOffer) map[string]any { return nil }
+	defer func() { tryUpstreamOpenAPI = prev }()
 
 	if got := buildOfferBundles([]*monetizeapi.ServiceOffer{routeTableOffer()}, profile); len(got) != 0 {
 		t.Fatalf("path-only offer produced bundles: %v", got)
 	}
 
 	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile)
-	if len(bundles) != 3 {
-		t.Fatalf("len(bundles) = %d, want 3", len(bundles))
+	if len(bundles) != 4 {
+		t.Fatalf("len(bundles) = %d, want 4", len(bundles))
 	}
 	byPath := map[string]string{}
 	for _, f := range bundles {
@@ -182,6 +186,9 @@ func TestBuildOfferBundles(t *testing.T) {
 // spec.branding fields override the storefront profile on the dedicated
 // origin's surfaces, empty fields inherit.
 func TestBuildOfferBundles_BrandingOverride(t *testing.T) {
+	prev := tryUpstreamOpenAPI
+	tryUpstreamOpenAPI = func(*monetizeapi.ServiceOffer) map[string]any { return nil }
+	defer func() { tryUpstreamOpenAPI = prev }()
 	profile := storefront.ResolvePublished(&schemas.StorefrontProfile{
 		DisplayName:  "Acme",
 		ContactEmail: "ops@acme.example",
@@ -280,15 +287,15 @@ func TestBuildHostHTTPRoute_AgentChatWidget(t *testing.T) {
 	route := buildHostHTTPRoute(offer)
 
 	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
-	if len(rules) != 6 {
-		t.Fatalf("rules = %d, want 6 (3 discovery + /chat + /chat-vendor.js + catch-all)", len(rules))
+	if len(rules) != 7 {
+		t.Fatalf("rules = %d, want 7 (4 discovery + /chat + /chat-vendor.js + catch-all)", len(rules))
 	}
 
 	wantShared := map[string]string{
 		"/chat":           "/offers/sec/audit/chat.html",
 		"/chat-vendor.js": "/chat-vendor.js",
 	}
-	for i := 3; i <= 4; i++ {
+	for i := 4; i <= 5; i++ {
 		rule := rules[i].(map[string]any)
 		match := rule["matches"].([]any)[0].(map[string]any)["path"].(map[string]any)
 		if match["type"] != "Exact" {
@@ -311,7 +318,7 @@ func TestBuildHostHTTPRoute_AgentChatWidget(t *testing.T) {
 	}
 
 	// Catch-all must still be last.
-	last := rules[5].(map[string]any)
+	last := rules[6].(map[string]any)
 	match := last["matches"].([]any)[0].(map[string]any)["path"].(map[string]any)
 	if match["type"] != "PathPrefix" {
 		t.Fatalf("last rule = %v, want the PathPrefix catch-all", match)
@@ -364,6 +371,9 @@ func TestStaticSiteServesChatWidget(t *testing.T) {
 	// Per-offer page: agent offers gain a chat.html bundle file carrying
 	// the landing page's theme tokens and title; non-agent offers do not.
 	profile := schemas.StorefrontProfile{DisplayName: "Acme"}
+	prev := tryUpstreamOpenAPI
+	tryUpstreamOpenAPI = func(*monetizeapi.ServiceOffer) map[string]any { return nil }
+	defer func() { tryUpstreamOpenAPI = prev }()
 	plain := buildOfferBundles([]*monetizeapi.ServiceOffer{hostnameOffer()}, profile)
 	for _, f := range plain {
 		if strings.HasSuffix(f.Path, "chat.html") {
@@ -409,5 +419,65 @@ func TestHostRouteDiscoveryRulesAreGETOnly(t *testing.T) {
 	last := rules[len(rules)-1].(map[string]any)["matches"].([]any)[0].(map[string]any)
 	if _, scoped := last["method"]; scoped {
 		t.Errorf("catch-all must match every method")
+	}
+}
+
+func TestBuildOfferBundles_UpstreamOpenAPI(t *testing.T) {
+	profile := schemas.StorefrontProfile{DisplayName: "Acme", ContactEmail: "ops@acme.example"}
+	offer := hostnameOffer()
+	offer.Spec.Registration.Name = "Hyperliquid Trading Intelligence"
+	offer.Spec.Registration.Description = "Full first-party catalog."
+	prev := tryUpstreamOpenAPI
+	tryUpstreamOpenAPI = func(*monetizeapi.ServiceOffer) map[string]any {
+		return map[string]any{
+			"openapi": "3.1.0",
+			"info":    map[string]any{"title": "upstream-title", "version": "1.1.0"},
+			"paths": map[string]any{
+				"/v1/leaderboard": map[string]any{
+					"get": map[string]any{
+						"summary": "Leaderboard", "security": []any{map[string]any{"x402": []any{}}},
+						"x-payment-info": map[string]any{"price": map[string]any{"amount": "0.001"}},
+						"responses": map[string]any{"200": map[string]any{}, "402": map[string]any{}},
+					},
+				},
+				"/v1/markets/overview": map[string]any{
+					"get": map[string]any{"summary": "Free overview", "security": []any{}, "responses": map[string]any{"200": map[string]any{}}},
+				},
+			},
+		}
+	}
+	defer func() { tryUpstreamOpenAPI = prev }()
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile)
+	byPath := map[string]string{}
+	for _, f := range bundles {
+		byPath[f.Path] = f.Content
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(byPath["offers/sec/audit/openapi.json"]), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc["info"].(map[string]any)["title"] != "Hyperliquid Trading Intelligence" {
+		t.Errorf("title = %v", doc["info"])
+	}
+	if _, ok := doc["paths"].(map[string]any)["/v1/leaderboard"]; !ok {
+		t.Fatalf("missing leaderboard in paths: %v", doc["paths"])
+	}
+	var wk struct {
+		Resources []struct {
+			Resource string `json:"resource"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal([]byte(byPath["offers/sec/audit/x402.json"]), &wk); err != nil {
+		t.Fatal(err)
+	}
+	if len(wk.Resources) != 1 || !strings.Contains(wk.Resources[0].Resource, "/v1/leaderboard") {
+		t.Fatalf("x402 resources = %+v", wk.Resources)
+	}
+	var reg map[string]any
+	if err := json.Unmarshal([]byte(byPath["offers/sec/audit/agent-registration.json"]), &reg); err != nil {
+		t.Fatal(err)
+	}
+	if reg["name"] != "Hyperliquid Trading Intelligence" {
+		t.Errorf("reg name = %v", reg["name"])
 	}
 }
