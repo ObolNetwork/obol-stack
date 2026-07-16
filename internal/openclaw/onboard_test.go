@@ -1,8 +1,10 @@
 package openclaw
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
@@ -24,5 +26,24 @@ func TestOnboardRejectsUnsafeID(t *testing.T) {
 		if err == nil {
 			t.Errorf("Onboard(ID=%q) = nil, want error", id)
 		}
+	}
+}
+
+// TestOnboardRejectsIDTooLongForDNSLabel guards against the "openclaw-<id>"
+// DNS label overflowing 63 characters: validate.Name alone allows a 63-char
+// id, but Onboard prepends "openclaw-" to it, so an id at (or near) that
+// limit must be rejected here with a clear error instead of failing later
+// with an opaque Kubernetes error.
+func TestOnboardRejectsIDTooLongForDNSLabel(t *testing.T) {
+	max := agentruntime.MaxIDLength(agentruntime.OpenClaw)
+
+	tooLong := "a" + strings.Repeat("b", max) // max+1 chars, still a valid DNS label on its own
+	cfg := testConfig(t)
+	err := Onboard(cfg, OnboardOptions{ID: tooLong}, ui.New(false))
+	if err == nil {
+		t.Fatalf("Onboard(ID=%d chars) = nil, want error", len(tooLong))
+	}
+	if !strings.Contains(err.Error(), "too long") {
+		t.Errorf("error should explain the id is too long, got: %v", err)
 	}
 }

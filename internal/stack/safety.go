@@ -273,9 +273,11 @@ func pidAlive(pid int) bool {
 	return p.Signal(syscall.Signal(0)) == nil
 }
 
-// errSafetyAborted lets cmd/obol/stack.go distinguish "user said no" from
-// other errors. The CLI maps this to exit code 0 with a brief message
-// instead of a noisy error trace.
+// errSafetyAborted is a sentinel for "user declined a ConfirmRunningServicesLoss
+// prompt". destroyOldBackendIfSwitching returns it so Init stops the whole
+// command before switching backends (Down/Purge instead return nil directly
+// from their own top-level check); Init maps it to a clean exit-0. Exported via
+// ErrSafetyAborted() for callers that want to detect the abort with errors.Is.
 var errSafetyAborted = errors.New("aborted by operator at safety prompt")
 
 // ErrSafetyAborted is exported for callers that want to detect the abort

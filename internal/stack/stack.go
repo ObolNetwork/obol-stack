@@ -107,6 +107,11 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string, skipConf
 	// live traffic.
 	if hasExistingConfig && force {
 		if err := destroyOldBackendIfSwitching(cfg, u, backendName, stackID, skipConfirm); err != nil {
+			// A declined safety prompt stops Init entirely (nothing switched,
+			// old cluster left intact) and, like Down/Purge, exits cleanly.
+			if errors.Is(err, errSafetyAborted) {
+				return nil
+			}
 			return err
 		}
 	}
@@ -156,6 +161,9 @@ func destroyOldBackendIfSwitching(cfg *config.Config, u *ui.UI, newBackend, stac
 		return err
 	}
 	if !proceed {
+		// Signal the decline to Init, which stops the whole command before
+		// touching anything (the old cluster is still serving traffic — it
+		// must NOT be left undestroyed while the backend config switches).
 		u.Info("Aborted.")
 		return errSafetyAborted
 	}

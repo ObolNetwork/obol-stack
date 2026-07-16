@@ -138,6 +138,26 @@ func TestOnboardRejectsUnsafeID(t *testing.T) {
 	}
 }
 
+// TestOnboardRejectsIDTooLongForDNSLabel guards against the "hermes-<id>-ui"
+// DashboardHostname DNS label overflowing 63 characters: validate.Name alone
+// allows a 63-char id, but Onboard derives "hermes-<id>" (and, for the
+// dashboard, "hermes-<id>-ui") from it, so an id at (or near) that limit
+// must be rejected here with a clear error instead of failing later with an
+// opaque Kubernetes error.
+func TestOnboardRejectsIDTooLongForDNSLabel(t *testing.T) {
+	max := agentruntime.MaxIDLength(agentruntime.Hermes)
+
+	tooLong := "a" + strings.Repeat("b", max) // max+1 chars, still a valid DNS label on its own
+	cfg := testConfig(t)
+	err := Onboard(cfg, OnboardOptions{ID: tooLong}, newTestUI())
+	if err == nil {
+		t.Fatalf("Onboard(ID=%d chars) = nil, want error", len(tooLong))
+	}
+	if !strings.Contains(err.Error(), "too long") {
+		t.Errorf("error should explain the id is too long, got: %v", err)
+	}
+}
+
 // TestGenerateConfig_PrimaryIsRoundTrippable guards the LiteLLM model_name
 // contract end-to-end: whatever string the agent's `model.default` is set to
 // MUST match a `model_name` entry in the LiteLLM ConfigMap byte-for-byte,

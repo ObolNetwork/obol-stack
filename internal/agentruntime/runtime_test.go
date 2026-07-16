@@ -3,10 +3,41 @@ package agentruntime
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 )
+
+// TestMaxIDLengthKeepsDerivedLabelsWithinDNSLimit guards the DNS-label
+// overflow finding: an id at MaxIDLength must keep every label this package
+// derives (Namespace/Hostname, and for Hermes DashboardHostname's "-ui"
+// suffix) at or under the 63-character RFC 1123 limit.
+func TestMaxIDLengthKeepsDerivedLabelsWithinDNSLimit(t *testing.T) {
+	for _, rt := range []Runtime{OpenClaw, Hermes} {
+		id := strings.Repeat("a", MaxIDLength(rt))
+
+		if n := len(Namespace(rt, id)); n > 63 {
+			t.Errorf("%s: Namespace(%q) label is %d chars, want <=63", rt, id, n)
+		}
+		if n := len(strings.SplitN(Hostname(rt, id), ".", 2)[0]); n > 63 {
+			t.Errorf("%s: Hostname(%q) label is %d chars, want <=63", rt, id, n)
+		}
+		if n := len(strings.SplitN(DashboardHostname(rt, id), ".", 2)[0]); n > 63 {
+			t.Errorf("%s: DashboardHostname(%q) label is %d chars, want <=63", rt, id, n)
+		}
+
+		// One character longer must overflow at least one derived label —
+		// otherwise MaxIDLength is too conservative, not just safe.
+		tooLong := id + "a"
+		overflow := len(Namespace(rt, tooLong)) > 63 ||
+			len(strings.SplitN(Hostname(rt, tooLong), ".", 2)[0]) > 63 ||
+			len(strings.SplitN(DashboardHostname(rt, tooLong), ".", 2)[0]) > 63
+		if !overflow {
+			t.Errorf("%s: MaxIDLength+1 (%d chars) did not overflow any derived DNS label", rt, len(tooLong))
+		}
+	}
+}
 
 func TestHermesPaths(t *testing.T) {
 	cfg := &config.Config{

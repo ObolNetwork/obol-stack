@@ -66,3 +66,22 @@ func TestRemoveAgentIdentityRegistration_UnknownChainAndEmptyChainAreNoops(t *te
 		t.Errorf("base agentId = %q, want 42 unchanged by an empty-chain no-op", got)
 	}
 }
+
+// TestRemoveAgentIdentityRegistration_DoesNotMutateSharedBackingArray guards
+// against RemoveAgentIdentityRegistration filtering status.Registrations in
+// place: a caller (e.g. an informer-cached object) may hold another
+// reference to the same backing array, which an in-place compaction would
+// silently corrupt.
+func TestRemoveAgentIdentityRegistration_DoesNotMutateSharedBackingArray(t *testing.T) {
+	backing := []AgentIdentityRegistration{
+		{Chain: "base", AgentID: "1"},
+		{Chain: "base-sepolia", AgentID: "2"},
+	}
+	shared := AgentIdentityStatus{Registrations: backing}
+
+	_ = RemoveAgentIdentityRegistration(shared, "base")
+
+	if backing[0].Chain != "base" || backing[0].AgentID != "1" {
+		t.Errorf("shared backing array was mutated: backing[0] = %+v, want unchanged {base 1}", backing[0])
+	}
+}

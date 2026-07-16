@@ -519,10 +519,11 @@ download_with_retries() {
 }
 
 # Verify a downloaded release binary against the published SHA256SUMS file.
-# Fails closed (returns 1) on checksum mismatch, a missing checksum entry, or
-# no local sha256 tool. If SHA256SUMS itself can't be fetched, also fails
-# closed unless OBOL_ALLOW_UNVERIFIED=1 is explicitly set, in which case the
-# install proceeds unverified.
+# Fails closed: returns 2 on a *verified* checksum mismatch (tamper — the caller
+# must abort hard and NOT fall back to a source build), and returns 1 on a
+# missing checksum entry or no local sha256 tool. If SHA256SUMS itself can't be
+# fetched, also fails closed unless OBOL_ALLOW_UNVERIFIED=1 is explicitly set,
+# in which case the install proceeds unverified (return 0).
 verify_release_checksum() {
 	local release_tag="$1"
 	local binary_name="$2"
@@ -570,7 +571,12 @@ verify_release_checksum() {
 		echo "Please re-run the installer. If the problem persists, report an issue at:"
 		echo "  https://github.com/ObolNetwork/obol-stack/issues"
 		echo ""
-		return 1
+		# Exit code 2 signals a *verified* mismatch (as opposed to the
+		# generic 1 used above for "couldn't verify at all") so callers can
+		# tell tamper apart from unavailability and refuse to silently fall
+		# back to another download over the same (possibly compromised)
+		# channel.
+		return 2
 	fi
 
 	log_success "Checksum verified for $binary_name"
@@ -617,10 +623,15 @@ download_release() {
 		return 1
 	fi
 
-	# Verify against the published SHA256SUMS before installing
-	if ! verify_release_checksum "$release_tag" "$binary_name" "$tmp_obol"; then
+	# Verify against the published SHA256SUMS before installing. Propagate
+	# a verified-tamper (exit 2) distinctly from a generic verification
+	# failure (exit 1) so the caller knows falling back to another download
+	# method is unsafe.
+	local verify_status=0
+	verify_release_checksum "$release_tag" "$binary_name" "$tmp_obol" || verify_status=$?
+	if [[ "$verify_status" -ne 0 ]]; then
 		rm -f "$tmp_obol"
-		return 1
+		return "$verify_status"
 	fi
 
 	chmod +x "$tmp_obol"
@@ -715,9 +726,19 @@ install_obol_binary() {
 
 		# If we got a tag, try to download it
 		if [[ -n "$latest_tag" ]]; then
-			if download_release "$latest_tag"; then
+			local dl_status=0
+			download_release "$latest_tag" || dl_status=$?
+			if [[ "$dl_status" -eq 0 ]]; then
 				show_version_change "$current_version"
 				return 0
+			fi
+			if [[ "$dl_status" -eq 2 ]]; then
+				# Verified tamper (checksum mismatch), not mere
+				# unavailability: building from source would just re-fetch
+				# over the same, possibly compromised, channel. Abort hard
+				# instead of silently "recovering" into an unverified install.
+				log_error "Checksum verification failed for $latest_tag — refusing to fall back to building from source over the same network channel."
+				return 1
 			fi
 			log_warn "Download failed, falling back to building from source..."
 		else
@@ -730,12 +751,18 @@ install_obol_binary() {
 	else
 		# Specific release requested
 		log_info "Attempting to download release: $release"
-		if download_release "$release"; then
+		local dl_status=0
+		download_release "$release" || dl_status=$?
+		if [[ "$dl_status" -eq 0 ]]; then
 			show_version_change "$current_version"
 			return 0
 		fi
+		if [[ "$dl_status" -eq 2 ]]; then
+			log_error "Checksum verification failed for $release — refusing to fall back to building from source over the same network channel."
+			return 1
+		fi
 
-		log_warn "Release $release not found, building from source..."
+		log_warn "Release $release not found or download failed, building from source..."
 		build_from_source "$release"
 		show_version_change "$current_version"
 	fi

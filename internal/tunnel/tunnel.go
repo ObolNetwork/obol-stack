@@ -1051,8 +1051,18 @@ func EnsureTunnelForSell(cfg *config.Config, u *ui.UI) (string, error) {
 // reflected immediately, instead of shadowing the offer's route until some
 // later, unrelated tunnel/sell invocation happens to run CreateStorefront
 // again (Canary402).
+//
+// It no-ops quietly when there is no persistent tunnel/hostname state yet
+// (e.g. a first `obol sell ... --hostname X --no-register` before any
+// tunnel has ever been created) — CreateStorefront has nothing to publish
+// in that case, and EnsureTunnelForSell reconciles the storefront once the
+// tunnel comes up.
 func RefreshStorefront(cfg *config.Config) error {
-	return CreateStorefront(cfg, storefrontHostnames(cfg, "")...)
+	hosts := storefrontHostnames(cfg, "")
+	if len(hosts) == 0 {
+		return nil
+	}
+	return CreateStorefront(cfg, hosts...)
 }
 
 // Stop scales the cloudflared deployment to 0 replicas.

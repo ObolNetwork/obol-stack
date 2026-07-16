@@ -211,6 +211,30 @@ func TestCreateStorefront_TearsDownWhenAllHostsOfferBound(t *testing.T) {
 	}
 }
 
+// TestRefreshStorefront_NoOpWithoutTunnelState guards a first `obol sell
+// ... --hostname X --no-register` before any persistent tunnel has ever been
+// created: storefrontHostnames("") has nothing to report (no persistent
+// tunnel state, no quick-tunnel URL to parse), so RefreshStorefront must
+// no-op quietly instead of calling CreateStorefront with zero hostnames and
+// surfacing its "requires at least one hostname" error as a confusing
+// warning. EnsureTunnelForSell reconciles the storefront later once the
+// tunnel exists.
+func TestRefreshStorefront_NoOpWithoutTunnelState(t *testing.T) {
+	cfg := newHostnameTestConfig(t)
+	writeFakeKubeconfig(t, cfg)
+
+	logPath := filepath.Join(cfg.ConfigDir, "kubectl.log")
+	writeFakeKubectl(t, cfg, logPath, "")
+
+	if err := RefreshStorefront(cfg); err != nil {
+		t.Fatalf("RefreshStorefront should no-op without tunnel state, got error: %v", err)
+	}
+
+	if _, err := os.ReadFile(logPath); err == nil {
+		t.Fatal("RefreshStorefront must not invoke kubectl when there is no hostname to publish")
+	}
+}
+
 func TestPatchAgentBaseURL_Insert(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "values-obol.yaml")
