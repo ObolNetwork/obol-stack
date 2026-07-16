@@ -1,6 +1,7 @@
 package network
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -24,6 +25,33 @@ upstreams:
 `))
 	if err == nil {
 		t.Fatal("expected missing id to fail")
+	}
+}
+
+func TestParseERPCOverlay_RejectsNetworkWithoutMergeKey(t *testing.T) {
+	_, err := parseERPCOverlay([]byte(`
+version: 1
+networks:
+  - architecture: evm
+    failsafe:
+      timeout:
+        duration: 10s
+`))
+	if err == nil {
+		t.Fatal("expected network without evm.chainId or alias to fail")
+	}
+}
+
+func TestParseERPCOverlay_RejectsBadChainIDType(t *testing.T) {
+	_, err := parseERPCOverlay([]byte(`
+version: 1
+networks:
+  - alias: hyperevm
+    evm:
+      chainId: "not-a-number"
+`))
+	if err == nil {
+		t.Fatal("expected non-numeric chainId to fail")
 	}
 }
 
@@ -303,7 +331,7 @@ func TestStripERPCOverlay(t *testing.T) {
 			{"id": "local-hl-node", "endpoint": "http://x", "evm": map[string]any{"chainId": 999}},
 		},
 	}
-	if err := stripERPCOverlay(erpcConfig, ov); err != nil {
+	if err := stripERPCOverlay(erpcConfig, ov, nil); err != nil {
 		t.Fatal(err)
 	}
 	project := erpcConfig["projects"].([]any)[0].(map[string]any)
@@ -315,6 +343,133 @@ func TestStripERPCOverlay(t *testing.T) {
 	}
 	if project["upstreams"].([]any)[0].(map[string]any)["id"] != "obol-rpc-base" {
 		t.Error("base upstream must remain")
+	}
+}
+
+// TestResetERPC_RestoresBaseEntriesOverlayReplaced covers the reset
+// provenance fix: an overlay entry whose key collides with a chart-base
+// entry must be RESTORED (not deleted) on reset, while an entry the
+// overlay purely added is still dropped.
+func TestResetERPC_RestoresBaseEntriesOverlayReplaced(t *testing.T) {
+	cfg := &config.Config{ConfigDir: t.TempDir()}
+
+	// Chart-base cluster state: one network/upstream at the SAME key the
+	// operator overlay is about to replace.
+	erpcConfig := map[string]any{
+		"projects": []any{
+			map[string]any{
+				"id": "rpc",
+				"networks": []any{
+					map[string]any{
+						"alias": "hyperevm",
+						"evm":   map[string]any{"chainId": 999},
+						"failsafe": map[string]any{
+							"timeout": map[string]any{"duration": "30s"},
+						},
+					},
+				},
+				"upstreams": []any{
+					map[string]any{
+						"id":       "hyperevm-official",
+						"endpoint": "https://base-rpc.example.com/evm",
+						"evm":      map[string]any{"chainId": 999},
+					},
+				},
+			},
+		},
+	}
+
+	ov := &ERPCOverlay{
+		Version: 1,
+		Networks: []map[string]any{
+			{ // replaces the base "hyperevm" network
+				"alias": "hyperevm",
+				"evm":   map[string]any{"chainId": 999},
+				"failsafe": map[string]any{
+					"timeout": map[string]any{"duration": "5s"},
+				},
+			},
+			{ // purely additive — no base collision
+				"alias": "brandnew",
+				"evm":   map[string]any{"chainId": 111},
+			},
+		},
+		Upstreams: []map[string]any{
+			{ // replaces the base "hyperevm-official" upstream
+				"id":       "hyperevm-official",
+				"endpoint": "https://overlay-rpc.example.com/evm",
+				"evm":      map[string]any{"chainId": 999},
+			},
+			{ // purely additive
+				"id":       "brand-new-id",
+				"endpoint": "https://new.example.com",
+			},
+		},
+	}
+
+	// Mirrors applyOverlayToCluster: snapshot provenance BEFORE merging.
+	if err := captureERPCProvenance(cfg, erpcConfig, ov); err != nil {
+		t.Fatal(err)
+	}
+	if err := mergeERPCOverlay(erpcConfig, ov); err != nil {
+		t.Fatal(err)
+	}
+
+	project := erpcConfig["projects"].([]any)[0].(map[string]any)
+	if len(project["networks"].([]any)) != 2 || len(project["upstreams"].([]any)) != 2 {
+		t.Fatalf("merge shape unexpected: networks=%v upstreams=%v", project["networks"], project["upstreams"])
+	}
+
+	// Mirrors removeOverlayFromCluster: read provenance back and strip.
+	prov, err := readERPCProvenance(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stripERPCOverlay(erpcConfig, ov, prov); err != nil {
+		t.Fatal(err)
+	}
+
+	project = erpcConfig["projects"].([]any)[0].(map[string]any)
+	upstreams := project["upstreams"].([]any)
+	if len(upstreams) != 1 {
+		t.Fatalf("upstreams after reset = %d, want 1 (base restored, addition dropped)", len(upstreams))
+	}
+	um := upstreams[0].(map[string]any)
+	if um["id"] != "hyperevm-official" || um["endpoint"] != "https://base-rpc.example.com/evm" {
+		t.Errorf("base upstream not restored, got %+v", um)
+	}
+
+	networks := project["networks"].([]any)
+	if len(networks) != 1 {
+		t.Fatalf("networks after reset = %d, want 1 (base restored, addition dropped)", len(networks))
+	}
+	nm := networks[0].(map[string]any)
+	to := nm["failsafe"].(map[string]any)["timeout"].(map[string]any)["duration"]
+	if to != "30s" {
+		t.Errorf("base network failsafe not restored, got duration=%v", to)
+	}
+}
+
+func TestERPCOverlayDriftStatus(t *testing.T) {
+	cases := []struct {
+		name        string
+		localHash   string
+		clusterHash string
+		clusterErr  error
+		want        string
+	}{
+		{"in sync", "abc123", "abc123", nil, ERPCSyncInSync},
+		{"drifted", "abc123", "def456", nil, ERPCSyncDrifted},
+		{"not applied", "abc123", "", nil, ERPCSyncNotApplied},
+		{"cluster unreachable", "abc123", "", errors.New("no cluster"), ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := erpcOverlayDriftStatus(tc.localHash, tc.clusterHash, tc.clusterErr)
+			if got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
