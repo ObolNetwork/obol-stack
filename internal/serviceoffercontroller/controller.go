@@ -1678,6 +1678,10 @@ func httpRouteAccepted(route *unstructured.Unstructured) bool {
 	if err != nil || !found {
 		return false
 	}
+	// metadata.generation defaults to 0 when absent (e.g. hand-built test
+	// fixtures), matching a condition's absent observedGeneration below so
+	// older/incomplete fixtures still compare equal.
+	routeGeneration, _, _ := unstructured.NestedInt64(route.Object, "metadata", "generation")
 	for _, parent := range parents {
 		parentMap, ok := parent.(map[string]any)
 		if !ok {
@@ -1687,11 +1691,26 @@ func httpRouteAccepted(route *unstructured.Unstructured) bool {
 		if !ok {
 			continue
 		}
+		// Both default to false: each must be affirmatively reported True at
+		// the CURRENT generation. Defaulting resolvedRefs to true would be
+		// fail-open — a stale or not-yet-emitted ResolvedRefs (behind
+		// metadata.generation, or False from a rejected prior spec) would be
+		// skipped by the observedGeneration guard below and leave the true
+		// default intact, publishing a route Traefik hasn't resolved.
 		accepted := false
-		resolvedRefs := true
+		resolvedRefs := false
 		for _, condition := range conditions {
 			condMap, ok := condition.(map[string]any)
 			if !ok {
+				continue
+			}
+			// A condition Traefik hasn't reconciled against the current spec
+			// yet (observedGeneration behind metadata.generation) still
+			// reflects the PREVIOUS generation's verdict — don't trust it,
+			// or an update to an already-accepted route would flip
+			// RoutePublished True before Traefik has actually checked it.
+			observedGeneration, _, _ := unstructured.NestedInt64(condMap, "observedGeneration")
+			if observedGeneration != routeGeneration {
 				continue
 			}
 			condType, _ := condMap["type"].(string)
