@@ -833,14 +833,39 @@ func (c *Controller) reconcileRoute(ctx context.Context, status *monetizeapi.Ser
 			return err
 		}
 	}
+	// Delete the legacy (pre-4726dcfe) non-namespace-qualified ReferenceGrant
+	// name every reconcile so grants orphaned by that rename don't linger and
+	// collide with a same-named offer in another namespace.
+	err := c.referenceGrants.Namespace("x402").Delete(ctx, legacyBackendReferenceGrantName(offer.Name), metav1.DeleteOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
 	if err := c.applyObject(ctx, c.httpRoutes.Namespace(offer.Namespace), buildHTTPRoute(offer)); err != nil {
 		setCondition(status, "RoutePublished", "False", "ApplyFailed", err.Error())
 		return err
+	}
+	route, err := c.httpRoutes.Namespace(offer.Namespace).Get(ctx, childName(offer.Name), metav1.GetOptions{})
+	if err != nil {
+		setCondition(status, "RoutePublished", "False", "ApplyFailed", err.Error())
+		return err
+	}
+	if !httpRouteAccepted(route) {
+		setCondition(status, "RoutePublished", "False", "WaitingForTraefikAcceptance", "HTTPRoute applied but not yet accepted by Traefik")
+		return nil
 	}
 	if offer.Spec.Hostname != "" {
 		if err := c.applyObject(ctx, c.httpRoutes.Namespace(offer.Namespace), buildHostHTTPRoute(offer)); err != nil {
 			setCondition(status, "RoutePublished", "False", "ApplyFailed", err.Error())
 			return err
+		}
+		hostRoute, err := c.httpRoutes.Namespace(offer.Namespace).Get(ctx, hostChildName(offer.Name), metav1.GetOptions{})
+		if err != nil {
+			setCondition(status, "RoutePublished", "False", "ApplyFailed", err.Error())
+			return err
+		}
+		if !httpRouteAccepted(hostRoute) {
+			setCondition(status, "RoutePublished", "False", "WaitingForTraefikAcceptance", "Host HTTPRoute applied but not yet accepted by Traefik")
+			return nil
 		}
 	} else {
 		// Hostname removed from the spec: tear the host route down so the
@@ -1370,6 +1395,7 @@ func (c *Controller) deleteRouteChildren(ctx context.Context, offer *monetizeapi
 		name     string
 	}{
 		{resource: c.referenceGrants.Namespace("x402"), name: backendReferenceGrantName(offer.Namespace, offer.Name)},
+		{resource: c.referenceGrants.Namespace("x402"), name: legacyBackendReferenceGrantName(offer.Name)},
 		{resource: c.httpRoutes.Namespace(offer.Namespace), name: childName(offer.Name)},
 		{resource: c.httpRoutes.Namespace(offer.Namespace), name: hostChildName(offer.Name)},
 		{resource: c.middlewares.Namespace(offer.Namespace), name: limitsInFlightMiddlewareName(offer.Name)},

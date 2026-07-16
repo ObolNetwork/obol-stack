@@ -1059,6 +1059,13 @@ func backendReferenceGrantName(namespace, name string) string {
 	return safeName("so-", namespace+"-"+name, "-backend-grant")
 }
 
+// legacyBackendReferenceGrantName is the pre-4726dcfe non-namespaced grant
+// name; still deleted on reconcile so upgrades tear down the orphaned object
+// (grants created before the rename are never touched by the new name).
+func legacyBackendReferenceGrantName(offerName string) string {
+	return safeName("so-", offerName, "-backend-grant")
+}
+
 func registrationRequestName(name string) string {
 	return safeName("so-", name, "-registration")
 }
