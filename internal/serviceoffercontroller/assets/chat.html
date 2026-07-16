@@ -40,7 +40,6 @@
   #strip b { font-weight: 500; color: var(--light); }
   #strip .bal { color: var(--green); font-variant-numeric: tabular-nums; cursor: pointer; }
   #strip .bal.low { color: var(--amber); }
-  #strip a, #strip .lnk { color: var(--green); text-decoration: none; cursor: pointer; }
 
   /* staged composer: connect -> sign in -> fund -> chat */
   #composer { display: flex; align-items: stretch; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--stroke); }
@@ -53,6 +52,15 @@
            padding: 9px 16px; font: 600 13px "DM Sans", system-ui; cursor: pointer; white-space: nowrap; }
   button:hover:not(:disabled) { background: var(--green); color: var(--bg01); }
   button:disabled { border-color: var(--stroke); color: var(--muted); cursor: default; }
+  /* mirrors 402 page's canonical .icon-btn */
+  #strip .icon-btn { display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; padding: 0; border-radius: 5px;
+    background: var(--bg03); border: 1px solid var(--stroke); color: var(--body);
+    cursor: pointer; text-decoration: none; flex: none;
+    transition: color 120ms, border-color 120ms, background 120ms; }
+  #strip .icon-btn:hover { color: var(--green); border-color: var(--green); background: var(--bg04); }
+  #strip .icon-btn svg { width: 12px; height: 12px; display: block; }
+  #strip .icon-btn.copied { color: var(--green); border-color: var(--green); }
   .stagebtn { flex: 1; padding: 11px 16px; }
   .stagebtn small { display: block; margin-top: 2px; font-weight: 400; color: var(--muted); }
   .stagebtn:hover:not(:disabled) small { color: var(--bg01); }
@@ -76,9 +84,11 @@
 </div>
 <div id="strip">
   <span>session <b id="sessaddr">—</b></span>
+  <button type="button" class="icon-btn" id="copyaddr" title="Copy session address" aria-label="Copy session address"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
   <span class="bal" id="balance" title="click to refresh">$0.00</span>
-  <span class="lnk" id="fundlink">+ fund</span>
-  <a id="explorer" target="_blank" rel="noopener" style="display:none">explorer</a>
+  <button type="button" class="icon-btn" id="fundlink" title="Fund session" aria-label="Fund session"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg></button>
+  <button type="button" class="icon-btn" id="withdraw" title="Withdraw to wallet" aria-label="Withdraw to wallet"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></button>
+  <a class="icon-btn" id="explorer" target="_blank" rel="noopener" style="display:none" title="View on explorer" aria-label="View session on block explorer"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>
 </div>
 <form id="composer"></form>
 <div id="status"></div>
@@ -94,9 +104,9 @@ const AGENT = {{.Title}};
 document.documentElement.style.setProperty("--agent-name", JSON.stringify(AGENT));
 const CHAINS = { "eip155:8453": base, "eip155:84532": baseSepolia };
 const $ = (id) => document.getElementById(id);
-let net, chain, asset, pub, explorer; // resolved from the 402 challenge
+let net, chain, asset, assetExtra, pub, explorer; // resolved from the 402 challenge
 let wallet, mainAddr, burner, payFetch, balPoll = null;
-let model = {{.OfferName}}, price = null, balance = 0n, busy = false;
+let model = {{.OfferName}}, price = null, balance = 0n, busy = false, withdrawing = false;
 const messages = [];
 
 const short = (a) => a.slice(0, 6) + "…" + a.slice(-4);
@@ -173,6 +183,7 @@ const priceStr = () => price === null ? "…" : "$" + formatUnits(price, 6);
     const c = await r.json();
     const acc = (c.accepts || [])[0] || {};
     net = acc.network; chain = CHAINS[net]; asset = acc.asset;
+    assetExtra = acc.extra;
     if (!chain || !asset) throw new Error("unsupported payment network: " + net);
     pub = createPublicClient({ chain, transport: http() });
     explorer = chain.blockExplorers?.default?.url || "";
@@ -190,6 +201,15 @@ async function connect() {
     if (!window.ethereum) { say("sys err", "No wallet found. Install Rabby or MetaMask, then reload."); return; }
     if (!chain) { status("still fetching the agent's payment details — try again in a second"); return; }
     [mainAddr] = await window.ethereum.request({ method: "eth_requestAccounts" });
+    // Non-deterministic ERC-1271 signatures would strand session funds: the
+    // session key is derived from a signature a contract wallet cannot reproduce.
+    const code = await pub.getCode({ address: mainAddr });
+    if (code && code !== "0x" && !code.startsWith("0xef0100")) {
+      say("sys err", "Smart-contract wallets aren't supported: their signatures aren't deterministic, so the session wallet this page derives could not be recovered later. Connect a regular (EOA) wallet.");
+      mainAddr = null;
+      renderComposer();
+      return;
+    }
     try { await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: "0x" + chain.id.toString(16) }] }); } catch {}
     wallet = createWalletClient({ account: mainAddr, chain, transport: custom(window.ethereum) });
     status("");
@@ -202,16 +222,38 @@ async function connect() {
 }
 
 // ---- stage 2: sign in -> derive session key (deterministic, domain-bound).
-// This message must stay byte-identical forever: it re-derives existing
-// users' session wallets. Changing it strands their funds.
-const SIGNIN = "Agent chat session key v1\n" +
-  "domain: " + location.hostname + "\n\n" +
-  "Signing derives a local session wallet used to pay this agent per chat message.\n" +
-  "Only sign this message on " + location.hostname + ".";
+// Session-key message v2: EIP-4361-formatted so wallets enforce domain
+// binding (deceptive-site warning when origin ≠ message domain). Every field
+// is deliberately static — nonce and Issued At are constants because the
+// signature IS the key material (keccak256 of it derives the session wallet),
+// never a server-replayable proof; replay protection is meaningless here and
+// determinism is what protects users' funds. This message must never change
+// again: changing it re-derives different session wallets and strands funds.
+// v1 ("Agent chat session key v1") predates this and was retired after its
+// only funded session was swept.
+function checksumAddr(addr) {
+  const a = addr.toLowerCase().slice(2);
+  const h = keccak256(new TextEncoder().encode(a)).slice(2);
+  let out = "0x";
+  for (let i = 0; i < 40; i++) out += parseInt(h[i], 16) >= 8 ? a[i].toUpperCase() : a[i];
+  return out;
+}
+function signinMessage() {
+  return location.hostname + " wants you to sign in with your Ethereum account:\n" +
+    checksumAddr(mainAddr) + "\n" +
+    "\n" +
+    "Signing derives this site's local pay-per-message chat session wallet. Only sign on " + location.hostname + ".\n" +
+    "\n" +
+    "URI: https://" + location.hostname + "\n" +
+    "Version: 1\n" +
+    "Chain ID: " + chain.id + "\n" +
+    "Nonce: obolchat" + "\n" +
+    "Issued At: 2026-01-01T00:00:00Z";
+}
 async function signin() {
   try {
     status("waiting for signature…", true);
-    const sig = await wallet.signMessage({ account: mainAddr, message: SIGNIN });
+    const sig = await wallet.signMessage({ account: mainAddr, message: signinMessage() });
     burner = privateKeyToAccount(keccak256(sig));
     // Per-payment ceiling = the session balance: whatever the seller prices
     // a turn at, the widget never signs an authorization for more than the
@@ -248,6 +290,66 @@ $("fundlink").onclick = () => {
   if (!burner || forceFund) return;
   forceFund = true; $("composer").dataset.stage = ""; renderComposer();
 };
+$("withdraw").onclick = withdraw;
+$("copyaddr").onclick = async () => {
+  if (!burner) return;
+  try { await navigator.clipboard.writeText(burner.address); } catch { return; }
+  const b = $("copyaddr");
+  b.classList.add("copied"); b.title = "Copied";
+  setTimeout(() => { b.classList.remove("copied"); b.title = "Copy session address"; }, 1500);
+};
+
+// EIP-3009 transferWithAuthorization — withdraw reuses the same primitive as
+// x402 payments, but settles directly on-chain (not via payFetch/x402Client).
+const TWA_ABI = [{
+  name: "transferWithAuthorization", type: "function", stateMutability: "nonpayable", outputs: [],
+  inputs: [
+    { name: "from", type: "address" }, { name: "to", type: "address" },
+    { name: "value", type: "uint256" }, { name: "validAfter", type: "uint256" },
+    { name: "validBefore", type: "uint256" }, { name: "nonce", type: "bytes32" },
+    { name: "v", type: "uint8" }, { name: "r", type: "bytes32" }, { name: "s", type: "bytes32" },
+  ],
+}];
+async function withdraw() {
+  if (!burner || !wallet || balance <= 0n || withdrawing) return;
+  withdrawing = true;
+  const amt = balance;
+  try {
+    status("withdrawing to your wallet…", true);
+    const validBefore = BigInt(Math.floor(Date.now() / 1000) + 3600);
+    const nonceBytes = new Uint8Array(32);
+    crypto.getRandomValues(nonceBytes);
+    const nonce = "0x" + Array.from(nonceBytes, (b) => b.toString(16).padStart(2, "0")).join("");
+    const domain = {
+      name: assetExtra?.name || "USD Coin", version: assetExtra?.version || "2",
+      chainId: chain.id, verifyingContract: asset,
+    };
+    const types = {
+      TransferWithAuthorization: [
+        { name: "from", type: "address" }, { name: "to", type: "address" },
+        { name: "value", type: "uint256" }, { name: "validAfter", type: "uint256" },
+        { name: "validBefore", type: "uint256" }, { name: "nonce", type: "bytes32" },
+      ],
+    };
+    const message = {
+      from: burner.address, to: mainAddr, value: amt,
+      validAfter: 0n, validBefore, nonce,
+    };
+    const sig = await burner.signTypedData({ domain, types, primaryType: "TransferWithAuthorization", message });
+    const r = sig.slice(0, 66);
+    const s = "0x" + sig.slice(66, 130);
+    const v = parseInt(sig.slice(130, 132), 16);
+    await wallet.writeContract({
+      account: mainAddr, chain, address: asset, abi: TWA_ABI,
+      functionName: "transferWithAuthorization",
+      args: [burner.address, mainAddr, amt, 0n, validBefore, nonce, v, r, s],
+    });
+    say("sys", "Withdrew $" + formatUnits(amt, 6) + " to " + short(mainAddr));
+    await refreshBalance();
+    status("");
+  } catch (e) { status("withdraw failed: " + (e.shortMessage || e.message)); }
+  finally { withdrawing = false; }
+}
 
 // ---- stage 3: fund the session wallet from the main wallet (one confirmation)
 async function fund(val) {
