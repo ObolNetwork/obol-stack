@@ -179,6 +179,27 @@ func TestAgentOfferRegistrationMetadata_DefaultsRuntimeHermes(t *testing.T) {
 	}
 }
 
+func TestResolveAgentOfferDescription_NoDescriptionFlagStaysEmpty(t *testing.T) {
+	// Regression: sell_agent.go used to default an omitted --description to
+	// agent.Objective — leaking operator-authored system-prompt text (tool
+	// addresses, wallet details, operational instructions) into the public
+	// storefront/registration description. resolveAgentOfferDescription must
+	// never manufacture a non-empty description; it stays empty and the
+	// controller's own generic fallback applies.
+	objective := "You are a focused sub-agent. Trade using wallet 0xDEADBEEF via tool http://internal.example/mcp"
+	got := resolveAgentOfferDescription("", objective)
+	if got != "" {
+		t.Fatalf("resolveAgentOfferDescription(\"\", objective) = %q, want empty (must not fall back to the objective)", got)
+	}
+}
+
+func TestResolveAgentOfferDescription_PassesThroughExplicitFlag(t *testing.T) {
+	got := resolveAgentOfferDescription("  Quant trading agent  ", "unrelated objective text")
+	if got != "Quant trading agent" {
+		t.Errorf("resolveAgentOfferDescription = %q, want trimmed explicit value", got)
+	}
+}
+
 func TestSellAgentCommand_FlagShape(t *testing.T) {
 	cfg := newTestConfig(t)
 	cmd := sellCommand(cfg)
@@ -186,6 +207,12 @@ func TestSellAgentCommand_FlagShape(t *testing.T) {
 	flags := flagMap(agent)
 
 	requireFlags(t, flags, "pay-to", "wallet", "chain", "token", "price", "per-request", "path", "max-timeout", "no-register")
+
+	// The --description Usage text used to advertise the leaky
+	// objective-fallback default; it must not document that anymore.
+	if desc, ok := flags["description"].(*cli.StringFlag); ok && strings.Contains(desc.Usage, "objective") {
+		t.Errorf("description usage still documents the objective fallback: %q", desc.Usage)
+	}
 
 	if chain, ok := flags["chain"].(*cli.StringFlag); ok && chain.Value != "base" {
 		t.Errorf("chain default = %q, want base", chain.Value)
