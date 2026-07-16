@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func TestIsEnvVarRef(t *testing.T) {
@@ -226,7 +228,7 @@ func TestTranslateToOverlayYAML_AgentModelOnly(t *testing.T) {
 	}
 
 	got := TranslateToOverlayYAML(result)
-	if !strings.Contains(got, "agentModel: claude-sonnet-4-6") {
+	if !strings.Contains(got, `agentModel: "claude-sonnet-4-6"`) {
 		t.Errorf("YAML missing agentModel, got:\n%s", got)
 	}
 
@@ -252,11 +254,11 @@ func TestTranslateToOverlayYAML_ProviderWithModels(t *testing.T) {
 	got := TranslateToOverlayYAML(result)
 
 	checks := []string{
-		"anthropic:\n    enabled: true",
-		"baseUrl: https://api.anthropic.com",
+		"\"anthropic\":\n    enabled: true",
+		`baseUrl: "https://api.anthropic.com"`,
 		"api: anthropic-messages",
-		"- id: claude-sonnet-4-6",
-		"name: Claude Sonnet 4.6",
+		`- id: "claude-sonnet-4-6"`,
+		`name: "Claude Sonnet 4.6"`,
 	}
 	for _, check := range checks {
 		if !strings.Contains(got, check) {
@@ -273,7 +275,7 @@ func TestTranslateToOverlayYAML_DisabledProvider(t *testing.T) {
 	}
 	got := TranslateToOverlayYAML(result)
 
-	if !strings.Contains(got, "openai:\n    enabled: false") {
+	if !strings.Contains(got, "\"openai\":\n    enabled: false") {
 		t.Errorf("YAML missing disabled openai, got:\n%s", got)
 	}
 
@@ -346,15 +348,15 @@ func TestTranslateToOverlayYAML_FullConfig(t *testing.T) {
 	}
 	got := TranslateToOverlayYAML(result)
 
-	if !strings.Contains(got, "agentModel: claude-sonnet-4-6") {
+	if !strings.Contains(got, `agentModel: "claude-sonnet-4-6"`) {
 		t.Errorf("YAML missing agentModel, got:\n%s", got)
 	}
 
-	if !strings.Contains(got, "anthropic:\n    enabled: true") {
+	if !strings.Contains(got, "\"anthropic\":\n    enabled: true") {
 		t.Errorf("YAML missing enabled anthropic, got:\n%s", got)
 	}
 
-	if !strings.Contains(got, "openai:\n    enabled: false") {
+	if !strings.Contains(got, "\"openai\":\n    enabled: false") {
 		t.Errorf("YAML missing disabled openai, got:\n%s", got)
 	}
 
@@ -615,5 +617,81 @@ func TestDetectExistingConfigAt_EmptyConfig(t *testing.T) {
 
 	if result.AgentModel != "" {
 		t.Errorf("AgentModel = %q, want empty", result.AgentModel)
+	}
+}
+
+// TestYAMLScalar_EscapesInjection is a Canary402 full-surface audit
+// regression test: values imported from ~/.openclaw/openclaw.json must never
+// be able to inject additional YAML keys (e.g. overriding `image:` to
+// achieve RCE via `helmfile sync`) when hand-formatted into the overlay
+// values file.
+func TestYAMLScalar_EscapesInjection(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+	}{
+		{"plain", "openai/claude-sonnet-4-6"},
+		{"newline_key_injection", "x\nimage:\n  repository: evil"},
+		{"colon", "has: colon"},
+		{"quotes_and_backslash", `back\slash"quote`},
+		{"empty", ""},
+		{"trailing_newline_injection", "gpt-5.2\nrbac:\n  create: false"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			line := "key: " + yamlScalar(tt.in) + "\n"
+
+			var doc map[string]any
+			if err := yaml.Unmarshal([]byte(line), &doc); err != nil {
+				t.Fatalf("yamlScalar(%q) produced invalid YAML %q: %v", tt.in, line, err)
+			}
+
+			if got, ok := doc["key"].(string); !ok || got != tt.in {
+				t.Errorf("round-trip = %#v, want single scalar %q (no injected keys); rendered: %q", doc["key"], tt.in, line)
+			}
+
+			if len(doc) != 1 {
+				t.Errorf("doc has %d top-level keys, want 1 (injection leaked extra keys): %#v", len(doc), doc)
+			}
+		})
+	}
+}
+
+// TestGenerateOverlayValues_RejectsYAMLInjection feeds generateOverlayValues
+// a malicious imported agentModel and provider name (newline + "image:")
+// and asserts the rendered values-obol.yaml parses to the SAME single
+// scalar values, with no injected top-level "image" key — i.e. the fix for
+// the confirmed Canary402 full-surface audit finding holds end-to-end.
+func TestGenerateOverlayValues_RejectsYAMLInjection(t *testing.T) {
+	maliciousModel := "x\nimage:\n  repository: pwned-by-canary402\nrbac:\n  create: false"
+	maliciousProvider := "ollama\nimage:\n  repository: pwned-by-canary402"
+
+	imported := &ImportResult{
+		AgentModel: maliciousModel,
+		Providers: []ImportedProvider{
+			{Name: maliciousProvider, BaseURL: "http://localhost:11434"},
+		},
+	}
+
+	rendered := generateOverlayValues(testConfig(t), "openclaw-default.obol.stack", imported, false, nil, "")
+
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(rendered), &doc); err != nil {
+		t.Fatalf("rendered overlay is not valid YAML: %v\n%s", err, rendered)
+	}
+
+	// The chart-default image override is legitimate and expected to stay a
+	// map with only "tag" — injection would add a "repository" key to it.
+	if img, ok := doc["image"].(map[string]any); ok {
+		if _, hasRepo := img["repository"]; hasRepo {
+			t.Errorf("attacker injected an 'image.repository' key: %#v\nrendered:\n%s", img, rendered)
+		}
+	}
+
+	openclawSection, _ := doc["openclaw"].(map[string]any)
+	if openclawSection == nil || openclawSection["agentModel"] != "openai/"+maliciousModel {
+		t.Errorf("agentModel = %#v, want single scalar %q (rewritten with openai/ prefix); rendered:\n%s",
+			openclawSection["agentModel"], "openai/"+maliciousModel, rendered)
 	}
 }

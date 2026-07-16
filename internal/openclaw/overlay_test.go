@@ -111,21 +111,21 @@ func TestOverlayYAML_LiteLLMRouted(t *testing.T) {
 	yaml := TranslateToOverlayYAML(result)
 
 	// Agent model should have ollama/ prefix
-	if !strings.Contains(yaml, "agentModel: openai/claude-sonnet-4-5-20250929") {
+	if !strings.Contains(yaml, `agentModel: "openai/claude-sonnet-4-5-20250929"`) {
 		t.Errorf("YAML missing agentModel, got:\n%s", yaml)
 	}
 
 	// openai should be enabled with LiteLLM baseUrl
-	if !strings.Contains(yaml, "openai:\n    enabled: true") {
+	if !strings.Contains(yaml, "\"openai\":\n    enabled: true") {
 		t.Errorf("YAML missing enabled openai provider, got:\n%s", yaml)
 	}
 
-	if !strings.Contains(yaml, "baseUrl: http://litellm.llm.svc.cluster.local:4000/v1") {
+	if !strings.Contains(yaml, `baseUrl: "http://litellm.llm.svc.cluster.local:4000/v1"`) {
 		t.Errorf("YAML missing LiteLLM baseUrl, got:\n%s", yaml)
 	}
 
 	// apiKeyEnvVar should be OPENAI_API_KEY (LiteLLM master key injected via this env var)
-	if !strings.Contains(yaml, "apiKeyEnvVar: OPENAI_API_KEY") {
+	if !strings.Contains(yaml, `apiKeyEnvVar: "OPENAI_API_KEY"`) {
 		t.Errorf("YAML missing apiKeyEnvVar, got:\n%s", yaml)
 	}
 
@@ -140,16 +140,16 @@ func TestOverlayYAML_LiteLLMRouted(t *testing.T) {
 	}
 
 	// Cloud model should appear in ollama's model list
-	if !strings.Contains(yaml, "- id: claude-sonnet-4-5-20250929") {
+	if !strings.Contains(yaml, `- id: "claude-sonnet-4-5-20250929"`) {
 		t.Errorf("YAML missing cloud model ID, got:\n%s", yaml)
 	}
 
 	// anthropic and ollama should be disabled
-	if !strings.Contains(yaml, "anthropic:\n    enabled: false") {
+	if !strings.Contains(yaml, "\"anthropic\":\n    enabled: false") {
 		t.Errorf("YAML missing disabled anthropic, got:\n%s", yaml)
 	}
 
-	if !strings.Contains(yaml, "ollama:\n    enabled: false") {
+	if !strings.Contains(yaml, "\"ollama\":\n    enabled: false") {
 		t.Errorf("YAML missing disabled ollama, got:\n%s", yaml)
 	}
 }
@@ -159,7 +159,7 @@ func TestGenerateOverlayValues_OllamaDefaultWithModels(t *testing.T) {
 	models := []string{"llama3.2:3b", "mistral:7b"}
 	yaml := generateOverlayValues(testConfig(t), "openclaw-default.obol.stack", nil, false, models, "")
 
-	if !strings.Contains(yaml, "agentModel: openai/llama3.2:3b") {
+	if !strings.Contains(yaml, `agentModel: "openai/llama3.2:3b"`) {
 		t.Errorf("default overlay missing ollama agentModel, got:\n%s", yaml)
 	}
 
