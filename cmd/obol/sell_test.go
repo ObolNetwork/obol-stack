@@ -2623,3 +2623,66 @@ func TestOfferPathCollisionInList_Hostname(t *testing.T) {
 		t.Fatalf("self-update must pass: %v", err)
 	}
 }
+
+// TestResolvePriceTable_RejectsMalformedPrice is the regression guard for
+// the Canary402 finding: an EU-style comma decimal ("0,01") or other
+// malformed --price value used to sail through resolvePriceTable with zero
+// validation, silently mispricing the offer at $0 (decimalToAtomic parses
+// "0" and drops the rest) or panicking the verifier hot path on every
+// request (nil *big.Float from a discarded Parse error). --per-mtok/--per-hour
+// already validate via ApproximateRequestPriceFrom*; --price/--per-request
+// must too.
+func TestResolvePriceTable_RejectsMalformedPrice(t *testing.T) {
+	badPrices := []string{"0,01", "abc", "$0.01", "-1", ""}
+
+	for _, price := range badPrices {
+		t.Run(price, func(t *testing.T) {
+			var resolveErr error
+			cmd := &cli.Command{
+				Name: "x",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "price"},
+					&cli.StringFlag{Name: "per-request"},
+					&cli.StringFlag{Name: "per-mtok"},
+					&cli.StringFlag{Name: "per-hour"},
+				},
+				Action: func(_ context.Context, c *cli.Command) error {
+					_, resolveErr = resolvePriceTable(c, true)
+					return nil
+				},
+			}
+			if err := cmd.Run(context.Background(), []string{"x", "--price", price}); err != nil {
+				t.Fatalf("cmd.Run: %v", err)
+			}
+			if resolveErr == nil {
+				t.Fatalf("resolvePriceTable(--price=%q) expected error, got nil", price)
+			}
+		})
+	}
+
+	// A well-formed price must still pass.
+	var resolveErr error
+	var got schemas.PriceTable
+	cmd := &cli.Command{
+		Name: "x",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "price"},
+			&cli.StringFlag{Name: "per-request"},
+			&cli.StringFlag{Name: "per-mtok"},
+			&cli.StringFlag{Name: "per-hour"},
+		},
+		Action: func(_ context.Context, c *cli.Command) error {
+			got, resolveErr = resolvePriceTable(c, true)
+			return nil
+		},
+	}
+	if err := cmd.Run(context.Background(), []string{"x", "--price", "0.01"}); err != nil {
+		t.Fatalf("cmd.Run: %v", err)
+	}
+	if resolveErr != nil {
+		t.Fatalf("resolvePriceTable(--price=0.01): unexpected error %v", resolveErr)
+	}
+	if got.PerRequest != "0.01" {
+		t.Fatalf("PerRequest = %q, want 0.01", got.PerRequest)
+	}
+}

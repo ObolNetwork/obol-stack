@@ -200,24 +200,33 @@ func TestBuildV2RequirementWithAsset_HonorsMaxTimeoutSeconds(t *testing.T) {
 		EIP712Version:  "2",
 	}
 
-	got := BuildV2RequirementWithAsset(ChainBaseSepolia, asset, "0.001", "0xRecipient", 0)
+	got, err := BuildV2RequirementWithAsset(ChainBaseSepolia, asset, "0.001", "0xRecipient", 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if got.MaxTimeoutSeconds != int(DefaultMaxTimeoutSeconds) {
 		t.Errorf("zero spec value should map to default %d, got %d", DefaultMaxTimeoutSeconds, got.MaxTimeoutSeconds)
 	}
 
-	got = BuildV2RequirementWithAsset(ChainBaseSepolia, asset, "0.001", "0xRecipient", 1800)
+	got, err = BuildV2RequirementWithAsset(ChainBaseSepolia, asset, "0.001", "0xRecipient", 1800)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if got.MaxTimeoutSeconds != 1800 {
 		t.Errorf("operator-set 1800 should reach the 402 verbatim, got %d", got.MaxTimeoutSeconds)
 	}
 
-	got = BuildV2RequirementWithAsset(ChainBaseSepolia, asset, "0.001", "0xRecipient", MaxMaxTimeoutSeconds+1000)
+	got, err = BuildV2RequirementWithAsset(ChainBaseSepolia, asset, "0.001", "0xRecipient", MaxMaxTimeoutSeconds+1000)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if got.MaxTimeoutSeconds != int(MaxMaxTimeoutSeconds) {
 		t.Errorf("runaway value should clamp to cap %d, got %d", MaxMaxTimeoutSeconds, got.MaxTimeoutSeconds)
 	}
 }
 
 func TestBuildV2RequirementWithAsset(t *testing.T) {
-	req := BuildV2RequirementWithAsset(ChainEthereumMainnet, AssetInfo{
+	req, err := BuildV2RequirementWithAsset(ChainEthereumMainnet, AssetInfo{
 		Address:        "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7",
 		Symbol:         "OBOL",
 		Decimals:       18,
@@ -225,6 +234,9 @@ func TestBuildV2RequirementWithAsset(t *testing.T) {
 		EIP712Name:     "Obol Network",
 		EIP712Version:  "1",
 	}, "0.001", "0xRecipient", 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if req.Amount != "1000000000000000" {
 		t.Fatalf("Amount = %q, want 1000000000000000", req.Amount)
@@ -237,5 +249,43 @@ func TestBuildV2RequirementWithAsset(t *testing.T) {
 	}
 	if req.Extra["name"] != "Obol Network" || req.Extra["version"] != "1" {
 		t.Fatalf("name/version = %v/%v", req.Extra["name"], req.Extra["version"])
+	}
+}
+
+// TestDecimalToAtomic_RejectsMalformedInput is the regression guard for the
+// Canary402 finding: decimalToAtomic used to discard the big.Float Parse
+// error, so "0,01" (EU comma decimal) silently parsed as "0" (mispricing
+// the route at $0) and "abc"/""/"  " left amountFloat nil, panicking the
+// next line's Mul(nil, ...) on every request in the verifier hot path.
+func TestDecimalToAtomic_RejectsMalformedInput(t *testing.T) {
+	for _, amount := range []string{"abc", "", "  ", "0,01", "$0.01", "-1"} {
+		t.Run(amount, func(t *testing.T) {
+			if _, err := decimalToAtomic(amount, 6); err == nil {
+				t.Fatalf("decimalToAtomic(%q) expected error, got nil", amount)
+			}
+		})
+	}
+}
+
+func TestDecimalToAtomic_ValidInput(t *testing.T) {
+	tests := []struct {
+		amount   string
+		decimals int
+		want     string
+	}{
+		{"0.01", 6, "10000"},
+		{"1.5", 6, "1500000"},
+		{"0.001", 18, "1000000000000000"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.amount, func(t *testing.T) {
+			got, err := decimalToAtomic(tc.amount, tc.decimals)
+			if err != nil {
+				t.Fatalf("decimalToAtomic(%q, %d): unexpected error %v", tc.amount, tc.decimals, err)
+			}
+			if got != tc.want {
+				t.Fatalf("decimalToAtomic(%q, %d) = %q, want %q", tc.amount, tc.decimals, got, tc.want)
+			}
+		})
 	}
 }

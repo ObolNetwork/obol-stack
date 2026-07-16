@@ -219,8 +219,22 @@ func ResolveChainInfo(name string) (ChainInfo, error) {
 // decimalToAtomic converts a decimal token amount (e.g. "0.001") to atomic
 // units using big.Float with 128-bit precision to avoid floating-point
 // truncation (e.g. 0.001 * 1e6 must produce 1000, not 999).
-func decimalToAtomic(amount string, decimals int) string {
-	amountFloat, _, _ := new(big.Float).SetPrec(128).Parse(amount, 10)
+//
+// Returns an error rather than silently mispricing or panicking on
+// malformed input (e.g. "0,01" EU-style decimals, "abc", "", "$0.01") —
+// amount ultimately comes from operator/CLI input and, via a ServiceOffer
+// applied directly to the cluster, can bypass CLI validation entirely.
+func decimalToAtomic(amount string, decimals int) (string, error) {
+	amountFloat, _, err := new(big.Float).SetPrec(128).Parse(amount, 10)
+	if err != nil {
+		return "", fmt.Errorf("invalid decimal amount %q: %w", amount, err)
+	}
+	if amountFloat == nil {
+		return "", fmt.Errorf("invalid decimal amount %q", amount)
+	}
+	if amountFloat.Sign() < 0 {
+		return "", fmt.Errorf("amount must be non-negative: %q", amount)
+	}
 	multiplier := new(big.Float).SetPrec(128).SetInt(
 		new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil),
 	)
@@ -228,7 +242,7 @@ func decimalToAtomic(amount string, decimals int) string {
 	// Add 0.5 before truncating to int so we round to nearest.
 	atomicFloat.Add(atomicFloat, new(big.Float).SetPrec(128).SetFloat64(0.5))
 	atomicInt, _ := atomicFloat.Int(nil)
-	return atomicInt.String()
+	return atomicInt.String(), nil
 }
 
 // DefaultAsset returns the default settlement asset for a chain.
@@ -368,18 +382,27 @@ func ClampMaxTimeoutSeconds(n int64) int64 {
 
 // BuildV2Requirement creates a v2 PaymentRequirements for USDC payment on the
 // given chain. amount is the decimal USDC amount (e.g. "0.001" = $0.001).
-func BuildV2Requirement(chain ChainInfo, amount, recipientAddress string, maxTimeoutSeconds int64) x402types.PaymentRequirements {
+// Returns an error — rather than a $0 or panicking requirement — if amount
+// is not a valid non-negative decimal.
+func BuildV2Requirement(chain ChainInfo, amount, recipientAddress string, maxTimeoutSeconds int64) (x402types.PaymentRequirements, error) {
 	return BuildV2RequirementWithAsset(chain, chain.DefaultAsset(), amount, recipientAddress, maxTimeoutSeconds)
 }
 
 // BuildV2RequirementWithAsset creates a v2 PaymentRequirements for the given
 // chain and settlement asset. Pass maxTimeoutSeconds=0 to fall back to
 // DefaultMaxTimeoutSeconds; operator-set values are clamped to MaxMaxTimeoutSeconds.
-func BuildV2RequirementWithAsset(chain ChainInfo, asset AssetInfo, amount, recipientAddress string, maxTimeoutSeconds int64) x402types.PaymentRequirements {
+// Returns an error — rather than a $0 or panicking requirement — if amount
+// is not a valid non-negative decimal; callers must fail closed on error,
+// never serve the route for free.
+func BuildV2RequirementWithAsset(chain ChainInfo, asset AssetInfo, amount, recipientAddress string, maxTimeoutSeconds int64) (x402types.PaymentRequirements, error) {
+	atomicAmount, err := decimalToAtomic(amount, asset.Decimals)
+	if err != nil {
+		return x402types.PaymentRequirements{}, fmt.Errorf("invalid price %q: %w", amount, err)
+	}
 	return x402types.PaymentRequirements{
 		Scheme:            "exact",
 		Network:           chain.CAIP2Network,
-		Amount:            decimalToAtomic(amount, asset.Decimals),
+		Amount:            atomicAmount,
 		Asset:             asset.Address,
 		PayTo:             recipientAddress,
 		MaxTimeoutSeconds: int(ClampMaxTimeoutSeconds(maxTimeoutSeconds)),
@@ -388,5 +411,5 @@ func BuildV2RequirementWithAsset(chain ChainInfo, asset AssetInfo, amount, recip
 			"version":             asset.EIP712Version,
 			"assetTransferMethod": asset.TransferMethod,
 		},
-	}
+	}, nil
 }

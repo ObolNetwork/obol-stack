@@ -591,7 +591,17 @@ func (v *Verifier) resolvePaidRoute(cfg *PricingConfig, rule *RouteRule) (*match
 			wallet = opt.PayTo
 		}
 		asset := ResolveAssetInfoForPayment(chain, opt)
-		req := BuildV2RequirementWithAsset(chain, asset, opt.Price, wallet, opt.MaxTimeoutSeconds)
+		req, err := BuildV2RequirementWithAsset(chain, asset, opt.Price, wallet, opt.MaxTimeoutSeconds)
+		if err != nil {
+			// Skip this option rather than serving it free or panicking —
+			// a malformed stored price (e.g. a ServiceOffer applied
+			// directly via kubectl, bypassing CLI validation) must never
+			// produce a payable route. Other options may still be payable;
+			// if none are, the len(reqs)==0 check below fails the route
+			// closed.
+			log.Printf("x402-verifier: invalid price %q for route %q option %d: %v", opt.Price, rule.Pattern, i, err)
+			continue
+		}
 		mergeAgentExtras(&req, rule)
 		reqs = append(reqs, req)
 		optLabels = append(optLabels, labelsForPaymentOption(rule, opt))
