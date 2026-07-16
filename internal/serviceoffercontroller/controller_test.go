@@ -130,6 +130,9 @@ func TestApplySharedRegistrationStatus_NonOwnerUsesSharedAgent(t *testing.T) {
 	}
 	owner := &monetizeapi.ServiceOffer{ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "demo"}}
 	offer := &monetizeapi.ServiceOffer{ObjectMeta: metav1.ObjectMeta{Name: "beta", Namespace: "demo"}}
+	offer.Spec.Payment.Network = "base"
+	identity := &monetizeapi.AgentIdentity{}
+	identity.Status = monetizeapi.UpsertAgentIdentityRegistration(identity.Status, "base", "42")
 	request := &monetizeapi.RegistrationRequest{
 		Status: monetizeapi.RegistrationRequestStatus{
 			Phase:              registrationPhaseRegistered,
@@ -138,7 +141,7 @@ func TestApplySharedRegistrationStatus_NonOwnerUsesSharedAgent(t *testing.T) {
 		},
 	}
 
-	applySharedRegistrationStatus(status, offer, owner, request)
+	applySharedRegistrationStatus(status, offer, owner, identity, request)
 
 	if status.AgentID != "42" || status.RegistrationTxHash != "0xtx" {
 		t.Fatalf("shared registration identifiers not copied: %+v", status)
@@ -151,6 +154,9 @@ func TestApplySharedRegistrationStatus_NonOwnerUsesSharedAgent(t *testing.T) {
 func TestApplySharedRegistrationStatus_WaitsForRoute(t *testing.T) {
 	status := &monetizeapi.ServiceOfferStatus{}
 	owner := &monetizeapi.ServiceOffer{ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "demo"}}
+	owner.Spec.Payment.Network = "base"
+	identity := &monetizeapi.AgentIdentity{}
+	identity.Status = monetizeapi.UpsertAgentIdentityRegistration(identity.Status, "base", "7")
 	request := &monetizeapi.RegistrationRequest{
 		Status: monetizeapi.RegistrationRequestStatus{
 			Phase:   registrationPhaseRegistered,
@@ -158,7 +164,7 @@ func TestApplySharedRegistrationStatus_WaitsForRoute(t *testing.T) {
 		},
 	}
 
-	applySharedRegistrationStatus(status, owner, owner, request)
+	applySharedRegistrationStatus(status, owner, owner, identity, request)
 
 	if isConditionTrue(*status, "Registered") {
 		t.Fatalf("registered should remain false until route is published: %+v", status.Conditions)
@@ -174,6 +180,9 @@ func TestApplySharedRegistrationStatus_AgentIDWithoutPhase(t *testing.T) {
 	}
 	owner := &monetizeapi.ServiceOffer{ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "demo"}}
 	offer := &monetizeapi.ServiceOffer{ObjectMeta: metav1.ObjectMeta{Name: "beta", Namespace: "other"}}
+	offer.Spec.Payment.Network = "base"
+	identity := &monetizeapi.AgentIdentity{}
+	identity.Status = monetizeapi.UpsertAgentIdentityRegistration(identity.Status, "base", "8104")
 	request := &monetizeapi.RegistrationRequest{
 		Status: monetizeapi.RegistrationRequestStatus{
 			AgentID: "8104",
@@ -181,12 +190,44 @@ func TestApplySharedRegistrationStatus_AgentIDWithoutPhase(t *testing.T) {
 		},
 	}
 
-	applySharedRegistrationStatus(status, offer, owner, request)
+	applySharedRegistrationStatus(status, offer, owner, identity, request)
 
 	if status.AgentID != "8104" {
 		t.Fatalf("AgentID = %q, want 8104", status.AgentID)
 	}
 	if !isConditionTrue(*status, "Registered") {
 		t.Fatalf("Registered should be True when agentId is known: %+v", status.Conditions)
+	}
+}
+
+// Chain-switch regression: offer B borrows a shared registration from owner
+// A, but B's own Spec.Payment.Network has no verified registration in the
+// AgentIdentity (e.g. B just switched networks, or was never registered on
+// this chain). Even though the owner's RegistrationRequest is Phase=Registered
+// with a non-empty (different-chain) AgentID, B's status must not adopt it
+// and Registered must not flip True on the strength of a foreign chain's id.
+func TestApplySharedRegistrationStatus_ChainMismatchDoesNotAdoptForeignAgentID(t *testing.T) {
+	status := &monetizeapi.ServiceOfferStatus{
+		Conditions: []monetizeapi.Condition{{Type: "RoutePublished", Status: "True"}},
+	}
+	owner := &monetizeapi.ServiceOffer{ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "demo"}}
+	offer := &monetizeapi.ServiceOffer{ObjectMeta: metav1.ObjectMeta{Name: "beta", Namespace: "demo"}}
+	offer.Spec.Payment.Network = "base" // switched away from base-sepolia
+	identity := &monetizeapi.AgentIdentity{}
+	identity.Status = monetizeapi.UpsertAgentIdentityRegistration(identity.Status, "base-sepolia", "42")
+	request := &monetizeapi.RegistrationRequest{
+		Status: monetizeapi.RegistrationRequestStatus{
+			Phase:   registrationPhaseRegistered,
+			AgentID: "42", // owner's base-sepolia id — must not leak onto offer's base status
+		},
+	}
+
+	applySharedRegistrationStatus(status, offer, owner, identity, request)
+
+	if status.AgentID != "" {
+		t.Fatalf("AgentID = %q, want empty (no verified registration on offer's own chain)", status.AgentID)
+	}
+	if isConditionTrue(*status, "Registered") {
+		t.Fatalf("Registered should not flip True from a different chain's agentId: %+v", status.Conditions)
 	}
 }
