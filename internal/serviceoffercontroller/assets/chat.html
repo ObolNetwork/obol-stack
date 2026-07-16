@@ -311,7 +311,9 @@ const TWA_ABI = [{
   ],
 }];
 async function withdraw() {
-  if (!burner || !wallet || balance <= 0n || withdrawing) return;
+  // busy = a paid message is mid-flight and may be about to spend this same
+  // balance via payFetch; withdrawing itself blocks a send below.
+  if (!burner || !wallet || balance <= 0n || withdrawing || busy) return;
   withdrawing = true;
   const amt = balance;
   try {
@@ -339,11 +341,13 @@ async function withdraw() {
     const r = sig.slice(0, 66);
     const s = "0x" + sig.slice(66, 130);
     const v = parseInt(sig.slice(130, 132), 16);
-    await wallet.writeContract({
+    const hash = await wallet.writeContract({
       account: mainAddr, chain, address: asset, abi: TWA_ABI,
       functionName: "transferWithAuthorization",
       args: [burner.address, mainAddr, amt, 0n, validBefore, nonce, v, r, s],
     });
+    status("withdrawal sent, waiting for confirmation…", true);
+    await pub.waitForTransactionReceipt({ hash });
     say("sys", "Withdrew $" + formatUnits(amt, 6) + " to " + short(mainAddr));
     await refreshBalance();
     status("");
@@ -372,7 +376,7 @@ $("composer").onsubmit = async (ev) => {
   ev.preventDefault();
   const ta = $("input");
   const text = ta?.value.trim();
-  if (!text || !payFetch || busy) return;
+  if (!text || !payFetch || busy || withdrawing) return;
   busy = true; ta.value = ""; ta.disabled = true;
   say("user", text);
   messages.push({ role: "user", content: text });

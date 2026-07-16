@@ -940,8 +940,15 @@ func hostRouteRules(offer *monetizeapi.ServiceOffer, exactTo, exactToShared func
 		exactTo("/.well-known/agent-registration.json", "agent-registration.json"),
 	}
 	if offer.IsAgent() {
+		// The chat page holds a hot session key and signs USDC transfers —
+		// frame-ancestors 'self' stops it being clickjacked into a
+		// cross-origin iframe (Connect/Fund/Withdraw/Send). The offer's own
+		// landing page embeds it same-origin (TestOfferLandingChatEmbed), so
+		// that legitimate embed still works.
+		chatRule := exactTo("/chat", "chat.html")
+		addResponseHeader(chatRule, "Content-Security-Policy", "frame-ancestors 'self'")
 		rules = append(rules,
-			exactTo("/chat", "chat.html"),
+			chatRule,
 			exactToShared("/chat-vendor.js", "chat-vendor.js"),
 		)
 	}
@@ -954,6 +961,23 @@ func hostRouteRules(offer *monetizeapi.ServiceOffer, exactTo, exactToShared func
 			map[string]any{"name": "x402-verifier", "namespace": "x402", "port": int64(8080)},
 		},
 	})
+}
+
+// addResponseHeader appends a Set entry to a rule's existing
+// ResponseHeaderModifier filter (every exactTo rule has exactly one, from
+// cacheFilter) — Gateway API's core filters are unspecified/implementation
+// -defined if repeated within one rule, so extra headers merge into the
+// existing filter instead of adding a second one.
+func addResponseHeader(rule map[string]any, name, value string) {
+	for _, f := range rule["filters"].([]any) {
+		fm := f.(map[string]any)
+		if fm["type"] != "ResponseHeaderModifier" {
+			continue
+		}
+		mod := fm["responseHeaderModifier"].(map[string]any)
+		mod["set"] = append(mod["set"].([]any), map[string]any{"name": name, "value": value})
+		return
+	}
 }
 
 // sharedOriginRule is the /services/<name> PathPrefix rule → verifier,

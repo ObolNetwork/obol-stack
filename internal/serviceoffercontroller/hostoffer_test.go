@@ -1,7 +1,9 @@
 package serviceoffercontroller
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -317,6 +319,27 @@ func TestBuildHostHTTPRoute_AgentChatWidget(t *testing.T) {
 		}
 	}
 
+	// /chat holds a hot session key and signs USDC transfers — it must carry
+	// frame-ancestors 'self' so it can't be clickjacked into a cross-origin
+	// iframe (the offer's own landing page still embeds it same-origin).
+	chatRule := rules[4].(map[string]any)
+	var sawCSP bool
+	for _, rawFilter := range chatRule["filters"].([]any) {
+		filter := rawFilter.(map[string]any)
+		if filter["type"] != "ResponseHeaderModifier" {
+			continue
+		}
+		for _, s := range filter["responseHeaderModifier"].(map[string]any)["set"].([]any) {
+			h := s.(map[string]any)
+			if h["name"] == "Content-Security-Policy" && h["value"] == "frame-ancestors 'self'" {
+				sawCSP = true
+			}
+		}
+	}
+	if !sawCSP {
+		t.Errorf("/chat rule missing Content-Security-Policy: frame-ancestors 'self'")
+	}
+
 	// Catch-all must still be last.
 	last := rules[6].(map[string]any)
 	match := last["matches"].([]any)[0].(map[string]any)["path"].(map[string]any)
@@ -398,6 +421,20 @@ func TestStaticSiteServesChatWidget(t *testing.T) {
 	}
 	if !strings.Contains(chat, "chat-vendor.js?v=") {
 		t.Errorf("chat page missing cache-busted vendor import")
+	}
+}
+
+// TestChatVendorVersionMatchesBundle guards the ?v= cache-buster on
+// chat.html's chat-vendor.js import against a forgotten bump: the bundle is
+// served 1-year immutable (buildHostHTTPRoute's exactToShared), so a rebuild
+// that forgets to bump ?v= would silently serve returning visitors the OLD
+// payment-signing bundle for up to a year. This must fail CI whenever
+// assets/chat-vendor.js and assets/chat.html's ?v= go out of sync.
+func TestChatVendorVersionMatchesBundle(t *testing.T) {
+	sum := sha256.Sum256([]byte(chatWidgetVendorJS))
+	want := "chat-vendor.js?v=" + fmt.Sprintf("%x", sum)[:8]
+	if !strings.Contains(chatWidgetTmplSrc, want) {
+		t.Fatalf("chat.html's chat-vendor.js ?v= does not match sha256(assets/chat-vendor.js); want %q (see assets/README.md rebuild steps)", want)
 	}
 }
 
