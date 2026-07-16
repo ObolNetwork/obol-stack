@@ -15,9 +15,17 @@ else
     SELL_MODEL_RUNTIME="${SELL_MODEL_RUNTIME:-ollama}"
 fi
 
+# LiteLLM: unauthenticated readiness probe. /health requires the master key
+# (401) and fails UpstreamHealthy under the 2xx-only probe gate. Ollama
+# serves neither /health nor /health/readiness — only "/" returns 2xx —
+# matching sell.go's --upstream ollama default.
+if [ "$SELL_UPSTREAM_SERVICE" = "ollama" ]; then
+    SELL_HEALTH_PATH="${SELL_HEALTH_PATH:-/}"
+else
+    SELL_HEALTH_PATH="${SELL_HEALTH_PATH:-/health/readiness}"
+fi
+
 apply_flow_qwen_inference_offer() {
-    # LiteLLM: unauthenticated readiness probe. /health requires the master
-    # key (401) and fails UpstreamHealthy under the 2xx-only probe gate.
     "$OBOL" sell http flow-qwen --namespace llm --from-json - <<JSON
 {
   "type": "inference",
@@ -25,7 +33,7 @@ apply_flow_qwen_inference_offer() {
     "service": "$SELL_UPSTREAM_SERVICE",
     "namespace": "llm",
     "port": $SELL_UPSTREAM_PORT,
-    "healthPath": "/health/readiness"
+    "healthPath": "$SELL_HEALTH_PATH"
   },
   "model": {
     "name": "$FLOW_MODEL",

@@ -249,8 +249,8 @@ for i in $(seq 1 15); do
     dash_root=$(dash_code "$HERMES_DASHBOARD_URL/")
     dash_root_final=$(dash_code_follow "$HERMES_DASHBOARD_URL/")
     if [ "$dash_status" = "200" ] && [ "$dash_protected" = "401" ] && \
-       [ "$dash_login" != "500" ] && [ -n "$dash_login" ] && [ "$dash_login" != "000" ] && \
-       [ "$dash_root" != "500" ] && [ -n "$dash_root" ] && [ "$dash_root" != "000" ] && \
+       { [ "$dash_login" = "200" ] || [ "$dash_login" = "401" ]; } && \
+       [ "$dash_root" = "302" ] && \
        [ "$dash_root_final" != "500" ] && [ -n "$dash_root_final" ] && [ "$dash_root_final" != "000" ]; then
         pass "Hermes dashboard up + auth-gated + root/login ok (status=$dash_status protected=$dash_protected login=$dash_login root=$dash_root final=$dash_root_final)"
         break
@@ -260,11 +260,11 @@ done
 if [ "$dash_status" != "200" ] || [ "$dash_protected" != "401" ]; then
     fail "Hermes dashboard check failed — status=$dash_status protected=$dash_protected"
 fi
-if [ -z "$dash_login" ] || [ "$dash_login" = "000" ] || [ "$dash_login" = "500" ]; then
-    fail "Hermes dashboard password-login path failed — expected non-500 HTML login page, got HTTP $dash_login"
+if [ "$dash_login" != "200" ] && [ "$dash_login" != "401" ]; then
+    fail "Hermes dashboard password-login path failed — expected HTTP 200 or 401, got HTTP $dash_login"
 fi
-if [ -z "$dash_root" ] || [ "$dash_root" = "000" ] || [ "$dash_root" = "500" ]; then
-    fail "Hermes dashboard root failed — expected edge 302 (or non-500) to password-login, got HTTP $dash_root"
+if [ "$dash_root" != "302" ]; then
+    fail "Hermes dashboard root failed — expected edge 302 redirect to password-login, got HTTP $dash_root"
 fi
 if [ -z "$dash_root_final" ] || [ "$dash_root_final" = "000" ] || [ "$dash_root_final" = "500" ]; then
     fail "Hermes dashboard root follow failed — expected non-500 after redirect, got HTTP $dash_root_final"
