@@ -425,12 +425,16 @@ func BuildV2Requirement(chain ChainInfo, amount, recipientAddress string, maxTim
 // chain and settlement asset. Pass maxTimeoutSeconds=0 to fall back to
 // DefaultMaxTimeoutSeconds; operator-set values are clamped to MaxMaxTimeoutSeconds.
 // Returns an error — rather than a $0 or panicking requirement — if amount
-// is not a valid non-negative decimal; callers must fail closed on error,
-// never serve the route for free.
+// is not a valid non-negative decimal, or if it rounds to 0 atomic units
+// (e.g. "0", or a sub-atomic price like "0.0000001" at 6 decimals); callers
+// must fail closed on error, never serve the route for free.
 func BuildV2RequirementWithAsset(chain ChainInfo, asset AssetInfo, amount, recipientAddress string, maxTimeoutSeconds int64) (x402types.PaymentRequirements, error) {
 	atomicAmount, err := decimalToAtomic(amount, asset.Decimals)
 	if err != nil {
 		return x402types.PaymentRequirements{}, fmt.Errorf("invalid price %q: %w", amount, err)
+	}
+	if atomicAmount == "0" {
+		return x402types.PaymentRequirements{}, fmt.Errorf("price %q rounds to 0 atomic units at %d decimals: refusing to advertise a $0 paid route", amount, asset.Decimals)
 	}
 	return x402types.PaymentRequirements{
 		Scheme:            "exact",
