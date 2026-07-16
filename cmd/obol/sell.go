@@ -1126,6 +1126,16 @@ Examples:
 			u.Infof("The agent will reconcile: health-check → payment gate → route")
 			u.Infof("Check status: obol sell status %s -n %s", name, ns)
 
+			if strings.TrimSpace(cmd.String("hostname")) != "" {
+				// The offer's spec.hostname binding just landed on the
+				// cluster; narrow (or tear down) the storefront's catch-all
+				// route for it now rather than waiting for some later,
+				// unrelated tunnel/sell invocation to notice.
+				if err := tunnel.RefreshStorefront(cfg); err != nil {
+					u.Warnf("could not refresh storefront: %v", err)
+				}
+			}
+
 			if !registerEnabled {
 				// Best-effort tunnel for --no-register: not fatal if it doesn't come up.
 				u.Blank()
