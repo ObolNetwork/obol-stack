@@ -47,8 +47,8 @@ type ERPCOverlay struct {
 	// entries are replaced; others are appended (after existing).
 	Upstreams []map[string]any `yaml:"upstreams,omitempty"`
 
-	// RateLimiters is deep-merged at the top level. Budget entries under
-	// rateLimiters.budgets are merged by id.
+	// RateLimiters budgets are merged by id; other top-level keys are
+	// shallow-replaced (see mergeRateLimiters).
 	RateLimiters map[string]any `yaml:"rateLimiters,omitempty"`
 
 	// CachePoliciesAdd are appended to database.evmJsonRpcCache.policies
@@ -68,10 +68,180 @@ type ERPCOverlayStatus struct {
 	NetworkKeys    []string
 	UpstreamIDs    []string
 	ContentHash    string
+
+	// ClusterSync is a best-effort comparison of ContentHash against the
+	// live ConfigMap's erpcOverlayAnnotKey annotation:
+	// "in-sync" | "drifted" | "not-applied" | "" (cluster unreachable/unknown).
+	ClusterSync string
 }
+
+// ERPCSyncInSync / ERPCSyncDrifted / ERPCSyncNotApplied are the ClusterSync
+// values StatusERPC can report; "" means the cluster couldn't be checked.
+const (
+	ERPCSyncInSync     = "in-sync"
+	ERPCSyncDrifted    = "drifted"
+	ERPCSyncNotApplied = "not-applied"
+)
 
 func erpcOverlayPath(cfg *config.Config) string {
 	return filepath.Join(cfg.ConfigDir, "rpc", "erpc-overlay.yaml")
+}
+
+// erpcProvenancePath is the host-side record of what mergeERPCOverlay
+// replaced the FIRST time each overlay-owned key was applied, so ResetERPC
+// can restore chart-base/recorded entries instead of deleting them.
+func erpcProvenancePath(cfg *config.Config) string {
+	return filepath.Join(cfg.ConfigDir, "rpc", "erpc-overlay-provenance.yaml")
+}
+
+// erpcProvenance maps each overlay-owned merge key to the entry it replaced.
+// A key present with a nil *map value means the overlay ADDED that entry
+// (no prior base entry to restore); a key absent means "not yet recorded".
+// (A pointer, not a bare map, because a nil map[string]any round-trips
+// through a YAML marshal/unmarshal as an empty map, not nil — see
+// captureERPCProvenance.)
+type erpcProvenance struct {
+	Networks  map[string]*map[string]any `yaml:"networks,omitempty"`
+	Upstreams map[string]*map[string]any `yaml:"upstreams,omitempty"`
+}
+
+func readERPCProvenance(cfg *config.Config) (*erpcProvenance, error) {
+	data, err := os.ReadFile(erpcProvenancePath(cfg))
+	if os.IsNotExist(err) {
+		return &erpcProvenance{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var p erpcProvenance
+	if err := yaml.Unmarshal(data, &p); err != nil {
+		return nil, fmt.Errorf("parse eRPC overlay provenance: %w", err)
+	}
+	return &p, nil
+}
+
+func writeERPCProvenance(cfg *config.Config, p *erpcProvenance) error {
+	path := erpcProvenancePath(cfg)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	data, err := yaml.Marshal(p)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// captureERPCProvenance records, for every overlay-owned key not already
+// tracked, whatever entry currently occupies that key in erpcConfig — the
+// chart-base or recorded-RPC entry mergeERPCOverlay is about to replace (or
+// nil if the key doesn't exist yet, meaning the overlay is adding it).
+// Must be called BEFORE mergeERPCOverlay mutates erpcConfig.
+func captureERPCProvenance(cfg *config.Config, erpcConfig map[string]any, ov *ERPCOverlay) error {
+	if len(ov.Networks) == 0 && len(ov.Upstreams) == 0 {
+		return nil
+	}
+	prov, err := readERPCProvenance(cfg)
+	if err != nil {
+		return err
+	}
+	project := erpcConfigProject(erpcConfig)
+	if project == nil {
+		return nil
+	}
+	changed := false
+
+	if len(ov.Networks) > 0 {
+		if prov.Networks == nil {
+			prov.Networks = map[string]*map[string]any{}
+		}
+		byKey := map[string]map[string]any{}
+		for _, n := range asMapSlice(project["networks"]) {
+			if k := networkMergeKey(n); k != "" {
+				byKey[k] = n
+			}
+		}
+		for _, n := range ov.Networks {
+			k := networkMergeKey(n)
+			if k == "" {
+				continue
+			}
+			if _, tracked := prov.Networks[k]; tracked {
+				continue
+			}
+			if orig, hit := byKey[k]; hit {
+				clone := cloneMap(orig)
+				prov.Networks[k] = &clone
+			} else {
+				prov.Networks[k] = nil // marker: overlay added this key
+			}
+			changed = true
+		}
+	}
+
+	if len(ov.Upstreams) > 0 {
+		if prov.Upstreams == nil {
+			prov.Upstreams = map[string]*map[string]any{}
+		}
+		byID := map[string]map[string]any{}
+		for _, u := range asMapSlice(project["upstreams"]) {
+			if id, _ := u["id"].(string); id != "" {
+				byID[id] = u
+			}
+		}
+		for _, u := range ov.Upstreams {
+			id, _ := u["id"].(string)
+			if id == "" {
+				continue
+			}
+			if _, tracked := prov.Upstreams[id]; tracked {
+				continue
+			}
+			if orig, hit := byID[id]; hit {
+				clone := cloneMap(orig)
+				prov.Upstreams[id] = &clone
+			} else {
+				prov.Upstreams[id] = nil // marker: overlay added this key
+			}
+			changed = true
+		}
+	}
+
+	if !changed {
+		return nil
+	}
+	return writeERPCProvenance(cfg, prov)
+}
+
+// erpcConfigProject returns projects[0] as a map, or nil if the shape is
+// unexpected (callers treat that as "nothing to capture/strip").
+func erpcConfigProject(erpcConfig map[string]any) map[string]any {
+	projects, ok := erpcConfig["projects"].([]any)
+	if !ok || len(projects) == 0 {
+		return nil
+	}
+	project, ok := projects[0].(map[string]any)
+	if !ok {
+		return nil
+	}
+	return project
+}
+
+// asMapSlice filters a []any (as decoded from YAML) down to its map[string]any
+// entries, skipping anything malformed.
+func asMapSlice(v any) []map[string]any {
+	items, _ := v.([]any)
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		if m, ok := item.(map[string]any); ok {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // ReconcileERPCOverlay re-applies the host-side overlay into the live eRPC
@@ -132,12 +302,15 @@ func ResetERPC(cfg *config.Config, u *ui.UI) error {
 	if err := removeOverlayFromCluster(cfg, ov); err != nil {
 		u.Warnf("Could not strip eRPC config from live ConfigMap (will still reset host file): %v", err)
 	} else {
-		u.Success("Removed operator eRPC networks/upstreams from live ConfigMap")
+		u.Success("Removed overlay-added networks/upstreams and restored any chart-base/recorded entries they replaced")
 	}
 
 	path := erpcOverlayPath(cfg)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove overlay file: %w", err)
+	}
+	if err := os.Remove(erpcProvenancePath(cfg)); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove overlay provenance file: %w", err)
 	}
 	// Best-effort annotation clear
 	_ = annotateERPCOverlay(cfg, "", "")
@@ -175,7 +348,43 @@ func StatusERPC(cfg *config.Config) (*ERPCOverlayStatus, error) {
 		sum := sha256.Sum256(data)
 		st.ContentHash = hex.EncodeToString(sum[:8])
 	}
+	clusterHash, clusterErr := readERPCOverlayAnnotation(cfg)
+	st.ClusterSync = erpcOverlayDriftStatus(st.ContentHash, clusterHash, clusterErr)
 	return st, nil
+}
+
+// erpcOverlayDriftStatus compares the host-side overlay's content hash
+// against the erpcOverlayAnnotKey annotation read from the live ConfigMap.
+// Pure/no I/O so it's directly testable; clusterErr != nil (cluster
+// unreachable, no permissions, etc.) yields "" — best-effort, not fatal.
+func erpcOverlayDriftStatus(localHash, clusterHash string, clusterErr error) string {
+	if clusterErr != nil {
+		return ""
+	}
+	if clusterHash == "" {
+		return ERPCSyncNotApplied
+	}
+	if clusterHash == localHash {
+		return ERPCSyncInSync
+	}
+	return ERPCSyncDrifted
+}
+
+// readERPCOverlayAnnotation best-effort reads the erpcOverlayAnnotKey
+// annotation applyOverlayToCluster stamps on the eRPC ConfigMap, so status
+// can detect drift between the on-disk overlay and what's actually live.
+func readERPCOverlayAnnotation(cfg *config.Config) (string, error) {
+	if err := kubectl.EnsureCluster(cfg); err != nil {
+		return "", err
+	}
+	kubectlBin, kubeconfigPath := kubectl.Paths(cfg)
+	out, err := kubectl.Output(kubectlBin, kubeconfigPath,
+		"get", "configmap", erpcConfigMapName, "-n", erpcNamespace,
+		"-o", fmt.Sprintf("jsonpath={.metadata.annotations.%s}", strings.ReplaceAll(erpcOverlayAnnotKey, ".", "\\.")))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
 }
 
 // --- persistence ---
@@ -213,7 +422,43 @@ func parseERPCOverlay(data []byte) (*ERPCOverlay, error) {
 			return nil, fmt.Errorf("upstreams[%d]: missing id", i)
 		}
 	}
+	// Networks must have a usable merge key (evm.chainId or alias) — an
+	// entry with neither gets networkMergeKey "" and would be blindly
+	// appended as a duplicate on every merge instead of being matched.
+	for i, n := range ov.Networks {
+		if err := validateNetworkEntry(n); err != nil {
+			return nil, fmt.Errorf("networks[%d]: %w", i, err)
+		}
+	}
 	return &ov, nil
+}
+
+// validateNetworkEntry checks the cheap-to-catch type errors and requires a
+// usable merge key, so a bad entry fails `erpc set` instead of silently
+// duplicating (or crash-looping eRPC) on every merge.
+func validateNetworkEntry(n map[string]any) error {
+	if raw, ok := n["evm"]; ok {
+		evm, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("evm must be a mapping, got %T", raw)
+		}
+		if cid, ok := evm["chainId"]; ok {
+			switch cid.(type) {
+			case int, int64, float64:
+			default:
+				return fmt.Errorf("evm.chainId must be a number, got %T", cid)
+			}
+		}
+	}
+	if raw, ok := n["alias"]; ok {
+		if _, ok := raw.(string); !ok {
+			return fmt.Errorf("alias must be a string, got %T", raw)
+		}
+	}
+	if networkMergeKey(n) == "" {
+		return fmt.Errorf("missing usable merge key (need evm.chainId or alias)")
+	}
+	return nil
 }
 
 func writeERPCOverlay(cfg *config.Config, ov *ERPCOverlay) error {
@@ -242,6 +487,12 @@ func applyOverlayToCluster(cfg *config.Config, ov *ERPCOverlay, source string) e
 	if err != nil {
 		return err
 	}
+	// Snapshot whatever mergeERPCOverlay is about to replace, BEFORE it
+	// mutates erpcConfig, so ResetERPC can restore it later instead of
+	// deleting it outright.
+	if err := captureERPCProvenance(cfg, erpcConfig, ov); err != nil {
+		return fmt.Errorf("capture eRPC overlay provenance: %w", err)
+	}
 	if err := mergeERPCOverlay(erpcConfig, ov); err != nil {
 		return err
 	}
@@ -262,7 +513,11 @@ func removeOverlayFromCluster(cfg *config.Config, ov *ERPCOverlay) error {
 	if err != nil {
 		return err
 	}
-	if err := stripERPCOverlay(erpcConfig, ov); err != nil {
+	prov, err := readERPCProvenance(cfg)
+	if err != nil {
+		return err
+	}
+	if err := stripERPCOverlay(erpcConfig, ov, prov); err != nil {
 		return err
 	}
 	return writeERPCConfig(cfg, erpcConfig)
@@ -303,20 +558,32 @@ func mergeERPCOverlay(erpcConfig map[string]any, ov *ERPCOverlay) error {
 	return nil
 }
 
-func stripERPCOverlay(erpcConfig map[string]any, ov *ERPCOverlay) error {
-	projects, ok := erpcConfig["projects"].([]any)
-	if !ok || len(projects) == 0 {
+// stripERPCOverlay removes overlay-owned entries from erpcConfig. Per key,
+// prov says whether the overlay ADDED it (no prior entry — drop it) or
+// REPLACED a chart-base/recorded entry (restore that entry instead of
+// deleting it, so the chain doesn't go unroutable). A key with no
+// provenance record at all (nil prov, or overlay applied before provenance
+// tracking existed) falls back to the old drop-only behavior.
+func stripERPCOverlay(erpcConfig map[string]any, ov *ERPCOverlay, prov *erpcProvenance) error {
+	project := erpcConfigProject(erpcConfig)
+	if project == nil {
 		return fmt.Errorf("eRPC config has no projects")
 	}
-	project, ok := projects[0].(map[string]any)
-	if !ok {
-		return fmt.Errorf("eRPC config project[0] is not a map")
+	if prov == nil {
+		prov = &erpcProvenance{}
 	}
 
 	if len(ov.Upstreams) > 0 {
 		drop := map[string]struct{}{}
+		restore := map[string]map[string]any{}
 		for _, u := range ov.Upstreams {
-			if id, _ := u["id"].(string); id != "" {
+			id, _ := u["id"].(string)
+			if id == "" {
+				continue
+			}
+			if orig, tracked := prov.Upstreams[id]; tracked && orig != nil {
+				restore[id] = *orig
+			} else {
 				drop[id] = struct{}{}
 			}
 		}
@@ -329,6 +596,10 @@ func stripERPCOverlay(erpcConfig map[string]any, ov *ERPCOverlay) error {
 				continue
 			}
 			id, _ := um["id"].(string)
+			if orig, hit := restore[id]; hit {
+				kept = append(kept, orig)
+				continue
+			}
 			if _, hit := drop[id]; hit {
 				continue
 			}
@@ -339,8 +610,15 @@ func stripERPCOverlay(erpcConfig map[string]any, ov *ERPCOverlay) error {
 
 	if len(ov.Networks) > 0 {
 		drop := map[string]struct{}{}
+		restore := map[string]map[string]any{}
 		for _, n := range ov.Networks {
-			if k := networkMergeKey(n); k != "" {
+			k := networkMergeKey(n)
+			if k == "" {
+				continue
+			}
+			if orig, tracked := prov.Networks[k]; tracked && orig != nil {
+				restore[k] = *orig
+			} else {
 				drop[k] = struct{}{}
 			}
 		}
@@ -352,7 +630,12 @@ func stripERPCOverlay(erpcConfig map[string]any, ov *ERPCOverlay) error {
 				kept = append(kept, n)
 				continue
 			}
-			if _, hit := drop[networkMergeKey(nm)]; hit {
+			k := networkMergeKey(nm)
+			if orig, hit := restore[k]; hit {
+				kept = append(kept, orig)
+				continue
+			}
+			if _, hit := drop[k]; hit {
 				continue
 			}
 			kept = append(kept, n)

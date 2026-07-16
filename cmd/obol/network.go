@@ -577,6 +577,16 @@ func networkERPCCommand(cfg *config.Config) *cli.Command {
 						return nil
 					}
 					u.Printf("Status: set (v%d, hash %s)\n", st.Version, st.ContentHash)
+					switch st.ClusterSync {
+					case "":
+						u.Info("Cluster: unknown (could not reach cluster to check for drift)")
+					case network.ERPCSyncInSync:
+						u.Info("Cluster: in-sync")
+					case network.ERPCSyncNotApplied:
+						u.Warn("Cluster: not-applied (overlay is on disk but not on the live ConfigMap — run `obol network erpc set -f <file>` or `obol stack up`)")
+					default:
+						u.Warnf("Cluster: %s (live ConfigMap does not match the on-disk overlay — re-run `obol network erpc set -f <file>`)", st.ClusterSync)
+					}
 					u.Printf("Networks (%d):\n", st.NetworkCount)
 					for _, k := range st.NetworkKeys {
 						u.Printf("  - %s\n", k)
