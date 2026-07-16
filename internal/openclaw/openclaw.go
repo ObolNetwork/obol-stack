@@ -28,6 +28,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
+	"github.com/ObolNetwork/obol-stack/internal/validate"
 	petname "github.com/dustinkirkland/golang-petname"
 )
 
@@ -166,6 +167,13 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 		u.Infof("Generated deployment ID: %s", id)
 	} else {
 		u.Infof("Using deployment ID: %s", id)
+	}
+
+	// id becomes a DNS label (hostname, namespace) below, so it must be
+	// restricted to a safe charset — an unsanitized id (e.g. containing a
+	// newline) could otherwise inject arbitrary /etc/hosts entries.
+	if err := validate.Name(id); err != nil {
+		return fmt.Errorf("invalid agent id: %w", err)
 	}
 
 	deploymentDir := DeploymentPath(cfg, id)
