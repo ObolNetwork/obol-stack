@@ -1054,8 +1054,30 @@ func childName(name string) string {
 }
 
 func backendReferenceGrantName(namespace, name string) string {
-	// Prefix with namespace so cluster-scoped-looking names in x402 stay unique
-	// per (namespace, offer). safeName still truncates+hashes long names.
+	// All grants share the x402 namespace, so this name must be injective over
+	// (namespace, name). namespace and name are DNS subdomains that may both
+	// contain internal dashes, so NO literal separator between them is
+	// injective — (ns "foo-bar", name "baz") and (ns "foo", name "bar-baz")
+	// would both dash-join to "foo-bar-baz" and fight over one ReferenceGrant
+	// (the HTTP-500 collision the namespace-qualification was meant to end).
+	// Disambiguate with a hash of the exact tuple: "/" is illegal in a DNS
+	// label, so namespace+"/"+name is a collision-free encoding of the pair.
+	tuple := md5.Sum([]byte(namespace + "/" + name))
+	return safeName("so-", namespace+"-"+name, "-"+fmt.Sprintf("%x", tuple)[:8]+"-backend-grant")
+}
+
+// legacyBackendReferenceGrantName is the pre-4726dcfe non-namespaced grant
+// name; still deleted on reconcile so upgrades tear down the orphaned object
+// (grants created before the rename are never touched by the new name).
+func legacyBackendReferenceGrantName(offerName string) string {
+	return safeName("so-", offerName, "-backend-grant")
+}
+
+// intermediateBackendReferenceGrantName is the dash-joined 4726dcfe grant name
+// (never released, but live on integration deployments) that the hash suffix
+// superseded. Swept alongside the pre-4726dcfe name so an upgrade tears down
+// both stale forms.
+func intermediateBackendReferenceGrantName(namespace, name string) string {
 	return safeName("so-", namespace+"-"+name, "-backend-grant")
 }
 
