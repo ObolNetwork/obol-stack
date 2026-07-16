@@ -267,3 +267,147 @@ func TestCatalogAdvertisesDedicatedOrigin(t *testing.T) {
 		t.Errorf("skill.md routes not rooted at dedicated origin:\n%.400s", skill)
 	}
 }
+
+// TestBuildHostHTTPRoute_AgentChatWidget pins the agent-only chat rules:
+// Exact /chat and /chat-vendor.js rewrite to the SHARED widget files at the
+// catalog httpd root (not the offer bundle dir), sit between the discovery
+// rules and the catch-all so they win over the payment gate, and do not
+// exist at all for non-agent offers (covered by TestBuildHostHTTPRoute's
+// rule-count pin).
+func TestBuildHostHTTPRoute_AgentChatWidget(t *testing.T) {
+	offer := hostnameOffer()
+	offer.Spec.Type = "agent"
+	route := buildHostHTTPRoute(offer)
+
+	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+	if len(rules) != 6 {
+		t.Fatalf("rules = %d, want 6 (3 discovery + /chat + /chat-vendor.js + catch-all)", len(rules))
+	}
+
+	wantShared := map[string]string{
+		"/chat":           "/offers/sec/audit/chat.html",
+		"/chat-vendor.js": "/chat-vendor.js",
+	}
+	for i := 3; i <= 4; i++ {
+		rule := rules[i].(map[string]any)
+		match := rule["matches"].([]any)[0].(map[string]any)["path"].(map[string]any)
+		if match["type"] != "Exact" {
+			t.Errorf("rule %d match type = %v, want Exact", i, match["type"])
+		}
+		public := match["value"].(string)
+		want, ok := wantShared[public]
+		if !ok {
+			t.Fatalf("rule %d matches unexpected path %q", i, public)
+		}
+		filter := rule["filters"].([]any)[0].(map[string]any)
+		rewrite := filter["urlRewrite"].(map[string]any)["path"].(map[string]any)
+		if got := rewrite["replaceFullPath"]; got != want {
+			t.Errorf("rule %d (%s) rewrites to %v, want %s", i, public, got, want)
+		}
+		backend := rule["backendRefs"].([]any)[0].(map[string]any)
+		if backend["name"] != staticSiteConfigMapName || backend["namespace"] != staticSiteNamespace {
+			t.Errorf("rule %d backend = %v", i, backend)
+		}
+	}
+
+	// Catch-all must still be last.
+	last := rules[5].(map[string]any)
+	match := last["matches"].([]any)[0].(map[string]any)["path"].(map[string]any)
+	if match["type"] != "PathPrefix" {
+		t.Fatalf("last rule = %v, want the PathPrefix catch-all", match)
+	}
+}
+
+// TestOfferLandingChatEmbed pins the landing-page widget embed: agent offers
+// get the chat card iframing /chat; everything else keeps the plain landing.
+func TestOfferLandingChatEmbed(t *testing.T) {
+	profile := schemas.StorefrontProfile{DisplayName: "Acme", ContactEmail: "ops@acme.example"}
+
+	plain := buildOfferLandingHTML(hostnameOffer(), profile)
+	if strings.Contains(plain, `data-obol="chat"`) {
+		t.Fatalf("non-agent landing embeds the chat widget")
+	}
+
+	agent := hostnameOffer()
+	agent.Spec.Type = "agent"
+	withChat := buildOfferLandingHTML(agent, profile)
+	if !strings.Contains(withChat, `data-obol="chat"`) || !strings.Contains(withChat, `src="/chat"`) {
+		t.Fatalf("agent landing missing chat embed:\n%s", withChat)
+	}
+}
+
+// TestStaticSiteServesChatWidget pins the widget delivery: the shared
+// vendor bundle sits in the catalog ConfigMap (served with a JavaScript
+// MIME type — module imports hard-fail otherwise), while the chat page is
+// rendered per agent offer into its bundle with the offer's title and the
+// same resolved theme tokens as its landing page.
+func TestStaticSiteServesChatWidget(t *testing.T) {
+	cm := buildStaticSiteConfigMap("# cat", `{"services":[]}`, `{}`, "<html></html>", nil)
+	data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+	if data["chat-vendor.js"] == "" {
+		t.Fatalf("catalog ConfigMap missing the shared chat vendor bundle")
+	}
+	if !strings.Contains(data["httpd.conf"], ".js:text/javascript") {
+		t.Fatalf("httpd.conf missing .js MIME mapping: %q", data["httpd.conf"])
+	}
+	var sawJS bool
+	for _, raw := range staticSiteVolumeItems(nil) {
+		item := raw.(map[string]any)
+		if item["key"] == "chat-vendor.js" && item["path"] == "chat-vendor.js" {
+			sawJS = true
+		}
+	}
+	if !sawJS {
+		t.Fatalf("volume items missing the chat vendor projection")
+	}
+
+	// Per-offer page: agent offers gain a chat.html bundle file carrying
+	// the landing page's theme tokens and title; non-agent offers do not.
+	profile := schemas.StorefrontProfile{DisplayName: "Acme"}
+	plain := buildOfferBundles([]*monetizeapi.ServiceOffer{hostnameOffer()}, profile)
+	for _, f := range plain {
+		if strings.HasSuffix(f.Path, "chat.html") {
+			t.Fatalf("non-agent offer rendered a chat page: %s", f.Path)
+		}
+	}
+	agent := hostnameOffer()
+	agent.Spec.Type = "agent"
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{agent}, profile)
+	var chat string
+	for _, f := range bundles {
+		if f.Path == "offers/sec/audit/chat.html" {
+			chat = f.Content
+		}
+	}
+	if chat == "" {
+		t.Fatalf("agent offer bundle missing chat.html (got %d files)", len(bundles))
+	}
+	theme := storefront.ResolveTheme(profile.Theme, profile.AccentColor)
+	if !strings.Contains(chat, "--bg01:"+theme.Vars["bg01"]) {
+		t.Errorf("chat page missing resolved theme tokens")
+	}
+	if !strings.Contains(chat, "chat-vendor.js?v=") {
+		t.Errorf("chat page missing cache-busted vendor import")
+	}
+}
+
+// TestHostRouteDiscoveryRulesAreGETOnly pins the method scoping: a
+// root-priced offer advertises POST <origin>/ as its paid resource, so the
+// Exact "/" discovery rule must only capture GETs — POSTs fall through to
+// the PathPrefix payment gate.
+func TestHostRouteDiscoveryRulesAreGETOnly(t *testing.T) {
+	offer := hostnameOffer()
+	offer.Spec.Type = "agent"
+	route := buildHostHTTPRoute(offer)
+	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+	for i, raw := range rules[:len(rules)-1] { // all but the catch-all
+		match := raw.(map[string]any)["matches"].([]any)[0].(map[string]any)
+		if match["method"] != "GET" {
+			t.Errorf("rule %d (%v) method = %v, want GET", i, match["path"], match["method"])
+		}
+	}
+	last := rules[len(rules)-1].(map[string]any)["matches"].([]any)[0].(map[string]any)
+	if _, scoped := last["method"]; scoped {
+		t.Errorf("catch-all must match every method")
+	}
+}
