@@ -815,6 +815,7 @@ func buildHostHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructu
 					exactTo("/", "index.html"),
 					exactTo("/openapi.json", "openapi.json"),
 					exactTo("/.well-known/x402", "x402.json"),
+					exactTo("/.well-known/agent-registration.json", "agent-registration.json"),
 					map[string]any{
 						"matches": []any{
 							map[string]any{"path": map[string]any{"type": "PathPrefix", "value": "/"}},

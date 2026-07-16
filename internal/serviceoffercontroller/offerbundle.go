@@ -52,16 +52,32 @@ func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.Store
 		// branding block overrides the storefront profile field-wise
 		// (empty fields inherit).
 		originProfile := storefront.MergeProfile(profile, offer.Spec.Branding.ProfilePatch())
+		upstreamDoc := tryUpstreamOpenAPI(offer)
+		openapiContent := buildOfferScopedOpenAPI(offer, originProfile)
+		x402Content := buildOfferWellKnownX402(offer)
+		if upstreamDoc != nil {
+			if rewritten, ok := rewriteUpstreamOpenAPI(upstreamDoc, offer, originProfile); ok {
+				openapiContent = rewritten
+			}
+			if expanded := buildOfferWellKnownX402FromOpenAPI(offer, upstreamDoc); expanded != "" {
+				x402Content = expanded
+			}
+		}
 		bundles = append(bundles,
 			offerBundleFile{
 				Key:     offerBundleKey(offer, "openapi.json"),
 				Path:    offerBundleDir(offer) + "/openapi.json",
-				Content: buildOfferScopedOpenAPI(offer, originProfile),
+				Content: openapiContent,
 			},
 			offerBundleFile{
 				Key:     offerBundleKey(offer, "x402.json"),
 				Path:    offerBundleDir(offer) + "/x402.json",
-				Content: buildOfferWellKnownX402(offer),
+				Content: x402Content,
+			},
+			offerBundleFile{
+				Key:     offerBundleKey(offer, "agent-registration.json"),
+				Path:    offerBundleDir(offer) + "/agent-registration.json",
+				Content: buildOfferAgentRegistration(offer, originProfile),
 			},
 			offerBundleFile{
 				Key:     offerBundleKey(offer, "index.html"),
@@ -74,8 +90,6 @@ func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.Store
 	return bundles
 }
 
-// bundleDigestInput folds bundle contents into the catalog content hash so
-// bundle-only changes (e.g. a hostname added to one offer) roll the httpd.
 func bundleDigestInput(bundles []offerBundleFile) string {
 	var b strings.Builder
 	for _, f := range bundles {
