@@ -519,8 +519,10 @@ download_with_retries() {
 }
 
 # Verify a downloaded release binary against the published SHA256SUMS file.
-# Fails (returns 1) on checksum mismatch. Warns and continues (returns 0) if
-# SHA256SUMS is unavailable (older releases) or no local sha256 tool exists.
+# Fails closed (returns 1) on checksum mismatch, a missing checksum entry, or
+# no local sha256 tool. If SHA256SUMS itself can't be fetched, also fails
+# closed unless OBOL_ALLOW_UNVERIFIED=1 is explicitly set, in which case the
+# install proceeds unverified.
 verify_release_checksum() {
 	local release_tag="$1"
 	local binary_name="$2"
@@ -530,8 +532,15 @@ verify_release_checksum() {
 	local tmp_sums="${binary_path}.sha256sums"
 
 	if ! download_with_retries "$sums_url" "$tmp_sums"; then
-		log_warn "SHA256SUMS not published for $release_tag, skipping checksum verification"
-		return 0
+		if [[ "${OBOL_ALLOW_UNVERIFIED:-}" == "1" || "${OBOL_ALLOW_UNVERIFIED:-}" == "true" ]]; then
+			log_warn "SHA256SUMS not published for $release_tag, skipping checksum verification (OBOL_ALLOW_UNVERIFIED set)"
+			return 0
+		fi
+		log_error "Could not fetch SHA256SUMS for $release_tag, refusing to install an unverified binary"
+		echo ""
+		echo "  Set OBOL_ALLOW_UNVERIFIED=1 to bypass this check if you understand the risk."
+		echo ""
+		return 1
 	fi
 
 	# Match on the artifact name as published (e.g. obol_darwin_arm64),
@@ -541,14 +550,14 @@ verify_release_checksum() {
 	rm -f "$tmp_sums"
 
 	if [[ -z "$expected_hash" ]]; then
-		log_warn "No checksum entry for $binary_name in SHA256SUMS, skipping verification"
-		return 0
+		log_error "No checksum entry for $binary_name in SHA256SUMS ($release_tag), refusing to install an unverified binary"
+		return 1
 	fi
 
 	local actual_hash
 	if ! actual_hash=$(sha256_file "$binary_path"); then
-		log_warn "Neither sha256sum nor shasum is available, skipping checksum verification"
-		return 0
+		log_error "Neither sha256sum nor shasum is available, refusing to install an unverified binary"
+		return 1
 	fi
 
 	if [[ "$actual_hash" != "$expected_hash" ]]; then
