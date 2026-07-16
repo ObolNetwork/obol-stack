@@ -18,6 +18,10 @@ func hostnameOffer() *monetizeapi.ServiceOffer {
 	return offer
 }
 
+// noUpstreamOpenAPI is the buildOfferBundles cache-lookup stub for tests
+// that don't exercise the upstream-OpenAPI path.
+func noUpstreamOpenAPI(*monetizeapi.ServiceOffer) map[string]any { return nil }
+
 // TestBuildHostHTTPRoute pins the dedicated-origin route topology: Exact
 // discovery rules rewriting into the offer's bundle files on the catalog
 // httpd, and a PathPrefix / rule rewriting the public path-world into
@@ -105,15 +109,12 @@ func TestBuildHostHTTPRoute(t *testing.T) {
 func TestBuildOfferBundles(t *testing.T) {
 	profile := schemas.StorefrontProfile{DisplayName: "Acme", ContactEmail: "ops@acme.example"}
 	offer := hostnameOffer()
-	prev := tryUpstreamOpenAPI
-	tryUpstreamOpenAPI = func(*monetizeapi.ServiceOffer) map[string]any { return nil }
-	defer func() { tryUpstreamOpenAPI = prev }()
 
-	if got := buildOfferBundles([]*monetizeapi.ServiceOffer{routeTableOffer()}, profile); len(got) != 0 {
+	if got := buildOfferBundles([]*monetizeapi.ServiceOffer{routeTableOffer()}, profile, noUpstreamOpenAPI); len(got) != 0 {
 		t.Fatalf("path-only offer produced bundles: %v", got)
 	}
 
-	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile)
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile, noUpstreamOpenAPI)
 	if len(bundles) != 4 {
 		t.Fatalf("len(bundles) = %d, want 4", len(bundles))
 	}
@@ -186,9 +187,6 @@ func TestBuildOfferBundles(t *testing.T) {
 // spec.branding fields override the storefront profile on the dedicated
 // origin's surfaces, empty fields inherit.
 func TestBuildOfferBundles_BrandingOverride(t *testing.T) {
-	prev := tryUpstreamOpenAPI
-	tryUpstreamOpenAPI = func(*monetizeapi.ServiceOffer) map[string]any { return nil }
-	defer func() { tryUpstreamOpenAPI = prev }()
 	profile := storefront.ResolvePublished(&schemas.StorefrontProfile{
 		DisplayName:  "Acme",
 		ContactEmail: "ops@acme.example",
@@ -202,7 +200,7 @@ func TestBuildOfferBundles_BrandingOverride(t *testing.T) {
 		Description: "**Deep** audits by AuditCo.",
 	}
 
-	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile)
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile, noUpstreamOpenAPI)
 	byPath := map[string]string{}
 	for _, f := range bundles {
 		byPath[f.Path] = f.Content
@@ -371,10 +369,7 @@ func TestStaticSiteServesChatWidget(t *testing.T) {
 	// Per-offer page: agent offers gain a chat.html bundle file carrying
 	// the landing page's theme tokens and title; non-agent offers do not.
 	profile := schemas.StorefrontProfile{DisplayName: "Acme"}
-	prev := tryUpstreamOpenAPI
-	tryUpstreamOpenAPI = func(*monetizeapi.ServiceOffer) map[string]any { return nil }
-	defer func() { tryUpstreamOpenAPI = prev }()
-	plain := buildOfferBundles([]*monetizeapi.ServiceOffer{hostnameOffer()}, profile)
+	plain := buildOfferBundles([]*monetizeapi.ServiceOffer{hostnameOffer()}, profile, noUpstreamOpenAPI)
 	for _, f := range plain {
 		if strings.HasSuffix(f.Path, "chat.html") {
 			t.Fatalf("non-agent offer rendered a chat page: %s", f.Path)
@@ -382,7 +377,7 @@ func TestStaticSiteServesChatWidget(t *testing.T) {
 	}
 	agent := hostnameOffer()
 	agent.Spec.Type = "agent"
-	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{agent}, profile)
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{agent}, profile, noUpstreamOpenAPI)
 	var chat string
 	for _, f := range bundles {
 		if f.Path == "offers/sec/audit/chat.html" {
@@ -427,8 +422,7 @@ func TestBuildOfferBundles_UpstreamOpenAPI(t *testing.T) {
 	offer := hostnameOffer()
 	offer.Spec.Registration.Name = "Hyperliquid Trading Intelligence"
 	offer.Spec.Registration.Description = "Full first-party catalog."
-	prev := tryUpstreamOpenAPI
-	tryUpstreamOpenAPI = func(*monetizeapi.ServiceOffer) map[string]any {
+	upstream := func(*monetizeapi.ServiceOffer) map[string]any {
 		return map[string]any{
 			"openapi": "3.1.0",
 			"info":    map[string]any{"title": "upstream-title", "version": "1.1.0"},
@@ -446,8 +440,7 @@ func TestBuildOfferBundles_UpstreamOpenAPI(t *testing.T) {
 			},
 		}
 	}
-	defer func() { tryUpstreamOpenAPI = prev }()
-	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile)
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile, upstream)
 	byPath := map[string]string{}
 	for _, f := range bundles {
 		byPath[f.Path] = f.Content

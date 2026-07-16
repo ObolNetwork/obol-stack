@@ -78,6 +78,12 @@ type Controller struct {
 	agentQueue                workqueue.TypedRateLimitingInterface[string]
 	staticSiteMu              sync.Mutex
 
+	// upstreamOpenAPICache is populated from each offer's own reconcile
+	// (refresh, outside staticSiteMu) and only ever read by
+	// reconcileStaticSite's buildOfferBundles call (under staticSiteMu) —
+	// see upstream_openapi.go.
+	upstreamOpenAPICache upstreamOpenAPICache
+
 	pendingAuths sync.Map // key: "ns/name" → []map[string]string
 
 	httpClient *http.Client
@@ -470,6 +476,7 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		if err := c.reconcileStaticSite(ctx, &tombstone); err != nil {
 			return err
 		}
+		c.upstreamOpenAPICache.forget(offer.UID)
 		return c.removeFinalizer(ctx, raw, serviceOfferFinalizer)
 	}
 
@@ -660,6 +667,13 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		// Requeue offers that are still converging so status can advance without
 		// requiring a spec mutation or unrelated ConfigMap update.
 		c.offerQueue.AddAfter(offer.Namespace+"/"+offer.Name, 5*time.Second)
+	}
+	// Refresh this offer's upstream OpenAPI cache from its own reconcile,
+	// outside staticSiteMu, at most once per generation — see
+	// upstreamOpenAPICache and buildOfferBundles for why the rebuild below
+	// must never fetch live.
+	if offer.Spec.Hostname != "" {
+		c.upstreamOpenAPICache.refresh(offer, tryUpstreamOpenAPI)
 	}
 	// Rebuild the static site on every reconcile so tunnel URL changes and
 	// offer status updates propagate immediately. reconcileStaticSite skips
@@ -1339,7 +1353,7 @@ func (c *Controller) reconcileStaticSite(ctx context.Context, override *monetize
 	// when tunnelURL changes — see enqueueDiscoveryRefresh).
 	openAPIJSON := buildOpenAPIDocument(offers, baseURL, resolvedProfile)
 	apiDocsHTML := scalarHTML(resolvedProfile)
-	bundles := buildOfferBundles(offers, resolvedProfile)
+	bundles := buildOfferBundles(offers, resolvedProfile, c.upstreamOpenAPICache.get)
 	contentHash := computeStaticSiteContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)
 
 	unchanged, err := c.staticSiteContentUnchanged(ctx, content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)
