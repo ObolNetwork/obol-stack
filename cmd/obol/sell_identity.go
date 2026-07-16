@@ -291,6 +291,70 @@ func sellIdentityCommand(cfg *config.Config) *cli.Command {
 		Usage: "Manage the durable ERC-8004 AgentIdentity record",
 		Commands: []*cli.Command{
 			sellIdentityImportCommand(cfg),
+			sellIdentityForgetCommand(cfg),
+		},
+	}
+}
+
+func sellIdentityForgetCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:      "forget",
+		Usage:     "Remove a chain's registration from the AgentIdentity record",
+		ArgsUsage: "<chain>",
+		Description: `Removes the recorded agentId for <chain> from the AgentIdentity CR.
+
+Use this to correct a registration that was recorded under the wrong
+chain (e.g. a wrong-chain agentId written by a bug, or an offer that
+switched networks before an on-chain id was verified). This does not
+touch the on-chain NFT itself; it only clears the local record so the
+controller re-derives the id from scratch on the next reconcile.`,
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.NArg() != 1 {
+				return fmt.Errorf("chain required: obol sell identity forget <chain>")
+			}
+			chain := strings.TrimSpace(cmd.Args().First())
+
+			ns := monetizeapi.AgentIdentityDefaultNamespace
+			name := monetizeapi.AgentIdentityDefaultName
+			rec, err := loadAgentIdentity(cfg, ns, name)
+			if err != nil {
+				return err
+			}
+			if rec == nil {
+				return fmt.Errorf("AgentIdentity %s/%s not found", ns, name)
+			}
+			existing := monetizeapi.AgentIdentityAgentIDForChain(rec.Status, chain)
+			if existing == "" {
+				getUI(cmd).Printf("AgentIdentity %s/%s has no registration on %s; nothing to do.", ns, name, chain)
+				return nil
+			}
+			rec.Status = monetizeapi.RemoveAgentIdentityRegistration(rec.Status, chain)
+			// Patch registrations explicitly rather than via
+			// patchAgentIdentityStatus: that helper marshals with
+			// `omitempty`, so dropping the last entry (the common case —
+			// the poisoned record is usually the only one) would omit
+			// the field from the JSON merge patch and leave the stale
+			// array untouched server-side instead of clearing it.
+			registrations := rec.Status.Registrations
+			if registrations == nil {
+				registrations = []monetizeapi.AgentIdentityRegistration{}
+			}
+			patch, err := json.Marshal(map[string]any{"status": map[string]any{"registrations": registrations}})
+			if err != nil {
+				return err
+			}
+			if err := kubectlRun(
+				cfg,
+				"patch", "agentidentities.obol.org", name,
+				"-n", ns,
+				"--subresource=status",
+				"--type=merge",
+				"-p", string(patch),
+			); err != nil {
+				return err
+			}
+			getUI(cmd).Successf("Removed agent %s on %s from AgentIdentity %s/%s.", existing, chain, ns, name)
+			return nil
 		},
 	}
 }

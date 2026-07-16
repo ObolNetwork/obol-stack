@@ -864,6 +864,11 @@ func (c *Controller) reconcileRegistrationStatus(ctx context.Context, status *mo
 		if err := c.deleteRegistrationRequest(ctx, offer.Namespace, offer.Name); err != nil {
 			return err
 		}
+		// Disabling registration must stop reporting whatever agentId was
+		// last recorded — otherwise a disabled offer keeps showing a
+		// (possibly stale, wrong-chain) id in status/CLI output.
+		status.AgentID = ""
+		status.RegistrationTxHash = ""
 		setCondition(status, "Registered", "True", "Disabled", "Registration disabled")
 		return nil
 	}
@@ -905,8 +910,7 @@ func (c *Controller) reconcileRegistrationStatus(ctx context.Context, status *mo
 		if err != nil {
 			return err
 		}
-		request.Status = registrationRequestStatusWithIdentity(request, identity)
-		applySharedRegistrationStatus(status, offer, owner, request)
+		applySharedRegistrationStatus(status, offer, owner, identity, request)
 		return nil
 	}
 
@@ -926,14 +930,7 @@ func (c *Controller) reconcileRegistrationStatus(ctx context.Context, status *mo
 		return err
 	}
 
-	status.AgentID = request.Status.AgentID
-	status.RegistrationTxHash = request.Status.RegistrationTxHash
-	if agentID := monetizeapi.AgentIdentityAgentIDForChain(identity.Status, offer.Spec.Payment.Network); agentID != "" {
-		status.AgentID = agentID
-		request.Status = registrationRequestStatusWithIdentity(request, identity)
-	}
-
-	applySharedRegistrationStatus(status, offer, owner, request)
+	applySharedRegistrationStatus(status, offer, owner, identity, request)
 	return nil
 }
 
@@ -1072,7 +1069,12 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 		return c.updateRegistrationStatus(ctx, raw, status)
 	}
 	registrationChain := firstNonEmpty(request.Spec.Chain, offer.Spec.Payment.Network)
-	agentID := firstNonEmpty(monetizeapi.AgentIdentityAgentIDForChain(identity.Status, registrationChain), status.AgentID, offer.Status.AgentID)
+	// Chain-scoped only: status.AgentID/offer.Status.AgentID are not
+	// chain-tagged, so falling back to them here would reuse a
+	// wrong-chain id after a network switch and skip the on-chain
+	// ownership verification below. AgentIdentityAgentIDForChain
+	// correctly returns "" until this chain has a verified registration.
+	agentID := monetizeapi.AgentIdentityAgentIDForChain(identity.Status, registrationChain)
 	txHash := firstNonEmpty(status.RegistrationTxHash, offer.Status.RegistrationTxHash)
 
 	offers, err := c.registrationOffersForIdentity(defaultAgentIdentityKey(), "", "")
@@ -1215,21 +1217,18 @@ func (c *Controller) recoverRegistration(ctx context.Context, client *erc8004.Cl
 
 func (c *Controller) reconcileRegistrationTombstone(ctx context.Context, raw *unstructured.Unstructured, request *monetizeapi.RegistrationRequest, offer *monetizeapi.ServiceOffer, baseURL string) error {
 	status := request.Status
-	identityRaw, identity, err := c.ensureAgentIdentityForOffer(ctx, offer)
+	_, identity, err := c.ensureAgentIdentityForOffer(ctx, offer)
 	if err != nil {
 		status.Phase = registrationPhaseAwaitingExternal
 		status.Message = truncateMessage(fmt.Sprintf("Waiting for AgentIdentity tombstone: %v", err))
 		return c.updateRegistrationStatus(ctx, raw, status)
 	}
+	// Chain-scoped only — see reconcileRegistrationActive for why the
+	// status.AgentID/offer.Status.AgentID fallbacks are dropped. Since
+	// agentID is now always exactly what AgentIdentityAgentIDForChain
+	// already returns, there is nothing left to backfill into identity.
 	registrationChain := firstNonEmpty(request.Spec.Chain, offer.Spec.Payment.Network)
-	agentID := firstNonEmpty(monetizeapi.AgentIdentityAgentIDForChain(identity.Status, registrationChain), status.AgentID, offer.Status.AgentID)
-
-	if agentID != "" && monetizeapi.AgentIdentityAgentIDForChain(identity.Status, registrationChain) == "" {
-		identity.Status = agentIdentityStatusFromRegistration(identity, registrationChain, agentID)
-		if err := c.updateAgentIdentityStatus(ctx, identityRaw, identity.Status); err != nil {
-			return err
-		}
-	}
+	agentID := monetizeapi.AgentIdentityAgentIDForChain(identity.Status, registrationChain)
 
 	document := BuildIdentityRegistrationDocument(IdentityRegistrationView{
 		Identity: identity,
@@ -1434,34 +1433,50 @@ func selectRegistrationOwner(offers []*monetizeapi.ServiceOffer) *monetizeapi.Se
 	return offers[0]
 }
 
-func applySharedRegistrationStatus(status *monetizeapi.ServiceOfferStatus, offer, owner *monetizeapi.ServiceOffer, request *monetizeapi.RegistrationRequest) {
-	status.AgentID = request.Status.AgentID
-	status.RegistrationTxHash = request.Status.RegistrationTxHash
+// applySharedRegistrationStatus copies a shared RegistrationRequest's phase
+// onto offer's status, but the agentId itself is never trusted straight off
+// request.Status: that subresource belongs to the registration owner and is
+// never chain-tagged, so it can't tell whether it was recorded under
+// offer's own Spec.Payment.Network or a different chain the owner (or offer
+// itself, before a network switch) used previously. The agentId is instead
+// always re-derived from the chain-scoped AgentIdentity record — if the
+// identity has no registration for offer's chain, agentId stays empty and
+// Registered does not flip True on the strength of a foreign chain's id.
+func applySharedRegistrationStatus(status *monetizeapi.ServiceOfferStatus, offer, owner *monetizeapi.ServiceOffer, identity *monetizeapi.AgentIdentity, request *monetizeapi.RegistrationRequest) {
+	agentID := monetizeapi.AgentIdentityAgentIDForChain(identity.Status, offer.Spec.Payment.Network)
+	status.AgentID = agentID
+	// The tx hash lives on the same chain-blind request.Status subresource
+	// the agentId was retired from, so it is only mirrored once the offer's
+	// own chain has a recorded registration for it to describe.
+	status.RegistrationTxHash = ""
+	if agentID != "" {
+		status.RegistrationTxHash = request.Status.RegistrationTxHash
+	}
 
 	if !isConditionTrue(*status, "RoutePublished") {
 		setCondition(status, "Registered", "False", "WaitingForRoute", "Waiting for route publication before shared registration")
 		return
 	}
 
-	// Prefer a completed RegistrationRequest phase. Also treat a non-empty
-	// agentId (including one filled from AgentIdentity after CLI register)
-	// as Registered=True so non-owner offers and post-hoc enables leave
-	// Pending once the on-chain id is known — even when RegistrationTxHash
-	// is still empty (CLI path does not always populate the request tx).
-	if requestPhaseReady(request.Status.Phase) || strings.TrimSpace(request.Status.AgentID) != "" {
-		message := defaultString(request.Status.Message, "Registration reconciled")
-		if request.Status.AgentID != "" {
-			message = defaultString(request.Status.Message, fmt.Sprintf("Recorded agent %s", request.Status.AgentID))
-		}
+	// Registered only ever flips True on the strength of a chain-scoped
+	// agentId. requestPhaseReady(request.Status.Phase) alone is NOT a
+	// sufficient condition: Phase is set by whoever last reconciled this
+	// RegistrationRequest for whatever chain it targeted at that time, and
+	// (like the AgentID field) is never chain-tagged — it can read stale
+	// "Registered" from a chain the offer (or, when shared, the owner) has
+	// since moved off. Every legitimate Phase=Registered transition sets
+	// agentID for that same chain in the same reconcile pass, so requiring
+	// agentID != "" here costs no real case while closing the stale-phase
+	// gap (this is also what tempers the request.Status.AgentID-based
+	// widening 84dcbf83 added — that source is gone, but a bare Phase
+	// check has the identical staleness problem).
+	if agentID != "" {
+		message := defaultString(request.Status.Message, fmt.Sprintf("Recorded agent %s", agentID))
 		if owner != nil && (owner.Namespace != offer.Namespace || owner.Name != offer.Name) {
-			if request.Status.AgentID != "" {
-				message = fmt.Sprintf("Shared registration via %s/%s recorded agent %s", owner.Namespace, owner.Name, request.Status.AgentID)
-			} else {
-				message = fmt.Sprintf("Shared registration via %s/%s is active", owner.Namespace, owner.Name)
-			}
+			message = fmt.Sprintf("Shared registration via %s/%s recorded agent %s", owner.Namespace, owner.Name, agentID)
 		}
 		reason := defaultString(request.Status.Phase, "Active")
-		if !requestPhaseReady(request.Status.Phase) && request.Status.AgentID != "" {
+		if !requestPhaseReady(request.Status.Phase) {
 			reason = "Active"
 		}
 		setCondition(status, "Registered", "True", reason, message)
