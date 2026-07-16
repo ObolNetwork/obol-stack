@@ -2035,7 +2035,7 @@ rbac:
 	b.WriteString("openclaw:\n")
 
 	if agentModel != "" {
-		fmt.Fprintf(&b, "  agentModel: %s\n", agentModel)
+		fmt.Fprintf(&b, "  agentModel: %s\n", yamlScalar(agentModel))
 	}
 
 	b.WriteString(`  gateway:
