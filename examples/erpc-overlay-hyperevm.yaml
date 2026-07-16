@@ -1,0 +1,104 @@
+# Example eRPC operator overlay — HyperEVM (chain 999) basket.
+#
+# Durable multi-upstream baskets that survive `obol stack up`. Apply with:
+#
+#   obol network overlay apply -f examples/erpc-overlay-hyperevm.yaml
+#   obol network overlay status
+#   obol network overlay reconcile   # re-apply without re-reading -f
+#
+# Host copy lives at $OBOL_CONFIG_DIR/rpc/erpc-overlay.yaml (0600) and is
+# re-merged after recorded remotes on every stack up (see #763).
+#
+# Edit the local endpoint for your co-located hl-node before applying.
+
+version: 1
+
+networks:
+  - alias: hyperevm
+    architecture: evm
+    evm:
+      chainId: 999
+    failsafe:
+      timeout:
+        duration: 10s
+      retry:
+        maxAttempts: 3
+        delay: 100ms
+      hedge:
+        delay: 150ms
+        maxCount: 1
+
+upstreams:
+  # Prefer a co-located non-validator HyperEVM RPC when present.
+  - id: local-hl-node
+    endpoint: http://192.168.50.21:3001/evm
+    evm:
+      chainId: 999
+    routing:
+      scoreMultipliers:
+        - network: "*"
+          method: "*"
+          overall: 5.0
+
+  - id: hyperevm-official
+    endpoint: https://rpc.hyperliquid.xyz/evm
+    evm:
+      chainId: 999
+    tags: ["tier:fallback"]
+    rateLimitBudget: hyperevm-official
+    routing:
+      scoreMultipliers:
+        - network: "*"
+          method: "*"
+          overall: 0.3
+
+  - id: hyperevm-drpc
+    endpoint: https://hyperliquid.drpc.org
+    evm:
+      chainId: 999
+    tags: ["tier:fallback"]
+    rateLimitBudget: hyperevm-drpc
+    routing:
+      scoreMultipliers:
+        - network: "*"
+          method: "*"
+          overall: 0.3
+
+  - id: hyperevm-onfinality
+    endpoint: https://hyperliquid.api.onfinality.io/evm/public
+    evm:
+      chainId: 999
+    tags: ["tier:fallback"]
+    rateLimitBudget: hyperevm-onfinality
+    routing:
+      scoreMultipliers:
+        - network: "*"
+          method: "*"
+          overall: 0.3
+
+rateLimiters:
+  budgets:
+    - id: hyperevm-official
+      rules:
+        - method: "*"
+          maxCount: 100
+          period: second
+    - id: hyperevm-drpc
+      rules:
+        - method: "*"
+          maxCount: 30
+          period: second
+    - id: hyperevm-onfinality
+      rules:
+        - method: "*"
+          maxCount: 25
+          period: second
+
+# eth_call @ latest (HyperCore precompiles) needs realtime caching; the chart
+# default finality:unfinalized can serve stale precompile reads under burst.
+cachePoliciesAdd:
+  - network: "*"
+    method: eth_call
+    finality: realtime
+    connector: memory-cache
+    ttl: 2s

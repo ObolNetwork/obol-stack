@@ -76,6 +76,7 @@ func networkCommand(cfg *config.Config) *cli.Command {
 			networkAddCommand(cfg),
 			networkRemoveCommand(cfg),
 			networkStatusCommand(cfg),
+			networkOverlayCommand(cfg),
 		},
 	}
 }
@@ -534,6 +535,89 @@ func networkStatusCommand(cfg *config.Config) *cli.Command {
 	}
 }
 
+// network overlay — durable multi-upstream eRPC baskets (ObolNetwork/obol-stack#763)
+// ---------------------------------------------------------------------------
+
+func networkOverlayCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:  "overlay",
+		Usage: "Manage durable eRPC operator overlays (multi-upstream baskets that survive stack up)",
+		Commands: []*cli.Command{
+			{
+				Name:  "apply",
+				Usage: "Apply an eRPC overlay YAML: save under $CONFIG_DIR/rpc/erpc-overlay.yaml and merge into the live ConfigMap",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "file",
+						Aliases:  []string{"f"},
+						Usage:    "Path to erpc-overlay.yaml (version, networks, upstreams, rateLimiters, cachePoliciesAdd)",
+						Required: true,
+					},
+				},
+				Action: func(_ context.Context, cmd *cli.Command) error {
+					return network.ApplyERPCOverlayFile(cfg, getUI(cmd), cmd.String("file"))
+				},
+			},
+			{
+				Name:  "status",
+				Usage: "Show the on-disk eRPC overlay (networks, upstreams, content hash)",
+				Action: func(_ context.Context, cmd *cli.Command) error {
+					u := getUI(cmd)
+					st, err := network.StatusERPCOverlay(cfg)
+					if err != nil {
+						return err
+					}
+					u.Printf("eRPC Operator Overlay\n")
+					u.Printf("=====================\n\n")
+					u.Printf("Path: %s\n", st.Path)
+					if !st.Present {
+						u.Info("Status: not configured")
+						u.Info("Apply one with: obol network overlay apply -f <overlay.yaml>")
+						return nil
+					}
+					u.Printf("Status: present (v%d, hash %s)\n", st.Version, st.ContentHash)
+					u.Printf("Networks (%d):\n", st.NetworkCount)
+					for _, k := range st.NetworkKeys {
+						u.Printf("  - %s\n", k)
+					}
+					if st.NetworkCount == 0 {
+						u.Info("  (none)")
+					}
+					u.Printf("Upstreams (%d):\n", st.UpstreamCount)
+					for _, id := range st.UpstreamIDs {
+						u.Printf("  - %s\n", id)
+					}
+					if st.UpstreamCount == 0 {
+						u.Info("  (none)")
+					}
+					u.Printf("Rate-limit budgets: %d\n", st.BudgetCount)
+					u.Printf("Cache policies to add: %d\n", st.CachePolicyAdd)
+					return nil
+				},
+			},
+			{
+				Name:  "clear",
+				Usage: "Remove overlay networks/upstreams from live eRPC and delete the host-side overlay file",
+				Action: func(_ context.Context, cmd *cli.Command) error {
+					return network.ClearERPCOverlay(cfg, getUI(cmd))
+				},
+			},
+			{
+				Name:  "reconcile",
+				Usage: "Re-apply the on-disk overlay into the live eRPC ConfigMap (same as stack-up resume)",
+				Action: func(_ context.Context, cmd *cli.Command) error {
+					u := getUI(cmd)
+					network.ReconcileERPCOverlay(cfg, u)
+					return nil
+				},
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			return cli.ShowSubcommandHelp(cmd)
+		},
+	}
+}
+
 // chainIDToName returns a human-readable name for a chain ID.
 func chainIDToName(chainID int) string {
 	names := map[int]string{
@@ -550,6 +634,7 @@ func chainIDToName(chainID int) string {
 		43114:    "Avalanche",
 		59144:    "Linea",
 		84532:    "Base Sepolia",
+		999:      "HyperEVM",
 		534352:   "Scroll",
 		560048:   "Hoodi",
 		11155111: "Sepolia",

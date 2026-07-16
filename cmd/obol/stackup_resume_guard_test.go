@@ -21,12 +21,16 @@ func TestStackUpAction_ReplaysRecordedState(t *testing.T) {
 
 	upIdx := strings.Index(body, "stack.Up(cfg")
 	rpcIdx := strings.Index(body, "network.ReconcileRecordedRPCs(")
+	overlayIdx := strings.Index(body, "network.ReconcileERPCOverlay(")
 	agentsIdx := strings.Index(body, "agentcrd.ResumeAll(")
 	appsIdx := strings.Index(body, "app.ResumeAll(")
 	offersIdx := strings.Index(body, "resumeSellOffers(")
 
 	if rpcIdx < 0 {
 		t.Fatal("cmd/obol/main.go must call network.ReconcileRecordedRPCs — without it recorded remote RPCs never reach a freshly-recreated cluster")
+	}
+	if overlayIdx < 0 {
+		t.Fatal("cmd/obol/main.go must call network.ReconcileERPCOverlay — without it durable eRPC baskets (e.g. HyperEVM) never re-apply after stack up (#763)")
 	}
 	if agentsIdx < 0 {
 		t.Fatal("cmd/obol/main.go must call agentcrd.ResumeAll — without it recorded Agent CRs never reach a freshly-recreated cluster")
@@ -37,8 +41,11 @@ func TestStackUpAction_ReplaysRecordedState(t *testing.T) {
 	if upIdx < 0 || offersIdx < 0 {
 		t.Fatalf("expected stack.Up and resumeSellOffers in main.go; upIdx=%d offersIdx=%d", upIdx, offersIdx)
 	}
-	if rpcIdx < upIdx || agentsIdx < upIdx || appsIdx < upIdx {
+	if rpcIdx < upIdx || overlayIdx < upIdx || agentsIdx < upIdx || appsIdx < upIdx {
 		t.Error("recorded-state replay must run AFTER stack.Up — before it there is no kubeconfig/cluster")
+	}
+	if overlayIdx < rpcIdx {
+		t.Error("ReconcileERPCOverlay must run AFTER ReconcileRecordedRPCs — overlay merges onto base+recorded remotes")
 	}
 	if agentsIdx > offersIdx {
 		t.Error("agentcrd.ResumeAll must run BEFORE resumeSellOffers — agent-backed ServiceOffers need their Agent CR first")

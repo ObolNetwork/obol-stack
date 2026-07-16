@@ -212,6 +212,11 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 							// Replay recorded remote RPC upstreams into the
 							// (possibly fresh) eRPC ConfigMap. Best-effort.
 							network.ReconcileRecordedRPCs(cfg, u)
+							// Re-apply durable multi-upstream eRPC operator
+							// overlays (baskets/scoring/rate-limits) AFTER
+							// simple recorded remotes. Best-effort.
+							// See ObolNetwork/obol-stack#763.
+							network.ReconcileERPCOverlay(cfg, u)
 							// Re-apply recorded Agent CRs BEFORE sell offers:
 							// agent-backed ServiceOffers resolve agent.ref and
 							// would dangle without their Agent. Best-effort.
