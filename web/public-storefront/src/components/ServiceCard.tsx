@@ -249,7 +249,7 @@ export function ServiceCard({ service }: { service: Service }) {
         </div>
         {endpointOrigin(service.endpoint) ? (
           <div className="col-span-2">
-            <span className="block text-text-muted">API docs</span>
+            <span className="text-text-muted">API docs</span>
             <a
               // service.docsPath deep-links to this operation inside the
               // Scalar UI (anchor format is controller-published so the

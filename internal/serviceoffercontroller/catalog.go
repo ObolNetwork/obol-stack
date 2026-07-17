@@ -51,8 +51,7 @@ func staticSiteContentMatches(cm *unstructured.Unstructured, content, servicesJS
 	if data["skill.md"] != content ||
 		data["services.json"] != servicesJSON ||
 		data["openapi.json"] != openAPIJSON ||
-		data["api.html"] != apiDocsHTML ||
-		data["chat-vendor.js"] != chatWidgetVendorJS {
+		data["api.html"] != apiDocsHTML {
 		return false
 	}
 	// Per-offer bundles: every expected file present + identical, and no
@@ -88,11 +87,7 @@ func (c *Controller) staticSiteContentUnchanged(ctx context.Context, content, se
 }
 
 func computeStaticSiteContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) string {
-	// The embedded vendor bundle is part of the served content: fold it in
-	// so a controller upgrade that changes it re-applies the ConfigMap and
-	// rolls the httpd (otherwise the skip-when-unchanged fast path pins the
-	// old asset forever). The per-offer chat pages flow through bundles.
-	return fmt.Sprintf("%x", md5Sum(content+servicesJSON+openAPIJSON+apiDocsHTML+chatWidgetVendorJS+bundleDigestInput(bundles)))[:8]
+	return fmt.Sprintf("%x", md5Sum(content+servicesJSON+openAPIJSON+apiDocsHTML+bundleDigestInput(bundles)))[:8]
 }
 
 func staticSiteDeployedContentHash(deployment *unstructured.Unstructured) string {
