@@ -42,8 +42,10 @@ const (
 	stackIDFile    = ".stack-id"
 )
 
-// Init initializes the stack configuration
-func Init(cfg *config.Config, u *ui.UI, force bool, backendName string) error {
+// Init initializes the stack configuration. skipConfirm (--yes) bypasses the
+// live-services confirmation prompt when --force switches backends and would
+// otherwise destroy a cluster serving live traffic (mirrors Down/Purge).
+func Init(cfg *config.Config, u *ui.UI, force bool, backendName string, skipConfirm bool) error {
 	// Check if any stack config already exists (legacy k3d.yaml included).
 	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
 	hasExistingConfig := false
@@ -76,13 +78,13 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string) error {
 		backendName = BackendK3d
 	}
 
-	// If switching backends, destroy the old one first to prevent
-	// orphaned clusters (e.g., k3d containers still running after
-	// switching to k3s, or k3s process still alive after switching to k3d).
-	if hasExistingConfig && force {
-		destroyOldBackendIfSwitching(cfg, u, backendName, stackID)
-	}
-
+	// Validate the new backend BEFORE destroying anything. Previously the old
+	// backend was torn down first and NewBackend/Prerequisites only checked
+	// afterward — an invalid or unavailable target backend left the old
+	// cluster destroyed with nothing running in its place (confirmed
+	// Canary402 full-surface audit finding). Resolve and validate the new
+	// backend first so a failure here aborts Init without having touched the
+	// old cluster.
 	backend, err := NewBackend(backendName)
 	if err != nil {
 		return err
@@ -95,6 +97,23 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string) error {
 	// Check prerequisites
 	if err := backend.Prerequisites(cfg); err != nil {
 		return fmt.Errorf("prerequisites check failed: %w", err)
+	}
+
+	// If switching backends, destroy the old one first to prevent
+	// orphaned clusters (e.g., k3d containers still running after
+	// switching to k3s, or k3s process still alive after switching to k3d).
+	// Gated on ConfirmRunningServicesLoss (same safety bar as Down/Purge) so
+	// this destructive step can't run unconfirmed against a cluster serving
+	// live traffic.
+	if hasExistingConfig && force {
+		if err := destroyOldBackendIfSwitching(cfg, u, backendName, stackID, skipConfirm); err != nil {
+			// A declined safety prompt stops Init entirely (nothing switched,
+			// old cluster left intact) and, like Down/Purge, exits cleanly.
+			if errors.Is(err, errSafetyAborted) {
+				return nil
+			}
+			return err
+		}
 	}
 
 	// Generate backend-specific config
@@ -123,15 +142,30 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string) error {
 }
 
 // destroyOldBackendIfSwitching checks if the backend is changing and tears down
-// the old one to prevent orphaned clusters running side by side.
-func destroyOldBackendIfSwitching(cfg *config.Config, u *ui.UI, newBackend, stackID string) {
+// the old one to prevent orphaned clusters running side by side. The destroy
+// is gated on ConfirmRunningServicesLoss — the same safety bar `obol stack
+// down`/`purge` use — since it's just as capable of destroying a cluster that
+// is currently serving paid traffic.
+func destroyOldBackendIfSwitching(cfg *config.Config, u *ui.UI, newBackend, stackID string, skipConfirm bool) error {
 	oldBackend, err := LoadBackend(cfg)
 	if err != nil {
-		return
+		return nil
 	}
 
 	if oldBackend.Name() == newBackend {
-		return // same backend, nothing to clean up
+		return nil // same backend, nothing to clean up
+	}
+
+	proceed, err := ConfirmRunningServicesLoss(cfg, u, "stack init --force (backend switch)", skipConfirm)
+	if err != nil {
+		return err
+	}
+	if !proceed {
+		// Signal the decline to Init, which stops the whole command before
+		// touching anything (the old cluster is still serving traffic — it
+		// must NOT be left undestroyed while the backend config switches).
+		u.Info("Aborted.")
+		return errSafetyAborted
 	}
 
 	u.Warnf("Switching backend from %s to %s — destroying old cluster", oldBackend.Name(), newBackend)
@@ -145,6 +179,7 @@ func destroyOldBackendIfSwitching(cfg *config.Config, u *ui.UI, newBackend, stac
 
 	// Clean up stale config files from the old backend
 	cleanupStaleBackendConfigs(cfg, oldBackend.Name())
+	return nil
 }
 
 // cleanupStaleBackendConfigs removes config files belonging to the old backend

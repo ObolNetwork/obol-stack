@@ -436,11 +436,3 @@ func agentIdentityStatusFromRegistration(identity *monetizeapi.AgentIdentity, ch
 	return status
 }
 
-func registrationRequestStatusWithIdentity(request *monetizeapi.RegistrationRequest, identity *monetizeapi.AgentIdentity) monetizeapi.RegistrationRequestStatus {
-	status := request.Status
-	if identity == nil {
-		return status
-	}
-	status.AgentID = firstNonEmpty(monetizeapi.AgentIdentityAgentIDForChain(identity.Status, request.Spec.Chain), status.AgentID)
-	return status
-}

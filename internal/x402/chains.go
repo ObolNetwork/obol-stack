@@ -33,6 +33,12 @@ type ChainInfo struct {
 
 	// EIP3009Version is the EIP-712 domain version.
 	EIP3009Version string
+
+	// Testnet marks a chain as a test network rather than a production
+	// mainnet. Consumers that only care about "real money" chains (e.g. the
+	// x402scan registry preflight, which indexes mainnet resources only)
+	// key off this instead of pattern-matching chain names.
+	Testnet bool
 }
 
 // AssetInfo describes the token and EIP-712 metadata used for x402 settlement.
@@ -71,6 +77,7 @@ var (
 		CAIP2Network: "eip155:84532",
 		USDCAddress:  "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
 		Decimals:     6,
+		Testnet:      true,
 		// Base-Sepolia USDC is FiatTokenV2_2 whose EIP-712 domain name is
 		// "USDC", NOT the mainnet "USD Coin". Advertising "USD Coin" makes a
 		// real facilitator reject otherwise-valid signatures — the recurring
@@ -107,6 +114,7 @@ var (
 		Decimals:       6,
 		EIP3009Name:    "USD Coin",
 		EIP3009Version: "2",
+		Testnet:        true,
 	}
 
 	ChainAvalancheMainnet = ChainInfo{
@@ -127,6 +135,7 @@ var (
 		Decimals:       6,
 		EIP3009Name:    "USD Coin",
 		EIP3009Version: "2",
+		Testnet:        true,
 	}
 
 	ChainArbitrumOne = ChainInfo{
@@ -147,8 +156,32 @@ var (
 		Decimals:       6,
 		EIP3009Name:    "USD Coin",
 		EIP3009Version: "2",
+		Testnet:        true,
+	}
+
+	// allChains lists every chain the registry knows about, used to answer
+	// "is this CAIP-2 id a testnet" without a second hardcoded id list.
+	allChains = []ChainInfo{
+		ChainBaseMainnet, ChainBaseSepolia,
+		ChainEthereumMainnet,
+		ChainPolygonMainnet, ChainPolygonAmoy,
+		ChainAvalancheMainnet, ChainAvalancheFuji,
+		ChainArbitrumOne, ChainArbitrumSepolia,
 	}
 )
+
+// IsTestnetCAIP2 reports whether caip2 (e.g. "eip155:84532") identifies a
+// known testnet chain. Unknown ids return false — callers that need to
+// distinguish "known mainnet" from "unrecognized" should check membership
+// separately.
+func IsTestnetCAIP2(caip2 string) bool {
+	for _, c := range allChains {
+		if c.CAIP2Network == caip2 {
+			return c.Testnet
+		}
+	}
+	return false
+}
 
 // NormalizeNetworkID maps a human-friendly chain name to its CAIP-2 network
 // identifier. Already-normalized CAIP-2 values are returned as-is.
@@ -219,8 +252,22 @@ func ResolveChainInfo(name string) (ChainInfo, error) {
 // decimalToAtomic converts a decimal token amount (e.g. "0.001") to atomic
 // units using big.Float with 128-bit precision to avoid floating-point
 // truncation (e.g. 0.001 * 1e6 must produce 1000, not 999).
-func decimalToAtomic(amount string, decimals int) string {
-	amountFloat, _, _ := new(big.Float).SetPrec(128).Parse(amount, 10)
+//
+// Returns an error rather than silently mispricing or panicking on
+// malformed input (e.g. "0,01" EU-style decimals, "abc", "", "$0.01") —
+// amount ultimately comes from operator/CLI input and, via a ServiceOffer
+// applied directly to the cluster, can bypass CLI validation entirely.
+func decimalToAtomic(amount string, decimals int) (string, error) {
+	amountFloat, _, err := new(big.Float).SetPrec(128).Parse(amount, 10)
+	if err != nil {
+		return "", fmt.Errorf("invalid decimal amount %q: %w", amount, err)
+	}
+	if amountFloat == nil {
+		return "", fmt.Errorf("invalid decimal amount %q", amount)
+	}
+	if amountFloat.Sign() < 0 {
+		return "", fmt.Errorf("amount must be non-negative: %q", amount)
+	}
 	multiplier := new(big.Float).SetPrec(128).SetInt(
 		new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil),
 	)
@@ -228,7 +275,7 @@ func decimalToAtomic(amount string, decimals int) string {
 	// Add 0.5 before truncating to int so we round to nearest.
 	atomicFloat.Add(atomicFloat, new(big.Float).SetPrec(128).SetFloat64(0.5))
 	atomicInt, _ := atomicFloat.Int(nil)
-	return atomicInt.String()
+	return atomicInt.String(), nil
 }
 
 // DefaultAsset returns the default settlement asset for a chain.
@@ -368,18 +415,31 @@ func ClampMaxTimeoutSeconds(n int64) int64 {
 
 // BuildV2Requirement creates a v2 PaymentRequirements for USDC payment on the
 // given chain. amount is the decimal USDC amount (e.g. "0.001" = $0.001).
-func BuildV2Requirement(chain ChainInfo, amount, recipientAddress string, maxTimeoutSeconds int64) x402types.PaymentRequirements {
+// Returns an error — rather than a $0 or panicking requirement — if amount
+// is not a valid non-negative decimal.
+func BuildV2Requirement(chain ChainInfo, amount, recipientAddress string, maxTimeoutSeconds int64) (x402types.PaymentRequirements, error) {
 	return BuildV2RequirementWithAsset(chain, chain.DefaultAsset(), amount, recipientAddress, maxTimeoutSeconds)
 }
 
 // BuildV2RequirementWithAsset creates a v2 PaymentRequirements for the given
 // chain and settlement asset. Pass maxTimeoutSeconds=0 to fall back to
 // DefaultMaxTimeoutSeconds; operator-set values are clamped to MaxMaxTimeoutSeconds.
-func BuildV2RequirementWithAsset(chain ChainInfo, asset AssetInfo, amount, recipientAddress string, maxTimeoutSeconds int64) x402types.PaymentRequirements {
+// Returns an error — rather than a $0 or panicking requirement — if amount
+// is not a valid non-negative decimal, or if it rounds to 0 atomic units
+// (e.g. "0", or a sub-atomic price like "0.0000001" at 6 decimals); callers
+// must fail closed on error, never serve the route for free.
+func BuildV2RequirementWithAsset(chain ChainInfo, asset AssetInfo, amount, recipientAddress string, maxTimeoutSeconds int64) (x402types.PaymentRequirements, error) {
+	atomicAmount, err := decimalToAtomic(amount, asset.Decimals)
+	if err != nil {
+		return x402types.PaymentRequirements{}, fmt.Errorf("invalid price %q: %w", amount, err)
+	}
+	if atomicAmount == "0" {
+		return x402types.PaymentRequirements{}, fmt.Errorf("price %q rounds to 0 atomic units at %d decimals: refusing to advertise a $0 paid route", amount, asset.Decimals)
+	}
 	return x402types.PaymentRequirements{
 		Scheme:            "exact",
 		Network:           chain.CAIP2Network,
-		Amount:            decimalToAtomic(amount, asset.Decimals),
+		Amount:            atomicAmount,
 		Asset:             asset.Address,
 		PayTo:             recipientAddress,
 		MaxTimeoutSeconds: int(ClampMaxTimeoutSeconds(maxTimeoutSeconds)),
@@ -388,5 +448,5 @@ func BuildV2RequirementWithAsset(chain ChainInfo, asset AssetInfo, amount, recip
 			"version":             asset.EIP712Version,
 			"assetTransferMethod": asset.TransferMethod,
 		},
-	}
+	}, nil
 }

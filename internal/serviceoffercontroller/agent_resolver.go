@@ -81,8 +81,12 @@ func (c *Controller) resolveAgentOffer(ctx context.Context, offer *monetizeapi.S
 	offer.Spec.Upstream = monetizeapi.ServiceOfferUpstream{
 		Service:    "hermes",
 		Namespace:  ref.Namespace,
-		Port:       8642,
-		HealthPath: "/api/status",
+		Port:       hermesPort,
+		// Hermes API (port hermesPort) serves unauthenticated /health.
+		// /api/status is the dashboard probe path on a different port and
+		// returns 404 on the API — that used to slip past as "healthy"
+		// under the pre-2xx UpstreamHealthy gate.
+		HealthPath: hermesAPIPath,
 	}
 	offer.Spec.Model = monetizeapi.ServiceOfferModel{
 		Name:    model,

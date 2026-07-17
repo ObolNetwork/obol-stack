@@ -1042,6 +1042,29 @@ func EnsureTunnelForSell(cfg *config.Config, u *ui.UI) (string, error) {
 	return tunnelURL, nil
 }
 
+// RefreshStorefront re-applies the storefront's HTTPRoute against the
+// tunnel's currently tracked hostnames, narrowing or tearing it down for any
+// hostname that is now offer-bound. CreateStorefront only sees ServiceOffer
+// bindings that already exist on the cluster at call time, so a hostname
+// bound by a manifest applied AFTER the tunnel was last (re)created — e.g.
+// `obol sell ... --hostname X` — needs this explicit follow-up to be
+// reflected immediately, instead of shadowing the offer's route until some
+// later, unrelated tunnel/sell invocation happens to run CreateStorefront
+// again (Canary402).
+//
+// It no-ops quietly when there is no persistent tunnel/hostname state yet
+// (e.g. a first `obol sell ... --hostname X --no-register` before any
+// tunnel has ever been created) — CreateStorefront has nothing to publish
+// in that case, and EnsureTunnelForSell reconciles the storefront once the
+// tunnel comes up.
+func RefreshStorefront(cfg *config.Config) error {
+	hosts := storefrontHostnames(cfg, "")
+	if len(hosts) == 0 {
+		return nil
+	}
+	return CreateStorefront(cfg, hosts...)
+}
+
 // Stop scales the cloudflared deployment to 0 replicas.
 func Stop(cfg *config.Config, u *ui.UI) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
@@ -1292,9 +1315,14 @@ func CreateStorefront(cfg *config.Config, hostnames ...string) error {
 		}
 		hosts = kept
 		if len(hosts) == 0 {
-			// Every tracked hostname is offer-bound; nothing for the
-			// storefront to serve — a valid configuration.
-			return nil
+			// Every tracked hostname is offer-bound: the storefront has
+			// nothing left to serve at any hostname. Tear it down instead
+			// of leaving the previously-applied HTTPRoute (with the now-
+			// stale wider host list) on the cluster — Gateway API breaks
+			// the resulting PathPrefix-/ tie by route age, so that stale
+			// route would otherwise keep shadowing the offer's own
+			// dedicated-origin route.
+			return DeleteStorefront(cfg)
 		}
 	}
 

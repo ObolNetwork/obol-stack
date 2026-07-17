@@ -352,6 +352,9 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 			"This path is not part of any published service. The operator's catalog lists every live endpoint.")
 		return
 	}
+	// Carry the matched rule so 402 resource.URL builders can map the
+	// Traefik-rewritten internal path back to the public dedicated-origin path.
+	r = r.WithContext(withRouteRule(r.Context(), rule))
 
 	// Declared free carve-out: proxy straight to the upstream, no payment
 	// middleware. buildUpstreamProxy still injects upstream auth and strips
@@ -588,7 +591,17 @@ func (v *Verifier) resolvePaidRoute(cfg *PricingConfig, rule *RouteRule) (*match
 			wallet = opt.PayTo
 		}
 		asset := ResolveAssetInfoForPayment(chain, opt)
-		req := BuildV2RequirementWithAsset(chain, asset, opt.Price, wallet, opt.MaxTimeoutSeconds)
+		req, err := BuildV2RequirementWithAsset(chain, asset, opt.Price, wallet, opt.MaxTimeoutSeconds)
+		if err != nil {
+			// Skip this option rather than serving it free or panicking —
+			// a malformed stored price (e.g. a ServiceOffer applied
+			// directly via kubectl, bypassing CLI validation) must never
+			// produce a payable route. Other options may still be payable;
+			// if none are, the len(reqs)==0 check below fails the route
+			// closed.
+			log.Printf("x402-verifier: invalid price %q for route %q option %d: %v", opt.Price, rule.Pattern, i, err)
+			continue
+		}
 		mergeAgentExtras(&req, rule)
 		reqs = append(reqs, req)
 		optLabels = append(optLabels, labelsForPaymentOption(rule, opt))
@@ -805,6 +818,24 @@ func buildUpstreamProxy(rule *RouteRule) (http.Handler, error) {
 			pr.Out.URL.Path = singleJoiningSlash(target.Path, strippedPath)
 			pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 			pr.Out.Host = target.Host
+			// The verifier is the browser-facing boundary ONLY on routes it
+			// actually gates (payment / SIWX): it authenticates the request
+			// and re-issues it upstream under its own authority, so browser
+			// fetch-context headers must not leak through — an upstream with
+			// its own origin allowlist (hermes's API server 403s any Origin
+			// it has not allowlisted, and browsers attach Origin to every
+			// POST) would otherwise reject paid browser requests after the
+			// payment already verified. gate:free routes are the opposite:
+			// the verifier performs no auth and doesn't own CSRF for them,
+			// so stripping Origin here would instead break the upstream's
+			// own Origin-based CSRF defense.
+			if !rule.IsFree() {
+				pr.Out.Header.Del("Origin")
+				pr.Out.Header.Del("Sec-Fetch-Site")
+				pr.Out.Header.Del("Sec-Fetch-Mode")
+				pr.Out.Header.Del("Sec-Fetch-Dest")
+				pr.Out.Header.Del("Sec-Fetch-User")
+			}
 			if rule.Async && rule.BrokerURL != "" {
 				pr.Out.Header.Set(headerBrokerUpstreamURL, rule.UpstreamURL)
 				pr.Out.Header.Set(headerBrokerOffer, rule.OfferNamespace+"/"+rule.OfferName)

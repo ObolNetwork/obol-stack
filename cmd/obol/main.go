@@ -190,9 +190,14 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 								Usage:   "Cluster backend: k3d (Docker-based) or k3s (bare-metal)",
 								Sources: cli.EnvVars("OBOL_BACKEND"),
 							},
+							&cli.BoolFlag{
+								Name:    "yes",
+								Aliases: []string{"y"},
+								Usage:   "Skip the live-services confirmation prompt when --force switches backends (required in non-interactive shells when offers are running)",
+							},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return stack.Init(cfg, getUI(cmd), cmd.Bool("force"), cmd.String("backend"))
+							return stack.Init(cfg, getUI(cmd), cmd.Bool("force"), cmd.String("backend"), cmd.Bool("yes"))
 						},
 					},
 					{
@@ -212,6 +217,11 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 							// Replay recorded remote RPC upstreams into the
 							// (possibly fresh) eRPC ConfigMap. Best-effort.
 							network.ReconcileRecordedRPCs(cfg, u)
+							// Re-apply durable multi-upstream eRPC operator
+							// overlays (baskets/scoring/rate-limits) AFTER
+							// simple recorded remotes. Best-effort.
+							// See ObolNetwork/obol-stack#763.
+							network.ReconcileERPCOverlay(cfg, u)
 							// Re-apply recorded Agent CRs BEFORE sell offers:
 							// agent-backed ServiceOffers resolve agent.ref and
 							// would dangle without their Agent. Best-effort.

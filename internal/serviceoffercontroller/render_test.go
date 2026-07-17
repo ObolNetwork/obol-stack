@@ -90,6 +90,55 @@ func TestBuildHTTPRoute(t *testing.T) {
 	}
 }
 
+func TestBuildLimitsMiddlewares_SplitsInFlightAndRPS(t *testing.T) {
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "gated", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Limits: monetizeapi.ServiceOfferLimits{MaxInFlight: 4, RPS: 10},
+		},
+	}
+	mws := buildLimitsMiddlewares(offer)
+	if len(mws) != 2 {
+		t.Fatalf("len(middlewares) = %d, want 2 (one per Traefik type)", len(mws))
+	}
+	names := map[string]map[string]any{}
+	for _, mw := range mws {
+		spec, _ := mw.Object["spec"].(map[string]any)
+		names[mw.GetName()] = spec
+		// Each CR must carry exactly one middleware type key.
+		if len(spec) != 1 {
+			t.Fatalf("middleware %q has %d spec keys; Traefik requires one type per CR: %v", mw.GetName(), len(spec), spec)
+		}
+	}
+	if _, ok := names[limitsInFlightMiddlewareName("gated")]["inFlightReq"]; !ok {
+		t.Fatal("missing inFlightReq middleware")
+	}
+	if _, ok := names[limitsRPSMiddlewareName("gated")]["rateLimit"]; !ok {
+		t.Fatal("missing rateLimit middleware")
+	}
+	filters := limitsFilters(offer)
+	if len(filters) != 2 {
+		t.Fatalf("len(filters) = %d, want 2 ExtensionRefs", len(filters))
+	}
+}
+
+func TestBuildLimitsMiddlewares_SingleType(t *testing.T) {
+	onlyInFlight := buildLimitsMiddlewares(&monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "a", Namespace: "llm"},
+		Spec:       monetizeapi.ServiceOfferSpec{Limits: monetizeapi.ServiceOfferLimits{MaxInFlight: 2}},
+	})
+	if len(onlyInFlight) != 1 {
+		t.Fatalf("maxInFlight only: len = %d", len(onlyInFlight))
+	}
+	onlyRPS := buildLimitsMiddlewares(&monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "b", Namespace: "llm"},
+		Spec:       monetizeapi.ServiceOfferSpec{Limits: monetizeapi.ServiceOfferLimits{RPS: 5}},
+	})
+	if len(onlyRPS) != 1 {
+		t.Fatalf("rps only: len = %d", len(onlyRPS))
+	}
+}
+
 func TestBuildReferenceGrant(t *testing.T) {
 	offer := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{
@@ -103,6 +152,12 @@ func TestBuildReferenceGrant(t *testing.T) {
 	if grant.GetNamespace() != "x402" {
 		t.Fatalf("grant namespace = %q, want x402", grant.GetNamespace())
 	}
+	if grant.GetName() != backendReferenceGrantName("llm", "demo") {
+		t.Fatalf("grant name = %q, want namespaced unique name", grant.GetName())
+	}
+	if !strings.Contains(grant.GetName(), "llm") || !strings.Contains(grant.GetName(), "demo") {
+		t.Fatalf("grant name %q must include offer namespace and name", grant.GetName())
+	}
 	spec := grant.Object["spec"].(map[string]any)
 	from := spec["from"].([]any)[0].(map[string]any)
 	to := spec["to"].([]any)[0].(map[string]any)
@@ -111,6 +166,26 @@ func TestBuildReferenceGrant(t *testing.T) {
 	}
 	if to["name"] != "x402-verifier" {
 		t.Fatalf("grant to.name = %v, want x402-verifier", to["name"])
+	}
+}
+
+// Two offers with the same name in different namespaces must not share a
+// ReferenceGrant object name in x402 (overwrite / flapping 500s).
+func TestBuildReferenceGrant_DisambiguatesByNamespace(t *testing.T) {
+	a := buildReferenceGrant(&monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "canary402", Namespace: "ns-a"},
+	})
+	b := buildReferenceGrant(&monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "canary402", Namespace: "ns-b"},
+	})
+	if a.GetName() == b.GetName() {
+		t.Fatalf("same-named offers in different namespaces must get distinct grant names; both = %q", a.GetName())
+	}
+	if a.Object["spec"].(map[string]any)["from"].([]any)[0].(map[string]any)["namespace"] != "ns-a" {
+		t.Fatal("grant A from.namespace must be ns-a")
+	}
+	if b.Object["spec"].(map[string]any)["from"].([]any)[0].(map[string]any)["namespace"] != "ns-b" {
+		t.Fatal("grant B from.namespace must be ns-b")
 	}
 }
 
@@ -611,7 +686,7 @@ func TestRegistrationDataURL(t *testing.T) {
 	}
 }
 
-func TestBuildSkillCatalogMarkdown(t *testing.T) {
+func TestBuildSkillMarkdown(t *testing.T) {
 	readyOffer := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "flow-qwen", Namespace: "llm"},
 		Spec: monetizeapi.ServiceOfferSpec{
@@ -639,7 +714,7 @@ func TestBuildSkillCatalogMarkdown(t *testing.T) {
 		},
 	}
 
-	content := buildSkillCatalogMarkdown([]*monetizeapi.ServiceOffer{readyOffer, notReadyOffer}, "https://example.com", nil)
+	content := buildSkillMarkdown([]*monetizeapi.ServiceOffer{readyOffer, notReadyOffer}, "https://example.com", nil)
 
 	if !strings.Contains(content, "# Obol Stack Service Catalog") {
 		t.Fatalf("catalog missing title:\n%s", content)
@@ -655,13 +730,13 @@ func TestBuildSkillCatalogMarkdown(t *testing.T) {
 	}
 }
 
-// TestBuildSkillCatalogMarkdown_DrainAdditiveDetail locks in the
+// TestBuildSkillMarkdown_DrainAdditiveDetail locks in the
 // pure-additive markdown surface: active offers must NOT emit a
 // `- **Available**:` detail bullet (that wire was removed when drain
 // landed). Draining offers may have a `- **Drain ends at**:` bullet
 // but never a separate Available bullet, because consumers detect
 // drain solely via the timestamp's presence.
-func TestBuildSkillCatalogMarkdown_DrainAdditiveDetail(t *testing.T) {
+func TestBuildSkillMarkdown_DrainAdditiveDetail(t *testing.T) {
 	readyCond := []monetizeapi.Condition{{Type: "Ready", Status: "True"}}
 	activeOffer := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "llm"},
@@ -693,7 +768,7 @@ func TestBuildSkillCatalogMarkdown_DrainAdditiveDetail(t *testing.T) {
 		Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
 	}
 
-	content := buildSkillCatalogMarkdown(
+	content := buildSkillMarkdown(
 		[]*monetizeapi.ServiceOffer{activeOffer, drainingOffer},
 		"https://example.com",
 		nil,
@@ -717,10 +792,10 @@ func TestBuildSkillCatalogMarkdown_DrainAdditiveDetail(t *testing.T) {
 	}
 }
 
-func TestBuildSkillCatalogHTTPRoute(t *testing.T) {
-	route := buildSkillCatalogHTTPRoute()
-	if route.GetName() != skillCatalogRouteName {
-		t.Fatalf("route name = %q, want %q", route.GetName(), skillCatalogRouteName)
+func TestBuildStaticSiteHTTPRoute(t *testing.T) {
+	route := buildStaticSiteHTTPRoute()
+	if route.GetName() != staticSiteRouteName {
+		t.Fatalf("route name = %q, want %q", route.GetName(), staticSiteRouteName)
 	}
 	spec := route.Object["spec"].(map[string]any)
 	rules := spec["rules"].([]any)
@@ -732,8 +807,8 @@ func TestBuildSkillCatalogHTTPRoute(t *testing.T) {
 	}
 	backends := firstRule["backendRefs"].([]any)
 	backend := backends[0].(map[string]any)
-	if backend["name"] != skillCatalogConfigMapName {
-		t.Fatalf("backend name = %v, want %s", backend["name"], skillCatalogConfigMapName)
+	if backend["name"] != staticSiteConfigMapName {
+		t.Fatalf("backend name = %v, want %s", backend["name"], staticSiteConfigMapName)
 	}
 }
 
@@ -1622,8 +1697,8 @@ func TestBuildCatalogHeadersMiddleware(t *testing.T) {
 	if mw.GetName() != catalogHeadersMiddlewareName {
 		t.Fatalf("name = %q, want %q", mw.GetName(), catalogHeadersMiddlewareName)
 	}
-	if mw.GetNamespace() != skillCatalogNamespace {
-		t.Fatalf("namespace = %q, want %q", mw.GetNamespace(), skillCatalogNamespace)
+	if mw.GetNamespace() != staticSiteNamespace {
+		t.Fatalf("namespace = %q, want %q", mw.GetNamespace(), staticSiteNamespace)
 	}
 
 	headers := mw.Object["spec"].(map[string]any)["headers"].(map[string]any)
@@ -1648,7 +1723,7 @@ func TestBuildCatalogHeadersMiddleware(t *testing.T) {
 // (locked separately by TestBuildHTTPRoute's no-filters assertion).
 func TestCatalogRoutesCarryHeadersFilter(t *testing.T) {
 	routes := map[string]*unstructured.Unstructured{
-		"/skill.md":          buildSkillCatalogHTTPRoute(),
+		"/skill.md":          buildStaticSiteHTTPRoute(),
 		"/api/services.json": buildServicesJSONHTTPRoute(),
 		"/openapi.json":      buildOpenAPIHTTPRoute(),
 		"/api":               buildAPIDocsHTTPRoute(),
@@ -1699,12 +1774,12 @@ func TestBuildServiceCatalogJSON_SchemaVersion(t *testing.T) {
 	}
 }
 
-// TestBuildSkillCatalogMarkdown_TryIt asserts every offer detail block ends
+// TestBuildSkillMarkdown_TryIt asserts every offer detail block ends
 // with a copy-paste "Try it" section: a 402 probe curl plus a worked paid
 // request. Chat-shaped offers must show the REAL model id (including the
 // AgentResolution fallback for type=agent) — the same id services.json
 // publishes — and http offers a curl of the gated path.
-func TestBuildSkillCatalogMarkdown_TryIt(t *testing.T) {
+func TestBuildSkillMarkdown_TryIt(t *testing.T) {
 	readyCond := []monetizeapi.Condition{{Type: "Ready", Status: "True"}}
 	inferenceOffer := &monetizeapi.ServiceOffer{
 		ObjectMeta: metav1.ObjectMeta{Name: "flow-qwen", Namespace: "llm"},
@@ -1747,7 +1822,7 @@ func TestBuildSkillCatalogMarkdown_TryIt(t *testing.T) {
 		Status: monetizeapi.ServiceOfferStatus{Conditions: readyCond},
 	}
 
-	content := buildSkillCatalogMarkdown(
+	content := buildSkillMarkdown(
 		[]*monetizeapi.ServiceOffer{inferenceOffer, agentOffer, httpOffer},
 		"https://seller.example", nil,
 	)

@@ -34,7 +34,7 @@ Built on [Kubernetes](https://kubernetes.io) with [Helm](https://helm.sh/) for p
 - **Linux**: [Docker Engine installation guide](https://docs.docker.com/engine/install/)
 - **macOS/Windows**: [Docker Desktop](https://docs.docker.com/desktop/)
 
-For local models, install [Ollama](https://ollama.com) and pull at least one chat-capable model (e.g. `ollama pull qwen3:8b`). Skip this if you'll use a cloud provider (see [Models](#models)).
+For local models, install [Ollama](https://ollama.com) and pull at least one chat-capable model (e.g. `ollama pull qwen3.5:4b`). The installer may offer to install Ollama; **if you decline and do not configure a cloud model**, `obol stack up` **skips the default Hermes agent** until you run `obol model setup` and then `obol agent init`. Prefer a cloud provider anytime with `obol model setup` (see [Models](#models)).
 
 ### Install
 
@@ -42,7 +42,25 @@ For local models, install [Ollama](https://ollama.com) and pull at least one cha
 bash <(curl -fsSL https://stack.obol.org)
 ```
 
-The installer sets up the `obol` CLI and all dependencies (`kubectl`, `helm`, `k3d`, `helmfile`, `k9s`) into `~/.local/bin/`, verifies release checksums, configures your PATH, and offers to start the cluster.
+Pin a release (use the current tag from the [releases page](https://github.com/ObolNetwork/obol-stack/releases), not an ancient example):
+
+```bash
+OBOL_RELEASE=v0.13.0 bash <(curl -fsSL https://stack.obol.org)
+```
+
+The installer sets up the `obol` CLI and all dependencies (`kubectl`, `helm`, `k3d`, `helmfile`, `k9s`) into `~/.local/bin/`, verifies release checksums, configures your PATH, tries to add `obol.stack` to `/etc/hosts`, and offers to start the cluster.
+
+If `/etc/hosts` cannot be updated (no sudo / you cancel), the install still finishes — add the host, then start the stack yourself:
+
+```bash
+echo "127.0.0.1 obol.stack" | sudo tee -a /etc/hosts
+# After stack up, agent hostnames are also managed (obol-agent.obol.stack, …)
+obol stack init
+obol stack up
+obol agent init   # if the default agent was skipped (no model yet)
+```
+
+Non-interactive / CI: set `OBOL_NONINTERACTIVE=true` so hosts updates do not prompt for a sudo password (they fail fast if credentials are not already cached). Combine with a pre-written `/etc/hosts` entry or run `sudo -v` first.
 
 Verify:
 
@@ -65,7 +83,33 @@ obol agent list
 obol agent auth obol-agent
 ```
 
-`obol stack up` provisions the cluster, auto-detects your local Ollama models into the LiteLLM gateway, deploys the default Hermes agent (with its own wallet behind a remote signer), and starts a Cloudflare quick-tunnel. From here you can chat with your agent locally at `http://obol.stack:8080` — or go straight to selling.
+`obol stack up` provisions the cluster, auto-detects host Ollama models into the **LiteLLM** gateway (when present), and deploys the default **Hermes** agent with its own wallet behind a remote signer. The Cloudflare tunnel stays **dormant** until the first sell workflow (or `obol tunnel restart` / `obol tunnel setup`).
+
+### Local UI URL (Host header)
+
+Open the frontend at:
+
+```text
+http://obol.stack:8080
+```
+
+Use **`obol.stack`**, not `localhost`. Traefik routes the frontend (and eRPC) only for `Host: obol.stack`. `http://localhost:8080` returns **404** even when the stack is healthy.
+
+- Prefer `:8080` on macOS when port 80 is unavailable (or after editing `k3d.yaml` to drop privileged 80/443 binds).
+- If port 80 is mapped, `http://obol.stack/` works too.
+
+Hermes dashboard (root edge-redirects to the password form):
+
+```text
+http://obol-agent.obol.stack
+```
+
+(or with `:8080` when that is your ingress)
+
+- **Username:** `obol`
+- **Password:** the agent API token from `obol agent auth obol-agent`
+
+Details: [Hermes dashboard login](docs/guides/hermes-dashboard-login.md).
 
 ## Sell: Your First Paid Service
 
@@ -406,7 +450,19 @@ Edit `~/.config/obol/k3d.yaml`, remove the `80:80` and `443:443` port entries (k
 obol stack down && obol stack up
 ```
 
-Access at http://obol.stack:8080 instead.
+Access at http://obol.stack:8080 instead (still with the `obol.stack` host — not `localhost`).
+
+#### `/etc/hosts` / sudo prompts
+
+`obol stack up` also tries to refresh managed hostnames (`obol.stack`, `obol-agent.obol.stack`, …). A failed hosts write is a **warning**, not a hard stop — the cluster still comes up. Fix hosts, then re-run `obol stack up` or `obol agent sync` so agent hostnames are registered.
+
+```bash
+# Minimal manual entry
+echo "127.0.0.1 obol.stack" | sudo tee -a /etc/hosts
+
+# Skip interactive sudo during automation (must already have NOPASSWD or a cached timestamp)
+OBOL_NONINTERACTIVE=true obol stack up
+```
 
 #### Monetize Flow Preflight
 

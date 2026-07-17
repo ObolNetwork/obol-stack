@@ -180,6 +180,30 @@ func TestVerifier_PaidRoute_NoPayment_Returns402(t *testing.T) {
 	}
 }
 
+// TestVerifier_MalformedStoredPrice_FailsClosed is the resolvePaidRoute seam
+// for the Canary402 finding: a ServiceOffer applied directly via kubectl
+// bypasses CLI (`validate.Price`) entirely, so a malformed stored price
+// (e.g. EU comma decimal "0,01", or "abc") must never reach the buyer as a
+// free ($0) or crashing route. resolvePaidRoute must skip the unresolvable
+// option; with no other options the route fails closed with 403, not a 402
+// advertising a free/mispriced requirement.
+func TestVerifier_MalformedStoredPrice_FailsClosed(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	v := newTestVerifier(t, fac.URL, []RouteRule{
+		{Pattern: "/rpc/*", Price: "0,01"},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
+	req.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
+	req.Header.Set("X-Forwarded-Host", "obol.stack")
+	w := httptest.NewRecorder()
+	v.HandleVerify(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("expected 403 fail-closed for malformed stored price, got %d", w.Code)
+	}
+}
+
 func TestVerifier_PaidRoute_ValidPayment_Returns200(t *testing.T) {
 	fac := newMockFacilitator(t, mockFacilitatorOpts{})
 	v := newTestVerifier(t, fac.URL, []RouteRule{
@@ -1839,5 +1863,105 @@ func TestVerifier_HandleProxy_FreeGateRule_ProxiesWithoutPayment(t *testing.T) {
 	v.HandleProxy(w, req)
 	if w.Code != http.StatusPaymentRequired {
 		t.Errorf("expected 402 for paid sibling, got %d", w.Code)
+	}
+}
+
+// TestVerifier_ResolvePaidRoute_ZeroPriceFailsClosed pins the Canary402
+// zero-price finding end to end: a paid route stored (or applied directly
+// via kubectl, bypassing CLI validation) with a "0" or sub-atomic price
+// must never resolve to a payable requirement. resolvePaidRoute must skip
+// the option and, with no other options, fail the whole route closed (403)
+// rather than advertise a $0 accepts[] entry.
+func TestVerifier_ResolvePaidRoute_ZeroPriceFailsClosed(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("upstream should not be called for an unresolvable-priced route")
+	}))
+	defer upstream.Close()
+
+	for _, price := range []string{"0", "0.0000001"} {
+		t.Run(price, func(t *testing.T) {
+			v := newTestVerifier(t, fac.URL, []RouteRule{{
+				Pattern:     "/services/free-ish/*",
+				Price:       price,
+				UpstreamURL: upstream.URL,
+				StripPrefix: "/services/free-ish",
+			}})
+
+			req := httptest.NewRequest(http.MethodGet, "/services/free-ish/data", nil)
+			w := httptest.NewRecorder()
+			v.HandleProxy(w, req)
+
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("price %q: status = %d, want 403 (fail closed, no payable option)", price, w.Code)
+			}
+		})
+	}
+}
+
+// TestVerifier_BuildUpstreamProxy_OriginStripping pins the F-finding that
+// buildUpstreamProxy unconditionally stripped Origin/Sec-Fetch-* on every
+// route class. The verifier is the auth boundary on a paid route (it
+// authenticates via x402 and re-issues upstream under its own authority),
+// so stripping there is correct — but a gate:free route has no verifier
+// auth to protect and must let the upstream's own Origin-based CSRF
+// defense see the real browser headers.
+func TestVerifier_BuildUpstreamProxy_OriginStripping(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	var lastHeaders http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		lastHeaders = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer upstream.Close()
+
+	v := newTestVerifier(t, fac.URL, []RouteRule{
+		{
+			Pattern:     "/services/mix/free/*",
+			Gate:        "free",
+			UpstreamURL: upstream.URL,
+			StripPrefix: "/services/mix",
+		},
+		{
+			Pattern:     "/services/mix/paid/*",
+			Price:       "0.0001",
+			UpstreamURL: upstream.URL,
+			StripPrefix: "/services/mix",
+		},
+	})
+
+	// Free route: Origin/Sec-Fetch-* must pass through untouched so the
+	// upstream's own CSRF check still sees them.
+	req := httptest.NewRequest(http.MethodPost, "/services/mix/free/submit", strings.NewReader(`{}`))
+	req.Header.Set("Origin", "https://evil.example")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	w := httptest.NewRecorder()
+	v.HandleProxy(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("free route status = %d, want 200", w.Code)
+	}
+	if got := lastHeaders.Get("Origin"); got != "https://evil.example" {
+		t.Errorf("free route Origin = %q, want preserved", got)
+	}
+	if got := lastHeaders.Get("Sec-Fetch-Site"); got != "cross-site" {
+		t.Errorf("free route Sec-Fetch-Site = %q, want preserved", got)
+	}
+
+	// Paid route: the verifier IS the auth boundary here, so browser
+	// fetch-context headers must be stripped before reaching upstream.
+	req = httptest.NewRequest(http.MethodPost, "/services/mix/paid/submit", strings.NewReader(`{}`))
+	req.Header.Set("Origin", "https://evil.example")
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	w = httptest.NewRecorder()
+	v.HandleProxy(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("paid route status = %d, want 200 (body %s)", w.Code, w.Body.String())
+	}
+	if got := lastHeaders.Get("Origin"); got != "" {
+		t.Errorf("paid route Origin = %q, want stripped", got)
+	}
+	if got := lastHeaders.Get("Sec-Fetch-Site"); got != "" {
+		t.Errorf("paid route Sec-Fetch-Site = %q, want stripped", got)
 	}
 }

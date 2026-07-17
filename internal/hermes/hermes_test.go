@@ -117,6 +117,47 @@ func TestOnboardDefaultAlreadyInstalledIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestOnboardRejectsUnsafeID guards against the Canary402 full-surface audit
+// finding: an unsanitized --id becomes a DNS label (hostname, namespace) and
+// was written verbatim into /etc/hosts, so a newline in --id could inject
+// arbitrary /etc/hosts lines via "sudo tee". Onboard must reject any id that
+// isn't a safe DNS label before it reaches deployment/hostname construction.
+func TestOnboardRejectsUnsafeID(t *testing.T) {
+	invalid := []string{
+		"evil\n127.0.0.1 attacker.com", // /etc/hosts line injection
+		"has space",
+		"has/slash",
+		"-leading-dash",
+	}
+	for _, id := range invalid {
+		cfg := testConfig(t)
+		err := Onboard(cfg, OnboardOptions{ID: id}, newTestUI())
+		if err == nil {
+			t.Errorf("Onboard(ID=%q) = nil, want error", id)
+		}
+	}
+}
+
+// TestOnboardRejectsIDTooLongForDNSLabel guards against the "hermes-<id>-ui"
+// DashboardHostname DNS label overflowing 63 characters: validate.Name alone
+// allows a 63-char id, but Onboard derives "hermes-<id>" (and, for the
+// dashboard, "hermes-<id>-ui") from it, so an id at (or near) that limit
+// must be rejected here with a clear error instead of failing later with an
+// opaque Kubernetes error.
+func TestOnboardRejectsIDTooLongForDNSLabel(t *testing.T) {
+	max := agentruntime.MaxIDLength(agentruntime.Hermes)
+
+	tooLong := "a" + strings.Repeat("b", max) // max+1 chars, still a valid DNS label on its own
+	cfg := testConfig(t)
+	err := Onboard(cfg, OnboardOptions{ID: tooLong}, newTestUI())
+	if err == nil {
+		t.Fatalf("Onboard(ID=%d chars) = nil, want error", len(tooLong))
+	}
+	if !strings.Contains(err.Error(), "too long") {
+		t.Errorf("error should explain the id is too long, got: %v", err)
+	}
+}
+
 // TestGenerateConfig_PrimaryIsRoundTrippable guards the LiteLLM model_name
 // contract end-to-end: whatever string the agent's `model.default` is set to
 // MUST match a `model_name` entry in the LiteLLM ConfigMap byte-for-byte,
@@ -303,6 +344,9 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		"name: GATEWAY_HEALTH_URL",
 		"HERMES_DASHBOARD_BASIC_AUTH_USERNAME",
 		"HERMES_DASHBOARD_BASIC_AUTH_PASSWORD",
+		// Username is fixed; password is the agent API token (API_SERVER_KEY).
+		`value: "obol"`,
+		`value: "secret-token"`,
 		// Must track HERMES_HOME: v2026.7.x images bake
 		// HERMES_WRITE_SAFE_ROOT=/opt/data and deny all file-tool
 		// writes outside the safe root.
@@ -312,6 +356,58 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		if !strings.Contains(values, needle) {
 			t.Fatalf("generateValues() missing %q:\n%s", needle, values)
 		}
+	}
+
+	// Basic-auth must stay wired: non-loopback dashboard bind requires it,
+	// and the password must equal the agent API token already in the Secret.
+	if !strings.Contains(values, "HERMES_DASHBOARD_BASIC_AUTH_USERNAME") ||
+		!strings.Contains(values, "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD") {
+		t.Fatalf("generateValues() missing dashboard basic-auth env wiring:\n%s", values)
+	}
+	// Password env must carry the same token as API_SERVER_KEY (secret-token in this fixture).
+	if idx := strings.Index(values, "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"); idx < 0 {
+		t.Fatal("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD missing")
+	} else {
+		window := values[idx:]
+		if len(window) > 120 {
+			window = window[:120]
+		}
+		if !strings.Contains(window, `value: "secret-token"`) {
+			t.Fatalf("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD must use agent API token; nearby:\n%s", window)
+		}
+	}
+
+	// Dashboard HTTPRoute must edge-redirect Exact "/" → password-login so
+	// operators can open the pretty host without hitting Hermes's broken
+	// /auth/login?provider=basic path.
+	for _, needle := range []string{
+		"type: RequestRedirect",
+		"replaceFullPath: " + DashboardPasswordLoginPath,
+		"type: Exact",
+		"value: /",
+	} {
+		if !strings.Contains(values, needle) {
+			t.Fatalf("generateValues() dashboard root redirect missing %q:\n%s", needle, values)
+		}
+	}
+	// Redirect must only live on the dashboard HTTPRoute, not the agent API route.
+	firstHTTPRoute := strings.Index(values, "kind: HTTPRoute")
+	if firstHTTPRoute < 0 {
+		t.Fatal("expected HTTPRoute resources in generateValues()")
+	}
+	secondHTTPRouteRel := strings.Index(values[firstHTTPRoute+1:], "kind: HTTPRoute")
+	if secondHTTPRouteRel < 0 {
+		t.Fatal("expected two HTTPRoutes (agent + dashboard)")
+	}
+	secondHTTPRoute := firstHTTPRoute + 1 + secondHTTPRouteRel
+	agentRouteYAML := values[firstHTTPRoute:secondHTTPRoute]
+	if strings.Contains(agentRouteYAML, "RequestRedirect") {
+		t.Fatalf("agent API HTTPRoute must not edge-redirect root:\n%s", agentRouteYAML)
+	}
+	dashRouteYAML := values[secondHTTPRoute:]
+	if !strings.Contains(dashRouteYAML, "RequestRedirect") ||
+		!strings.Contains(dashRouteYAML, "replaceFullPath: "+DashboardPasswordLoginPath) {
+		t.Fatalf("dashboard HTTPRoute missing root→password-login redirect:\n%s", dashRouteYAML)
 	}
 
 	for _, banned := range []string{
@@ -389,6 +485,46 @@ func TestDashboardHostname_UsesDefaultAgentHostAndHermesUIHostForNamedInstances(
 				t.Fatalf("dashboardHostname(%q) = %q, want %q", tt.id, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDashboardPasswordLoginURL_UsesPasswordLoginPath(t *testing.T) {
+	got := dashboardPasswordLoginURL("obol-agent")
+	want := "http://obol-agent.obol.stack" + DashboardPasswordLoginPath
+	if got != want {
+		t.Fatalf("dashboardPasswordLoginURL(obol-agent) = %q, want %q", got, want)
+	}
+	if !strings.HasSuffix(got, "/auth/password-login") {
+		t.Fatalf("login URL must end with /auth/password-login, got %q", got)
+	}
+	if gotRoot := dashboardURL("obol-agent"); gotRoot != "http://obol-agent.obol.stack" {
+		t.Fatalf("dashboardURL(obol-agent) = %q, want pretty host root", gotRoot)
+	}
+}
+
+func TestDashboardAccessGuidance_NamesPrettyURLAndTokenPassword(t *testing.T) {
+	id := "obol-agent"
+	lines := dashboardAccessGuidance(id)
+	joined := strings.Join(lines, "\n")
+
+	for _, needle := range []string{
+		"Dashboard: http://obol-agent.obol.stack",
+		DashboardPasswordLoginPath,
+		"Username: " + DashboardBasicAuthUsername,
+		"obol agent auth " + id,
+		"Password:",
+	} {
+		if !strings.Contains(joined, needle) {
+			t.Fatalf("dashboardAccessGuidance missing %q:\n%s", needle, joined)
+		}
+	}
+
+	// Primary line is the pretty host (edge-redirected), not only the form path.
+	if !strings.HasPrefix(lines[0], "Dashboard: http://obol-agent.obol.stack") {
+		t.Fatalf("first guidance line should be pretty Dashboard URL, got %q", lines[0])
+	}
+	if strings.HasPrefix(lines[0], "Dashboard: http://obol-agent.obol.stack/auth/") {
+		t.Fatalf("primary Dashboard URL should be host root, not form path: %q", lines[0])
 	}
 }
 

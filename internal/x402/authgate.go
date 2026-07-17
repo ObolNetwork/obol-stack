@@ -1,6 +1,7 @@
 package x402
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -10,6 +11,7 @@ import (
 	"fmt"
 	"html/template"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -81,10 +83,38 @@ func requestHost(r *http.Request) string {
 // public URLs must not leak the internal prefix; on the shared origin the
 // prefix is the offer path itself.
 func publicPrefix(rule *RouteRule, host string) string {
-	if rule.Hostname != "" && strings.EqualFold(host, rule.Hostname) {
+	if rule == nil {
+		return ""
+	}
+	h := host
+	if hh, _, err := net.SplitHostPort(host); err == nil {
+		h = hh
+	}
+	rh := rule.Hostname
+	if rhH, _, err := net.SplitHostPort(rule.Hostname); err == nil {
+		rh = rhH
+	}
+	if rule.Hostname != "" && strings.EqualFold(h, rh) {
 		return ""
 	}
 	return strings.TrimSuffix(rule.StripPrefix, "/")
+}
+
+// routeRuleContextKey carries the matched RouteRule on the request context
+// so 402 resource.URL builders can recover the public path-world after
+// Traefik rewrote a dedicated-origin request into /services/<name>/….
+type routeRuleContextKey struct{}
+
+func withRouteRule(ctx context.Context, rule *RouteRule) context.Context {
+	if rule == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, routeRuleContextKey{}, rule)
+}
+
+func routeRuleFrom(ctx context.Context) *RouteRule {
+	rule, _ := ctx.Value(routeRuleContextKey{}).(*RouteRule)
+	return rule
 }
 
 // Broker contract headers (mirrors internal/jobbroker — see the comment on

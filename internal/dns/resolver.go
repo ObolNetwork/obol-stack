@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -120,6 +121,19 @@ const (
 	hostsFile        = "/etc/hosts"
 )
 
+// validHostnameRegex matches DNS-safe hostnames: labels of lowercase/uppercase
+// alphanumerics and hyphens, joined by dots. No spaces, newlines, or other
+// characters that could inject extra lines into /etc/hosts.
+var validHostnameRegex = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$`)
+
+// isValidHostname reports whether h is safe to write as an /etc/hosts entry.
+// Belt-and-suspenders check: callers are expected to validate ids before
+// they ever become a hostname, but this guards the file write regardless of
+// how a malformed hostname got here.
+func isValidHostname(h string) bool {
+	return validHostnameRegex.MatchString(h)
+}
+
 // EnsureHostsEntries adds /etc/hosts entries for the given hostnames.
 // Always includes "obol.stack" plus any additional hostnames (e.g. openclaw subdomains).
 // Entries are idempotent — existing managed block is replaced.
@@ -129,7 +143,7 @@ func EnsureHostsEntries(hostnames []string) error {
 
 	seen := map[string]bool{domain: true}
 	for _, h := range hostnames {
-		if h != "" && !seen[h] {
+		if h != "" && !seen[h] && isValidHostname(h) {
 			all = append(all, h)
 			seen[h] = true
 		}

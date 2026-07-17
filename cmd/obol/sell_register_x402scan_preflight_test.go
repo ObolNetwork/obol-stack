@@ -51,6 +51,55 @@ func TestPreflightOpenAPI_MultiOfferSharedOrigin(t *testing.T) {
 	}
 }
 
+func TestPreflightOpenAPI_AllTestnet(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"paths":{
+			"/services/foo/v1/chat/completions": {
+				"post": {"x-payment-info": {"accepts": [{"network": "eip155:84532"}]}}
+			}
+		}}`))
+	}))
+	defer srv.Close()
+
+	var stderr bytes.Buffer
+	u := ui.NewForTest(&bytes.Buffer{}, &stderr)
+	allTestnet := preflightOpenAPI(context.Background(), u, srv.URL)
+
+	if !allTestnet {
+		t.Fatal("expected allTestnet=true for an origin whose only accepted network is base-sepolia")
+	}
+	if got := stderr.String(); !strings.Contains(got, "eip155:84532 (testnet)") {
+		t.Fatalf("expected testnet warning, got: %q", got)
+	}
+}
+
+func TestPreflightOpenAPI_MixedMainnetAndTestnetIsNotAllTestnet(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"paths":{
+			"/services/foo/v1/chat/completions": {
+				"post": {"x-payment-info": {"accepts": [
+					{"network": "eip155:84532"},
+					{"network": "eip155:8453"}
+				]}}
+			}
+		}}`))
+	}))
+	defer srv.Close()
+
+	var stderr bytes.Buffer
+	u := ui.NewForTest(&bytes.Buffer{}, &stderr)
+	allTestnet := preflightOpenAPI(context.Background(), u, srv.URL)
+
+	if allTestnet {
+		t.Fatal("expected allTestnet=false when a mainnet network is also accepted")
+	}
+	if got := stderr.String(); strings.Contains(got, "testnet") {
+		t.Fatalf("did not expect a testnet warning when base mainnet is accepted, got: %q", got)
+	}
+}
+
 func TestPreflightOpenAPI_UnreachableOrNon200(t *testing.T) {
 	// Non-200: server up but returns an error status.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

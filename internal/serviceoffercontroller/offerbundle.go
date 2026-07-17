@@ -1,6 +1,7 @@
 package serviceoffercontroller
 
 import (
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -19,7 +20,7 @@ import (
 // resources per origin. An offer with spec.hostname therefore gets its own
 // discovery documents — an openapi.json scoped to just that offer with
 // paths rooted at "/", a /.well-known/x402 resource list, and a minimal
-// landing page — served by the same catalog httpd via per-offer ConfigMap
+// landing page — served by the same static-site httpd via per-offer ConfigMap
 // keys and Exact-match rewrite routes on the offer's hostname.
 
 // offerBundleFile is one generated file: Key is the ConfigMap data key,
@@ -42,7 +43,16 @@ func offerBundleKey(offer *monetizeapi.ServiceOffer, file string) string {
 // buildOfferBundles renders the discovery bundle for every hostname-bound,
 // operationally-included offer. Deterministic order (bundle keys sorted) so
 // content hashing is stable.
-func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.StorefrontProfile) []offerBundleFile {
+//
+// upstreamOpenAPI supplies each offer's (possibly nil) upstream OpenAPI
+// document. It must be a cache read, never a live fetch: this function runs
+// under staticSiteMu on every offer's reconcile (see reconcileStaticSite),
+// so a live HTTP call here would serialize every reconcile behind the
+// slowest upstream and — on a flapping upstream — flip-flop the rebuilt
+// content hash and roll the shared discovery pod. The production caller
+// passes the Controller's upstreamOpenAPICache.get, refreshed independently
+// from each offer's own reconcile.
+func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.StorefrontProfile, upstreamOpenAPI func(*monetizeapi.ServiceOffer) map[string]any) []offerBundleFile {
 	var bundles []offerBundleFile
 	for _, offer := range offers {
 		if offer == nil || offer.Spec.Hostname == "" {
@@ -52,16 +62,32 @@ func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.Store
 		// branding block overrides the storefront profile field-wise
 		// (empty fields inherit).
 		originProfile := storefront.MergeProfile(profile, offer.Spec.Branding.ProfilePatch())
+		upstreamDoc := upstreamOpenAPI(offer)
+		openapiContent := buildOfferScopedOpenAPI(offer, originProfile)
+		x402Content := buildOfferWellKnownX402(offer)
+		if upstreamDoc != nil {
+			if rewritten, ok := rewriteUpstreamOpenAPI(upstreamDoc, offer, originProfile); ok {
+				openapiContent = rewritten
+			}
+			if expanded := buildOfferWellKnownX402FromOpenAPI(offer, upstreamDoc); expanded != "" {
+				x402Content = expanded
+			}
+		}
 		bundles = append(bundles,
 			offerBundleFile{
 				Key:     offerBundleKey(offer, "openapi.json"),
 				Path:    offerBundleDir(offer) + "/openapi.json",
-				Content: buildOfferScopedOpenAPI(offer, originProfile),
+				Content: openapiContent,
 			},
 			offerBundleFile{
 				Key:     offerBundleKey(offer, "x402.json"),
 				Path:    offerBundleDir(offer) + "/x402.json",
-				Content: buildOfferWellKnownX402(offer),
+				Content: x402Content,
+			},
+			offerBundleFile{
+				Key:     offerBundleKey(offer, "agent-registration.json"),
+				Path:    offerBundleDir(offer) + "/agent-registration.json",
+				Content: buildOfferAgentRegistration(offer, originProfile),
 			},
 			offerBundleFile{
 				Key:     offerBundleKey(offer, "index.html"),
@@ -74,8 +100,6 @@ func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.Store
 	return bundles
 }
 
-// bundleDigestInput folds bundle contents into the catalog content hash so
-// bundle-only changes (e.g. a hostname added to one offer) roll the httpd.
 func bundleDigestInput(bundles []offerBundleFile) string {
 	var b strings.Builder
 	for _, f := range bundles {
@@ -265,71 +289,12 @@ func wellKnownAccept(p monetizeapi.ServiceOfferPayment) map[string]any {
 	return entry
 }
 
-var offerLandingTmpl = template.Must(template.New("offer_landing").Parse(`<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>{{.Title}}</title>
-    <meta name="description" content="{{.Description}}" />
-    <meta name="theme-color" content="{{.ThemeColor}}" />
-    <meta property="og:type" content="website" />
-    <meta property="og:title" content="{{.Title}}" />
-    <meta property="og:description" content="{{.Description}}" />
-    <meta property="og:site_name" content="{{.Operator}}" />
-    {{if .OGImageURL}}<meta property="og:image" content="{{.OGImageURL}}" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:image" content="{{.OGImageURL}}" />{{end}}
-    {{if .FaviconURL}}<link rel="icon" href="{{.FaviconURL}}" />{{end}}
-    <style>
-      :root { {{.ThemeCSS}} --mono:"JetBrains Mono",ui-monospace,monospace; }
-      * { box-sizing: border-box; } html, body { background: var(--bg01); }
-      body { margin:0; color:var(--light); font-family:"DM Sans",system-ui,sans-serif; line-height:1.5; }
-      .wrap { max-width:640px; margin:0 auto; padding:64px 24px 96px; }
-      .brand { display:flex; align-items:center; gap:10px; margin-bottom:24px; color:var(--light); font-weight:600; font-size:15px; }
-      .brand img { height:32px; width:auto; }
-      .pill { display:inline-block; font-family:var(--mono); font-size:13px; font-weight:600; color:var(--green); border:1px solid var(--green); border-radius:999px; padding:6px 14px; margin-bottom:24px; }
-      h1 { font-size:28px; margin:0 0 8px; }
-      p { color:var(--body); margin:0 0 12px; }
-      .richtext { color:var(--body); }
-      .richtext p { margin:0 0 10px; }
-      .richtext ul, .richtext ol { margin:0 0 10px; padding-left:22px; }
-      .richtext h3, .richtext h4 { color:var(--light); margin:14px 0 6px; font-size:16px; }
-      .richtext code { font-family:var(--mono); font-size:0.9em; }
-      .richtext pre { background:var(--bg01); border:1px solid var(--stroke); border-radius:8px; padding:12px; overflow-x:auto; }
-      .card { background:var(--bg02); border:1px solid var(--stroke); border-radius:12px; padding:20px 24px; margin-top:24px; }
-      .card h2 { font-size:15px; margin:0 0 8px; color:var(--light); }
-      code, .mono { font-family:var(--mono); font-size:13px; color:var(--light); }
-      a { color:var(--green); }
-      .fineprint { color:var(--muted); font-size:13px; margin-top:32px; }
-    </style>
-    {{if .CustomCSS}}<style data-obol="custom-css">{{.CustomCSS}}</style>{{end}}
-  </head>
-  <body>
-    <div class="wrap" data-obol="page-landing">
-      {{if .LogoURL}}<div class="brand" data-obol="brand"><img src="{{.LogoURL}}" alt="{{.Operator}}" />{{if .ShowName}}<span>{{.Operator}}</span>{{end}}</div>{{end}}
-      <span class="pill" data-obol="price">{{.Price}}</span>
-      <h1 data-obol="title">{{.Title}}</h1>
-      <div class="richtext" data-obol="description">{{.DescriptionHTML}}</div>
-      <!-- Reserved mount for the in-browser wallet checkout widget. -->
-      <div data-obol="checkout"></div>
-      <div class="card" data-obol="dev-links">
-        <h2>For agents &amp; developers</h2>
-        <p class="mono"><a href="/openapi.json">/openapi.json</a> — request shapes + per-route pricing</p>
-        <p class="mono"><a href="/.well-known/x402">/.well-known/x402</a> — signable x402 payment requirements</p>
-        <p>Payment is per-request via x402 micropayments: call an endpoint with no payment to receive the <code>402</code> challenge, sign one <code>accepts[]</code> entry, retry with the <code>X-PAYMENT</code> header.</p>
-      </div>
-      {{if .AboutHTML}}
-      <div class="card" data-obol="about">
-        <h2>About {{.Operator}}</h2>
-        <div class="richtext">{{.AboutHTML}}</div>
-      </div>
-      {{end}}
-      <p class="fineprint" data-obol="powered-by">Sold by {{.Operator}} · Powered by <a href="https://obol.org">Obol</a></p>
-    </div>
-  </body>
-</html>
-`))
+//go:embed templates/offer_landing.html
+var offerLandingHTMLSrc string
+
+var offerLandingTmpl = template.Must(
+	template.New("offer_landing").Parse(offerLandingHTMLSrc),
+)
 
 // buildOfferLandingHTML renders the hostname's "/" landing page: enough for
 // a human to understand the product and for previews/scrapers to get sane

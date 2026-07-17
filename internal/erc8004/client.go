@@ -75,6 +75,16 @@ func (c *Client) ChainID() *big.Int {
 	return new(big.Int).Set(c.chainID)
 }
 
+// PendingNonceAt returns the account's next usable nonce. Callers issuing a
+// sequence of transactions in one run should fetch this once and pin it into
+// TransactOpts.Nonce, bumping it locally after each successful send — the
+// eRPC gateway fans requests out to independent upstreams per call, so
+// re-querying the pending nonce between sequential sends can hit a lagging
+// upstream and return a stale (too-low) value.
+func (c *Client) PendingNonceAt(ctx context.Context, addr common.Address) (uint64, error) {
+	return c.eth.PendingNonceAt(ctx, addr)
+}
+
 // RegisterWithOptsDetailed mints a new agent NFT using the provided
 // TransactOpts and returns both the minted agentId and transaction hash.
 func (c *Client) RegisterWithOptsDetailed(ctx context.Context, opts *bind.TransactOpts, agentURI string) (*big.Int, string, error) {
