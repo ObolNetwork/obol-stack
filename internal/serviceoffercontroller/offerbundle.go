@@ -197,6 +197,20 @@ func rerootAuthInfo(item map[string]any) map[string]any {
 	return out
 }
 
+// openAPIRelPathForOfferRoute resolves the OpenAPI-relative path a single
+// route maps to, matching openAPIPathsForOffer's per-type path selection so
+// /.well-known/x402 and openapi.json agree on the same paid operation path.
+// Inference/agent offers always expose the fixed OpenAI-compatible endpoint
+// regardless of the declared route table (openAPIPathsForOffer ignores
+// spec.routes for these types); every other type maps the route's own path
+// through openAPIRelPathForRoute exactly as the OpenAPI builder does.
+func openAPIRelPathForOfferRoute(offer *monetizeapi.ServiceOffer, routePath string) string {
+	if offer.IsInference() || offer.IsAgent() {
+		return "/v1/chat/completions"
+	}
+	return openAPIRelPathForRoute(routePath)
+}
+
 // buildOfferWellKnownX402 renders the /.well-known/x402 discovery document:
 // one resource entry per paid route, each carrying the signable payment
 // requirements (mirrors the 402 accepts[] fields so a crawler can price the
@@ -228,7 +242,7 @@ func buildOfferWellKnownX402(offer *monetizeapi.ServiceOffer) string {
 			desc = offerDescription(offer, "x402 payment-gated service.")
 		}
 		resources = append(resources, map[string]any{
-			"resource":    origin + joinOpenAPIPath("/", openAPIRelPathForRoute(rt.Path)),
+			"resource":    origin + joinOpenAPIPath("/", openAPIRelPathForOfferRoute(offer, rt.Path)),
 			"type":        "http",
 			"method":      method,
 			"description": desc,
