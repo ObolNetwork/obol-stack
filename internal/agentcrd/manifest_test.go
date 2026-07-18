@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/stackbackup"
 	"gopkg.in/yaml.v3"
 )
 
@@ -62,5 +63,57 @@ func TestManifestStoreRoundTrip(t *testing.T) {
 	}
 	if names := ListPersistedManifests(cfg); len(names) != 1 || names[0] != "scout" {
 		t.Fatalf("after remove: %v", names)
+	}
+}
+
+// TestStripServerManagedMetadataOnAgentManifest pins the ResumeAll strip path:
+// persisted Agent YAML may carry server-managed metadata; stripping must drop
+// those fields while keeping name/namespace and spec intact.
+func TestStripServerManagedMetadataOnAgentManifest(t *testing.T) {
+	manifest := map[string]any{
+		"apiVersion": "obol.org/v1alpha1",
+		"kind":       "Agent",
+		"metadata": map[string]any{
+			"name":              "quant",
+			"namespace":         "agent-quant",
+			"resourceVersion":   "12345",
+			"uid":               "abc-123",
+			"creationTimestamp": "2024-01-01T00:00:00Z",
+			"managedFields":     []any{map[string]any{"manager": "kubectl"}},
+		},
+		"spec": map[string]any{
+			"model":  "qwen3.5:9b",
+			"skills": []any{"gas"},
+			"wallet": map[string]any{"create": true},
+		},
+	}
+	data, err := yaml.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	stackbackup.StripServerManagedMetadata(doc)
+
+	meta, ok := doc["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("metadata missing or wrong type: %T", doc["metadata"])
+	}
+	for _, k := range []string{"resourceVersion", "uid", "creationTimestamp", "managedFields"} {
+		if _, present := meta[k]; present {
+			t.Errorf("server-managed field %q still present after strip", k)
+		}
+	}
+	if meta["name"] != "quant" || meta["namespace"] != "agent-quant" {
+		t.Fatalf("identity fields altered: %v", meta)
+	}
+	spec, ok := doc["spec"].(map[string]any)
+	if !ok {
+		t.Fatalf("spec missing or wrong type: %T", doc["spec"])
+	}
+	if spec["model"] != "qwen3.5:9b" {
+		t.Fatalf("spec.model altered: %v", spec["model"])
 	}
 }
