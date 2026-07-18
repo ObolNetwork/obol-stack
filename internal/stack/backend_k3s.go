@@ -53,7 +53,7 @@ func (b *K3sBackend) Prerequisites(cfg *config.Config) error {
 	return nil
 }
 
-func (b *K3sBackend) Init(cfg *config.Config, u *ui.UI, stackID string) error {
+func (b *K3sBackend) Init(cfg *config.Config, u *ui.UI, stackID string, force bool) error {
 	absDataDir, err := filepath.Abs(cfg.DataDir)
 	if err != nil {
 		return fmt.Errorf("failed to get absolute path for data directory: %w", err)

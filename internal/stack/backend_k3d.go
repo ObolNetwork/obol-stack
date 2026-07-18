@@ -52,7 +52,7 @@ func (b *K3dBackend) Prerequisites(cfg *config.Config) error {
 	return nil
 }
 
-func (b *K3dBackend) Init(cfg *config.Config, u *ui.UI, stackID string) error {
+func (b *K3dBackend) Init(cfg *config.Config, u *ui.UI, stackID string, force bool) error {
 	absDataDir, err := filepath.Abs(cfg.DataDir)
 	if err != nil {
 		return fmt.Errorf("failed to get absolute path for data directory: %w", err)
@@ -63,6 +63,8 @@ func (b *K3dBackend) Init(cfg *config.Config, u *ui.UI, stackID string) error {
 		return fmt.Errorf("failed to get absolute path for config directory: %w", err)
 	}
 
+	stackName := "obol-stack-" + stackID
+
 	// Template k3d config with actual values
 	k3dConfig := embed.K3dConfig
 	k3dConfig = strings.ReplaceAll(k3dConfig, "{{STACK_ID}}", stackID)
@@ -71,7 +73,8 @@ func (b *K3dBackend) Init(cfg *config.Config, u *ui.UI, stackID string) error {
 
 	// Rewrite occupied host-port mappings so k3d cluster create won't fail
 	// when another local stack is already bound to the default ingress ports.
-	k3dConfig = stripConflictingPorts(k3dConfig, u)
+	// Under --force, ports held by this cluster's own serverlb are not conflicts.
+	k3dConfig = stripConflictingPorts(k3dConfig, u, force, stackName)
 
 	k3dConfigPath := filepath.Join(cfg.ConfigDir, k3dConfigFile)
 	if err := os.WriteFile(k3dConfigPath, []byte(k3dConfig), 0o600); err != nil {
@@ -273,8 +276,14 @@ func portBlock(host, container int) string {
 // stripConflictingPorts removes occupied default k3d ingress mappings. If all
 // default host ports for a container port are occupied, it adds an ephemeral
 // host-port mapping so multiple dev stacks can coexist on the same machine.
-func stripConflictingPorts(k3dConfig string, u *ui.UI) string {
-	return rewriteConflictingPorts(k3dConfig, u, hostPortAvailable, pickAvailableHostPort)
+// When force is true, ports published by the existing clusterName load-balancer
+// are treated as owned (not foreign conflicts).
+func stripConflictingPorts(k3dConfig string, u *ui.UI, force bool, clusterName string) string {
+	owned := map[int]bool{}
+	if force {
+		owned = k3dOwnedHostPorts(clusterName)
+	}
+	return rewriteConflictingPorts(k3dConfig, u, hostPortAvailable, pickAvailableHostPort, owned)
 }
 
 func rewriteConflictingPorts(
@@ -282,6 +291,7 @@ func rewriteConflictingPorts(
 	u *ui.UI,
 	available func(int) bool,
 	pickPort func() (int, error),
+	owned map[int]bool,
 ) string {
 	hasMapping := map[int]bool{}
 
@@ -294,7 +304,7 @@ func rewriteConflictingPorts(
 		if !strings.Contains(k3dConfig, block) {
 			continue
 		}
-		if available(c.hostPort) {
+		if available(c.hostPort) || owned[c.hostPort] {
 			hasMapping[c.containerPort] = true
 			continue
 		}
@@ -368,6 +378,36 @@ func hostPortAvailable(port int) bool {
 	return checkPortsAvailable([]int{port}) == nil
 }
 
+// k3dOwnedHostPorts returns the host ports currently published by the
+// existing obol-managed k3d cluster's load-balancer container — the
+// cluster that "--force" is about to tear down and recreate. Used so
+// rewriteConflictingPorts does not treat a port as a foreign conflict when
+// it is actually held by the very cluster being recreated. Returns an
+// empty map (no exceptions) if the container can't be found/inspected —
+// callers fall back to the normal availability check in that case.
+func k3dOwnedHostPorts(clusterName string) map[int]bool {
+	out, err := exec.Command("docker", "port", "k3d-"+clusterName+"-serverlb").Output()
+	if err != nil {
+		return map[int]bool{}
+	}
+
+	owned := map[int]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+
+		idx := strings.LastIndex(line, ":")
+		if idx == -1 {
+			continue
+		}
+
+		if port, err := strconv.Atoi(strings.TrimSpace(line[idx+1:])); err == nil {
+			owned[port] = true
+		}
+	}
+
+	return owned
+}
+
 func pickAvailableHostPort() (int, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -403,7 +443,9 @@ func ensureK3dPortsAvailable(configPath string, u *ui.UI) {
 	}
 
 	original := string(data)
-	updated := stripConflictingPorts(original, u)
+	// force=false: this runs from Up() right before a fresh k3d cluster create,
+	// which only happens when IsRunning() is false — any prior instance is gone.
+	updated := stripConflictingPorts(original, u, false, "")
 
 	if updated != original {
 		if err := os.WriteFile(configPath, []byte(updated), 0o600); err != nil {
