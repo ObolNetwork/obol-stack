@@ -8,6 +8,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
+	"github.com/ObolNetwork/obol-stack/internal/stackbackup"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"gopkg.in/yaml.v3"
 )
@@ -89,6 +90,20 @@ func ResumeAll(cfg *config.Config, u *ui.UI) {
 			u.Warnf("Could not read recorded agent %s: %v", name, err)
 			continue
 		}
+		// Persisted manifests may include server-managed metadata (resourceVersion,
+		// uid, managedFields, ...) captured after apply. Strip them so kubectl
+		// apply does not fail with "resourceVersion: Invalid value: 0".
+		var doc map[string]any
+		if err := yaml.Unmarshal(data, &doc); err != nil {
+			u.Warnf("Could not parse recorded agent %s: %v", name, err)
+			continue
+		}
+		stackbackup.StripServerManagedMetadata(doc)
+		stripped, err := yaml.Marshal(doc)
+		if err != nil {
+			u.Warnf("Could not re-marshal recorded agent %s: %v", name, err)
+			continue
+		}
 		warnIfWalletWouldRegenerate(cfg, name, data, u)
 		nsErr := kubectl.PipeCommands(bin, kubeconfig,
 			[]string{"create", "namespace", Namespace(name), "--dry-run=client", "-o", "yaml"},
@@ -96,7 +111,7 @@ func ResumeAll(cfg *config.Config, u *ui.UI) {
 		if nsErr != nil {
 			u.Warnf("Could not ensure namespace for agent %s: %v", name, nsErr)
 		}
-		if err := kubectl.Apply(bin, kubeconfig, data); err != nil {
+		if err := kubectl.Apply(bin, kubeconfig, stripped); err != nil {
 			u.Warnf("Could not re-apply agent %s (run 'obol agent new %s' to recreate): %v", name, name, err)
 			continue
 		}
