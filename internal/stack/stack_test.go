@@ -175,7 +175,7 @@ func TestRewriteConflictingPorts_PreservesAvailableFallbacks(t *testing.T) {
 	}, func() (int, error) {
 		t.Fatal("should not pick an ephemeral port when fallbacks are available")
 		return 0, nil
-	})
+	}, nil)
 
 	for _, unexpected := range []string{"- port: 80:80", "- port: 443:443"} {
 		if strings.Contains(got, unexpected) {
@@ -207,7 +207,7 @@ func TestRewriteConflictingPorts_PicksEphemeralWhenAllDefaultsBusy(t *testing.T)
 		port := picks[0]
 		picks = picks[1:]
 		return port, nil
-	})
+	}, nil)
 
 	for _, unexpected := range []string{"- port: 80:80", "- port: 8080:80", "- port: 443:443", "- port: 8443:443"} {
 		if strings.Contains(got, unexpected) {
@@ -221,6 +221,39 @@ func TestRewriteConflictingPorts_PicksEphemeralWhenAllDefaultsBusy(t *testing.T)
 	}
 	if !strings.Contains(got, "options:\n") {
 		t.Fatal("YAML options key should remain")
+	}
+}
+
+func TestRewriteConflictingPorts_ForceSkipsOwnedPorts(t *testing.T) {
+	fullConfig := "ports:\n" +
+		portBlock(80, 80) +
+		portBlock(8080, 80) +
+		portBlock(443, 443) +
+		portBlock(8443, 443) +
+		"options:\n"
+
+	// Every default host port reads as occupied. 80 and 443 are "owned" —
+	// held by the existing obol cluster that --force is about to recreate
+	// — and must be kept. 8080/8443 are genuinely foreign occupants (not
+	// owned) and must still be stripped.
+	got := rewriteConflictingPorts(fullConfig, ui.New(false),
+		func(int) bool { return false },
+		func() (int, error) {
+			t.Fatal("should not need an ephemeral port: both container ports resolve via the owned mapping")
+			return 0, nil
+		},
+		map[int]bool{80: true, 443: true},
+	)
+
+	for _, expected := range []string{"- port: 80:80", "- port: 443:443"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("expected owned mapping %s to be preserved under force:\n%s", expected, got)
+		}
+	}
+	for _, unexpected := range []string{"- port: 8080:80", "- port: 8443:443"} {
+		if strings.Contains(got, unexpected) {
+			t.Fatalf("expected genuinely foreign-occupied mapping %s to still be stripped:\n%s", unexpected, got)
+		}
 	}
 }
 
