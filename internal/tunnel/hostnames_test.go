@@ -182,6 +182,8 @@ func TestHostnameInfos_PrimaryAndURL(t *testing.T) {
 }
 
 // --- AddHostname guards (all error before any cluster call) ----------------
+// Exception: TestAddHostname_DuplicateIsIdempotent succeeds as a no-op and
+// fail-opens through CreateStorefront (no real cluster required).
 
 func TestAddHostname_RejectsEmptyHostname(t *testing.T) {
 	cfg := newHostnameTestConfig(t)
@@ -211,16 +213,29 @@ func TestAddHostname_RejectsWithoutPersistentTunnel(t *testing.T) {
 	}
 }
 
-func TestAddHostname_RejectsDuplicate(t *testing.T) {
+func TestAddHostname_DuplicateIsIdempotent(t *testing.T) {
 	cfg := newHostnameTestConfig(t)
 	writeFakeKubeconfig(t, cfg)
 	if err := saveTunnelState(cfg, persistentLocalState("a.example.com")); err != nil {
 		t.Fatalf("save: %v", err)
 	}
-	// Mixed-case duplicate must still be rejected (normalized match).
-	_, err := AddHostname(cfg, ui.New(false), AddHostnameOptions{Hostname: "A.Example.com"})
-	if err == nil || !strings.Contains(err.Error(), "already a tunnel hostname") {
-		t.Fatalf("expected duplicate rejection, got %v", err)
+	// Mixed-case duplicate must still resolve to the same tracked hostname
+	// (normalized match) and succeed as a no-op instead of erroring. This
+	// exercises the storefront re-render path too (CreateStorefront fails
+	// open when kubectl/cluster access isn't available, so it does not
+	// turn this into an error in a unit-test environment).
+	result, err := AddHostname(cfg, ui.New(false), AddHostnameOptions{Hostname: "A.Example.com"})
+	if err != nil {
+		t.Fatalf("expected idempotent success for already-bound hostname, got error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected a non-nil result")
+	}
+	if result.Action != "unchanged" {
+		t.Fatalf("Action = %q, want %q", result.Action, "unchanged")
+	}
+	if len(result.Hostnames) != 1 || result.Hostnames[0].Hostname != "a.example.com" {
+		t.Fatalf("expected result to report the existing hostname set, got %+v", result.Hostnames)
 	}
 }
 
