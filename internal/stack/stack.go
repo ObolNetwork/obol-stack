@@ -117,7 +117,7 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string, skipConf
 	}
 
 	// Generate backend-specific config
-	if err := backend.Init(cfg, u, stackID); err != nil {
+	if err := backend.Init(cfg, u, stackID, force); err != nil {
 		return err
 	}
 

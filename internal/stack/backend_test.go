@@ -219,7 +219,7 @@ func TestK3dBackendInit(t *testing.T) {
 	b := &K3dBackend{}
 
 	u := ui.New(false)
-	if err := b.Init(cfg, u, "test-stack"); err != nil {
+	if err := b.Init(cfg, u, "test-stack", false); err != nil {
 		t.Fatalf("K3dBackend.Init() error: %v", err)
 	}
 
@@ -267,7 +267,7 @@ func TestK3sBackendInit(t *testing.T) {
 	b := &K3sBackend{}
 
 	u := ui.New(false)
-	if err := b.Init(cfg, u, "my-cluster"); err != nil {
+	if err := b.Init(cfg, u, "my-cluster", false); err != nil {
 		t.Fatalf("K3sBackend.Init() error: %v", err)
 	}
 

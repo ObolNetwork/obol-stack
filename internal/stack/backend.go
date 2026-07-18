@@ -24,8 +24,11 @@ type Backend interface {
 	// Name returns the backend identifier (e.g., "k3d", "k3s")
 	Name() string
 
-	// Init generates backend-specific cluster configuration files
-	Init(cfg *config.Config, u *ui.UI, stackID string) error
+	// Init generates backend-specific cluster configuration files.
+	// force is true when the caller is about to tear down and recreate the
+	// existing cluster (obol stack init --force); backends may use it to
+	// treat ports currently held by that cluster as non-conflicting.
+	Init(cfg *config.Config, u *ui.UI, stackID string, force bool) error
 
 	// Up creates or starts the cluster and returns kubeconfig contents
 	Up(cfg *config.Config, u *ui.UI, stackID string) (kubeconfigData []byte, err error)
