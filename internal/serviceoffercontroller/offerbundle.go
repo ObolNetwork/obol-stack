@@ -20,7 +20,7 @@ import (
 // resources per origin. An offer with spec.hostname therefore gets its own
 // discovery documents — an openapi.json scoped to just that offer with
 // paths rooted at "/", a /.well-known/x402 resource list, and a minimal
-// landing page — served by the same static-site httpd via per-offer ConfigMap
+// landing page — served by the same catalog httpd via per-offer ConfigMap
 // keys and Exact-match rewrite routes on the offer's hostname.
 
 // offerBundleFile is one generated file: Key is the ConfigMap data key,
@@ -95,6 +95,16 @@ func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.Store
 				Content: buildOfferLandingHTML(offer, originProfile),
 			},
 		)
+		if offer.IsAgent() {
+			// The chat widget page is themed and titled per offer (same
+			// resolved profile as the landing page); the heavy vendor
+			// bundle stays shared at the httpd root.
+			bundles = append(bundles, offerBundleFile{
+				Key:     offerBundleKey(offer, "chat.html"),
+				Path:    offerBundleDir(offer) + "/chat.html",
+				Content: buildOfferChatHTML(offer, originProfile),
+			})
+		}
 	}
 	sort.Slice(bundles, func(i, j int) bool { return bundles[i].Key < bundles[j].Key })
 	return bundles
@@ -331,6 +341,9 @@ func buildOfferLandingHTML(offer *monetizeapi.ServiceOffer, profile schemas.Stor
 	var out strings.Builder
 	err := offerLandingTmpl.Execute(&out, map[string]any{
 		"Title": title,
+		// Agent-type offers get the embedded chat widget: the /chat and
+		// /chat-vendor.js Exact routes exist on the hostname iff IsAgent.
+		"ChatEnabled": offer.IsAgent(),
 		// Meta/OG tags keep the plain text; the body renders the markdown.
 		"Description":     desc,
 		"DescriptionHTML": storefront.RenderRichText(desc),

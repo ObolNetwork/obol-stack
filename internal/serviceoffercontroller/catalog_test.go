@@ -49,3 +49,21 @@ func TestStaticSiteDeployedContentHash(t *testing.T) {
 		t.Fatalf("missing annotation hash = %q, want empty", got)
 	}
 }
+
+// TestStaticSiteStaleChatWidgetTriggersUpdate pins the upgrade path: a
+// deployed ConfigMap whose chat widget differs from the binary's embedded
+// copy must NOT match, otherwise the skip-when-unchanged fast path pins the
+// old asset across controller upgrades forever. (Per-offer chat pages flow
+// through the offer bundles, which the match already covers.)
+func TestStaticSiteStaleChatWidgetTriggersUpdate(t *testing.T) {
+	cm := buildStaticSiteConfigMap("# cat", `{}`, `{}`, "<html></html>", nil)
+	if !staticSiteContentMatches(cm, "# cat", `{}`, `{}`, "<html></html>", nil) {
+		t.Fatalf("fresh ConfigMap should match its own inputs")
+	}
+	if err := unstructured.SetNestedField(cm.Object, "stale vendor", "data", "chat-vendor.js"); err != nil {
+		t.Fatal(err)
+	}
+	if staticSiteContentMatches(cm, "# cat", `{}`, `{}`, "<html></html>", nil) {
+		t.Fatalf("stale chat-vendor.js must trigger a ConfigMap update")
+	}
+}

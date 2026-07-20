@@ -270,7 +270,13 @@ func buildStaticSiteConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML st
 		"services.json": servicesJSON,
 		"openapi.json":  openAPIJSON,
 		"api.html":      apiDocsHTML,
-		"httpd.conf":    ".md:text/markdown\n.json:application/json\n.html:text/html\n.js:text/javascript\n",
+		// .js must map to a JavaScript MIME type: the chat widget loads
+		// chat-vendor.js as an ES module and browsers hard-fail module
+		// imports served with a non-script Content-Type.
+		"httpd.conf": ".md:text/markdown\n.json:application/json\n.html:text/html\n.js:text/javascript\n",
+		// The chat widget's shared vendor bundle (per-offer /chat pages are
+		// rendered into the offer bundles; this one heavy file is common).
+		"chat-vendor.js": chatWidgetVendorJS,
 	}
 	for _, f := range bundles {
 		data[f.Key] = f.Content
@@ -293,8 +299,8 @@ func buildStaticSiteConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML st
 }
 
 // staticSiteVolumeItems projects the ConfigMap keys into the httpd's /www
-// tree: the aggregate documents plus one file per hostname-offer bundle
-// entry (offers/<ns>/<name>/…).
+// tree: the aggregate documents, the shared agent chat widget, plus one
+// file per hostname-offer bundle entry (offers/<ns>/<name>/…).
 func staticSiteVolumeItems(bundles []offerBundleFile) []any {
 	items := []any{
 		map[string]any{"key": "skill.md", "path": "skill.md"},
@@ -305,6 +311,9 @@ func staticSiteVolumeItems(bundles []offerBundleFile) []any {
 		// HTTPRoute also matches the trailing-slash variant so the
 		// resolver kicks in either way.
 		map[string]any{"key": "api.html", "path": "api/index.html"},
+		// The chat widget's shared vendor bundle at the /www root;
+		// agent-offer hostname routes rewrite /chat-vendor.js here.
+		map[string]any{"key": "chat-vendor.js", "path": "chat-vendor.js"},
 	}
 	for _, f := range bundles {
 		items = append(items, map[string]any{"key": f.Key, "path": f.Path})
@@ -919,14 +928,29 @@ func buildHostHTTPRoute(offer *monetizeapi.ServiceOffer) *unstructured.Unstructu
 }
 
 // hostRouteRules assembles the dedicated-origin rule list: the four
-// discovery rules (landing, openapi, x402, agent-registration) and the
-// PathPrefix / payment gate last.
+// discovery rules (landing, openapi, x402, agent-registration), the free
+// chat widget for agent-type offers (Exact rules, so they win over the
+// verifier catch-all like the discovery paths do), and the PathPrefix /
+// payment gate last.
 func hostRouteRules(offer *monetizeapi.ServiceOffer, exactTo, exactToShared func(string, string) map[string]any, catchallFilters []any) []any {
 	rules := []any{
 		exactTo("/", "index.html"),
 		exactTo("/openapi.json", "openapi.json"),
 		exactTo("/.well-known/x402", "x402.json"),
 		exactTo("/.well-known/agent-registration.json", "agent-registration.json"),
+	}
+	if offer.IsAgent() {
+		// The chat page holds a hot session key and signs USDC transfers —
+		// frame-ancestors 'self' stops it being clickjacked into a
+		// cross-origin iframe (Connect/Fund/Withdraw/Send). The offer's own
+		// landing page embeds it same-origin (TestOfferLandingChatEmbed), so
+		// that legitimate embed still works.
+		chatRule := exactTo("/chat", "chat.html")
+		addResponseHeader(chatRule, "Content-Security-Policy", "frame-ancestors 'self'")
+		rules = append(rules,
+			chatRule,
+			exactToShared("/chat-vendor.js", "chat-vendor.js"),
+		)
 	}
 	return append(rules, map[string]any{
 		"matches": []any{
@@ -937,6 +961,23 @@ func hostRouteRules(offer *monetizeapi.ServiceOffer, exactTo, exactToShared func
 			map[string]any{"name": "x402-verifier", "namespace": "x402", "port": int64(8080)},
 		},
 	})
+}
+
+// addResponseHeader appends a Set entry to a rule's existing
+// ResponseHeaderModifier filter (every exactTo rule has exactly one, from
+// cacheFilter) — Gateway API's core filters are unspecified/implementation
+// -defined if repeated within one rule, so extra headers merge into the
+// existing filter instead of adding a second one.
+func addResponseHeader(rule map[string]any, name, value string) {
+	for _, f := range rule["filters"].([]any) {
+		fm := f.(map[string]any)
+		if fm["type"] != "ResponseHeaderModifier" {
+			continue
+		}
+		mod := fm["responseHeaderModifier"].(map[string]any)
+		mod["set"] = append(mod["set"].([]any), map[string]any{"name": name, "value": value})
+		return
+	}
 }
 
 // sharedOriginRule is the /services/<name> PathPrefix rule → verifier,
