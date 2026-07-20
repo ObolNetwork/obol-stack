@@ -98,6 +98,8 @@ export async function generateMetadata(): Promise<Metadata> {
       card: "summary_large_image",
       title,
       description,
+      // Keep link-preview parity with Open Graph when the operator sets ogImageUrl.
+      ...(storefront.ogImageUrl ? { images: [storefront.ogImageUrl] } : {}),
     },
     robots: {
       index: true,
