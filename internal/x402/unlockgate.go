@@ -135,14 +135,24 @@ func (v *Verifier) handlePaidUnlock(w http.ResponseWriter, r *http.Request, rule
 
 	settleResp, err := facilitatorSettle(r.Context(), &http.Client{Timeout: facilitatorSettleTimeout}, cfg.FacilitatorURL, payloadBytes, signedReq)
 	if err != nil {
-		writeUnlockJSON(w, http.StatusBadGateway, map[string]any{"error": "settle_failed", "detail": err.Error()})
+		// The facilitator can submit the settle tx on-chain and THEN fail on
+		// the receipt path (facilitatorSettle returns the tx-bearing response
+		// alongside the error). Surface the tx hash so a charged-but-unanswered
+		// buyer can reconcile against the chain — same forensic contract as the
+		// per-request paid path in HandleProxy. Without this the debit is silent.
+		body := map[string]any{"error": "settle_failed", "detail": err.Error()}
+		if v.surfaceOnChainSettle(w, settleResp) {
+			body["hint"] = "the settle tx in X-PAYMENT-RESPONSE may have landed on-chain — verify against the chain before retrying, or you may pay twice"
+		}
+		writeUnlockJSON(w, http.StatusBadGateway, body)
 		return
 	}
 	if !settleResp.Success {
-		writeUnlockJSON(w, http.StatusBadGateway, map[string]any{
-			"error":  "settle_failed",
-			"detail": facilitatorDetail(settleResp.ErrorReason, settleResp.ErrorMessage),
-		})
+		body := map[string]any{"error": "settle_failed", "detail": facilitatorDetail(settleResp.ErrorReason, settleResp.ErrorMessage)}
+		if v.surfaceOnChainSettle(w, settleResp) {
+			body["hint"] = "the settle tx in X-PAYMENT-RESPONSE may have landed on-chain — verify against the chain before retrying, or you may pay twice"
+		}
+		writeUnlockJSON(w, http.StatusBadGateway, body)
 		return
 	}
 
@@ -180,6 +190,24 @@ func (v *Verifier) handlePaidUnlock(w http.ResponseWriter, r *http.Request, rule
 		return
 	}
 	proxy.ServeHTTP(&statusRecorder{ResponseWriter: w, status: http.StatusOK}, r)
+}
+
+// surfaceOnChainSettle sets X-PAYMENT-RESPONSE from a settle response that
+// carries an on-chain tx hash (the facilitator submitted the tx then errored),
+// so a charged buyer can reconcile. Must run before writeUnlockJSON commits the
+// status. Returns true when a tx was surfaced. Mirrors the HandleProxy path.
+func (v *Verifier) surfaceOnChainSettle(w http.ResponseWriter, settleResp *facilitatorSettleResponse) bool {
+	if settleResp == nil || settleResp.Transaction == "" {
+		return false
+	}
+	if encoded, err := json.Marshal(settleResp); err == nil {
+		b64 := base64.StdEncoding.EncodeToString(encoded)
+		w.Header().Set("X-PAYMENT-RESPONSE", b64)
+		w.Header().Set("PAYMENT-RESPONSE", b64)
+	}
+	log.Printf("x402-verifier: auth-capture unlock settle returned tx %s with an error — verify on-chain (network=%s payer=%s)",
+		settleResp.Transaction, settleResp.Network, settleResp.Payer)
+	return true
 }
 
 func bigIntToFloat(x *big.Int) float64 {

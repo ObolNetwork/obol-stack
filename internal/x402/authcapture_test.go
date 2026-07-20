@@ -316,6 +316,86 @@ func TestPaidUnlock_InlineFirstMessage(t *testing.T) {
 	}
 }
 
+// TestPaidUnlock_SettleErrorSurfacesTxHash locks in the forensic contract: when
+// the facilitator submits the settle tx on-chain and THEN fails on the receipt
+// path (non-200 with a tx hash in the body), the buyer must get the tx hash back
+// (X-PAYMENT-RESPONSE + a "you may pay twice" hint) rather than a bare error —
+// otherwise an on-chain debit goes silent with no way to reconcile.
+func TestPaidUnlock_SettleErrorSurfacesTxHash(t *testing.T) {
+	const settledTx = "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/verify", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"isValid":true,"payer":%q}`, testUnlockPayer)
+	})
+	mux.HandleFunc("/settle", func(w http.ResponseWriter, r *http.Request) {
+		// tx landed, receipt path 5xx'd: return the tx hash with a non-200.
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		fmt.Fprintf(w, `{"success":false,"transaction":%q,"network":"eip155:84532","payer":%q,"errorReason":"receipt_timeout"}`, settledTx, testUnlockPayer)
+	})
+	facilitator := httptest.NewServer(mux)
+	t.Cleanup(facilitator.Close)
+
+	unlockConfig := validAuthCaptureConfig()
+	v, err := NewVerifier(&PricingConfig{
+		Wallet:         "0x3333333333333333333333333333333333333333",
+		Chain:          "base-sepolia",
+		FacilitatorURL: facilitator.URL,
+		Routes: []RouteRule{{
+			Pattern:        "/services/agent/*",
+			Gate:           "auth",
+			StripPrefix:    unlockConfig.OfferPrefix,
+			UpstreamURL:    "http://upstream.invalid",
+			OfferNamespace: "test",
+			OfferName:      "agent",
+		}},
+		AuthCaptureUnlock: &unlockConfig,
+	})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+
+	path := unlockConfig.OfferPrefix + "/chat"
+	challengeReq := httptest.NewRequest(http.MethodGet, path, nil)
+	cw := httptest.NewRecorder()
+	v.HandleProxy(cw, challengeReq)
+	var challenge struct {
+		Accepts []x402types.PaymentRequirements `json:"accepts"`
+	}
+	if err := json.Unmarshal(cw.Body.Bytes(), &challenge); err != nil {
+		t.Fatalf("decode challenge: %v", err)
+	}
+	wireJSON, _ := json.Marshal(map[string]any{
+		"x402Version": 2, "payload": map[string]any{"stub": true}, "accepted": challenge.Accepts[0],
+	})
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("X-PAYMENT", base64.StdEncoding.EncodeToString(wireJSON))
+	w := httptest.NewRecorder()
+	v.HandleProxy(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body: %s", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("X-PAYMENT-RESPONSE"); got == "" {
+		t.Error("X-PAYMENT-RESPONSE header not set — the on-chain tx hash is lost")
+	} else {
+		decoded, derr := base64.StdEncoding.DecodeString(got)
+		if derr != nil || !strings.Contains(string(decoded), settledTx) {
+			t.Errorf("X-PAYMENT-RESPONSE does not carry the settle tx: %s", string(decoded))
+		}
+	}
+	if !strings.Contains(w.Body.String(), "pay twice") {
+		t.Errorf("error body missing the reconcile hint: %s", w.Body.String())
+	}
+	// A failed settle must NOT mint a session.
+	for _, c := range w.Result().Cookies() {
+		if c.Name == SIWXSessionCookie {
+			t.Error("session cookie minted despite settle failure")
+		}
+	}
+}
+
 // TestValidateSignedUnlockRequirement guards the money path: the verifier
 // settles the requirement the CLIENT signed (payload.accepted), so a client
 // must not be able to redirect the fee, underpay, or swap the authorizer. Each
