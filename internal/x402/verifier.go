@@ -385,6 +385,10 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	if rule.IsAuth() {
 		wallet, err := v.siwx.Authenticate(r, requestHost(r), time.Now())
 		if err != nil {
+			if v.isUnlockOffer(cfg, rule) {
+				v.handlePaidUnlock(w, r, rule)
+				return
+			}
 			v.writeSIWXChallenge(w, r, rule, err)
 			return
 		}
