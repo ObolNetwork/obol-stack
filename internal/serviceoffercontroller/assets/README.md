@@ -7,6 +7,25 @@ the live 402 challenge, so the same file works for every agent offer on any
 stack and network (Base mainnet `eip155:8453` and Base Sepolia
 `eip155:84532` are supported).
 
+## Known limitations
+
+- **Session key is derived from a wallet signature** (`keccak256(personal_sign(<EIP-4361 message>))`),
+  so the wallet must produce a *deterministic* signature for the same message.
+  Standard RFC-6979 EOAs (MetaMask, Rabby, Ledger, Trezor) do; the `getCode`
+  guard rejects contract wallets (non-reproducible ERC-1271) while allowing
+  EIP-7702-delegated EOAs. **Residual gap:** MPC / threshold-ECDSA wallets are
+  code-less EOAs that pass the guard but sign non-deterministically — funding a
+  session from one strands the balance on the next visit. There is no on-chain
+  signal to detect this without a second signature popup, which this
+  one-signature flow deliberately avoids. Use a standard EOA.
+- **Per-turn spend is capped at the price shown when the page loaded** (and the
+  session balance). A turn whose 402 amount exceeds the displayed price is
+  refused; a legitimate price change is picked up on reload. Max loss per
+  session is bounded by what you fund into the session wallet.
+- **The signature itself is key material.** Anything that can read it (a
+  malicious extension, a hooked `window.ethereum`) controls the session funds —
+  keep session balances small.
+
 `chat-vendor.js` — generated single-file ESM bundle of the widget's
 dependencies. Do not edit by hand. Rebuild:
 

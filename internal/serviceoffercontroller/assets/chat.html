@@ -203,6 +203,12 @@ async function connect() {
     [mainAddr] = await window.ethereum.request({ method: "eth_requestAccounts" });
     // Non-deterministic ERC-1271 signatures would strand session funds: the
     // session key is derived from a signature a contract wallet cannot reproduce.
+    // KNOWN RESIDUAL: MPC / threshold-ECDSA wallets (e.g. Zengo, some embedded
+    // signers) are code-less EOAs, so they pass this guard, yet their signatures
+    // are non-deterministic — funding one strands the balance on the next visit.
+    // There is no on-chain signal to detect this; the only programmatic defense
+    // is a sign-twice-and-compare probe (a second popup this one-signature flow
+    // deliberately avoids). Documented in assets/README.md.
     const code = await pub.getCode({ address: mainAddr });
     if (code && code !== "0x" && !code.startsWith("0xef0100")) {
       say("sys err", "Smart-contract wallets aren't supported: their signatures aren't deterministic, so the session wallet this page derives could not be recovered later. Connect a regular (EOA) wallet.");
@@ -255,12 +261,20 @@ async function signin() {
     status("waiting for signature…", true);
     const sig = await wallet.signMessage({ account: mainAddr, message: signinMessage() });
     burner = privateKeyToAccount(keccak256(sig));
-    // Per-payment ceiling = the session balance: whatever the seller prices
-    // a turn at, the widget never signs an authorization for more than the
-    // user chose to park in the session wallet. No arbitrary price cap.
+    // Per-turn ceiling = the price this page displayed at load (and never more
+    // than the session balance). A turn whose 402 amount exceeds the shown
+    // price is refused rather than silently paid up to the whole balance — so a
+    // seller can't drift the price up mid-session and drain a funded wallet in
+    // one message. The "above this page's safety cap" error copy below depends
+    // on this being the real cap. (A legit price change is picked up on reload.)
+    // A missing/zero amount is dropped, not treated as free.
     const x = new x402Client()
       .register(net, new ExactEvmScheme(toClientEvmSigner(burner, pub)))
-      .registerPolicy((_v, reqs) => reqs.filter((q) => BigInt(q.amount ?? q.maxAmountRequired ?? "0") <= balance));
+      .registerPolicy((_v, reqs) => reqs.filter((q) => {
+        const amt = BigInt(q.amount ?? q.maxAmountRequired ?? "0");
+        const cap = (price !== null && price > 0n) ? price : balance;
+        return amt > 0n && amt <= cap && amt <= balance;
+      }));
     payFetch = wrapFetchWithPayment(fetch, x);
     $("sessaddr").textContent = short(burner.address);
     if (explorer) { $("explorer").href = explorer + "/address/" + burner.address; $("explorer").style.display = ""; }
@@ -428,7 +442,7 @@ $("composer").onsubmit = async (ev) => {
     say("sys err", /insufficient|funds|balance/i.test(msg) ?
       "Payment failed — session balance too low. Top it up with + fund above." :
       /filtered out by policies/i.test(msg) ?
-      "Price changed above this page's safety cap — payment refused." :
+      "This turn's price is higher than the " + priceStr() + " shown when the page loaded — payment refused. Reload to accept the new price." :
       "Error: " + (e.shortMessage || e.message).slice(0, 200));
     status("");
   }
