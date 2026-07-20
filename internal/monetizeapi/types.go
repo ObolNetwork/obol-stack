@@ -304,6 +304,7 @@ type ServiceOfferPayment struct {
 	// x402 payment scheme.
 	// +kubebuilder:default="exact"
 	// +kubebuilder:validation:Enum=exact
+	// TODO(auth-capture): regenerate CRD manifests + wire per-offer unlock config
 	Scheme string `json:"scheme,omitempty"`
 	// Chain identifier for payments (human-friendly). Reconciler resolves
 	// to CAIP-2 format (e.g., "base-sepolia" → "eip155:84532").

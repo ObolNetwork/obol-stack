@@ -10,12 +10,14 @@ import (
 type verifierMetrics struct {
 	registry *prometheus.Registry
 
-	requestsTotal      *prometheus.CounterVec
-	paymentRequired    *prometheus.CounterVec
-	paymentVerified    *prometheus.CounterVec
-	paymentFailed      *prometheus.CounterVec
-	chargedRequests    *prometheus.CounterVec
-	lastPaymentSuccess *prometheus.GaugeVec
+	requestsTotal       *prometheus.CounterVec
+	paymentRequired     *prometheus.CounterVec
+	paymentVerified     *prometheus.CounterVec
+	paymentFailed       *prometheus.CounterVec
+	chargedRequests     *prometheus.CounterVec
+	feeRevenueAtomic    *prometheus.CounterVec
+	settledVolumeAtomic *prometheus.CounterVec
+	lastPaymentSuccess  *prometheus.GaugeVec
 
 	// paymentFailureReasons splits paymentFailed by WHY (payment_invalid,
 	// facilitator_unreachable, settlement_failed, ...). paymentFailed alone
@@ -69,6 +71,20 @@ func newVerifierMetrics() *verifierMetrics {
 			},
 			[]string{"offer_namespace", "offer_name", "chain", "asset_symbol"},
 		),
+		feeRevenueAtomic: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "obol_x402_verifier_fee_revenue_atomic_total",
+				Help: "Platform fee captured via auth-capture unlock, in atomic token units (fixed-rate: amount*maxFeeBps/10000).",
+			},
+			[]string{"network", "asset", "fee_recipient"},
+		),
+		settledVolumeAtomic: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "obol_x402_verifier_settled_volume_atomic_total",
+				Help: "Total settled unlock volume, atomic token units.",
+			},
+			[]string{"network", "asset", "fee_recipient"},
+		),
 		lastPaymentSuccess: prometheus.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Name: "obol_x402_verifier_last_payment_success_seconds",
@@ -98,6 +114,8 @@ func newVerifierMetrics() *verifierMetrics {
 		m.paymentVerified,
 		m.paymentFailed,
 		m.chargedRequests,
+		m.feeRevenueAtomic,
+		m.settledVolumeAtomic,
 		m.lastPaymentSuccess,
 		m.paymentFailureReasons,
 		m.upstreamFailedAfterVerify,
