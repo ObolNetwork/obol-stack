@@ -190,11 +190,20 @@ func resolveSiteURL(r *http.Request) string {
 	if forwarded := r.Header.Get("X-Forwarded-Host"); forwarded != "" {
 		host = forwarded
 	}
-	scheme := "https"
+	return resolveScheme(r, host) + "://" + host
+}
+
+// resolveScheme is the single source of truth for the public scheme of a
+// request that may have crossed a TLS-terminating tunnel. Default https;
+// downgrade to http only for hosts the stack serves locally over plain HTTP.
+// An explicit https signal (direct TLS or X-Forwarded-Proto: https) still
+// forces https for any host. Shared by resolveSiteURL (402 page links) and
+// buildResourceURL (challenge resource.url) so both stay consistent.
+func resolveScheme(r *http.Request, host string) string {
 	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "https" && isLocalHost(host) {
-		scheme = "http"
+		return "http"
 	}
-	return scheme + "://" + host
+	return "https"
 }
 
 // isLocalHost reports whether host (optionally with :port) is one the stack

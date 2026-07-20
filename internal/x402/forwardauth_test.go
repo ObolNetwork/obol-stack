@@ -951,3 +951,43 @@ func TestForwardAuth_402CarriesCatalogLinkHeader(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildResourceURL_Scheme(t *testing.T) {
+	cases := []struct {
+		name   string
+		host   string
+		xfHost string
+		xfp    string
+		xfURI  string
+		want   string
+	}{
+		// Public hosts default to https even when the TLS-terminating tunnel
+		// forwards plaintext (XFP=http) and the route carries no
+		// X-Forwarded-Proto filter — the shared-origin so-<name> case (#679).
+		{"public host, no forwarded proto", "svc.example.org", "", "", "", "https://svc.example.org/services/x"},
+		{"public host, xfp http from tunnel", "svc.example.org", "", "http", "", "https://svc.example.org/services/x"},
+		{"forwarded public host", "10.42.0.5:8000", "svc.example.org", "", "", "https://svc.example.org/services/x"},
+		{"local obol.stack stays http", "obol.stack:8080", "", "", "", "http://obol.stack:8080/services/x"},
+		{"localhost stays http", "localhost:3000", "", "", "", "http://localhost:3000/services/x"},
+		{"local host, explicit https honored", "obol.stack:8080", "", "https", "", "https://obol.stack:8080/services/x"},
+		{"forwarded uri used", "svc.example.org", "", "", "/services/x/v1/chat", "https://svc.example.org/services/x/v1/chat"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("POST", "/services/x", nil)
+			r.Host = tc.host
+			if tc.xfHost != "" {
+				r.Header.Set("X-Forwarded-Host", tc.xfHost)
+			}
+			if tc.xfp != "" {
+				r.Header.Set("X-Forwarded-Proto", tc.xfp)
+			}
+			if tc.xfURI != "" {
+				r.Header.Set("X-Forwarded-Uri", tc.xfURI)
+			}
+			if got := buildResourceURL(r); got != tc.want {
+				t.Errorf("buildResourceURL() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

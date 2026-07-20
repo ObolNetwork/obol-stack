@@ -606,10 +606,7 @@ func buildResourceURL(r *http.Request) string {
 	if forwardedHost := r.Header.Get("X-Forwarded-Host"); forwardedHost != "" {
 		host = forwardedHost
 	}
-	scheme := "https"
-	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "https" && isLocalHost(host) {
-		scheme = "http"
-	}
+	scheme := resolveScheme(r, host)
 
 	path := r.URL.Path
 	if r.URL.RawQuery != "" {
