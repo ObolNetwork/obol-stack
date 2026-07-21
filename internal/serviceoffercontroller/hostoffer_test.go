@@ -185,6 +185,72 @@ func TestBuildOfferBundles(t *testing.T) {
 	}
 }
 
+// TestBuildOfferBundles_InferenceOfferAgreesWithOpenAPI pins that a
+// hostname-bound inference offer (no custom Spec.Routes — synthesized
+// root catch-all) advertises the same paid path on both discovery
+// surfaces: openapi.json paths and /.well-known/x402 resources.
+// Before the openAPIRelPathForOfferRoute fix, x402 collapsed "/*" to
+// the bare origin while openapi hard-coded /v1/chat/completions.
+func TestBuildOfferBundles_InferenceOfferAgreesWithOpenAPI(t *testing.T) {
+	profile := schemas.StorefrontProfile{DisplayName: "Acme"}
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "chat", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type:     "inference",
+			Hostname: "chat.v1337.example",
+			Upstream: monetizeapi.ServiceOfferUpstream{Service: "gateway", Namespace: "llm", Port: 8080},
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base-sepolia",
+				PayTo:   "0x1111111111111111111111111111111111111111",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.1"},
+			},
+			// Spec.Routes intentionally empty: EffectiveRoutes synthesizes /*.
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{
+				{Type: "ModelReady", Status: "True"},
+				{Type: "UpstreamHealthy", Status: "True"},
+				{Type: "PaymentGateReady", Status: "True"},
+				{Type: "RoutePublished", Status: "True"},
+			},
+		},
+	}
+
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile, noUpstreamOpenAPI)
+	byPath := map[string]string{}
+	for _, f := range bundles {
+		byPath[f.Path] = f.Content
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(byPath["offers/llm/chat/openapi.json"]), &doc); err != nil {
+		t.Fatalf("openapi bundle: %v", err)
+	}
+	paths := doc["paths"].(map[string]any)
+	if len(paths) != 1 {
+		t.Fatalf("paths = %v, want exactly one key", mapKeys(paths))
+	}
+	if _, ok := paths["/v1/chat/completions"]; !ok {
+		t.Fatalf("paths = %v, want /v1/chat/completions", mapKeys(paths))
+	}
+
+	var wk struct {
+		Resources []struct {
+			Resource string `json:"resource"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal([]byte(byPath["offers/llm/chat/x402.json"]), &wk); err != nil {
+		t.Fatalf("x402 bundle: %v", err)
+	}
+	if len(wk.Resources) != 1 {
+		t.Fatalf("len(resources) = %d, want 1", len(wk.Resources))
+	}
+	want := "https://chat.v1337.example/v1/chat/completions"
+	if wk.Resources[0].Resource != want {
+		t.Errorf("resources[0].resource = %q, want %q (must agree with openapi.json path)", wk.Resources[0].Resource, want)
+	}
+}
+
 // TestBuildOfferBundles_BrandingOverride pins the per-origin identity merge:
 // spec.branding fields override the storefront profile on the dedicated
 // origin's surfaces, empty fields inherit.

@@ -43,7 +43,7 @@ type HostnameListResult struct {
 // HostnameMutationResult is the JSON-serialisable result of Add/RemoveHostname.
 type HostnameMutationResult struct {
 	Hostname       string         `json:"hostname"`
-	Action         string         `json:"action"` // "added" | "removed"
+	Action         string         `json:"action"` // "added" | "removed" | "unchanged"
 	ManagementMode string         `json:"management_mode"`
 	Hostnames      []HostnameInfo `json:"hostnames"`
 }
@@ -98,7 +98,28 @@ func AddHostname(cfg *config.Config, u *ui.UI, opts AddHostnameOptions) (*Hostna
 	existing := st.HostnameSet()
 	for _, h := range existing {
 		if h == hostname {
-			return nil, fmt.Errorf("%s is already a tunnel hostname; nothing to do", hostname)
+			// Idempotent: this hostname is already bound. Still re-render
+			// the storefront catch-all over the current set — a caller may
+			// be retrying `tunnel hostname add <host> --offer ns/name`
+			// after the offer bind, and the catch-all must be swept to
+			// skip a hostname that has since become offer-bound, or a
+			// stale catch-all route keeps shadowing the offer's
+			// dedicated-origin route (Gateway API breaks the PathPrefix-/
+			// tie by route age).
+			if err := CreateStorefront(cfg, existing...); err != nil {
+				u.Warnf("could not refresh storefront: %v", err)
+			}
+
+			u.Blank()
+			u.Successf("Hostname already present: https://%s", hostname)
+			u.Dim("  No changes needed — this is a no-op.")
+
+			return &HostnameMutationResult{
+				Hostname:       hostname,
+				Action:         "unchanged",
+				ManagementMode: st.Management(),
+				Hostnames:      hostnameInfos(existing),
+			}, nil
 		}
 	}
 

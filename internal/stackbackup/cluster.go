@@ -211,16 +211,20 @@ func StripK8sJSON(data []byte) ([]byte, error) {
 		}
 		for _, it := range items {
 			if obj, ok := it.(map[string]any); ok {
-				stripObject(obj)
+				StripServerManagedMetadata(obj)
 			}
 		}
 	} else {
-		stripObject(doc)
+		StripServerManagedMetadata(doc)
 	}
 	return json.MarshalIndent(doc, "", "  ")
 }
 
-func stripObject(obj map[string]any) {
+// StripServerManagedMetadata strips server-managed fields from one decoded
+// Kubernetes object (map from json.Unmarshal or yaml.Unmarshal) so it can be
+// re-applied. Used by StripK8sJSON (export/import dumps) and by
+// internal/agentcrd.ResumeAll (persisted Agent manifests on stack up).
+func StripServerManagedMetadata(obj map[string]any) {
 	delete(obj, "status")
 	meta, ok := obj["metadata"].(map[string]any)
 	if !ok {
