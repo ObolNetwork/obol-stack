@@ -990,17 +990,11 @@ func freeLocalPort() (int, error) {
 // SyncTunnelConfigMap creates or patches the obol-stack-config ConfigMap in the
 // obol-frontend namespace with the current tunnel URL and the running Obol CLI
 // version. The frontend reads this ConfigMap for the public tunnel URL and the
-// footer version display.
+// footer version display. Server-side apply merges fields; call after
+// obol-frontend exists (helmfile).
 func SyncTunnelConfigMap(cfg *config.Config, tunnelURL string) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	// Ensure the namespace exists (non-fatal if it doesn't).
-	_ = exec.Command(kubectlPath,
-		"--kubeconfig", kubeconfigPath,
-		"create", "namespace", "obol-frontend",
-		"--dry-run=client", "-o", "yaml",
-	).Run()
 
 	manifest := fmt.Sprintf(`apiVersion: v1
 kind: ConfigMap
@@ -1008,8 +1002,8 @@ metadata:
   name: obol-stack-config
   namespace: obol-frontend
 data:
-  tunnelURL: %s
-  obolVersion: %s
+  tunnelURL: %q
+  obolVersion: %q
 `, strings.TrimRight(tunnelURL, "/"), version.Version)
 
 	// Server-side apply avoids the flaky client-side /openapi/v2 download on k3d.
@@ -1026,47 +1020,28 @@ data:
 	return nil
 }
 
-// SyncStackConfigVersion patches obolVersion into obol-frontend/obol-stack-config
-// without touching tunnelURL. Used on stack up when no tunnel sync runs yet.
+// SyncStackConfigVersion SSA-merges only obolVersion into
+// obol-frontend/obol-stack-config, leaving tunnelURL untouched. Used on stack
+// up when no tunnel sync runs yet (after infra deploy creates the namespace).
 func SyncStackConfigVersion(cfg *config.Config) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
-	_ = exec.Command(kubectlPath,
-		"--kubeconfig", kubeconfigPath,
-		"create", "namespace", "obol-frontend",
-		"--dry-run=client", "-o", "yaml",
-	).Run()
-
-	patch := fmt.Sprintf(`{"data":{"obolVersion":%q}}`, version.Version)
-	cmd := exec.Command(kubectlPath,
-		"--kubeconfig", kubeconfigPath,
-		"patch", "configmap", "obol-stack-config",
-		"-n", "obol-frontend",
-		"--type", "merge",
-		"-p", patch,
-	)
-	if out, err := cmd.CombinedOutput(); err == nil {
-		return nil
-	} else if !strings.Contains(string(out), "NotFound") && !strings.Contains(string(out), "not found") {
-		return fmt.Errorf("kubectl patch obol-stack-config failed: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-
-	// ConfigMap does not exist yet (no tunnel ever synced) — create with version only.
 	manifest := fmt.Sprintf(`apiVersion: v1
 kind: ConfigMap
 metadata:
   name: obol-stack-config
   namespace: obol-frontend
 data:
-  obolVersion: %s
+  obolVersion: %q
 `, version.Version)
-	create := exec.Command(kubectlPath,
+
+	cmd := exec.Command(kubectlPath,
 		"--kubeconfig", kubeconfigPath,
 		"apply", "--server-side", "--force-conflicts", "-f", "-",
 	)
-	create.Stdin = strings.NewReader(manifest)
-	if out, err := create.CombinedOutput(); err != nil {
+	cmd.Stdin = strings.NewReader(manifest)
+	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("kubectl apply obol-stack-config failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
