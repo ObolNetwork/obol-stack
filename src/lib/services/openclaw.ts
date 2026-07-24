@@ -210,6 +210,23 @@ export class OpenClawClient {
     }
   }
 
+  /**
+   * Get the running Obol CLI version from obol-stack-config.
+   * Written by the CLI during `obol stack up` / tunnel sync.
+   */
+  public async getObolStackVersion(): Promise<string | null> {
+    try {
+      const response = await this.coreV1Api.readNamespacedConfigMap({
+        name: 'obol-stack-config',
+        namespace: 'obol-frontend',
+      });
+      const version = response.data?.['obolVersion']?.trim();
+      return version || null;
+    } catch {
+      return null;
+    }
+  }
+
   // Cache LLM health for 10s — all instances share the same LiteLLM gateway,
   // so N concurrent getInstanceHealth calls collapse into a single fetch.
   private static llmHealthCache: {
