@@ -9,6 +9,7 @@ import {
 } from '@radix-ui/react-icons';
 import { isFeatureEnabled } from '@/lib/config/featureFlags';
 import { useStackVersion } from '@/hooks/useStackVersion';
+import { releaseHref } from '@/lib/utils/release-href';
 
 export interface FooterBarProps {
   className?: string;
@@ -48,11 +49,6 @@ const IconWrapper = styled(Box, {
   width: '$sm',
   height: '$sm',
 });
-
-function releaseHref(repo: 'obol-stack' | 'obol-stack-front-end', tag: string) {
-  const normalized = tag.startsWith('v') ? tag : `v${tag}`;
-  return `https://github.com/ObolNetwork/${repo}/releases/tag/${normalized}`;
-}
 
 export function FooterBar({ className }: FooterBarProps) {
   const showCommitDetail = isFeatureEnabled('showTagVersionAndShaCommit');
@@ -95,11 +91,7 @@ export function FooterBar({ className }: FooterBarProps) {
             target="_blank"
             rel="noopener noreferrer"
             aria-label={`Obol stack version ${obolLabel}`}
-            href={
-              obolVersion
-                ? releaseHref('obol-stack', obolVersion)
-                : 'https://github.com/ObolNetwork/obol-stack/releases'
-            }
+            href={releaseHref('obol-stack', obolLabel)}
             css={{
               fontSize: '$3',
               color: '$obolGreen',
