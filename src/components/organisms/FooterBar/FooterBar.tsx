@@ -1,12 +1,15 @@
+'use client';
+
 import React from 'react';
-import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
+import { Box, Flex, Text, Link, styled } from '@obolnetwork/obol-ui';
 import {
   FileTextIcon,
   GitHubLogoIcon,
   DiscordLogoIcon,
 } from '@radix-ui/react-icons';
 import { isFeatureEnabled } from '@/lib/config/featureFlags';
-import { config } from '../../../lib/config/environment';
+import { useStackVersion } from '@/hooks/useStackVersion';
+import { releaseHref } from '@/lib/utils/release-href';
 
 export interface FooterBarProps {
   className?: string;
@@ -48,88 +51,87 @@ const IconWrapper = styled(Box, {
 });
 
 export function FooterBar({ className }: FooterBarProps) {
-  const showVersionInfo = isFeatureEnabled('showTagVersionAndShaCommit');
+  const showCommitDetail = isFeatureEnabled('showTagVersionAndShaCommit');
+  const { obolVersion, frontendTag, frontendCommit } = useStackVersion();
 
-  // TODO: Implement diagnostics export
-  // const handleExportDiagnostics = () => {
-  //
-  //   console.log('Export diagnostics clicked');
-  // };
-
-  // TODO: Implement view logs
-  // const handleViewLogs = () => {
-  //
-  //   console.log('View logs clicked');
-  // };
+  const obolLabel = obolVersion?.trim() || 'unknown';
+  const uiLabel = frontendTag?.trim() || 'local';
 
   return (
     <StyledFooter className={className} as="footer">
-      <Flex css={{ alignItems: 'center', gap: '$sm', width: 'max-content' }}>
-        {showVersionInfo && (
-          <Flex
+      {/* Match dv-launchpad Version info: layout + typography */}
+      <Box
+        css={{
+          display: 'flex',
+          width: '$full',
+          alignContent: 'center',
+          gap: '$xxs',
+          '@sm': {
+            marginTop: '$xs',
+          },
+        }}
+      >
+        <Text
+          variant="metadata"
+          css={{
+            display: 'grid',
+            placeItems: 'center',
+            fontSize: '$3',
+            width: '6rem',
+          }}
+        >
+          Version info:
+        </Text>
+        <Flex as="span" css={{ alignItems: 'center', fontSize: '$3' }}>
+          <Text as="span" css={{ fontSize: '$3', color: '$body' }}>
+            obol-
+          </Text>
+          <Link
+            data-testid="obol-version-info"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Obol stack version ${obolLabel}`}
+            href={releaseHref('obol-stack', obolLabel)}
             css={{
-              alignItems: 'center',
-              gap: '$xxs',
+              fontSize: '$3',
+              color: '$obolGreen',
             }}
           >
-            <Text
+            {obolLabel}
+          </Link>
+          <Text as="span" css={{ fontSize: '$3', color: '$body' }}>
+            , front-end-
+          </Text>
+          <Link
+            data-testid="version-tag-info"
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={`Front-end tag ${uiLabel}`}
+            href={releaseHref('obol-stack-front-end', uiLabel)}
+            css={{
+              fontSize: '$3',
+              color: '$obolGreen',
+            }}
+          >
+            {showCommitDetail ? `${uiLabel}-` : uiLabel}
+          </Link>
+          {showCommitDetail && (
+            <Link
+              data-testid="version-commit-info"
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Front-end commit"
+              href={`https://github.com/ObolNetwork/obol-stack-front-end/commit/${frontendCommit}`}
               css={{
-                display: 'grid',
-                placeItems: 'center',
                 fontSize: '$3',
-                whiteSpace: 'nowrap',
+                color: '$obolGreen',
               }}
             >
-              Version info:
-            </Text>
-            <Flex as="span">
-              <StyledLink
-                data-testid="version-tag-info"
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="Version info"
-                href={`https://github.com/ObolNetwork/obol-stack-front-end/releases/tag/${config.tagVersion}`}
-              >
-                {`${config.tagVersion}   -`}
-              </StyledLink>
-              <StyledLink
-                data-testid="version-commit-info"
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="Version info"
-                href={`https://github.com/ObolNetwork/obol-stack-front-end/commit/${config.commitSha}`}
-              >
-                {config.commitSha}
-              </StyledLink>
-              {config.buildTime && (
-                <Text
-                  data-testid="version-build-time"
-                  css={{
-                    fontSize: '$3',
-                    whiteSpace: 'nowrap',
-                    opacity: 0.7,
-                    paddingLeft: '$xxs',
-                  }}
-                >
-                  {`(${new Date(config.buildTime).toLocaleDateString()})`}
-                </Text>
-              )}
-            </Flex>
-          </Flex>
-        )}
-        {/* <StyledButton onClick={handleExportDiagnostics}>
-          <IconWrapper>
-            <DownloadIcon />
-          </IconWrapper>
-          Export Diagnostics
-        </StyledButton>
-        <StyledButton onClick={handleViewLogs}>
-          <IconWrapper>
-            <FileTextIcon />
-          </IconWrapper>
-          View Logs
-        </StyledButton> */}
-      </Flex>
+              {frontendCommit}
+            </Link>
+          )}
+        </Flex>
+      </Box>
 
       <Flex css={{ alignItems: 'center', gap: '$sm', width: 'fit-content' }}>
         <StyledLink
