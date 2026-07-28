@@ -32,6 +32,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/update"
+	"github.com/ObolNetwork/obol-stack/internal/version"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 	petname "github.com/dustinkirkland/golang-petname"
 	"gopkg.in/yaml.v3"
@@ -488,6 +489,7 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	helmfileCmd.Env = append(os.Environ(),
 		"KUBECONFIG="+kubeconfigPath,
 		"STACK_DATA_DIR="+dataDir,
+		"OBOL_STACK_VERSION="+version.Version,
 	)
 
 	// In development mode, build and import local repo images that aren't on a
@@ -521,6 +523,11 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	}
 
 	u.Success("Default infrastructure deployed")
+
+	// Publish the running CLI version for the local frontend footer.
+	if err := tunnel.SyncStackConfigVersion(cfg); err != nil {
+		u.Warnf("Could not publish Obol version to frontend config: %v", err)
+	}
 
 	restoredLiteLLMConfig := false
 	if previousLiteLLMConfig != "" {
