@@ -1020,6 +1020,31 @@ data:
 	return nil
 }
 
+// stackConfigVersionFieldManager scopes the obolVersion-only apply to its own
+// server-side-apply field manager.
+//
+// This is load-bearing, not cosmetic. Server-side apply deletes fields a
+// manager previously owned but no longer sends. SyncTunnelConfigMap applies
+// {tunnelURL, obolVersion} under kubectl's default manager; if this
+// obolVersion-only apply reused that manager, every call would prune
+// tunnelURL — which serviceoffer-controller reads for the ERC-8004
+// registration doc and the OpenAPI `servers` block, and the frontend reads for
+// the agent registration and marketplace URLs. Quick-tunnel stacks would never
+// get it back on `obol stack up`, because the tunnel stays dormant there and
+// SyncTunnelConfigMap is not called again.
+const stackConfigVersionFieldManager = "obol-stack-version"
+
+// stackConfigVersionApplyArgs builds the kubectl argv for the obolVersion-only
+// apply. Split out so the field-manager invariant above is unit-testable.
+func stackConfigVersionApplyArgs(kubeconfigPath string) []string {
+	return []string{
+		"--kubeconfig", kubeconfigPath,
+		"apply", "--server-side", "--force-conflicts",
+		"--field-manager=" + stackConfigVersionFieldManager,
+		"-f", "-",
+	}
+}
+
 // SyncStackConfigVersion SSA-merges only obolVersion into
 // obol-frontend/obol-stack-config, leaving tunnelURL untouched. Used on stack
 // up when no tunnel sync runs yet (after infra deploy creates the namespace).
@@ -1036,10 +1061,7 @@ data:
   obolVersion: %q
 `, version.Version)
 
-	cmd := exec.Command(kubectlPath,
-		"--kubeconfig", kubeconfigPath,
-		"apply", "--server-side", "--force-conflicts", "-f", "-",
-	)
+	cmd := exec.Command(kubectlPath, stackConfigVersionApplyArgs(kubeconfigPath)...)
 	cmd.Stdin = strings.NewReader(manifest)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("kubectl apply obol-stack-config failed: %w: %s", err, strings.TrimSpace(string(out)))
