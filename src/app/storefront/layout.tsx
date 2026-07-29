@@ -20,7 +20,7 @@ export default function StorefrontLayout({
 }) {
   return (
     <Providers>
-      <div className={dmMono.variable}>{children}</div>
+      <div className={`shop-root ${dmMono.variable}`}>{children}</div>
     </Providers>
   );
 }

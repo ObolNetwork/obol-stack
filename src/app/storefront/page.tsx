@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { StorefrontPage } from '@/components/storefront/StorefrontPage';
+import { BrandingEditorPage } from '@/components/storefront/BrandingEditorPage';
 
 export default function StorefrontRoute() {
   const [hasMounted, setHasMounted] = useState(false);
@@ -9,5 +9,5 @@ export default function StorefrontRoute() {
     setHasMounted(true);
   }, []);
   if (!hasMounted) return null;
-  return <StorefrontPage />;
+  return <BrandingEditorPage />;
 }
