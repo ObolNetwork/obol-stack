@@ -9,7 +9,10 @@ import {
   type BrandingField,
   type BrandingState,
 } from './storefront-utils';
-import { publicStorefrontUrl } from '@/lib/services/public-storefront';
+import {
+  localStorefrontPreviewUrl,
+  publicStorefrontUrl,
+} from '@/lib/services/public-storefront';
 import { useTunnelURL } from '@/hooks/useAgents';
 
 const BRANDING_FIELDS: BrandingField[] = [
@@ -49,20 +52,26 @@ function publishedBranding(data: unknown): BrandingState | null {
 /**
  * Operator-only branding editor.
  *
- * Does NOT reimplement the buyer storefront. The live preview iframe (or
- * open-in-tab link) points at the real public storefront in obol-stack
- * (`web/public-storefront`), so pay/chat/catalog work stays single-sourced.
+ * Does NOT reimplement the buyer storefront. The live preview iframe points at
+ * the local-only `storefront-preview.obol.stack` renderer; "Open in new tab"
+ * uses the public tunnel URL when available.
  */
 export function BrandingEditorPage() {
   const { tunnelURL } = useTunnelURL();
-  const liveUrl = useMemo(() => publicStorefrontUrl(tunnelURL), [tunnelURL]);
-  const liveOrigin = useMemo(() => new URL(liveUrl).origin, [liveUrl]);
+  const publicUrl = useMemo(() => publicStorefrontUrl(tunnelURL), [tunnelURL]);
+  const previewUrl = useMemo(
+    () =>
+      typeof window === 'undefined'
+        ? localStorefrontPreviewUrl(null)
+        : localStorefrontPreviewUrl(window.location.origin),
+    []
+  );
+  const previewOrigin = useMemo(() => new URL(previewUrl).origin, [previewUrl]);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const initializedRef = useRef(false);
   const [initialized, setInitialized] = useState(false);
   const [baseline, setBaseline] = useState<BrandingState>(DEFAULT_BRANDING);
   const [branding, setBranding] = useState<BrandingState>(DEFAULT_BRANDING);
-  const [iframeKey, setIframeKey] = useState(0);
 
   const changedFields = useMemo(
     () =>
@@ -76,9 +85,9 @@ export function BrandingEditorPage() {
     if (!initialized) return;
     iframeRef.current?.contentWindow?.postMessage(
       buildPreviewMessage(branding),
-      liveOrigin
+      previewOrigin
     );
-  }, [branding, initialized, liveOrigin]);
+  }, [branding, initialized, previewOrigin]);
 
   useEffect(() => {
     sendPreview();
@@ -88,7 +97,7 @@ export function BrandingEditorPage() {
     const handleReady = (event: MessageEvent) => {
       if (
         event.source !== iframeRef.current?.contentWindow ||
-        event.origin !== liveOrigin ||
+        event.origin !== previewOrigin ||
         event.data?.type !== STOREFRONT_PREVIEW_READY_MESSAGE ||
         event.data?.version !== 1
       ) {
@@ -107,7 +116,7 @@ export function BrandingEditorPage() {
     };
     window.addEventListener('message', handleReady);
     return () => window.removeEventListener('message', handleReady);
-  }, [liveOrigin, sendPreview]);
+  }, [previewOrigin, sendPreview]);
 
   const handleReset = useCallback(() => {
     setBranding(baseline);
@@ -150,40 +159,30 @@ export function BrandingEditorPage() {
         <div className="shop-preview-toolbar">
           <div>
             <div className="shop-preview-label">Draft storefront preview</div>
-            <div className="shop-preview-url" title={liveUrl}>
-              {liveUrl}
-              {!tunnelURL && (
-                <span className="shop-preview-hint">
-                  {' '}
-                  (no tunnel yet — local fallback)
-                </span>
-              )}
+            <div className="shop-preview-url" title={previewUrl}>
+              {previewUrl}
+              <span className="shop-preview-hint">
+                {' '}
+                (local-only preview — not the public tunnel)
+              </span>
             </div>
           </div>
           <div className="shop-preview-actions">
-            <button
-              type="button"
-              className="shop-btn"
-              onClick={() => setIframeKey(k => k + 1)}
-            >
-              Refresh preview
-            </button>
             <a
               className="shop-btn shop-btn-primary"
-              href={liveUrl}
+              href={publicUrl}
               target="_blank"
               rel="noopener noreferrer"
             >
-              Open in new tab
+              Open published
             </a>
           </div>
         </div>
         <iframe
           ref={iframeRef}
-          key={iframeKey}
           className="shop-preview-frame"
           title="Draft public storefront preview"
-          src={liveUrl}
+          src={previewUrl}
           onLoad={sendPreview}
           sandbox="allow-scripts allow-same-origin"
           referrerPolicy="strict-origin"

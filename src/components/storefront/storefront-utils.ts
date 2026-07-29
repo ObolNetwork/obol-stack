@@ -129,6 +129,29 @@ function assetFlag(urlFlag: string, value: string): string {
   return `  ${urlFlag} ${shellQuote(value)}`;
 }
 
+/** True when value is a usable remote logo URL (not a data URI / relative path). */
+export function isHttpLogoUrl(value: string | null | undefined): boolean {
+  if (!value?.trim()) return false;
+  try {
+    const parsed = new URL(value.trim());
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Shorten inline image payloads for display only. The full command remains the
+ * copy/run source; rendering hundreds of KiB in a modal is slow and unreadable.
+ */
+export function collapseDataUrisForDisplay(text: string): string {
+  return text.replace(
+    /data:image\/[a-zA-Z0-9.+-]+;base64,[a-zA-Z0-9+/=]+/g,
+    value =>
+      value.length > 15 ? `${value.slice(0, 10)}…${value.slice(-5)}` : value
+  );
+}
+
 /**
  * Build a real `obol sell info set` command.
  * Only emits fields changed by the operator. A reset command is included only

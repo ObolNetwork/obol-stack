@@ -2,7 +2,11 @@
 
 import { useCallback, useState } from 'react';
 import type { BrandingField, BrandingState } from './storefront-utils';
-import { buildCliCommand, buildClaudeCodePrompt } from './storefront-utils';
+import {
+  buildCliCommand,
+  buildClaudeCodePrompt,
+  collapseDataUrisForDisplay,
+} from './storefront-utils';
 
 interface Props {
   branding: BrandingState;
@@ -43,6 +47,8 @@ export function CommandModal({ branding, changedFields, onClose }: Props) {
   const cliCmd = buildCliCommand(branding, changedFields);
   const claudePrompt = buildClaudeCodePrompt(branding, changedFields);
   const text = tab === 'cli' ? cliCmd : claudePrompt;
+  const displayText = collapseDataUrisForDisplay(text);
+  const isDisplayCollapsed = displayText !== text;
 
   const handleCopy = useCallback(async () => {
     try {
@@ -115,15 +121,30 @@ export function CommandModal({ branding, changedFields, onClose }: Props) {
           </div>
 
           <div className="shop-code-block">
-            <pre>{text}</pre>
+            <pre>{displayText}</pre>
             <button
               className="shop-code-copy"
               onClick={handleCopy}
               type="button"
+              title={
+                isDisplayCollapsed ? 'Copies the complete data URI' : undefined
+              }
             >
               {copied ? 'Copied!' : copyFailed ? 'Copy failed' : 'Copy'}
             </button>
           </div>
+          {isDisplayCollapsed && (
+            <p
+              style={{
+                fontSize: 12,
+                color: 'var(--ink-2)',
+                margin: '8px 0 0',
+              }}
+            >
+              Inline image shortened for display. Copy still includes the
+              complete data URI.
+            </p>
+          )}
         </div>
       </div>
     </div>

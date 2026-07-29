@@ -4,7 +4,7 @@ import { useState, useCallback, useRef } from 'react';
 import { ColorPicker } from './ColorPicker';
 import { CommandModal } from './CommandModal';
 import type { BrandingField, BrandingState } from './storefront-utils';
-import { THEMES, ACCENT_SWATCHES } from './storefront-utils';
+import { THEMES, ACCENT_SWATCHES, isHttpLogoUrl } from './storefront-utils';
 
 const MAX_INLINE_IMAGE_BYTES = 256 * 1024;
 
@@ -78,7 +78,24 @@ function FileRow({
   hint?: string;
 }) {
   const ref = useRef<HTMLInputElement>(null);
+  const [mode, setMode] = useState<'upload' | 'url'>(() =>
+    isHttpLogoUrl(value) ? 'url' : 'upload'
+  );
+  const [urlDraft, setUrlDraft] = useState(() =>
+    isHttpLogoUrl(value) ? value! : ''
+  );
   const [error, setError] = useState<string | null>(null);
+
+  const applyUrl = useCallback(() => {
+    const trimmed = urlDraft.trim();
+    if (!isHttpLogoUrl(trimmed)) {
+      setError('Paste a valid http:// or https:// image URL.');
+      return;
+    }
+    setError(null);
+    onChange(trimmed);
+  }, [onChange, urlDraft]);
+
   const onFile = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
@@ -89,7 +106,9 @@ function FileRow({
         return;
       }
       if (file.size > MAX_INLINE_IMAGE_BYTES) {
-        setError('Image must be 256 KiB or smaller.');
+        setError(
+          'Upload must be 256 KiB or smaller. Prefer Image URL for larger logos.'
+        );
         return;
       }
       const reader = new FileReader();
@@ -106,56 +125,154 @@ function FileRow({
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       <span style={LABEL_STYLE}>{label}</span>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <div
-          style={{
-            width: 40,
-            height: 40,
-            borderRadius: 8,
-            flexShrink: 0,
-            overflow: 'hidden',
-            border: '1px solid #DFDED6',
-            background: '#F4F4F1',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <button
+          type="button"
+          className="shop-chip"
+          data-active={mode === 'upload'}
+          onClick={() => setMode('upload')}
         >
-          {value ? (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={value}
-              alt=""
-              style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+          Upload
+        </button>
+        <button
+          type="button"
+          className="shop-chip"
+          data-active={mode === 'url'}
+          onClick={() => setMode('url')}
+        >
+          Image URL
+        </button>
+      </div>
+
+      {mode === 'upload' ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div
+            style={{
+              width: 40,
+              height: 40,
+              borderRadius: 8,
+              flexShrink: 0,
+              overflow: 'hidden',
+              border: '1px solid #DFDED6',
+              background: '#F4F4F1',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {value ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={value}
+                alt=""
+                style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+              />
+            ) : (
+              <span style={{ fontSize: 11, color: '#8B9794' }}>—</span>
+            )}
+          </div>
+          <label
+            className="shop-btn"
+            style={{ cursor: 'pointer', borderColor: '#DFDED6' }}
+          >
+            {value && value.startsWith('data:') ? 'Replace' : 'Upload'}
+            <input
+              ref={ref}
+              type="file"
+              accept={accept}
+              onChange={onFile}
+              style={{ display: 'none' }}
             />
-          ) : (
-            <span style={{ fontSize: 11, color: '#8B9794' }}>—</span>
+          </label>
+          {value && (
+            <button
+              className="shop-modal-close"
+              onClick={() => {
+                setUrlDraft('');
+                onClear();
+              }}
+              type="button"
+              aria-label={`Remove ${label}`}
+            >
+              ×
+            </button>
           )}
         </div>
-        <label
-          className="shop-btn"
-          style={{ cursor: 'pointer', borderColor: '#DFDED6' }}
-        >
-          {value ? 'Replace' : 'Upload'}
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <input
-            ref={ref}
-            type="file"
-            accept={accept}
-            onChange={onFile}
-            style={{ display: 'none' }}
+            className="shop-input"
+            type="url"
+            placeholder="https://cdn.example.com/logo.png"
+            value={urlDraft}
+            onChange={e => setUrlDraft(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                applyUrl();
+              }
+            }}
           />
-        </label>
-        {value && (
-          <button
-            className="shop-modal-close"
-            onClick={onClear}
-            type="button"
-            aria-label={`Remove ${label}`}
-          >
-            ×
-          </button>
-        )}
-      </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              className="shop-btn"
+              type="button"
+              onClick={applyUrl}
+              style={{ borderColor: '#DFDED6' }}
+            >
+              Use URL
+            </button>
+            {value && (
+              <button
+                className="shop-modal-close"
+                onClick={() => {
+                  setUrlDraft('');
+                  onClear();
+                }}
+                type="button"
+                aria-label={`Remove ${label}`}
+              >
+                ×
+              </button>
+            )}
+          </div>
+          {isHttpLogoUrl(value) && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: 8,
+                  overflow: 'hidden',
+                  border: '1px solid #DFDED6',
+                  background: '#F4F4F1',
+                }}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={value!}
+                  alt=""
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'contain',
+                  }}
+                />
+              </div>
+              <span
+                style={{
+                  fontSize: 11.5,
+                  color: '#8B9794',
+                  overflowWrap: 'anywhere',
+                }}
+              >
+                {value}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
       {hint && <span style={{ fontSize: 11.5, color: '#8B9794' }}>{hint}</span>}
       {error && (
         <span role="alert" style={{ fontSize: 11.5, color: '#C94F2F' }}>
@@ -295,7 +412,7 @@ export function BrandingPanel({
             value={logoDataUrl}
             onChange={onLogoChange}
             onClear={() => onLogoChange(null)}
-            hint="Embedded directly in the command (maximum 256 KiB)."
+            hint="Prefer Image URL for large logos. Upload embeds a short data URI (max 256 KiB) — browsers cannot expose real disk paths to the CLI."
           />
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
