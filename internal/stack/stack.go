@@ -249,7 +249,8 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 	// Ensure the base host before syncing defaults. Include existing agent
 	// hostnames so stack up never shrinks the managed /etc/hosts block to only
 	// obol.stack when default setup is skipped.
-	if err := dns.EnsureHostsEntries(agentruntime.CollectHostnames(cfg)); err != nil {
+	hostnames := append(agentruntime.CollectHostnames(cfg), tunnel.StorefrontPreviewHostname)
+	if err := dns.EnsureHostsEntries(hostnames); err != nil {
 		u.Warnf("Could not update /etc/hosts for obol.stack: %v", err)
 	}
 
@@ -586,6 +587,12 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	if err := agent.Init(cfg, u); err != nil {
 		u.Warnf("Failed to apply agent capabilities: %v", err)
 		u.Dim("  You can manually apply later with: obol agent init")
+	}
+
+	// Local-only storefront preview must exist even when the public tunnel is
+	// dormant — the operator branding editor iframes storefront-preview.obol.stack.
+	if err := tunnel.EnsureLocalStorefrontPreview(cfg); err != nil {
+		u.Warnf("Could not publish local storefront preview: %v", err)
 	}
 
 	// Start the Cloudflare tunnel only if a persistent DNS tunnel is provisioned.

@@ -15,6 +15,7 @@ const PREVIEW_READY_MESSAGE = "obol.storefront.preview.ready";
 const HEX_RE = /^#[0-9a-fA-F]{3,8}$/;
 const MAX_DATA_URL_LENGTH = 360_000;
 const ALLOWED_OPERATOR_HOSTS = new Set(["obol.stack", "localhost", "127.0.0.1"]);
+const PREVIEW_HOST = "storefront-preview.obol.stack";
 
 interface PreviewBranding {
   displayName: string;
@@ -32,6 +33,12 @@ function operatorOrigin(): string | null {
   } catch {
     return null;
   }
+}
+
+function isOperatorPreviewFrame(): boolean {
+  if (typeof window === "undefined") return false;
+  if (window.parent !== window) return true;
+  return window.location.hostname === PREVIEW_HOST;
 }
 
 function optionalImage(value: unknown): string | null | undefined {
@@ -98,10 +105,20 @@ export function StorefrontPreview({
   initial: ServiceCatalogDocument;
 }) {
   const [storefront, setStorefront] = useState(initial);
+  const [previewMode, setPreviewMode] = useState(false);
 
   useEffect(() => {
+    const preview = isOperatorPreviewFrame();
+    setPreviewMode(preview);
+    const root = document.documentElement;
+    if (preview) root.dataset.obolPreview = "1";
+    else delete root.dataset.obolPreview;
     const origin = operatorOrigin();
-    if (!origin || window.parent === window) return;
+    if (!origin || window.parent === window) {
+      return () => {
+        delete root.dataset.obolPreview;
+      };
+    }
 
     const handleMessage = (event: MessageEvent) => {
       if (event.source !== window.parent || event.origin !== origin) return;
@@ -136,7 +153,10 @@ export function StorefrontPreview({
       },
       origin,
     );
-    return () => window.removeEventListener("message", handleMessage);
+    return () => {
+      window.removeEventListener("message", handleMessage);
+      delete root.dataset.obolPreview;
+    };
   }, [initial]);
 
   useEffect(() => {
@@ -162,6 +182,14 @@ export function StorefrontPreview({
     <>
       <Header storefront={storefront} />
       <main className="max-w-3xl mx-auto px-4 py-10" data-obol="page-storefront">
+        {previewMode ? (
+          <p
+            className="mb-4 rounded-md border border-stroke bg-bg02 px-3 py-2 text-xs text-text-muted"
+            data-obol="preview-banner"
+          >
+            Operator preview — payment and wallet actions are disabled here.
+          </p>
+        ) : null}
         <section className="mb-8" data-obol="hero">
           <h1
             className="text-3xl font-bold text-text-light mb-2"
@@ -190,12 +218,14 @@ export function StorefrontPreview({
             <a
               href="/skill.md"
               className="text-obol-green hover:underline font-mono"
+              tabIndex={previewMode ? -1 : undefined}
             >
               /skill.md
             </a>
             <a
               href="/.well-known/agent-registration.json"
               className="text-obol-green hover:underline font-mono"
+              tabIndex={previewMode ? -1 : undefined}
             >
               /.well-known/agent-registration.json
             </a>
