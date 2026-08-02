@@ -217,7 +217,25 @@ func openAPIRelPathForOfferRoute(offer *monetizeapi.ServiceOffer, routePath stri
 // offer without probing). Tracks the x402 discovery-list shape used by
 // facilitator /discovery/resources feeds.
 func buildOfferWellKnownX402(offer *monetizeapi.ServiceOffer) string {
-	origin := offer.EffectiveOrigin()
+	doc := map[string]any{
+		"x402Version": 2,
+		"resources":   wellKnownResourcesForOffer(offer, offer.EffectiveOrigin(), "/"),
+	}
+	encoded, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return `{"x402Version":2,"resources":[]}`
+	}
+	return string(encoded)
+}
+
+// wellKnownResourcesForOffer builds one /.well-known/x402 resource entry per
+// paid route on offer, rooted at origin+pathPrefix. Shared by the per-offer
+// hostname-bound bundle (origin=offer.EffectiveOrigin(), pathPrefix="/") and
+// the aggregate storefront catalog's fallback document
+// (buildAggregateWellKnownX402 in render.go; origin=baseURL,
+// pathPrefix=offer.EffectivePath()) so both surfaces describe the same paid
+// operations identically.
+func wellKnownResourcesForOffer(offer *monetizeapi.ServiceOffer, origin, pathPrefix string) []any {
 	var resources []any
 	for _, rt := range offer.EffectiveRoutes() {
 		if rt.EffectiveGate() != monetizeapi.GatePaid {
@@ -242,7 +260,7 @@ func buildOfferWellKnownX402(offer *monetizeapi.ServiceOffer) string {
 			desc = offerDescription(offer, "x402 payment-gated service.")
 		}
 		resources = append(resources, map[string]any{
-			"resource":    origin + joinOpenAPIPath("/", openAPIRelPathForOfferRoute(offer, rt.Path)),
+			"resource":    origin + joinOpenAPIPath(pathPrefix, openAPIRelPathForOfferRoute(offer, rt.Path)),
 			"type":        "http",
 			"method":      method,
 			"description": desc,
@@ -250,15 +268,7 @@ func buildOfferWellKnownX402(offer *monetizeapi.ServiceOffer) string {
 			"accepts":     accepts,
 		})
 	}
-	doc := map[string]any{
-		"x402Version": 2,
-		"resources":   resources,
-	}
-	encoded, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return `{"x402Version":2,"resources":[]}`
-	}
-	return string(encoded)
+	return resources
 }
 
 // wellKnownAccept renders one payment option in the 402-requirement shape

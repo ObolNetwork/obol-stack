@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import type { ReactNode } from "react";
 import type { Service, ServicePayment } from "@/types";
 import { RichText } from "@/components/RichText";
 
@@ -61,7 +62,7 @@ function normalizeOfferType(t: string): "inference" | "agent" | "http" {
   return "http";
 }
 
-type Tab = "agent" | "other-ai" | "code";
+type Tab = "agent" | "other-ai" | "agentcash" | "bankr" | "code";
 const AGENT_TASK_PLACEHOLDER = "Summarise the README and list the top 3 risks.";
 
 function resolvedAgentTask(task: string): string {
@@ -77,7 +78,7 @@ function resolvedAgentTask(task: string): string {
 // instructions.
 function buyPrompt(
   service: Service,
-  key: "obol-agent" | "generic-llm" | "cli",
+  key: "obol-agent" | "generic-llm" | "cli" | "agentcash" | "bankr",
   agentTask?: string,
 ): string | null {
   const raw = service.buy?.prompts?.[key];
@@ -341,13 +342,85 @@ export function ServiceCard({ service }: { service: Service }) {
             />
           )}
           {tab === "other-ai" && (
-            <BuyViaOtherAgent
+            <BuyViaExternalTool
               service={service}
               opt={opt}
               kind={kind}
               agentTask={agentTask}
               taskReady={taskReady}
               requireTask={needsAgentTask}
+              promptKey="generic-llm"
+              intro={
+                <>
+                  Paste this into Claude, ChatGPT, Gemini, or any AI agent
+                  with internet access. The buy-x402 skill from{" "}
+                  <a
+                    href="https://github.com/ObolNetwork/skills"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-obol-green hover:underline"
+                  >
+                    ObolNetwork/skills
+                  </a>{" "}
+                  bootstraps the stack and asks for your permission before
+                  spending.
+                </>
+              }
+            />
+          )}
+          {tab === "agentcash" && (
+            <BuyViaExternalTool
+              service={service}
+              opt={opt}
+              kind={kind}
+              agentTask={agentTask}
+              taskReady={taskReady}
+              requireTask={needsAgentTask}
+              promptKey="agentcash"
+              intro={
+                <>
+                  Paste this into your{" "}
+                  <a
+                    href="https://agentcash.dev"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-obol-green hover:underline"
+                  >
+                    AgentCash
+                  </a>
+                  -connected agent. This origin already publishes AgentCash&apos;s
+                  discovery convention — OpenAPI <code className="font-mono text-obol-green">x-payment-info</code>{" "}
+                  plus a <code className="font-mono text-obol-green">/.well-known/x402</code>{" "}
+                  fallback — so it can price this call automatically.
+                </>
+              }
+            />
+          )}
+          {tab === "bankr" && (
+            <BuyViaExternalTool
+              service={service}
+              opt={opt}
+              kind={kind}
+              agentTask={agentTask}
+              taskReady={taskReady}
+              requireTask={needsAgentTask}
+              promptKey="bankr"
+              intro={
+                <>
+                  Paste this into your{" "}
+                  <a
+                    href="https://skills.bankr.bot"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-obol-green hover:underline"
+                  >
+                    Bankr
+                  </a>
+                  -connected agent or wallet. There&apos;s no Bankr-specific
+                  format here — this is a standard x402 endpoint (402
+                  challenge, EIP-3009/Permit2 signature, X-PAYMENT retry).
+                </>
+              }
             />
           )}
           {tab === "code" && (
@@ -370,10 +443,12 @@ function TabBar({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
   const tabs: { id: Tab; label: string }[] = [
     { id: "agent", label: "Ask your Obol agent" },
     { id: "other-ai", label: "Ask another AI agent" },
+    { id: "agentcash", label: "Pay with AgentCash" },
+    { id: "bankr", label: "Pay with Bankr" },
     { id: "code", label: "Buy with code" },
   ];
   return (
-    <div className="flex gap-1 border-b border-stroke">
+    <div className="flex flex-wrap gap-1 border-b border-stroke">
       {tabs.map((t) => {
         const active = t.id === tab;
         return (
@@ -474,13 +549,20 @@ function BuyViaObolAgent({
   );
 }
 
-function BuyViaOtherAgent({
+// BuyViaExternalTool renders the "paste this into a buyer tool with no Obol
+// tooling" tabs: the generic "another AI agent" tab plus the AgentCash and
+// Bankr tabs. All three read the same shape of prompt (promptKey selects
+// which one) — the underlying x402 mechanics are identical, only the intro
+// copy and published prompt differ per tool.
+function BuyViaExternalTool({
   service,
   opt,
   kind,
   agentTask,
   taskReady,
   requireTask,
+  promptKey,
+  intro,
 }: {
   service: Service;
   opt: ServicePayment;
@@ -488,44 +570,34 @@ function BuyViaOtherAgent({
   agentTask: string;
   taskReady: boolean;
   requireTask: boolean;
+  promptKey: "generic-llm" | "agentcash" | "bankr";
+  intro: ReactNode;
 }) {
-
   // Canonical prompts from the catalog buy block; inline strings are only
-  // fallbacks for pre-buy-block catalogs.
+  // fallbacks for pre-buy-block catalogs (these predate the agentcash/bankr
+  // keys too, so all three tools share the same generic fallback copy).
   let prompt: string;
   if (kind === "inference") {
     const model = service.model || "the advertised model";
     prompt =
-      buyPrompt(service, "generic-llm") ??
+      buyPrompt(service, promptKey) ??
       `${docsRef(service.endpoint)} I want to use the remote LLM at ${service.endpoint} (model ${model}) as a paid OpenAI-compatible chat-completions endpoint. Pre-sign a budget of EIP-3009 or Permit2 authorisations and POST chat-completions bodies with the X-PAYMENT header attached.`;
   } else if (kind === "agent") {
     // An agent runs its own pinned model server-side and ignores the request's
     // model field, so we don't tell the buyer which model it uses — the request
     // shape is what matters.
     prompt =
-      buyPrompt(service, "generic-llm", agentTask) ??
+      buyPrompt(service, promptKey, agentTask) ??
       `${docsRef(service.endpoint)} Help me call the Obol Agent at ${service.endpoint} — it's an autonomous agent (tools + skills + memory), not a raw LLM. POST OpenAI-style chat-completions JSON to ${service.endpoint}/v1/chat/completions with this user message in \`messages\`: {"role":"user","content":${quoteAgentTask(agentTask)}}. Attach a signed EIP-3009 or Permit2 authorisation as \`X-PAYMENT\`, and report what the agent does.`;
   } else {
     prompt =
-      buyPrompt(service, "generic-llm") ??
+      buyPrompt(service, promptKey) ??
       `I want to purchase a service offered by an Obol Agent at ${service.endpoint} for ${opt.price} on ${opt.network}. Please install the run-obol-stack skill from https://github.com/ObolNetwork/skills, ask me for permission to set up the obol stack, and use the buy-x402 skill to make the purchase on my behalf.`;
   }
 
   return (
     <div className="space-y-2">
-      <p className="text-xs text-text-muted">
-        Paste this into Claude, ChatGPT, Gemini, or any AI agent with
-        internet access. The buy-x402 skill from{" "}
-        <a
-          href="https://github.com/ObolNetwork/skills"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-obol-green hover:underline"
-        >
-          ObolNetwork/skills
-        </a>{" "}
-        bootstraps the stack and asks for your permission before spending.
-      </p>
+      <p className="text-xs text-text-muted">{intro}</p>
       <Snippet
         code={prompt}
         copyDisabled={requireTask && !taskReady}

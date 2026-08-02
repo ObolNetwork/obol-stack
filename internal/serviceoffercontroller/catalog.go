@@ -40,7 +40,7 @@ func (c *Controller) listServiceOffersForCatalog(ctx context.Context, override *
 	return offers, nil
 }
 
-func staticSiteContentMatches(cm *unstructured.Unstructured, content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) bool {
+func staticSiteContentMatches(cm *unstructured.Unstructured, content, servicesJSON, openAPIJSON, apiDocsHTML, wellKnownX402JSON string, bundles []offerBundleFile) bool {
 	if cm == nil {
 		return false
 	}
@@ -51,6 +51,7 @@ func staticSiteContentMatches(cm *unstructured.Unstructured, content, servicesJS
 	if data["skill.md"] != content ||
 		data["services.json"] != servicesJSON ||
 		data["openapi.json"] != openAPIJSON ||
+		data["x402.json"] != wellKnownX402JSON ||
 		data["api.html"] != apiDocsHTML {
 		return false
 	}
@@ -75,7 +76,7 @@ func staticSiteContentMatches(cm *unstructured.Unstructured, content, servicesJS
 	return true
 }
 
-func (c *Controller) staticSiteContentUnchanged(ctx context.Context, content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) (bool, error) {
+func (c *Controller) staticSiteContentUnchanged(ctx context.Context, content, servicesJSON, openAPIJSON, apiDocsHTML, wellKnownX402JSON string, bundles []offerBundleFile) (bool, error) {
 	cm, err := c.configMaps.Namespace(staticSiteNamespace).Get(ctx, staticSiteConfigMapName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return false, nil
@@ -83,11 +84,11 @@ func (c *Controller) staticSiteContentUnchanged(ctx context.Context, content, se
 	if err != nil {
 		return false, err
 	}
-	return staticSiteContentMatches(cm, content, servicesJSON, openAPIJSON, apiDocsHTML, bundles), nil
+	return staticSiteContentMatches(cm, content, servicesJSON, openAPIJSON, apiDocsHTML, wellKnownX402JSON, bundles), nil
 }
 
-func computeStaticSiteContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) string {
-	return fmt.Sprintf("%x", md5Sum(content+servicesJSON+openAPIJSON+apiDocsHTML+bundleDigestInput(bundles)))[:8]
+func computeStaticSiteContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML, wellKnownX402JSON string, bundles []offerBundleFile) string {
+	return fmt.Sprintf("%x", md5Sum(content+servicesJSON+openAPIJSON+apiDocsHTML+wellKnownX402JSON+bundleDigestInput(bundles)))[:8]
 }
 
 func staticSiteDeployedContentHash(deployment *unstructured.Unstructured) string {

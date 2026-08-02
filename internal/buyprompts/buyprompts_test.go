@@ -37,11 +37,11 @@ func TestBuild_ChatOffersTeachCanonicalPath(t *testing.T) {
 }
 
 // TestBuild_AllTypesCarryEveryPromptKey ensures every surface can rely on
-// the three standard prompt keys existing for every offer type.
+// the five standard prompt keys existing for every offer type.
 func TestBuild_AllTypesCarryEveryPromptKey(t *testing.T) {
 	for _, typ := range []string{"agent", "inference", "http", "fine-tuning", "", "bogus"} {
 		block := Build(Input{Type: typ, URL: "https://s.example/services/x"})
-		for _, key := range []string{PromptObolAgent, PromptGenericLLM, PromptCLI} {
+		for _, key := range []string{PromptObolAgent, PromptGenericLLM, PromptCLI, PromptAgentCash, PromptBankr} {
 			if strings.TrimSpace(block.Prompts[key]) == "" {
 				t.Errorf("type %q: missing prompt %q", typ, key)
 			}

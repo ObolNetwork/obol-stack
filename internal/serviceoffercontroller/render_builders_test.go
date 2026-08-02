@@ -103,7 +103,7 @@ func TestBuildAgentIdentityRegistrationDeployment_RestrictedPSS(t *testing.T) {
 // TestBuildStaticSiteConfigMap: exposes skill.md + services.json + openapi.json
 // + api docs HTML + httpd conf.
 func TestBuildStaticSiteConfigMap(t *testing.T) {
-	cm := buildStaticSiteConfigMap("# Catalog", `{"displayName":"Acme","tagline":"t","logoUrl":"https://x/logo.png","services":[{"name":"a"}]}`, `{"openapi":"3.1.0"}`, "<html>shell</html>", nil)
+	cm := buildStaticSiteConfigMap("# Catalog", `{"displayName":"Acme","tagline":"t","logoUrl":"https://x/logo.png","services":[{"name":"a"}]}`, `{"openapi":"3.1.0"}`, "<html>shell</html>", `{"x402Version":2,"resources":[]}`, nil)
 
 	if cm.GetName() != staticSiteConfigMapName {
 		t.Errorf("name = %q, want %q", cm.GetName(), staticSiteConfigMapName)
@@ -120,6 +120,9 @@ func TestBuildStaticSiteConfigMap(t *testing.T) {
 	}
 	if data["openapi.json"] != `{"openapi":"3.1.0"}` {
 		t.Errorf("openapi.json payload mismatch, got %v", data["openapi.json"])
+	}
+	if data["x402.json"] != `{"x402Version":2,"resources":[]}` {
+		t.Errorf("x402.json payload mismatch, got %v", data["x402.json"])
 	}
 	if data["api.html"] != "<html>shell</html>" {
 		t.Errorf("api.html payload mismatch, got %v", data["api.html"])
@@ -164,6 +167,7 @@ func TestBuildStaticSiteDeployment(t *testing.T) {
 	expectedPaths := map[string]string{
 		"services.json": "api/services.json",
 		"openapi.json":  "openapi.json",
+		"x402.json":     "wellknown-x402.json",
 		"api.html":      "api/index.html",
 	}
 	foundPaths := map[string]string{}

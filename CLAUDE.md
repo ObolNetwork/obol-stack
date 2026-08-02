@@ -62,6 +62,7 @@ Integration tests use `//go:build integration`; skip when prerequisites missing.
 | Public (tunnel) | none | `/.well-known/agent-registration.json` | ERC-8004 httpd |
 | Public (tunnel) | none | `/skill.md` | service catalog |
 | Public (tunnel) | none | `/api/services.json` | service catalog JSON feed (`displayName`, `tagline`, `logoUrl`, `theme`, `themeVars`, `faviconUrl`, `ogImageUrl`, `description(+Html)`, `customCss`, `services[]`) |
+| Public (tunnel) | none | `/.well-known/x402` | aggregate x402 discovery fallback (AgentCash/x402scan-style crawlers that don't parse `/openapi.json`'s `x-payment-info`) |
 | Public (tunnel) | tunnel hostname only | `/` | storefront landing page (Next.js) |
 
 **NEVER remove hostname restrictions from frontend or eRPC HTTPRoutes** — exposing the frontend/RPC to the public internet is a critical security flaw.
@@ -478,6 +479,7 @@ The Cloudflare tunnel exposes the cluster to the public internet. Only x402-gate
 - `/.well-known/agent-registration.json` — ERC-8004 discovery
 - `/skill.md` — machine-readable service catalog
 - `/api/services.json` — service catalog envelope (`displayName`, `tagline`, `logoUrl`, theme/branding fields, `services[]`)
+- `/.well-known/x402` — aggregate x402 discovery fallback (AgentCash/x402scan-style discovery convention; no secret material)
 - `/` on tunnel hostname — public storefront landing page (Next.js)
 
 ## Dependencies

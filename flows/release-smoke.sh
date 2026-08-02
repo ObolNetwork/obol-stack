@@ -270,6 +270,13 @@ main() {
         # hostname binding (P1b), on a self-contained throwaway offer. gate
         # enforcement needs no facilitator, so it also sits in this group.
         "$SCRIPT_DIR/flow-21-route-surface.sh"
+        # flow-22 is the only coverage of external buyer-tool compatibility
+        # (AgentCash/x402scan/Poncho discovery + a generic non-Obol x402 SDK
+        # buyer). Reuses flow-10's anvil fork + facilitator (still up here)
+        # and the tunnel `obol stack up` already started. The AgentCash CLI
+        # sub-check (`npx @agentcash/discovery`) skips gracefully rather than
+        # failing when Node isn't available in the runner.
+        "$SCRIPT_DIR/flow-22-external-buyer-compat.sh"
     )
 
     for flow in "${flows[@]}"; do

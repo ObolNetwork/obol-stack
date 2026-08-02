@@ -33,6 +33,15 @@ const (
 	PromptGenericLLM = "generic-llm"
 	// PromptCLI is the shell command a human runs from an obol-stack host.
 	PromptCLI = "cli"
+	// PromptAgentCash is pasted into an AgentCash-connected agent/wallet.
+	// AgentCash (Merit Systems) shares its discovery convention — OpenAPI
+	// `x-payment-info` plus a `/.well-known/x402` fallback — with x402scan
+	// and Poncho, so this same prompt covers all three.
+	PromptAgentCash = "agentcash"
+	// PromptBankr is pasted into a Bankr-connected agent/wallet. Bankr
+	// publishes no seller-side discovery format of its own, so the copy
+	// describes the plain x402 handshake rather than anything bespoke.
+	PromptBankr = "bankr"
 )
 
 // Input describes one purchasable service. All fields are display-ready
@@ -186,6 +195,25 @@ func agentBlock(in Input) Block {
 				"python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py go %s --message %q",
 				in.URL, task(in),
 			),
+			PromptAgentCash: fmt.Sprintf(
+				"Help me call the Obol Agent at %s — it's an autonomous agent (tools + skills + "+
+					"memory), not a raw LLM. It's gated by %s, and already publishes AgentCash's "+
+					"discovery convention (OpenAPI `x-payment-info`, `/.well-known/x402` fallback) "+
+					"so your agent can auto-discover the price. POST OpenAI-style chat-completions "+
+					"JSON to %s with this user message in `messages`: "+
+					"{\"role\":\"user\",\"content\":%q}. Attach a signed EIP-3009/Permit2 authorization "+
+					"as `X-PAYMENT`, use `\"stream\": true`, and report what the agent does.",
+				in.URL, GuideRef(in.SiteURL), ChatCompletionsURL(in.URL), task(in),
+			),
+			PromptBankr: fmt.Sprintf(
+				"Pay for the Obol Agent at %s with your Bankr wallet — it's an autonomous agent "+
+					"(tools + skills + memory), not a raw LLM. It's gated by %s; there's no "+
+					"Bankr-specific format here, just standard x402. POST OpenAI-style "+
+					"chat-completions JSON to %s with this user message in `messages`: "+
+					"{\"role\":\"user\",\"content\":%q}. Attach a signed EIP-3009/Permit2 authorization "+
+					"as `X-PAYMENT`, use `\"stream\": true`, and report what the agent does.",
+				in.URL, GuideRef(in.SiteURL), ChatCompletionsURL(in.URL), task(in),
+			),
 		},
 		Example: ChatExample(in.URL, in.Model, in.TaskExample),
 	}
@@ -216,6 +244,23 @@ func inferenceBlock(in Input) Block {
 				in.URL, model, ChatCompletionsURL(in.URL), GuideRef(in.SiteURL),
 			),
 			PromptCLI: fmt.Sprintf("obol buy inference %s", in.URL),
+			PromptAgentCash: fmt.Sprintf(
+				"I want to use the remote LLM at %s (model %s) as a paid OpenAI-compatible "+
+					"chat-completions endpoint at %s. This origin already publishes AgentCash's "+
+					"discovery convention (OpenAPI `x-payment-info`, `/.well-known/x402` "+
+					"fallback), paid with %s — pre-sign a budget of EIP-3009/Permit2 "+
+					"authorizations and POST chat-completions bodies with the X-PAYMENT header "+
+					"attached.",
+				in.URL, model, ChatCompletionsURL(in.URL), GuideRef(in.SiteURL),
+			),
+			PromptBankr: fmt.Sprintf(
+				"Pay for the remote LLM at %s (model %s) with your Bankr wallet, as a paid "+
+					"OpenAI-compatible chat-completions endpoint at %s, paid with %s. There's no "+
+					"Bankr-specific format here — pre-sign a budget of EIP-3009/Permit2 "+
+					"authorizations and POST chat-completions bodies with the X-PAYMENT header "+
+					"attached.",
+				in.URL, model, ChatCompletionsURL(in.URL), GuideRef(in.SiteURL),
+			),
 		},
 		// The model field is required by chat-completions upstreams for
 		// inference offers, so the example keeps a placeholder when the
@@ -254,6 +299,23 @@ func httpBlock(in Input) Block {
 			PromptCLI: fmt.Sprintf(
 				"python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py go %s",
 				in.URL,
+			),
+			PromptAgentCash: fmt.Sprintf(
+				"Call the paid HTTP endpoint at %s once. It's gated by %s, and this origin "+
+					"already speaks AgentCash's own discovery convention (OpenAPI "+
+					"`x-payment-info` plus a `/.well-known/x402` fallback) — your "+
+					"AgentCash-connected agent can auto-discover the price instead of parsing "+
+					"the 402 by hand.%s%s Sign a matching EIP-3009/Permit2 authorization and "+
+					"retry with the payload in the `X-PAYMENT` header.",
+				in.URL, GuideRef(in.SiteURL), priceClause, netClause,
+			),
+			PromptBankr: fmt.Sprintf(
+				"Call the paid HTTP endpoint at %s once with your Bankr wallet.%s%s There's no "+
+					"Bankr-specific format here — it's a standard x402 endpoint: fetch it with "+
+					"no payment to read the 402 `accepts[]` pricing, sign a matching "+
+					"EIP-3009/Permit2 authorization, and retry with the payload in the "+
+					"`X-PAYMENT` header.",
+				in.URL, priceClause, netClause,
 			),
 		},
 	}

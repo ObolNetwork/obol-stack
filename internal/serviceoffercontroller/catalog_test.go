@@ -7,8 +7,8 @@ import (
 )
 
 func TestComputeStaticSiteContentHashDeterministic(t *testing.T) {
-	a := computeStaticSiteContentHash("# cat", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>", nil)
-	b := computeStaticSiteContentHash("# cat", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>", nil)
+	a := computeStaticSiteContentHash("# cat", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>", `{"resources":[]}`, nil)
+	b := computeStaticSiteContentHash("# cat", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>", `{"resources":[]}`, nil)
 	if a != b {
 		t.Fatalf("hash not deterministic: %q vs %q", a, b)
 	}
@@ -16,21 +16,21 @@ func TestComputeStaticSiteContentHashDeterministic(t *testing.T) {
 		t.Fatalf("hash length = %d, want 8", len(a))
 	}
 
-	changed := computeStaticSiteContentHash("# cat", `{"services":[{"name":"a"}]}`, `{"openapi":"3.1.0"}`, "<html></html>", nil)
+	changed := computeStaticSiteContentHash("# cat", `{"services":[{"name":"a"}]}`, `{"openapi":"3.1.0"}`, "<html></html>", `{"resources":[]}`, nil)
 	if changed == a {
 		t.Fatal("expected different hash when catalog content changes")
 	}
 }
 
 func TestStaticSiteContentMatches(t *testing.T) {
-	cm := buildStaticSiteConfigMap("# cat", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>", nil)
-	if !staticSiteContentMatches(cm, "# cat", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>", nil) {
+	cm := buildStaticSiteConfigMap("# cat", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>", `{"resources":[]}`, nil)
+	if !staticSiteContentMatches(cm, "# cat", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>", `{"resources":[]}`, nil) {
 		t.Fatal("expected matching catalog content")
 	}
-	if staticSiteContentMatches(cm, "# changed", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>", nil) {
+	if staticSiteContentMatches(cm, "# changed", `{"services":[]}`, `{"openapi":"3.1.0"}`, "<html></html>", `{"resources":[]}`, nil) {
 		t.Fatal("expected different skill.md to not match")
 	}
-	if staticSiteContentMatches(nil, "# cat", `{}`, `{}`, "", nil) {
+	if staticSiteContentMatches(nil, "# cat", `{}`, `{}`, "", "", nil) {
 		t.Fatal("nil configmap must not match")
 	}
 }
