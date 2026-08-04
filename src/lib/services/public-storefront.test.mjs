@@ -4,6 +4,8 @@ import { describe, it } from 'node:test';
 import {
   AGENT_REGISTRATION_PATH,
   LOCAL_STOREFRONT_URL,
+  STOREFRONT_PREVIEW_HOST,
+  localStorefrontPreviewUrl,
   normalizePublicBaseUrl,
   publicResourceUrl,
   publicServiceEndpoint,
@@ -55,6 +57,17 @@ describe('public storefront links', () => {
         'https://seller.trycloudflare.com/public/'
       ),
       'https://seller.trycloudflare.com/public/services/demo-quant?count=1'
+    );
+  });
+
+  it('builds the local-only preview URL from the operator origin port', () => {
+    assert.equal(
+      localStorefrontPreviewUrl('http://obol.stack:57425/storefront'),
+      `http://${STOREFRONT_PREVIEW_HOST}:57425`
+    );
+    assert.equal(
+      localStorefrontPreviewUrl('http://obol.stack/'),
+      `http://${STOREFRONT_PREVIEW_HOST}`
     );
   });
 });
