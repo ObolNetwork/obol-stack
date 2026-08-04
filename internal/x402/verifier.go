@@ -2,7 +2,10 @@ package x402
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -10,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -855,6 +859,7 @@ func buildUpstreamProxy(rule *RouteRule) (http.Handler, error) {
 			} else if rule.UpstreamAuth != "" {
 				pr.Out.Header.Set("Authorization", rule.UpstreamAuth)
 			}
+			injectAgentPayerContext(pr, rule)
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Printf("x402-verifier: upstream proxy error for %s/%s: %v", rule.OfferNamespace, rule.OfferName, err)
@@ -867,6 +872,101 @@ func buildUpstreamProxy(rule *RouteRule) (http.Handler, error) {
 // chatCompletionsPath is the OpenAI-compatible path served by inference and
 // agent upstreams (LiteLLM, Hermes).
 const chatCompletionsPath = "/v1/chat/completions"
+
+// payerContextBodyLimit caps how much of a chat-completions request body the
+// verifier buffers to splice in the payer-context system message. Larger
+// bodies pass through byte-identical.
+const payerContextBodyLimit = 4 << 20
+
+// injectAgentPayerContext rewrites a paid agent-offer chat request so the
+// verified payer wallet rides IN-BAND as a leading system message. The
+// X-Payment-Payer header alone doesn't reach the model — agent runtimes drop
+// HTTP headers before the LLM sees the conversation — so without this a buyer
+// must repeat their own address in the prompt. Identity headers are
+// verifier-set only (client copies are stripped at HandleProxy entry), so the
+// injected value is an authenticated fact.
+//
+// Injection is strictly best-effort: any shape we don't fully understand
+// (non-JSON, no messages array, oversized or unreadable body, compressed
+// content) leaves the request byte-identical rather than risking a paid
+// request.
+func injectAgentPayerContext(pr *httputil.ProxyRequest, rule *RouteRule) {
+	if rule.OfferType != "agent" || pr.Out.Method != http.MethodPost ||
+		pr.Out.URL.Path != chatCompletionsPath || pr.Out.Body == nil {
+		return
+	}
+	if ce := pr.In.Header.Get("Content-Encoding"); ce != "" && !strings.EqualFold(ce, "identity") {
+		return
+	}
+	if ct := pr.In.Header.Get("Content-Type"); ct != "" && !strings.Contains(strings.ToLower(ct), "json") {
+		return
+	}
+	payer := pr.In.Header.Get(HeaderPaymentPayer)
+	if payer == "" {
+		payer = pr.In.Header.Get(HeaderVerifiedWallet)
+	}
+	if payer == "" {
+		return
+	}
+
+	orig := pr.Out.Body
+	body, err := io.ReadAll(io.LimitReader(orig, payerContextBodyLimit+1))
+	if err != nil || len(body) > payerContextBodyLimit {
+		// Splice the consumed bytes back in front of the unread remainder so
+		// the upstream still receives the full original body.
+		pr.Out.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.MultiReader(bytes.NewReader(body), orig), orig}
+		return
+	}
+	orig.Close()
+
+	newBody, ok := splicePayerSystemMessage(body, payer)
+	if !ok {
+		newBody = body
+	}
+	pr.Out.Body = io.NopCloser(bytes.NewReader(newBody))
+	pr.Out.ContentLength = int64(len(newBody))
+	pr.Out.Header.Set("Content-Length", strconv.Itoa(len(newBody)))
+}
+
+// splicePayerSystemMessage prepends a system message carrying the verified
+// payer wallet to an OpenAI chat-completions JSON body. Returns the original
+// bytes and false when the body isn't the expected shape.
+func splicePayerSystemMessage(body []byte, payer string) ([]byte, bool) {
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return body, false
+	}
+	rawMsgs, ok := doc["messages"]
+	if !ok {
+		return body, false
+	}
+	var messages []json.RawMessage
+	if err := json.Unmarshal(rawMsgs, &messages); err != nil {
+		return body, false
+	}
+	note, err := json.Marshal(map[string]string{
+		"role": "system",
+		"content": "x402 payment context: this request was paid by wallet " + payer +
+			" (payer identity verified on-chain by the payment gateway; buyers cannot spoof it). " +
+			"When the buyer refers to their own wallet or address without spelling it out, use this address.",
+	})
+	if err != nil {
+		return body, false
+	}
+	merged, err := json.Marshal(append([]json.RawMessage{note}, messages...))
+	if err != nil {
+		return body, false
+	}
+	doc["messages"] = merged
+	newBody, err := json.Marshal(doc)
+	if err != nil {
+		return body, false
+	}
+	return newBody, true
+}
 
 // normalizeChatCompletionsPath forgives the common wrong-path shapes buyers
 // send to chat-completions offers. External x402 clients (and the prompts on
