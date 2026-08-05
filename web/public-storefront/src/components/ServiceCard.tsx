@@ -63,11 +63,12 @@ function normalizeOfferType(t: string): "inference" | "agent" | "http" {
 }
 
 type Tab = "agent" | "external" | "code";
-type ExternalBuyerTool = "agentcash" | "bankr" | "generic-llm";
+type ExternalBuyerTool = "agentcash" | "poncho" | "bankr" | "generic-llm";
 const AGENT_TASK_PLACEHOLDER = "Summarise the README and list the top 3 risks.";
 
 const EXTERNAL_BUYER_TOOLS: { id: ExternalBuyerTool; label: string }[] = [
   { id: "agentcash", label: "AgentCash" },
+  { id: "poncho", label: "Poncho" },
   { id: "bankr", label: "Bankr" },
   { id: "generic-llm", label: "Another AI" },
 ];
@@ -85,7 +86,7 @@ function resolvedAgentTask(task: string): string {
 // instructions.
 function buyPrompt(
   service: Service,
-  key: "obol-agent" | "generic-llm" | "cli" | "agentcash" | "bankr",
+  key: "obol-agent" | "generic-llm" | "cli" | "agentcash" | "poncho" | "bankr",
   agentTask?: string,
 ): string | null {
   const raw = service.buy?.prompts?.[key];
@@ -487,8 +488,8 @@ function BuyViaObolAgent({
 }
 
 // BuyViaExternalTool is the single "Pay with a buyer tool" tab: a pill
-// selector (AgentCash / Bankr / Another AI, same pattern as x402scan's
-// AgentCash↔Poncho switch) picks which published buy prompt + intro to show.
+// selector (AgentCash / Poncho / Bankr / Another AI) picks which published
+// buy prompt + intro to show.
 function BuyViaExternalTool({
   service,
   opt,
@@ -592,6 +593,31 @@ function externalBuyerIntro(
           plus a{" "}
           <code className="font-mono text-obol-green">/.well-known/x402</code>{" "}
           fallback — so it can price this call automatically.
+        </>
+      );
+    case "poncho":
+      // Merit consumer chat on the AgentCash micropayment layer — same
+      // discovery as AgentCash, not Bankr's scoped auto-pay. Agent offers
+      // still need a long client timeout.
+      return (
+        <>
+          Paste this into{" "}
+          <a
+            href="https://tryponcho.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-obol-green hover:underline"
+          >
+            Poncho
+          </a>{" "}
+          chat. Poncho uses AgentCash micropayments and the same OpenAPI{" "}
+          <code className="font-mono text-obol-green">x-payment-info</code> /{" "}
+          <code className="font-mono text-obol-green">/.well-known/x402</code>{" "}
+          discovery — enable the USDC wallet if asked
+          {kind === "http"
+            ? ""
+            : ", and keep the client timeout ≥180s for agent/LLM calls"}
+          .
         </>
       );
     case "bankr":

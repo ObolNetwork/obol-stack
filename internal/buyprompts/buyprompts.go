@@ -33,11 +33,16 @@ const (
 	PromptGenericLLM = "generic-llm"
 	// PromptCLI is the shell command a human runs from an obol-stack host.
 	PromptCLI = "cli"
-	// PromptAgentCash is pasted into an AgentCash-connected agent/wallet.
-	// AgentCash (Merit Systems) shares its discovery convention — OpenAPI
-	// `x-payment-info` plus a `/.well-known/x402` fallback — with x402scan
-	// and Poncho, so this same prompt covers all three.
+	// PromptAgentCash is pasted into an AgentCash-connected agent/wallet
+	// (Merit Systems MCP/CLI). Shares discovery with x402scan + Poncho:
+	// OpenAPI `x-payment-info` + `/.well-known/x402`.
 	PromptAgentCash = "agentcash"
+	// PromptPoncho is pasted into Poncho chat (https://tryponcho.com) — Merit
+	// Systems' consumer agent. Same discovery + wallet-pay path as AgentCash
+	// (Poncho runs on the AgentCash micropayment layer), NOT Bankr's scoped
+	// chat auto-pay. Expect AgentCash-like success on third-party Obol URLs;
+	// still require long client timeouts for agent/inference offers.
+	PromptPoncho = "poncho"
 	// PromptBankr is pasted into Bankr chat or a Bankr-CLI agent. Guidance is
 	// type-specific (observed 2026-08-05 against third-party Obol sellers):
 	//   - http: prefer Bankr chat auto-pay — fast endpoints usually finish
@@ -217,6 +222,22 @@ func agentBlock(in Input) Block {
 					"If the response has `paymentSettled:false`, you were NOT charged — do not spam retries.",
 				in.URL, GuideRef(in.SiteURL), ChatCompletionsURL(in.URL), modelOr(in, "hermes-agent"), task(in),
 			),
+			PromptPoncho: fmt.Sprintf(
+				"Paste this into Poncho chat (https://tryponcho.com). Call the Obol Agent at %s "+
+					"EXACTLY as specified — do not drop fields. Poncho runs on AgentCash micropayments "+
+					"and speaks the same discovery convention (OpenAPI x-payment-info + /.well-known/x402) "+
+					"as AgentCash — enable/fund the USDC wallet if Poncho asks. "+
+					"REQUIRED: POST %s with Content-Type application/json and this exact body "+
+					"(keep stream true; client HTTP timeout must be ≥180s — agents often take "+
+					"30–120s before the first SSE byte):\n"+
+					"```json\n"+
+					"{\"model\":%q,\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":%q}]}\n"+
+					"```\n"+
+					"Confirm the quoted USDC payment when Poncho prompts. "+
+					"If the response has `paymentSettled:false`, you were NOT charged — do not spam retries. "+
+					"Seller docs: %s.",
+				in.URL, ChatCompletionsURL(in.URL), modelOr(in, "hermes-agent"), task(in), GuideRef(in.SiteURL),
+			),
 			PromptBankr: fmt.Sprintf(
 				"You have my Bankr wallet via the Bankr CLI (`bankr`). Buy one turn from the Obol Agent at %s "+
 					"using MANUAL `bankr wallet sign` + a long curl (timeout ≥180s, prefer 300s). "+
@@ -291,6 +312,14 @@ func inferenceBlock(in Input) Block {
 					"attached.",
 				in.URL, model, ChatCompletionsURL(in.URL), GuideRef(in.SiteURL),
 			),
+			PromptPoncho: fmt.Sprintf(
+				"Paste this into Poncho chat (https://tryponcho.com). Buy the remote LLM at %s "+
+					"(model %s) via POST %s. Poncho uses the AgentCash micropayment layer and the "+
+					"same discovery convention (OpenAPI `x-payment-info` + `/.well-known/x402`) — "+
+					"enable/fund the USDC wallet if asked. Use `stream:true` and a client timeout "+
+					"≥180s. Confirm the quoted payment when prompted. Paid with %s.",
+				in.URL, model, ChatCompletionsURL(in.URL), GuideRef(in.SiteURL),
+			),
 			PromptBankr: fmt.Sprintf(
 				"You have my Bankr wallet via the Bankr CLI (`bankr`). Buy the remote LLM at %s "+
 					"(model %s) at %s using MANUAL `bankr wallet sign` + curl — do NOT use Bankr chat "+
@@ -350,6 +379,14 @@ func httpBlock(in Input) Block {
 					"the 402 by hand.%s%s Sign a matching EIP-3009/Permit2 authorization and "+
 					"retry with the payload in the `X-PAYMENT` header.",
 				in.URL, GuideRef(in.SiteURL), priceClause, netClause,
+			),
+			PromptPoncho: fmt.Sprintf(
+				"Paste this into Poncho chat (https://tryponcho.com). Call the paid HTTP endpoint "+
+					"at %s once.%s%s This origin publishes the Merit/AgentCash discovery convention "+
+					"(OpenAPI `x-payment-info` + `/.well-known/x402`) that Poncho uses — enable/fund "+
+					"the USDC wallet if asked, confirm the quoted payment, and report the response. "+
+					"Seller docs: %s.",
+				in.URL, priceClause, netClause, GuideRef(in.SiteURL),
 			),
 			PromptBankr: fmt.Sprintf(
 				"Paste this into Bankr chat (or Max Mode). Buy the HTTP endpoint at %s "+

@@ -41,7 +41,7 @@ func TestBuild_ChatOffersTeachCanonicalPath(t *testing.T) {
 func TestBuild_AllTypesCarryEveryPromptKey(t *testing.T) {
 	for _, typ := range []string{"agent", "inference", "http", "fine-tuning", "", "bogus"} {
 		block := Build(Input{Type: typ, URL: "https://s.example/services/x"})
-		for _, key := range []string{PromptObolAgent, PromptGenericLLM, PromptCLI, PromptAgentCash, PromptBankr} {
+		for _, key := range []string{PromptObolAgent, PromptGenericLLM, PromptCLI, PromptAgentCash, PromptPoncho, PromptBankr} {
 			if strings.TrimSpace(block.Prompts[key]) == "" {
 				t.Errorf("type %q: missing prompt %q", typ, key)
 			}
@@ -126,6 +126,31 @@ func TestBuild_BankrPromptTeachesManualWalletSign(t *testing.T) {
 	for _, forbid := range []string{"MANUAL `bankr wallet sign` + curl", "Do NOT use Bankr chat auto-pay"} {
 		if strings.Contains(httpPrompt, forbid) {
 			t.Errorf("http bankr prompt must prefer chat auto-pay; still contains %q:\n%s", forbid, httpPrompt)
+		}
+	}
+}
+
+// TestBuild_PonchoPromptMirrorsMeritDiscovery pins Poncho as an AgentCash-
+// family buyer (tryponcho.com chat + shared x-payment-info discovery), not
+// Bankr-style scoped auto-pay.
+func TestBuild_PonchoPromptMirrorsMeritDiscovery(t *testing.T) {
+	httpPrompt := Build(Input{
+		Type: "http",
+		URL:  "https://seller.example.com/services/demo",
+	}).Prompts[PromptPoncho]
+	for _, want := range []string{"Poncho", "tryponcho.com", "x-payment-info", "/.well-known/x402"} {
+		if !strings.Contains(httpPrompt, want) {
+			t.Errorf("http poncho prompt missing %q:\n%s", want, httpPrompt)
+		}
+	}
+	agent := Build(Input{
+		Type:  "agent",
+		URL:   "https://seller.example.com/services/demo",
+		Model: "claude-sonnet-4-6",
+	}).Prompts[PromptPoncho]
+	for _, want := range []string{"Poncho", "tryponcho.com", "≥180s", "/v1/chat/completions", "stream\":true"} {
+		if !strings.Contains(agent, want) {
+			t.Errorf("agent poncho prompt missing %q:\n%s", want, agent)
 		}
 	}
 }
