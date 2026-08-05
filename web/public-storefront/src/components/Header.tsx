@@ -13,14 +13,21 @@ export function Header({ storefront }: { storefront: StorefrontProfile }) {
         data-obol="brand"
       >
         {isDefaultLogo && dark ? (
-          <Image
-            src="/obol-stack-logo.png"
-            alt={storefront.displayName}
-            width={161}
-            height={28}
-            priority
-            className="h-7 w-auto"
-          />
+          <>
+            <Image
+              src="/obol-stack-logo.png"
+              alt="Obol Stack"
+              width={161}
+              height={28}
+              priority
+              className="h-7 w-auto"
+            />
+            {storefront.displayName !== "Obol Stack" ? (
+              <div className="text-sm font-semibold text-text-light truncate">
+                {storefront.displayName}
+              </div>
+            ) : null}
+          </>
         ) : isDefaultLogo ? (
           // The default wordmark is light-on-dark and invisible on the
           // light theme — use the dark square mark plus the name instead.

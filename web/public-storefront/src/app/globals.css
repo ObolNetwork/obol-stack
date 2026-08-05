@@ -39,6 +39,20 @@ body {
   color: var(--color-text-light);
 }
 
+/* Operator iframe preview: disable pay/wallet controls but keep page scroll. */
+html[data-obol-preview] a,
+html[data-obol-preview] button,
+html[data-obol-preview] input,
+html[data-obol-preview] textarea,
+html[data-obol-preview] select,
+html[data-obol-preview] summary,
+html[data-obol-preview] [role="button"] {
+  pointer-events: none;
+}
+html[data-obol-preview] {
+  cursor: default;
+}
+
 /* Scrollbars follow the theme */
 * {
   scrollbar-color: var(--color-bg04) var(--color-bg01);

@@ -49,7 +49,17 @@ func ReconcileRecorded(cfg *config.Config, u *ui.UI) {
 	}
 
 	bin, kubeconfig := kubectl.Paths(cfg)
-	if err := kubectl.Apply(bin, kubeconfig, payload); err != nil {
+	// Profiles may contain inline data:image URIs. Client-side apply mirrors
+	// the complete manifest into last-applied-configuration, and that annotation
+	// has a 256 KiB hard limit even though the ConfigMap itself allows 1 MiB.
+	// The host record is authoritative, so server-side ownership is appropriate
+	// and keeps large valid profiles replayable after stack recreation.
+	if err := kubectl.ApplyServerSideForceConflicts(
+		bin,
+		kubeconfig,
+		payload,
+		"obol-storefront-profile",
+	); err != nil {
 		u.Warnf("Could not reconcile recorded storefront profile: %v", err)
 		return
 	}

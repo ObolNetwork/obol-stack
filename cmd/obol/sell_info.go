@@ -841,7 +841,22 @@ func applySellerProfile(cfg *config.Config, profile schemas.StorefrontProfile) e
 	if err != nil {
 		return err
 	}
-	if err := kubectlApply(cfg, manifest); err != nil {
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		return fmt.Errorf("marshal storefront profile: %w", err)
+	}
+	bin, kubeconfig := kubectl.Paths(cfg)
+	// Inline data:image values can make kubectl's client-side
+	// last-applied-configuration annotation exceed its 256 KiB limit even
+	// though the ConfigMap itself remains below Kubernetes' 1 MiB limit.
+	// The host-side profile record is authoritative, so use server-side apply
+	// for both initial writes and updates.
+	if err := kubectl.ApplyServerSideForceConflicts(
+		bin,
+		kubeconfig,
+		raw,
+		"obol-storefront-profile",
+	); err != nil {
 		return fmt.Errorf("apply storefront profile: %w", err)
 	}
 	return nil

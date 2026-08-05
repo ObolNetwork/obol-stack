@@ -18,6 +18,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
 	"github.com/ObolNetwork/obol-stack/internal/images"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
@@ -1275,8 +1276,16 @@ func deleteLocalCloudflareTunnel(u *ui.UI, tunnelName, tunnelID string) error {
 	return nil
 }
 
-// storefrontNamespace is where the storefront landing page resources live.
-const storefrontNamespace = "traefik"
+// Storefront resources live beside the Gateway. The preview hostname is
+// deliberately local-only: unlike tunnel hostnames it is never written into
+// cloudflared ingress configuration, so the operator dashboard can frame the
+// real renderer without bringing the public tunnel into its trust boundary.
+const (
+	storefrontNamespace = "traefik"
+	// StorefrontPreviewHostname is the local-only operator preview origin.
+	// It is never written into cloudflared ingress configuration.
+	StorefrontPreviewHostname = "storefront-preview.obol.stack"
+)
 
 // storefrontHostnames returns the hostnames the public storefront should be
 // published on: the full tracked set for a persistent tunnel, else the host
@@ -1322,6 +1331,63 @@ func offerBoundHostnames(kubectlPath, kubeconfigPath string) (map[string]bool, e
 	return bound, nil
 }
 
+func buildStorefrontPreviewHTTPRoute() map[string]any {
+	return map[string]any{
+		"apiVersion": "gateway.networking.k8s.io/v1",
+		"kind":       "HTTPRoute",
+		"metadata": map[string]any{
+			"name":      "storefront-preview",
+			"namespace": storefrontNamespace,
+		},
+		"spec": map[string]any{
+			"hostnames": []string{StorefrontPreviewHostname},
+			"parentRefs": []map[string]any{
+				{
+					"name":        "traefik-gateway",
+					"namespace":   "traefik",
+					"sectionName": "web",
+				},
+			},
+			"rules": []map[string]any{
+				{
+					"matches": []map[string]any{
+						{"path": map[string]string{"type": "PathPrefix", "value": "/"}},
+					},
+					"filters": []map[string]any{
+						{
+							"type": "ResponseHeaderModifier",
+							"responseHeaderModifier": map[string]any{
+								"set": []map[string]string{
+									{
+										"name":  "Content-Security-Policy",
+										"value": "frame-ancestors 'self' http://obol.stack:* https://obol.stack:*",
+									},
+									{
+										"name":  "Permissions-Policy",
+										"value": "camera=(), microphone=(), geolocation=(), payment=()",
+									},
+									{"name": "X-Content-Type-Options", "value": "nosniff"},
+								},
+							},
+						},
+					},
+					"backendRefs": []map[string]any{
+						{"name": "tunnel-storefront", "port": 3000},
+					},
+				},
+			},
+		},
+	}
+}
+
+func storefrontImage(cfg *config.Config) string {
+	const repo = "ghcr.io/obolnetwork/obol-stack-public-storefront"
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("OBOL_DEVELOPMENT")), "true") {
+		return images.ResolveDev(repo, stackdefaults.ReadDevImageTag(cfg))
+	}
+	return images.Resolve(repo)
+}
+
 // CreateStorefront creates (or updates) the public storefront landing page and
 // publishes it at the root path of EVERY supplied hostname. Each argument may be
 // a bare hostname or a full URL (scheme/path stripped); empty or duplicate
@@ -1361,22 +1427,41 @@ func CreateStorefront(cfg *config.Config, hostnames ...string) error {
 		}
 		hosts = kept
 		if len(hosts) == 0 {
-			// Every tracked hostname is offer-bound: the storefront has
-			// nothing left to serve at any hostname. Tear it down instead
-			// of leaving the previously-applied HTTPRoute (with the now-
-			// stale wider host list) on the cluster — Gateway API breaks
-			// the resulting PathPrefix-/ tie by route age, so that stale
-			// route would otherwise keep shadowing the offer's own
-			// dedicated-origin route.
-			return DeleteStorefront(cfg)
+			// Every tracked public hostname is offer-bound: remove only the
+			// public catch-all HTTPRoute so it cannot shadow dedicated-origin
+			// offer routes. Keep the renderer + local preview hostname so the
+			// operator dashboard can still frame a non-public copy.
+			cmd := exec.Command(kubectlPath,
+				"--kubeconfig", kubeconfigPath,
+				"delete", "httproute/tunnel-storefront",
+				"-n", storefrontNamespace,
+				"--ignore-not-found",
+			)
+			_ = cmd.Run()
+			return ensureStorefrontRenderer(cfg, nil)
 		}
 	}
 
+	return ensureStorefrontRenderer(cfg, hosts)
+}
+
+// EnsureLocalStorefrontPreview publishes the local-only storefront renderer
+// (Deployment + Service + storefront-preview.obol.stack HTTPRoute) without
+// requiring a public tunnel hostname. Safe to call on every stack up so the
+// operator branding editor can iframe a non-public copy before tunnel setup.
+func EnsureLocalStorefrontPreview(cfg *config.Config) error {
+	return ensureStorefrontRenderer(cfg, nil)
+}
+
+// ensureStorefrontRenderer applies the Next.js storefront Deployment + Service
+// and the local-only preview HTTPRoute. When publicHosts is non-empty it also
+// publishes the tunnel catch-all HTTPRoute for those hostnames.
+func ensureStorefrontRenderer(cfg *config.Config, publicHosts []string) error {
+	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	labels := map[string]string{"app": "tunnel-storefront"}
 
-	// Build the resources for the public storefront.
 	resources := []map[string]any{
-		// Deployment: Next.js public storefront image.
 		{
 			"apiVersion": "apps/v1",
 			"kind":       "Deployment",
@@ -1397,7 +1482,7 @@ func CreateStorefront(cfg *config.Config, hostnames ...string) error {
 						"containers": []map[string]any{
 							{
 								"name":            "storefront",
-								"image":           images.Resolve("ghcr.io/obolnetwork/obol-stack-public-storefront"),
+								"image":           storefrontImage(cfg),
 								"imagePullPolicy": "IfNotPresent",
 								"ports": []map[string]any{
 									{"containerPort": 3000, "name": "http"},
@@ -1443,7 +1528,6 @@ func CreateStorefront(cfg *config.Config, hostnames ...string) error {
 				},
 			},
 		},
-		// Service
 		{
 			"apiVersion": "v1",
 			"kind":       "Service",
@@ -1458,8 +1542,14 @@ func CreateStorefront(cfg *config.Config, hostnames ...string) error {
 				},
 			},
 		},
-		// HTTPRoute: tunnel hostname → storefront (more specific than frontend catch-all).
-		{
+		// Local-only preview route. Hostname scoping is the security boundary:
+		// cloudflared never advertises *.obol.stack, while the CSP limits who
+		// may frame this renderer even on the local machine.
+		buildStorefrontPreviewHTTPRoute(),
+	}
+
+	if len(publicHosts) > 0 {
+		resources = append(resources, map[string]any{
 			"apiVersion": "gateway.networking.k8s.io/v1",
 			"kind":       "HTTPRoute",
 			"metadata": map[string]any{
@@ -1467,7 +1557,7 @@ func CreateStorefront(cfg *config.Config, hostnames ...string) error {
 				"namespace": storefrontNamespace,
 			},
 			"spec": map[string]any{
-				"hostnames": hosts,
+				"hostnames": publicHosts,
 				"parentRefs": []map[string]any{
 					{
 						"name":        "traefik-gateway",
@@ -1489,10 +1579,9 @@ func CreateStorefront(cfg *config.Config, hostnames ...string) error {
 					},
 				},
 			},
-		},
+		})
 	}
 
-	// Apply each resource via kubectl apply.
 	for _, res := range resources {
 		data, err := json.Marshal(res)
 		if err != nil {
@@ -1514,7 +1603,10 @@ func CreateStorefront(cfg *config.Config, hostnames ...string) error {
 	return nil
 }
 
-// DeleteStorefront removes the storefront landing page resources.
+// DeleteStorefront removes the public storefront catch-all HTTPRoute while
+// keeping the local-only preview renderer (Deployment/Service +
+// storefront-preview.obol.stack). The operator branding editor must keep
+// working when the tunnel is dormant or the last offer is deleted.
 func DeleteStorefront(cfg *config.Config) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 
@@ -1525,8 +1617,6 @@ func DeleteStorefront(cfg *config.Config) error {
 
 	for _, resource := range []string{
 		"httproute/tunnel-storefront",
-		"service/tunnel-storefront",
-		"deployment/tunnel-storefront",
 		"configmap/tunnel-storefront",
 	} {
 		cmd := exec.Command(kubectlPath,
@@ -1538,7 +1628,7 @@ func DeleteStorefront(cfg *config.Config) error {
 		_ = cmd.Run() // best-effort cleanup
 	}
 
-	return nil
+	return EnsureLocalStorefrontPreview(cfg)
 }
 
 func parseQuickTunnelURL(logs string) (string, bool) {
