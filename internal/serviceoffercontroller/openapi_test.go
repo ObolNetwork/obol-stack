@@ -355,18 +355,16 @@ func TestBuildOpenAPIDocument_HTTPOffer(t *testing.T) {
 
 	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, "", schemas.StorefrontProfile{}))
 
-	op := dig(t, doc, "paths", "/services/echo", "post")
+	op := dig(t, doc, "paths", "/services/echo", "get")
 	if op == nil {
-		t.Fatalf("http offer missing POST /services/echo, paths = %v", doc["paths"])
+		t.Fatalf("http offer missing GET /services/echo, paths = %v", doc["paths"])
 	}
-	// HTTP offers get a generic JSON body, no $ref into OpenAI components.
-	schema := dig(t, op.(map[string]any), "requestBody", "content", "application/json", "schema")
-	schemaMap, _ := schema.(map[string]any)
-	if _, hasRef := schemaMap["$ref"]; hasRef {
-		t.Errorf("http offer request body should be generic, got $ref: %v", schema)
+	// Default http emission is GET with no request body (demo/hello-shaped).
+	if body := dig(t, op.(map[string]any), "requestBody"); body != nil {
+		t.Errorf("http GET offer must not advertise a requestBody, got %v", body)
 	}
-	if schemaMap["type"] != "object" {
-		t.Errorf("http offer schema type = %v, want object", schemaMap["type"])
+	if post := dig(t, doc, "paths", "/services/echo", "post"); post != nil {
+		t.Errorf("default http offer must not advertise POST when Methods is empty")
 	}
 }
 

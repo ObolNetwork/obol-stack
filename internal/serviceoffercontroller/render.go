@@ -2159,7 +2159,7 @@ func skillMarkdownRouteLines(offer *monetizeapi.ServiceOffer, endpoint string) [
 		methods := strings.Join(rt.Methods, "|")
 		if methods == "" {
 			if gate == monetizeapi.GatePaid {
-				methods = "POST"
+				methods = defaultPaidMethod(offer)
 			} else {
 				methods = "GET"
 			}

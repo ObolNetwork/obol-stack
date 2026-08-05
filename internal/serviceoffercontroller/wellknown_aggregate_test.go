@@ -31,8 +31,8 @@ func TestBuildAggregateWellKnownX402_BasicOffer(t *testing.T) {
 	if res["resource"] != "https://tunnel.example/services/echo" {
 		t.Errorf("resource = %v, want https://tunnel.example/services/echo", res["resource"])
 	}
-	if res["method"] != "POST" {
-		t.Errorf("method = %v, want POST", res["method"])
+	if res["method"] != "GET" {
+		t.Errorf("method = %v, want GET", res["method"])
 	}
 	accepts, _ := res["accepts"].([]any)
 	if len(accepts) != 1 {
