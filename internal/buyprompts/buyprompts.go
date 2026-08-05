@@ -48,12 +48,12 @@ const (
 	//   - http: prefer Bankr chat auto-pay — fast endpoints usually finish
 	//     inside Bankr's ~30s client window; do NOT ask chat to run
 	//     `bankr wallet sign` (chat cannot).
-	//   - agent/inference: forbid chat/Apps auto-pay (`rpc timeout` / voucher
-	//     quirks); teach `bankr wallet sign` + long curl in a Bankr-CLI agent
-	//     (Cursor). Bankr's own docs also scope chat/CLI auto-pay to endpoints
-	//     deployed via `bankr x402 deploy` + their discovery index, and Apps
-	//     need an `allowedHosts` allowlist — still teach the proven CLI path
-	//     for slow offers.
+	//   - agent/inference: forbid chat/Apps auto-pay (`rpc timeout` even when
+	//     an Apps manifest allowlists our host — observed on Base mainnet);
+	//     teach `bankr wallet sign` + long curl in a Bankr-CLI agent (Cursor).
+	//     Bankr docs also describe chat/CLI auto-pay as oriented around
+	//     `bankr x402 deploy` / their discovery index — still teach the proven
+	//     CLI path for slow offers.
 	PromptBankr = "bankr"
 )
 

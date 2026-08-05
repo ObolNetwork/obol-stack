@@ -254,37 +254,42 @@ A `Transfer` to the expected recipient that exists while the buyer reports
 
 ## External buyers (Bankr): two failure modes, one canonical ledger
 
-Bankr chat / `bankr x402 call` against Obol agent offers confused operators
-because the UI error and the on-chain outcome often disagreed.
+Bankr chat / `bankr x402 call` / Apps against Obol agent offers confused
+operators because the UI error and the on-chain outcome often disagreed.
+Live Base mainnet testing (2026-08-05) against a public Obol tunnel clarified
+what is seller-fixable vs buyer-client limits.
 
-**Root cause (2026-08-05 investigation): Bankr chat/CLI auto-pay is not
-built to pay arbitrary third-party x402 endpoints at all.** Per Bankr's own
-docs, auto-pay is scoped to endpoints deployed through `bankr x402 deploy`
-and then approved into Bankr's own discovery index (criteria undocumented) —
-[docs.bankr.bot/x402-cloud/quick-start](https://docs.bankr.bot/x402-cloud/quick-start/).
-Their Apps SDK (`bankr.x402.fetch`) separately requires a pre-declared
-`allowedHosts` allowlist —
-[docs.bankr.bot/apps/overview](https://docs.bankr.bot/apps/overview/). Every
-documented example targets `"network":"base"` (mainnet); no Base Sepolia
-support was found anywhere in their docs or the `BankrBot/skills` repo. An
-arbitrary seller like ours is out of scope for chat auto-pay independent of
-the two wire-level failure modes below — `bankr wallet sign`
-([docs.bankr.bot/cli](https://docs.bankr.bot/cli/)) is Bankr's own
-officially documented manual-signing primitive, not a workaround hack, and
-is the only proven path today.
+**Context — Bankr surfaces are not one path.** Chat auto-pay, CLI
+`bankr x402 call`, and Apps (`bankr.x402.fetch`) are different clients.
+Bankr docs also describe chat/CLI auto-pay as oriented around endpoints
+deployed via `bankr x402 deploy` / their discovery index
+([docs.bankr.bot/x402-cloud/quick-start](https://docs.bankr.bot/x402-cloud/quick-start/)),
+and Apps require a manifest `allowedHosts` allowlist
+([docs.bankr.bot/apps/sdk](https://docs.bankr.bot/apps/sdk)).
 
-When Bankr auto-pay *does* attempt a call anyway, there are **two separate
-wire-level failure modes**:
+**Allowlisting is not enough for agent offers.** We built a Bankr App with
+`pay:x402`, `allowedHosts: ["<our-tunnel-hostname>"]`, and
+`bankr.x402.fetch` against bounty-radar. Payment **often verified** on Base
+mainnet; the App still failed with **`rpc timeout` ~30s** while the agent was
+still running. So the Apps failure we hit was not “missing allowlist” or
+“wrong network” — it was Bankr’s short client timeout on slow agent SSE.
+HTTP offers through the same App/chat path usually succeed because they
+finish in ~1s.
+
+When Bankr *does* attempt a paid call, there are **two separate wire-level
+failure modes**:
 
 | Mode | What the buyer sees | What happened | Charge? |
 |---|---|---|---|
-| **A — Voucher** | JSON `503` with `reason:facilitator_error`, `detail:unexpected_error` | Bankr auto-pay signed EIP-3009 with `validAfter=wall-clock now`. Base USDC requires `block.timestamp > validAfter`, so facilitator `/verify` rejects. | Usually **no** (verify never succeeded). |
-| **B — Timeout / zombie** | Timeout, 504, or a generic “payment failed” after ~30s | Verify **succeeded**, agent was still running (often 30–120s to first SSE byte). Bankr’s short client timeout aborted the UI. Cloudflare often does **not** cancel the seller’s request context, so older seller builds still called `/settle` after upstream finished → BaseScan shows 0.001 USDC Transfers in a triple-retry burst. | **Yes** on older builds. |
+| **A — Voucher** | JSON `503` with `reason:facilitator_error`, `detail:unexpected_error` | Buyer signed EIP-3009 with `validAfter=wall-clock now` (or a bad typed-data hash). Base USDC rejects (`not yet valid` / `invalid signature`). | Usually **no** (verify never succeeded). |
+| **B — Timeout / zombie** | `rpc timeout`, 504, or generic failure after ~30s | Verify **succeeded**, agent still running (often 30–120s to first SSE byte). Bankr client aborted. Cloudflare often does **not** cancel seller context, so older seller builds still called `/settle` after upstream finished → BaseScan shows 0.001 USDC Transfers. | **Yes** on older builds. |
 
-**Seller hardenings** (HandleProxy settlement interceptor):
+**Seller hardenings** (in-process HandleProxy settlement for agent/http
+gateways that settle after upstream — not the Traefik ForwardAuth
+verify-only path):
 
-- Settle SSE responses only in `finalize()` after the stream completes —
-  never on the first `WriteHeader(200)`.
+- Settle SSE only in `finalize()` after the stream completes — never on the
+  first `WriteHeader(200)`.
 - Skip `/settle` when `r.Context()` is canceled, when a body `Write` to the
   client fails (broken pipe — the reliable signal when cancel does not
   propagate), or when zero body bytes were written.
@@ -295,9 +300,10 @@ wire-level failure modes**:
 **Buyer guidance** (storefront Bankr prompts are type-specific):
 - **http** — prefer Bankr chat auto-pay (fast enough for the ~30s window).
   Do not ask chat to run `bankr wallet sign` (it cannot).
-- **agent / inference** — do not use Bankr chat/Apps auto-pay (`rpc timeout`);
-  use `bankr wallet sign` with a past `validAfter` buffer and HTTP timeout ≥180s.
-  After any timeout, check BaseScan before retrying.
+- **agent / inference** — do not use Bankr chat/Apps auto-pay (`rpc timeout`
+  even with a correct Apps `allowedHosts`); use `bankr wallet sign` with a
+  past `validAfter` buffer and HTTP timeout ≥180s. After any timeout, check
+  BaseScan before retrying.
 
 **Still true:** chain Transfers are canonical. Seller `paymentSettled:false`
 and Bankr UI copy are best-effort signals.
