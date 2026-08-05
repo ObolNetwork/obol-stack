@@ -196,7 +196,13 @@ func ApplyUpgrades(cfg *config.Config, u *ui.UI, opts UpgradeOptions) error {
 		helmfileArgs...,
 	)
 
-	helmfileCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
+	// OBOL_STACK_VERSION must match what `obol stack up` renders, or the
+	// obol-frontend podspec env flips to "" here and the deployment rolls for
+	// no reason on every upgrade.
+	helmfileCmd.Env = append(os.Environ(),
+		"KUBECONFIG="+kubeconfigPath,
+		"OBOL_STACK_VERSION="+version.Version,
+	)
 
 	label := "Upgrading default infrastructure"
 	if opts.ChartFilter != "" {

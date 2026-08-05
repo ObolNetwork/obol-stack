@@ -23,6 +23,12 @@ image:
     - name: OBOL_AUTH_DB_PATH
       value: "/data/auth.sqlite"
 
+    # Running Obol CLI version — shown in the local frontend footer.
+    # Injected by `obol stack up` via OBOL_STACK_VERSION; the frontend also
+    # reads obolVersion from the obol-stack-config ConfigMap.
+    - name: OBOL_STACK_VERSION
+      value: {{ env "OBOL_STACK_VERSION" | default "" | quote }}
+
     # Obol Agent (ADK) in-cluster URL for CopilotKit runtime
     - name: ADK_AGENT_URL
       value: "http://obol-agent.agent.svc.cluster.local:8000/"
