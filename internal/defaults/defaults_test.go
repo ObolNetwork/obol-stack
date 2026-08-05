@@ -1,6 +1,7 @@
 package defaults
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -133,8 +134,19 @@ func TestCopyInfrastructureRendersStackPlaceholders(t *testing.T) {
 	}
 
 	out := string(data)
+
+	// The ollama Endpoints IP must be rendered and routable — never loopback,
+	// which Kubernetes rejects in Endpoints (enforced since v1.33).
+	endpointIP := regexp.MustCompile(`ip: "([^"]+)"`).FindStringSubmatch(out)
+	if endpointIP == nil {
+		t.Fatalf("rendered defaults contain no ollama endpoint IP:\n%s", out)
+	}
+
+	if parsed := net.ParseIP(endpointIP[1]); parsed == nil || parsed.IsLoopback() {
+		t.Fatalf("ollama endpoint rendered as %q, want a routable non-loopback IP", endpointIP[1])
+	}
+
 	for _, want := range []string{
-		`ip: "127.0.0.1"`,
 		`LITELLM_MASTER_KEY: "sk-obol-test-stack"`,
 	} {
 		if !strings.Contains(out, want) {
@@ -205,5 +217,38 @@ func TestDetectedBackendNameDefaultsToK3d(t *testing.T) {
 	}
 	if got := DetectedBackendName(cfg); got != backendK3s {
 		t.Fatalf("DetectedBackendName() = %q, want %q", got, backendK3s)
+	}
+}
+
+// Kubernetes rejects loopback addresses in Endpoints (enforced since v1.33),
+// so the k3s backend — which runs on the host and therefore names 127.0.0.1 as
+// the Ollama host — must still resolve to a routable address. Regression test
+// for `UPGRADE FAILED: cannot patch "ollama" with kind Endpoints: ... may not
+// be in the loopback range`.
+func TestOllamaHostIPForBackendNeverReturnsLoopback(t *testing.T) {
+	ip, err := OllamaHostIPForBackend(backendK3s)
+	if err != nil {
+		t.Fatalf("resolve k3s ollama host IP: %v", err)
+	}
+
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		t.Fatalf("resolved %q is not a valid IP address", ip)
+	}
+
+	if parsed.IsLoopback() {
+		t.Fatalf("resolved %q is a loopback address; Kubernetes rejects these in Endpoints", ip)
+	}
+}
+
+func TestHostPrimaryIPIsRoutable(t *testing.T) {
+	ip, err := hostPrimaryIP()
+	if err != nil {
+		t.Skipf("no routable interface available in this environment: %v", err)
+	}
+
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.IsLoopback() || parsed.To4() == nil {
+		t.Fatalf("hostPrimaryIP returned %q, want a non-loopback IPv4 address", ip)
 	}
 }
