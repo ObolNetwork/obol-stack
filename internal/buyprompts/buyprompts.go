@@ -34,26 +34,13 @@ const (
 	// PromptCLI is the shell command a human runs from an obol-stack host.
 	PromptCLI = "cli"
 	// PromptAgentCash is pasted into an AgentCash-connected agent/wallet
-	// (Merit Systems MCP/CLI). Shares discovery with x402scan + Poncho:
-	// OpenAPI `x-payment-info` + `/.well-known/x402`.
+	// (Merit Systems MCP/CLI). Discovery: OpenAPI `x-payment-info` + `/.well-known/x402`.
 	PromptAgentCash = "agentcash"
-	// PromptPoncho is pasted into Poncho chat (https://tryponcho.com) — Merit
-	// Systems' consumer agent. Same discovery + wallet-pay path as AgentCash
-	// (Poncho runs on the AgentCash micropayment layer), NOT Bankr's scoped
-	// chat auto-pay. Expect AgentCash-like success on third-party Obol URLs;
-	// still require long client timeouts for agent/inference offers.
+	// PromptPoncho is pasted into Poncho chat (https://tryponcho.com) — same
+	// Merit/AgentCash discovery + wallet-pay path.
 	PromptPoncho = "poncho"
-	// PromptBankr is pasted into Bankr chat or a Bankr-CLI agent. Guidance is
-	// type-specific (observed 2026-08-05 against third-party Obol sellers):
-	//   - http: prefer Bankr chat auto-pay — fast endpoints usually finish
-	//     inside Bankr's ~30s client window; do NOT ask chat to run
-	//     `bankr wallet sign` (chat cannot).
-	//   - agent/inference: forbid chat/Apps auto-pay (`rpc timeout` even when
-	//     an Apps manifest allowlists our host — observed on Base mainnet);
-	//     teach `bankr wallet sign` + long curl in a Bankr-CLI agent (Cursor).
-	//     Bankr docs also describe chat/CLI auto-pay as oriented around
-	//     `bankr x402 deploy` / their discovery index — still teach the proven
-	//     CLI path for slow offers.
+	// PromptBankr is pasted into Bankr chat or a Bankr-CLI agent.
+	// http: chat auto-pay. agent/inference: `bankr wallet sign` + long curl.
 	PromptBankr = "bankr"
 )
 
@@ -209,69 +196,34 @@ func agentBlock(in Input) Block {
 				in.URL, task(in),
 			),
 			PromptAgentCash: fmt.Sprintf(
-				"Call the Obol Agent at %s EXACTLY as specified — do not drop fields. "+
-					"It's an autonomous agent (tools + skills + memory), gated by %s "+
-					"(OpenAPI `x-payment-info` + `/.well-known/x402`). "+
-					"REQUIRED: POST %s with Content-Type application/json and this exact body "+
-					"(keep stream true; client HTTP timeout must be ≥180s — agents often take "+
-					"30–120s before the first SSE byte; shorter timeouts cause false 'payment failed' retries):\n"+
-					"```json\n"+
-					"{\"model\":%q,\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":%q}]}\n"+
-					"```\n"+
-					"Attach a signed EIP-3009/Permit2 authorization as `X-PAYMENT`. "+
-					"If the response has `paymentSettled:false`, you were NOT charged — do not spam retries.",
+				"Call the Obol Agent at %s — gated by %s (OpenAPI `x-payment-info` + `/.well-known/x402`). "+
+					"POST %s with Content-Type application/json, client timeout ≥180s, and this body:\n"+
+					"```json\n{\"model\":%q,\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":%q}]}\n```\n"+
+					"Use AgentCash auto-pay (x402) — do not craft X-PAYMENT by hand. "+
+					"Treat as paid ONLY if the response includes a non-null payment receipt / tx hash "+
+					"(or X-PAYMENT-RESPONSE). If `payment` is null, report unpaid/failed — do not claim success.",
 				in.URL, GuideRef(in.SiteURL), ChatCompletionsURL(in.URL), modelOr(in, "hermes-agent"), task(in),
 			),
 			PromptPoncho: fmt.Sprintf(
-				"Paste this into Poncho chat (https://tryponcho.com). Call the Obol Agent at %s "+
-					"EXACTLY as specified — do not drop fields. Poncho runs on AgentCash micropayments "+
-					"and speaks the same discovery convention (OpenAPI x-payment-info + /.well-known/x402) "+
-					"as AgentCash — enable/fund the USDC wallet if Poncho asks. "+
-					"REQUIRED: POST %s with Content-Type application/json and this exact body "+
-					"(keep stream true; client HTTP timeout must be ≥180s — agents often take "+
-					"30–120s before the first SSE byte):\n"+
-					"```json\n"+
-					"{\"model\":%q,\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":%q}]}\n"+
-					"```\n"+
-					"Confirm the quoted USDC payment when Poncho prompts. "+
-					"If the response has `paymentSettled:false`, you were NOT charged — do not spam retries. "+
-					"Seller docs: %s.",
-				in.URL, ChatCompletionsURL(in.URL), modelOr(in, "hermes-agent"), task(in), GuideRef(in.SiteURL),
+				"Call the Obol Agent at %s — gated by %s (OpenAPI `x-payment-info` + `/.well-known/x402`). "+
+					"POST %s with timeout ≥180s and body:\n"+
+					"```json\n{\"model\":%q,\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":%q}]}\n```\n"+
+					"Confirm the quoted payment. Treat as paid ONLY if a payment receipt / tx hash is shown; "+
+					"if payment is missing, report unpaid/failed.",
+				in.URL, GuideRef(in.SiteURL), ChatCompletionsURL(in.URL), modelOr(in, "hermes-agent"), task(in),
 			),
 			PromptBankr: fmt.Sprintf(
-				"You have my Bankr wallet via the Bankr CLI (`bankr`). Buy one turn from the Obol Agent at %s "+
-					"using MANUAL `bankr wallet sign` + a long curl (timeout ≥180s, prefer 300s). "+
-					"Paste this into Cursor (or any Bankr-CLI agent) — not Bankr chat, not a Bankr App.\n\n"+
-					"Do NOT use Bankr chat auto-pay, `bankr x402 call`, `/wallet/x402-pay`, or a Bankr App "+
-					"`bankr.x402.fetch`. Against this agent offer those paths fail for three reasons:\n"+
-					"(A) Scope: per Bankr's own docs, chat/CLI auto-pay is scoped to endpoints deployed via "+
-					"`bankr x402 deploy` and approved into Bankr's own discovery index — an arbitrary "+
-					"third-party URL like this one is out of scope by design.\n"+
-					"(B) Voucher: when they do attempt a call, they often sign EIP-3009 with `validAfter=now` → "+
-					"seller returns JSON `reason:facilitator_error` / `detail:unexpected_error` (verify "+
-					"rejected; usually no charge).\n"+
-					"(C) Timeout: Bankr chat/Apps abort at ~30s with `rpc timeout` while this agent is still "+
-					"running (often 30–120s to first SSE byte) → UI failure; never auto-retry; treat BaseScan "+
-					"as canonical before any retry.\n\n"+
-					"Steps (exact):\n"+
-					"1. Probe once without payment: POST %s with the JSON body below → read 402 `accepts[]`. "+
-					"Copy network/amount/asset/payTo VERBATIM (CAIP-2 `eip155:8453`, not the alias `base`).\n"+
-					"2. Sign EIP-3009 TransferWithAuthorization with `bankr wallet sign` (typed data). "+
-					"REQUIRED: set `validAfter` to `0` or `now-600` (past buffer). NEVER `validAfter=now`. "+
-					"Set `validBefore` to `now+900`. Match `from`=my Bankr EVM address, `to`/`value`/`asset` from accepts[].\n"+
-					"3. Build the x402 payment payload (x402Version 2, accepted = that accepts[] entry, "+
-					"payload.authorization + payload.signature), base64-encode it, and curl POST the paid request with:\n"+
-					"   - Header `X-PAYMENT: <base64>` (also ok: `PAYMENT-SIGNATURE`)\n"+
-					"   - Header `Content-Type: application/json`\n"+
-					"   - `curl --max-time 300` (or equivalent) — agents often take 30–120s before first SSE byte\n"+
-					"4. Exact body (keep stream true; do not omit fields):\n"+
-					"```json\n"+
-					"{\"model\":%q,\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":%q}]}\n"+
-					"```\n"+
-					"5. Stream the SSE to me. On `facilitator_error`, re-sign once with a past `validAfter` (do not spam). "+
-					"On timeout/504/`rpc timeout`, do NOT retry until you check BaseScan for a Transfer to payTo. "+
-					"Seller docs: %s.",
-				in.URL, ChatCompletionsURL(in.URL), modelOr(in, "hermes-agent"), task(in), GuideRef(in.SiteURL),
+				"Buy one turn from the Obol Agent at %s via Bankr CLI — not Bankr chat/Apps. "+
+					"1) Probe POST %s (body below) without payment; take ONE `accepts[]` entry and reuse it "+
+					"ENTIRE as the payment payload's `accepted` object — every field "+
+					"(scheme, network, maxAmountRequired, asset, payTo, maxTimeoutSeconds, extra). "+
+					"Do not rebuild or drop fields (`unsupported_scheme` means you stripped the entry). "+
+					"2) `bankr wallet sign` EIP-3009 with `validAfter=0` or `now-600` (never `now`), `validBefore=now+900`. "+
+					"3) Base64-encode the x402 v2 payload; curl POST with `X-PAYMENT`, `Content-Type: application/json`, "+
+					"`curl --max-time 300`, body:\n"+
+					"```json\n{\"model\":%q,\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":%q}]}\n```\n"+
+					"Treat as paid ONLY if `X-PAYMENT-RESPONSE` / a tx hash appears; on timeout check the chain explorer before retry.",
+				in.URL, ChatCompletionsURL(in.URL), modelOr(in, "hermes-agent"), task(in),
 			),
 		},
 		Example: ChatExample(in.URL, in.Model, in.TaskExample),
@@ -304,33 +256,25 @@ func inferenceBlock(in Input) Block {
 			),
 			PromptCLI: fmt.Sprintf("obol buy inference %s", in.URL),
 			PromptAgentCash: fmt.Sprintf(
-				"I want to use the remote LLM at %s (model %s) as a paid OpenAI-compatible "+
-					"chat-completions endpoint at %s. This origin already publishes AgentCash's "+
-					"discovery convention (OpenAPI `x-payment-info`, `/.well-known/x402` "+
-					"fallback), paid with %s — pre-sign a budget of EIP-3009/Permit2 "+
-					"authorizations and POST chat-completions bodies with the X-PAYMENT header "+
-					"attached.",
-				in.URL, model, ChatCompletionsURL(in.URL), GuideRef(in.SiteURL),
+				"Call the remote LLM at %s (model %s) via POST %s, paid with %s "+
+					"(OpenAPI `x-payment-info` + `/.well-known/x402`). POST with `stream:true`, "+
+					"timeout ≥180s, body `{\"model\":%q,\"stream\":true,\"messages\":[...]}`. "+
+					"Use AgentCash auto-pay. Treat as paid ONLY if a non-null payment receipt / tx hash is returned.",
+				in.URL, model, ChatCompletionsURL(in.URL), GuideRef(in.SiteURL), model,
 			),
 			PromptPoncho: fmt.Sprintf(
-				"Paste this into Poncho chat (https://tryponcho.com). Buy the remote LLM at %s "+
-					"(model %s) via POST %s. Poncho uses the AgentCash micropayment layer and the "+
-					"same discovery convention (OpenAPI `x-payment-info` + `/.well-known/x402`) — "+
-					"enable/fund the USDC wallet if asked. Use `stream:true` and a client timeout "+
-					"≥180s. Confirm the quoted payment when prompted. Paid with %s.",
-				in.URL, model, ChatCompletionsURL(in.URL), GuideRef(in.SiteURL),
+				"Call the remote LLM at %s (model %s) via POST %s, paid with %s "+
+					"(OpenAPI `x-payment-info` + `/.well-known/x402`). Body "+
+					"`{\"model\":%q,\"stream\":true,\"messages\":[...]}`, timeout ≥180s. "+
+					"Confirm payment; treat as paid ONLY if a receipt / tx hash is shown.",
+				in.URL, model, ChatCompletionsURL(in.URL), GuideRef(in.SiteURL), model,
 			),
 			PromptBankr: fmt.Sprintf(
-				"You have my Bankr wallet via the Bankr CLI (`bankr`). Buy the remote LLM at %s "+
-					"(model %s) at %s using MANUAL `bankr wallet sign` + curl — do NOT use Bankr chat "+
-					"auto-pay or `bankr x402 call`. Bankr's own docs scope chat/CLI auto-pay to endpoints "+
-					"deployed via `bankr x402 deploy` and approved into their own discovery index — an "+
-					"arbitrary third-party URL like this one is out of scope by design. Even where it does "+
-					"attempt a call: (A) `validAfter=now` → `facilitator_error`/`unexpected_error`; "+
-					"(B) short client timeout while upstream still runs → UI failure (confirm BaseScan "+
-					"before retry). Sign EIP-3009 with `validAfter=0` or `now-600`, match accepts[] verbatim "+
-					"(CAIP-2), attach `X-PAYMENT`, timeout ≥180s, `stream:true`. Paid with %s.",
-				in.URL, model, ChatCompletionsURL(in.URL), GuideRef(in.SiteURL),
+				"Buy the remote LLM at %s (model %s) at %s via Bankr CLI — not Bankr chat/Apps. "+
+					"Probe without payment; copy `accepts[]` network/amount/asset/payTo VERBATIM; "+
+					"`bankr wallet sign` EIP-3009 with `validAfter=0` or `now-600` (never `now`); "+
+					"curl with `X-PAYMENT`, `--max-time 300`, `stream:true`, body model=%q. Paid with %s.",
+				in.URL, model, ChatCompletionsURL(in.URL), model, GuideRef(in.SiteURL),
 			),
 		},
 		// The model field is required by chat-completions upstreams for
@@ -372,34 +316,22 @@ func httpBlock(in Input) Block {
 				in.URL,
 			),
 			PromptAgentCash: fmt.Sprintf(
-				"Call the paid HTTP endpoint at %s once. It's gated by %s, and this origin "+
-					"already speaks AgentCash's own discovery convention (OpenAPI "+
-					"`x-payment-info` plus a `/.well-known/x402` fallback) — your "+
-					"AgentCash-connected agent can auto-discover the price instead of parsing "+
-					"the 402 by hand.%s%s Sign a matching EIP-3009/Permit2 authorization and "+
-					"retry with the payload in the `X-PAYMENT` header.",
+				"Call the paid HTTP endpoint at %s once. It's gated by %s.%s%s "+
+					"This origin publishes AgentCash discovery (OpenAPI `x-payment-info` + `/.well-known/x402`). "+
+					"Use AgentCash auto-pay. Treat as paid ONLY if a non-null payment receipt / tx hash is returned.",
 				in.URL, GuideRef(in.SiteURL), priceClause, netClause,
 			),
 			PromptPoncho: fmt.Sprintf(
-				"Paste this into Poncho chat (https://tryponcho.com). Call the paid HTTP endpoint "+
-					"at %s once.%s%s This origin publishes the Merit/AgentCash discovery convention "+
-					"(OpenAPI `x-payment-info` + `/.well-known/x402`) that Poncho uses — enable/fund "+
-					"the USDC wallet if asked, confirm the quoted payment, and report the response. "+
-					"Seller docs: %s.",
-				in.URL, priceClause, netClause, GuideRef(in.SiteURL),
+				"Call the paid HTTP endpoint at %s once.%s%s "+
+					"Discovery: OpenAPI `x-payment-info` + `/.well-known/x402`. "+
+					"Confirm payment; treat as paid ONLY if a receipt / tx hash is shown.",
+				in.URL, priceClause, netClause,
 			),
 			PromptBankr: fmt.Sprintf(
-				"Paste this into Bankr chat (or Max Mode). Buy the HTTP endpoint at %s "+
-					"using Bankr chat auto-pay — call the URL and let Bankr attach payment.%s%s\n\n"+
-					"Prefer chat auto-pay for this fast HTTP offer. Do NOT ask Bankr chat to run "+
-					"`bankr wallet sign` or build a manual X-PAYMENT header — chat cannot do that, "+
-					"and it will fall back to auto-pay anyway.\n\n"+
-					"If chat auto-pay returns `facilitator_error` / `unexpected_error`, that is usually "+
-					"a `validAfter=now` voucher quirk (auth not consumed) — retry once; do not spam. "+
-					"If it keeps failing, switch to a Bankr-CLI agent (Cursor) and use "+
-					"`bankr wallet sign` with `validAfter=0` or `now-600`, then curl with `X-PAYMENT`.\n"+
-					"Seller docs: %s.",
-				in.URL, priceClause, netClause, GuideRef(in.SiteURL),
+				"Buy the HTTP endpoint at %s with Bankr chat auto-pay.%s%s "+
+					"If chat returns `facilitator_error`, retry once; if it keeps failing, use "+
+					"`bankr wallet sign` with `validAfter=0` or `now-600`, then curl with `X-PAYMENT`.",
+				in.URL, priceClause, netClause,
 			),
 		},
 	}
