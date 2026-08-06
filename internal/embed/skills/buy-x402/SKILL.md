@@ -107,6 +107,13 @@ Permit2 approval above).
   storefront publishes machine-readable metadata at
   `<base>/api/services.json` with full asset, EIP-712 signing domain,
   transfer method, and atomic-unit price for every offered service.
+- **Third-party sellers may not publish `/api/services.json`.** When
+  buying from a non-Obol x402 seller, also check `<base>/openapi.json`
+  (paid operations carry an `x-payment-info` extension — the AgentCash/
+  x402scan/Poncho discovery convention) and, failing that, the flatter
+  `<base>/.well-known/x402` fallback (`{"x402Version":2,"resources":[...]}`,
+  one entry per paid resource with its `accepts[]` requirements). Obol
+  Stack sellers publish all three, plus `/skill.md`.
 - **`pay` timeout defaults: ~100 s for http, 600 s for inference.** The
   100 s http default matches the Cloudflare free-tier tunnel cap — longer
   requests get killed by the edge before our client ever sees a response.

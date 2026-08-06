@@ -37,6 +37,7 @@ const (
 	servicesJSONRouteName   = "obol-services-json-route"
 	openAPIRouteName        = "obol-openapi-route"
 	apiDocsRouteName        = "obol-api-docs-route"
+	wellKnownX402RouteName  = "obol-wellknown-x402-route"
 
 	// catalogHeadersMiddlewareName is the Traefik headers Middleware attached
 	// to the public catalog HTTPRoutes (/skill.md, /openapi.json, /api,
@@ -264,11 +265,12 @@ func agentIdentityLabels(identity *monetizeapi.AgentIdentity, appName string) ma
 	}
 }
 
-func buildStaticSiteConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) *unstructured.Unstructured {
+func buildStaticSiteConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML, wellKnownX402JSON string, bundles []offerBundleFile) *unstructured.Unstructured {
 	data := map[string]any{
 		"skill.md":      content,
 		"services.json": servicesJSON,
 		"openapi.json":  openAPIJSON,
+		"x402.json":     wellKnownX402JSON,
 		"api.html":      apiDocsHTML,
 		// charset=utf-8 on the text types so UTF-8 content (em dashes in the
 		// catalog, accented operator descriptions, …) renders correctly
@@ -310,6 +312,12 @@ func staticSiteVolumeItems(bundles []offerBundleFile) []any {
 		map[string]any{"key": "skill.md", "path": "skill.md"},
 		map[string]any{"key": "services.json", "path": "api/services.json"},
 		map[string]any{"key": "openapi.json", "path": "openapi.json"},
+		// Mounted with a .json name (not the public ".well-known/x402" path)
+		// so busybox's extension-based httpd.conf serves it as
+		// application/json — the HTTPRoute below rewrites the public path
+		// to this file, the same pattern buildHostHTTPRoute uses for the
+		// per-offer copy.
+		map[string]any{"key": "x402.json", "path": "wellknown-x402.json"},
 		// busybox httpd resolves /api/ → /api/index.html, so the
 		// Scalar shell sits at api/index.html. The /api Exact
 		// HTTPRoute also matches the trailing-slash variant so the
@@ -557,6 +565,73 @@ func buildOpenAPIHTTPRoute() *unstructured.Unstructured {
 							},
 						},
 						"filters": catalogHeadersFilters(),
+						"backendRefs": []any{
+							map[string]any{
+								"name":      staticSiteConfigMapName,
+								"namespace": staticSiteNamespace,
+								"port":      int64(8080),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// buildWellKnownX402HTTPRoute exposes the aggregate /.well-known/x402
+// discovery-list fallback for every offer sharing the storefront's origin
+// (hostname-bound offers publish their own copy at their dedicated origin
+// via buildHostHTTPRoute, but still appear here too under their shared-origin
+// alias — see buildAggregateWellKnownX402). AgentCash/x402scan-style
+// crawlers that don't parse OpenAPI's x-payment-info extension fall back to
+// this document. Same public posture as /openapi.json: no hostnames filter,
+// no secret material.
+func buildWellKnownX402HTTPRoute() *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "HTTPRoute",
+			"metadata": map[string]any{
+				"name":      wellKnownX402RouteName,
+				"namespace": staticSiteNamespace,
+				"labels": map[string]any{
+					"obol.org/managed-by": "serviceoffer-controller",
+				},
+			},
+			"spec": map[string]any{
+				"parentRefs": []any{
+					map[string]any{
+						"name":        "traefik-gateway",
+						"namespace":   "traefik",
+						"sectionName": "web",
+					},
+				},
+				"rules": []any{
+					map[string]any{
+						"matches": []any{
+							map[string]any{
+								"path": map[string]any{
+									"type":  "Exact",
+									"value": "/.well-known/x402",
+								},
+							},
+						},
+						// Rewrite the extensionless public path to the .json-
+						// suffixed file mounted in the ConfigMap volume, so
+						// busybox's extension-based httpd.conf serves
+						// application/json instead of a default octet-stream.
+						"filters": append([]any{
+							map[string]any{
+								"type": "URLRewrite",
+								"urlRewrite": map[string]any{
+									"path": map[string]any{
+										"type":            "ReplaceFullPath",
+										"replaceFullPath": "/wellknown-x402.json",
+									},
+								},
+							},
+						}, catalogHeadersFilters()...),
 						"backendRefs": []any{
 							map[string]any{
 								"name":      staticSiteConfigMapName,
@@ -1364,6 +1439,7 @@ func buildSkillMarkdown(offers []*monetizeapi.ServiceOffer, baseURL string, expl
 		"> **Machine-readable:** " +
 			fmt.Sprintf("OpenAPI 3.1 (Swagger) at [`%s/openapi.json`](%s/openapi.json) · ", baseURL, baseURL) +
 			fmt.Sprintf("catalog feed at [`%s/api/services.json`](%s/api/services.json) · ", baseURL, baseURL) +
+			fmt.Sprintf("x402 discovery fallback at [`%s/.well-known/x402`](%s/.well-known/x402) · ", baseURL, baseURL) +
 			fmt.Sprintf("agent identity at [`%s/.well-known/agent-registration.json`](%s/.well-known/agent-registration.json).", baseURL, baseURL),
 		"",
 	}
@@ -1485,6 +1561,13 @@ func skillMarkdownHowToPay(baseURL string) []string {
 		fmt.Sprintf("**Exact request shapes:** the OpenAPI 3.1 document at [`%s/openapi.json`](%s/openapi.json) "+
 			"describes every operation's path, method, request/response body, and per-operation pricing "+
 			"(`x-payment-info`). Load it into any OpenAPI-aware client to generate a typed caller.", baseURL, baseURL),
+		"",
+		fmt.Sprintf("**Discovery fallback:** a flat resource list is also published at "+
+			"[`%s/.well-known/x402`](%s/.well-known/x402) for crawlers that don't parse OpenAPI. This "+
+			"catalog is compatible with AgentCash- and x402scan-style discovery (Merit Systems' shared "+
+			"convention: OpenAPI `x-payment-info` plus the `/.well-known/x402` fallback — also covers "+
+			"Poncho) as well as any standard x402 buyer, e.g. Bankr, via the core 402/`X-PAYMENT` "+
+			"handshake above.", baseURL, baseURL),
 		"",
 		"**Already on Obol Stack?** The `buy-x402` skill automates the whole loop: " +
 			"`buy.py pay <endpoint>` for one-shot calls (add `--token <SYMBOL>` / `--network <chain>` to " +
@@ -1629,6 +1712,53 @@ func offerAwaitingRegistration(offer *monetizeapi.ServiceOffer) bool {
 		}
 	}
 	return false
+}
+
+// buildAggregateWellKnownX402 renders the /.well-known/x402 discovery
+// fallback for the shared storefront catalog: one resource entry per paid
+// route across every operationally-ready offer, rooted at baseURL +
+// offer.EffectivePath() — the same shared-origin alias buildOpenAPIDocument
+// and buildServiceCatalogJSON already publish every offer under (hostname-
+// bound offers included; they additionally get their own root-rooted copy
+// via buildOfferWellKnownX402/buildHostHTTPRoute). AgentCash/x402scan-style
+// crawlers fall back to this document when they don't parse OpenAPI's
+// x-payment-info extension.
+func buildAggregateWellKnownX402(offers []*monetizeapi.ServiceOffer, baseURL string) string {
+	baseURL = strings.TrimRight(baseURL, "/")
+
+	now := time.Now()
+	var ready []*monetizeapi.ServiceOffer
+	for _, offer := range offers {
+		if offer == nil || offer.DeletionTimestamp != nil {
+			continue
+		}
+		if offer.DrainExpired(now) {
+			continue
+		}
+		if offerOperationallyReady(offer) {
+			ready = append(ready, offer)
+		}
+	}
+	sort.Slice(ready, func(i, j int) bool {
+		if ready[i].Namespace == ready[j].Namespace {
+			return ready[i].Name < ready[j].Name
+		}
+		return ready[i].Namespace < ready[j].Namespace
+	})
+
+	var resources []any
+	for _, offer := range ready {
+		resources = append(resources, wellKnownResourcesForOffer(offer, baseURL, offer.EffectivePath())...)
+	}
+	doc := map[string]any{
+		"x402Version": 2,
+		"resources":   resources,
+	}
+	encoded, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return `{"x402Version":2,"resources":[]}`
+	}
+	return string(encoded)
 }
 
 // buildServiceCatalogJSON returns the public /api/services.json envelope:
@@ -2075,7 +2205,7 @@ func skillMarkdownRouteLines(offer *monetizeapi.ServiceOffer, endpoint string) [
 		methods := strings.Join(rt.Methods, "|")
 		if methods == "" {
 			if gate == monetizeapi.GatePaid {
-				methods = "POST"
+				methods = defaultPaidMethod(offer)
 			} else {
 				methods = "GET"
 			}

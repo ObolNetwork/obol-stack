@@ -436,7 +436,7 @@ func TestOfferLandingChatEmbed(t *testing.T) {
 // rendered per agent offer into its bundle with the offer's title and the
 // same resolved theme tokens as its landing page.
 func TestStaticSiteServesChatWidget(t *testing.T) {
-	cm := buildStaticSiteConfigMap("# cat", `{"services":[]}`, `{}`, "<html></html>", nil)
+	cm := buildStaticSiteConfigMap("# cat", `{"services":[]}`, `{}`, "<html></html>", "", nil)
 	data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
 	if data["chat-vendor.js"] == "" {
 		t.Fatalf("catalog ConfigMap missing the shared chat vendor bundle")

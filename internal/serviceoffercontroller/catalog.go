@@ -40,7 +40,7 @@ func (c *Controller) listServiceOffersForCatalog(ctx context.Context, override *
 	return offers, nil
 }
 
-func staticSiteContentMatches(cm *unstructured.Unstructured, content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) bool {
+func staticSiteContentMatches(cm *unstructured.Unstructured, content, servicesJSON, openAPIJSON, apiDocsHTML, wellKnownX402JSON string, bundles []offerBundleFile) bool {
 	if cm == nil {
 		return false
 	}
@@ -51,6 +51,7 @@ func staticSiteContentMatches(cm *unstructured.Unstructured, content, servicesJS
 	if data["skill.md"] != content ||
 		data["services.json"] != servicesJSON ||
 		data["openapi.json"] != openAPIJSON ||
+		data["x402.json"] != wellKnownX402JSON ||
 		data["api.html"] != apiDocsHTML ||
 		data["chat-vendor.js"] != chatWidgetVendorJS {
 		return false
@@ -76,7 +77,7 @@ func staticSiteContentMatches(cm *unstructured.Unstructured, content, servicesJS
 	return true
 }
 
-func (c *Controller) staticSiteContentUnchanged(ctx context.Context, content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) (bool, error) {
+func (c *Controller) staticSiteContentUnchanged(ctx context.Context, content, servicesJSON, openAPIJSON, apiDocsHTML, wellKnownX402JSON string, bundles []offerBundleFile) (bool, error) {
 	cm, err := c.configMaps.Namespace(staticSiteNamespace).Get(ctx, staticSiteConfigMapName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return false, nil
@@ -84,15 +85,15 @@ func (c *Controller) staticSiteContentUnchanged(ctx context.Context, content, se
 	if err != nil {
 		return false, err
 	}
-	return staticSiteContentMatches(cm, content, servicesJSON, openAPIJSON, apiDocsHTML, bundles), nil
+	return staticSiteContentMatches(cm, content, servicesJSON, openAPIJSON, apiDocsHTML, wellKnownX402JSON, bundles), nil
 }
 
-func computeStaticSiteContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) string {
+func computeStaticSiteContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML, wellKnownX402JSON string, bundles []offerBundleFile) string {
 	// The embedded vendor bundle is part of the served content: fold it in
 	// so a controller upgrade that changes it re-applies the ConfigMap and
 	// rolls the httpd (otherwise the skip-when-unchanged fast path pins the
 	// old asset forever). The per-offer chat pages flow through bundles.
-	return fmt.Sprintf("%x", md5Sum(content+servicesJSON+openAPIJSON+apiDocsHTML+chatWidgetVendorJS+bundleDigestInput(bundles)))[:8]
+	return fmt.Sprintf("%x", md5Sum(content+servicesJSON+openAPIJSON+apiDocsHTML+wellKnownX402JSON+chatWidgetVendorJS+bundleDigestInput(bundles)))[:8]
 }
 
 func staticSiteDeployedContentHash(deployment *unstructured.Unstructured) string {

@@ -255,14 +255,26 @@ func primaryPaidRoute(offer *monetizeapi.ServiceOffer) (monetizeapi.ServiceOffer
 	return monetizeapi.ServiceOfferRoute{}, false
 }
 
+// defaultPaidMethod is the method advertised when a paid route does not
+// declare Methods. Inference/agent/fine-tuning are write-shaped (POST);
+// plain http defaults to GET — that matches demo/hello and most "pay to
+// fetch" endpoints, and stops OpenAPI/AgentCash clients POSTing into a
+// GET-only upstream (405).
+func defaultPaidMethod(offer *monetizeapi.ServiceOffer) string {
+	if offer != nil && (offer.IsInference() || offer.IsAgent() || strings.EqualFold(offer.Spec.Type, "fine-tuning")) {
+		return "POST"
+	}
+	return "GET"
+}
+
 // primaryPaidMethod is the HTTP method advertised for the offer's primary
 // paid operation: the first declared method on the primary paid route, or
-// POST (the phase-1 default emission everywhere else).
+// defaultPaidMethod when Methods is empty.
 func primaryPaidMethod(offer *monetizeapi.ServiceOffer) string {
 	if rt, ok := primaryPaidRoute(offer); ok && len(rt.Methods) > 0 {
 		return strings.ToUpper(rt.Methods[0])
 	}
-	return "POST"
+	return defaultPaidMethod(offer)
 }
 
 // openAPIDocsAnchorForOffer returns the site-relative Scalar deep link for
@@ -286,7 +298,7 @@ func openAPIDocsAnchorForOffer(offer *monetizeapi.ServiceOffer) string {
 //     User feedback: agent uses the same OpenAI chat completions wire
 //     format as inference, so they share an emission path.
 //   - fine-tuning    → POST <path> with multipart upload, generic 200.
-//   - http (default) → POST <path> with application/json body, generic 200.
+//   - http (default) → GET <path>, generic 200 (no request body).
 //
 // Every operation references the shared `PaymentRequired` 402 response and
 // carries an `x-payment-info` extension marking it as x402-paid for
@@ -346,13 +358,9 @@ func openAPIPathsForOffer(offer *monetizeapi.ServiceOffer) map[string]map[string
 	default:
 		return annotateAsyncPaths(offer, map[string]map[string]any{
 			"": {
-				"post": openAPIOperation(offer, openAPIOperationOptions{
-					summary:     "Invoke " + offer.Name,
-					description: offerDescription(offer, "x402 payment-gated HTTP service."),
-					requestBody: openAPIJSONRequestBody(
-						"",
-						"Operator-defined JSON payload. Shape is not specified in phase 1.",
-					),
+				"get": openAPIOperation(offer, openAPIOperationOptions{
+					summary:         "Invoke " + offer.Name,
+					description:     offerDescription(offer, "x402 payment-gated HTTP service."),
 					successResponse: openAPIGenericSuccessResponse("Upstream response (shape is operator-defined)."),
 				}),
 			},
@@ -469,7 +477,7 @@ func openAPIPathsForRouteTable(offer *monetizeapi.ServiceOffer) map[string]map[s
 		methods := rt.Methods
 		if len(methods) == 0 {
 			if gate == monetizeapi.GatePaid {
-				methods = []string{"POST"}
+				methods = []string{defaultPaidMethod(offer)}
 			} else {
 				methods = []string{"GET"}
 			}

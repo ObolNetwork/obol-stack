@@ -229,7 +229,7 @@ func sendPaymentRequiredHTML(w http.ResponseWriter, r *http.Request, requirement
 	// Catalog discovery link rides on the HTML branch too (and survives the
 	// JSON fallbacks below — Header().Set is idempotent).
 	setCatalogLinkHeader(w)
-	jsonBody := buildPaymentRequired(r, requirements, extensions)
+	jsonBody := paymentRequiredBody(r, requirements, extensions)
 	indented, err := json.MarshalIndent(jsonBody, "", "  ")
 	if err != nil {
 		// Should not happen — fall back to JSON path.
