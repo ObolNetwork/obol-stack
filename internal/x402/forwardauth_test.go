@@ -1395,3 +1395,24 @@ func TestSettlementInterceptor_DeferredNonSSEStillEager(t *testing.T) {
 		t.Fatalf("settleCalls = %d, want 1 on WriteHeader for non-SSE", settleCalls)
 	}
 }
+
+// TestLogFieldsAreSingleLine guards the go/log-injection fix: strings that
+// reach log.Printf from outside the process — the facilitator's reject reason
+// and the buyer's payment payload — must not be able to forge a new log line.
+func TestLogFieldsAreSingleLine(t *testing.T) {
+	forged := "bad\r\nx402: payment settled successfully"
+
+	if got := facilitatorRejectDetail(&facilitatorVerifyResponse{InvalidReason: forged}); strings.ContainsAny(got, "\r\n") {
+		t.Errorf("facilitatorRejectDetail leaked a newline: %q", got)
+	}
+	if got := truncateForLog(forged, 500); strings.ContainsAny(got, "\r\n") {
+		t.Errorf("truncateForLog leaked a newline: %q", got)
+	}
+	summary := paymentPayloadSummary(x402types.PaymentPayload{
+		Accepted: x402types.PaymentRequirements{Scheme: forged, Network: forged},
+		Payload:  map[string]any{"signature": forged},
+	})
+	if strings.ContainsAny(summary, "\r\n") {
+		t.Errorf("paymentPayloadSummary leaked a newline: %q", summary)
+	}
+}

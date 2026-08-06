@@ -477,9 +477,9 @@ func paymentPayloadSummary(payload x402types.PaymentPayload) string {
 	}
 	b, err := json.Marshal(summary)
 	if err != nil {
-		return fmt.Sprintf("marshal_error=%v", err)
+		return sanitizeForLog(fmt.Sprintf("marshal_error=%v", err))
 	}
-	return string(b)
+	return sanitizeForLog(string(b))
 }
 
 func samePaymentNetwork(a, b string) bool {
@@ -545,7 +545,7 @@ func normalizePaymentPayloadForVerify(paymentPayloadJSON []byte) ([]byte, string
 	if err != nil {
 		return paymentPayloadJSON, ""
 	}
-	return out, fmt.Sprintf("signature_v_%d_to_%d", vi, vi+27)
+	return out, sanitizeForLog(fmt.Sprintf("signature_v_%d_to_%d", vi, vi+27))
 }
 
 func facilitatorRejectDetail(resp *facilitatorVerifyResponse) string {
@@ -560,10 +560,20 @@ func facilitatorRejectDetail(resp *facilitatorVerifyResponse) string {
 			out = append(out, p)
 		}
 	}
-	return strings.Join(out, " — ")
+	return sanitizeForLog(strings.Join(out, " — "))
+}
+
+// sanitizeForLog strips CR/LF from strings that originate outside the process
+// — the buyer's payment payload or the facilitator's response — so a crafted
+// value cannot forge extra lines in the operator's log. Applied at the
+// producers rather than at each log call so future call sites inherit it.
+func sanitizeForLog(s string) string {
+	s = strings.ReplaceAll(s, "\n", "")
+	return strings.ReplaceAll(s, "\r", "")
 }
 
 func truncateForLog(s string, max int) string {
+	s = sanitizeForLog(s)
 	if max <= 0 || len(s) <= max {
 		return s
 	}
