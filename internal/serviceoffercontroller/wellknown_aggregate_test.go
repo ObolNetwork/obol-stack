@@ -31,8 +31,11 @@ func TestBuildAggregateWellKnownX402_BasicOffer(t *testing.T) {
 	if res["resource"] != "https://tunnel.example/services/echo" {
 		t.Errorf("resource = %v, want https://tunnel.example/services/echo", res["resource"])
 	}
-	if res["method"] != "GET" {
-		t.Errorf("method = %v, want GET", res["method"])
+	// Root-priced: the offer has no route table, so its implicit catch-all is
+	// the offer root, where GET is claimed by the static index.html and only
+	// POST reaches the payment gate. See defaultPaidMethod.
+	if res["method"] != "POST" {
+		t.Errorf("method = %v, want POST", res["method"])
 	}
 	accepts, _ := res["accepts"].([]any)
 	if len(accepts) != 1 {

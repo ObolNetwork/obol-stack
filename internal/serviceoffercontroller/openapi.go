@@ -260,8 +260,19 @@ func primaryPaidRoute(offer *monetizeapi.ServiceOffer) (monetizeapi.ServiceOffer
 // plain http defaults to GET — that matches demo/hello and most "pay to
 // fetch" endpoints, and stops OpenAPI/AgentCash clients POSTing into a
 // GET-only upstream (405).
-func defaultPaidMethod(offer *monetizeapi.ServiceOffer) string {
+//
+// The exception is a ROOT-PRICED route (path "", "/" or "/*"). The static
+// site publishes the offer root as exactTo("/", "index.html"), a GET-scoped
+// Exact match, so at the root GET is claimed by the landing page and only
+// POST falls through to the payment gate. Advertising GET there would send
+// buyers to a 200 HTML page that can never return 402 — see the contract
+// documented on exactTo in render.go. routePath is the paid route's declared
+// path; callers without a route table pass the implicit catch-all "/*".
+func defaultPaidMethod(offer *monetizeapi.ServiceOffer, routePath string) string {
 	if offer != nil && (offer.IsInference() || offer.IsAgent() || strings.EqualFold(offer.Spec.Type, "fine-tuning")) {
+		return "POST"
+	}
+	if openAPIRelPathForRoute(routePath) == "" {
 		return "POST"
 	}
 	return "GET"
@@ -271,10 +282,14 @@ func defaultPaidMethod(offer *monetizeapi.ServiceOffer) string {
 // paid operation: the first declared method on the primary paid route, or
 // defaultPaidMethod when Methods is empty.
 func primaryPaidMethod(offer *monetizeapi.ServiceOffer) string {
-	if rt, ok := primaryPaidRoute(offer); ok && len(rt.Methods) > 0 {
-		return strings.ToUpper(rt.Methods[0])
+	if rt, ok := primaryPaidRoute(offer); ok {
+		if len(rt.Methods) > 0 {
+			return strings.ToUpper(rt.Methods[0])
+		}
+		return defaultPaidMethod(offer, rt.Path)
 	}
-	return defaultPaidMethod(offer)
+	// No declared route table: the implicit catch-all is root-priced.
+	return defaultPaidMethod(offer, "/*")
 }
 
 // openAPIDocsAnchorForOffer returns the site-relative Scalar deep link for
@@ -477,7 +492,7 @@ func openAPIPathsForRouteTable(offer *monetizeapi.ServiceOffer) map[string]map[s
 		methods := rt.Methods
 		if len(methods) == 0 {
 			if gate == monetizeapi.GatePaid {
-				methods = []string{defaultPaidMethod(offer)}
+				methods = []string{defaultPaidMethod(offer, rt.Path)}
 			} else {
 				methods = []string{"GET"}
 			}

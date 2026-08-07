@@ -241,7 +241,7 @@ func wellKnownResourcesForOffer(offer *monetizeapi.ServiceOffer, origin, pathPre
 		if rt.EffectiveGate() != monetizeapi.GatePaid {
 			continue
 		}
-		method := defaultPaidMethod(offer)
+		method := defaultPaidMethod(offer, rt.Path)
 		if len(rt.Methods) > 0 {
 			method = strings.ToUpper(rt.Methods[0])
 		}
