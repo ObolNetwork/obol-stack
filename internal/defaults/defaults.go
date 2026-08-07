@@ -212,7 +212,86 @@ func OllamaHostForBackend(backendName string) string {
 //     containers).
 //  2. Fall back to the Docker Desktop magic gateway IP (192.168.65.254) so
 //     Docker Desktop users without a working `docker` CLI still work.
+//
+// Whatever the backend resolves to, the result is never a loopback address:
+// see the guard below.
 func OllamaHostIPForBackend(backendName string) (string, error) {
+	ip, err := resolveOllamaHostIP(backendName)
+	if err != nil {
+		return "", err
+	}
+
+	// Kubernetes rejects loopback addresses in Endpoints (enforced since v1.33):
+	// inside a pod's network namespace 127.0.0.1 is the pod itself, not the host,
+	// so such an endpoint could never have worked. k3s hits this by design — it
+	// runs directly on the host, so OllamaHostForBackend returns 127.0.0.1 — and
+	// some Docker runtimes map host.docker.internal to loopback too. Substitute
+	// the host's primary routable address, which is what pods can actually reach.
+	if parsed := net.ParseIP(ip); parsed != nil && parsed.IsLoopback() {
+		hostIP, hostErr := hostPrimaryIP()
+		if hostErr != nil {
+			return "", fmt.Errorf(
+				"Ollama host resolved to loopback address %q, which Kubernetes rejects in Endpoints, "+
+					"and no routable host address could be determined: %w", ip, hostErr)
+		}
+
+		return hostIP, nil
+	}
+
+	return ip, nil
+}
+
+// hostPrimaryIP returns the host's primary routable IPv4 address — the address
+// pods reach the host on when the cluster runs on that same host.
+func hostPrimaryIP() (string, error) {
+	// A UDP "dial" sends no packets; it only asks the kernel which route it
+	// would take, which yields the address of the default-route interface.
+	// 192.0.2.1 is TEST-NET-1 (RFC 5737) and is never actually contacted.
+	if conn, dialErr := net.Dial("udp", "192.0.2.1:80"); dialErr == nil {
+		defer conn.Close()
+
+		if addr, ok := conn.LocalAddr().(*net.UDPAddr); ok && !addr.IP.IsLoopback() {
+			if v4 := addr.IP.To4(); v4 != nil {
+				return v4.String(), nil
+			}
+		}
+	}
+
+	// No default route (isolated or air-gapped host): take the first up,
+	// non-loopback IPv4 address instead.
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return "", fmt.Errorf("enumerate network interfaces: %w", err)
+	}
+
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+
+		addrs, addrErr := iface.Addrs()
+		if addrErr != nil {
+			continue
+		}
+
+		for _, addr := range addrs {
+			ipNet, ok := addr.(*net.IPNet)
+			if !ok || ipNet.IP.IsLoopback() {
+				continue
+			}
+
+			if v4 := ipNet.IP.To4(); v4 != nil {
+				return v4.String(), nil
+			}
+		}
+	}
+
+	return "", errors.New("no routable non-loopback IPv4 address found on any interface")
+}
+
+// resolveOllamaHostIP performs the per-backend resolution. Callers should use
+// OllamaHostIPForBackend, which additionally rejects loopback results.
+func resolveOllamaHostIP(backendName string) (string, error) {
 	host := OllamaHostForBackend(backendName)
 
 	if net.ParseIP(host) != nil {

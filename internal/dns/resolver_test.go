@@ -3,6 +3,7 @@ package dns
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -73,5 +74,36 @@ func TestHasNMDnsmasqConfig(t *testing.T) {
 	_, fileExists := os.Stat(path)
 	if result != (fileExists == nil) {
 		t.Errorf("hasNMDnsmasqConfig() = %v, but file exists = %v", result, fileExists == nil)
+	}
+}
+
+// EnsureHostsEntries replaces the managed block wholesale, and most callers
+// (internal/hermes, internal/openclaw) only know about agent hostnames. If the
+// storefront preview origin were merely appended by one caller, whichever call
+// ran last would silently drop it — which is exactly what happened on a real
+// stack: `obol stack up` added it, then the agent-resume path overwrote the
+// block without it, leaving the /storefront iframe unable to resolve its
+// preview origin. It must be emitted unconditionally, like the base domain.
+func TestEnsureHostsBlockAlwaysCarriesPreviewOrigin(t *testing.T) {
+	for name, hostnames := range map[string][]string{
+		"no caller hostnames":    nil,
+		"agent hostnames only":   {"hermes-obol-agent.obol.stack", "obol-agent.obol.stack"},
+		"preview passed by hand": {StorefrontPreviewHostname},
+	} {
+		t.Run(name, func(t *testing.T) {
+			block := buildHostsBlock(hostnames)
+
+			if !strings.Contains(block, "127.0.0.1 "+StorefrontPreviewHostname) {
+				t.Fatalf("managed block is missing the preview origin:\n%s", block)
+			}
+
+			if got := strings.Count(block, StorefrontPreviewHostname); got != 1 {
+				t.Fatalf("preview origin appears %d times, want exactly 1:\n%s", got, block)
+			}
+
+			if !strings.Contains(block, "127.0.0.1 "+domain) {
+				t.Fatalf("managed block is missing the base domain:\n%s", block)
+			}
+		})
 	}
 }

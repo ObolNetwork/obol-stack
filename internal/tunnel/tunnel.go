@@ -19,6 +19,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
+	"github.com/ObolNetwork/obol-stack/internal/dns"
 	"github.com/ObolNetwork/obol-stack/internal/images"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
@@ -1284,7 +1285,9 @@ const (
 	storefrontNamespace = "traefik"
 	// StorefrontPreviewHostname is the local-only operator preview origin.
 	// It is never written into cloudflared ingress configuration.
-	StorefrontPreviewHostname = "storefront-preview.obol.stack"
+	// Defined in internal/dns, which owns the /etc/hosts managed block that
+	// must always contain it — one source of truth for the two.
+	StorefrontPreviewHostname = dns.StorefrontPreviewHostname
 )
 
 // storefrontHostnames returns the hostnames the public storefront should be
