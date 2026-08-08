@@ -2,6 +2,9 @@ package x402
 
 import (
 	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -385,6 +388,10 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	if rule.IsAuth() {
 		wallet, err := v.siwx.Authenticate(r, requestHost(r), time.Now())
 		if err != nil {
+			if v.isUnlockOffer(cfg, rule) {
+				v.handlePaidUnlock(w, r, rule)
+				return
+			}
 			v.writeSIWXChallenge(w, r, rule, err)
 			return
 		}
@@ -665,18 +672,17 @@ func patternToPrefix(pattern string) string {
 	return strings.TrimSuffix(pattern, "*")
 }
 
-// mergeAgentExtras adds the agent fields from a RouteRule to the
-// requirement's Extra map so buyers probing a 402 see which model and
-// skills are powering the offer. No-op for non-agent rules.
+// mergeAgentExtras adds agent metadata from a RouteRule to the requirement's
+// Extra map so buyers probing a 402 can tell it's an agent. The underlying
+// model is intentionally NOT surfaced: an Obol Agent runs its own model and
+// the buyer never selects one, so the model id is an internal detail, not
+// buyer-facing info. No-op for non-agent rules.
 func mergeAgentExtras(req *x402types.PaymentRequirements, rule *RouteRule) {
-	if rule.AgentModel == "" && len(rule.AgentSkills) == 0 && rule.AgentRuntime == "" {
+	if len(rule.AgentSkills) == 0 && rule.AgentRuntime == "" {
 		return
 	}
 	if req.Extra == nil {
 		req.Extra = make(map[string]interface{})
-	}
-	if rule.AgentModel != "" {
-		req.Extra["agentModel"] = rule.AgentModel
 	}
 	if len(rule.AgentSkills) > 0 {
 		// Materialise as []any so JSON marshalling produces a proper array
@@ -857,11 +863,50 @@ func buildUpstreamProxy(rule *RouteRule) (http.Handler, error) {
 			}
 		},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			// ReverseProxy only reaches ErrorHandler AFTER ForwardAuth
+			// middleware has already verified payment (settlement still
+			// pending on the first successful upstream WriteHeader). A
+			// bare "upstream unavailable" 502 here is what Bankr/AgentCash
+			// mislabel as "x402 payment failed" — especially on agent
+			// offers where the buyer times out before Hermes emits a first
+			// SSE byte and retries 2–3×. Surface a structured body so
+			// buyers can tell verify≠settle≠payment-invalid apart.
 			log.Printf("x402-verifier: upstream proxy error for %s/%s: %v", rule.OfferNamespace, rule.OfferName, err)
-			http.Error(w, "upstream unavailable", http.StatusBadGateway)
+			writeUpstreamProxyError(w, err)
 		},
 	}
 	return proxy, nil
+}
+
+// writeUpstreamProxyError writes a structured JSON error for ReverseProxy
+// failures after payment verify. Status is 504 when the failure is a
+// canceled/deadline context (buyer disconnect or client timeout — the
+// common Bankr ~30s retry loop), otherwise 502.
+func writeUpstreamProxyError(w http.ResponseWriter, err error) {
+	status := http.StatusBadGateway
+	reason := "upstream_unavailable"
+	hint := "the upstream service failed before producing a response; payment was verified and seller-side settlement was skipped — confirm on BaseScan before retrying"
+	if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		strings.Contains(err.Error(), "context canceled") || strings.Contains(err.Error(), "context deadline")) {
+		status = http.StatusGatewayTimeout
+		reason = "client_timeout_or_disconnect"
+		hint = "the client disconnected or timed out before the agent finished; seller skips settlement when the client write fails or the context cancels — still confirm on BaseScan before retrying. Raise client timeout to ≥180s, keep stream:true, do not auto-retry"
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Payment-Settled", "false")
+	w.Header().Set("X-Payment-Verified", "true")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error":           http.StatusText(status),
+		"reason":          reason,
+		"paymentVerified": true,
+		"paymentSettled":  false,
+		// Do NOT encourage auto-retry storms (Bankr fired 3 paid verifies
+		// in ~30s). Buyer must raise timeout / fix stream before retrying.
+		"retriable": false,
+		"hint":      hint,
+	})
 }
 
 // chatCompletionsPath is the OpenAI-compatible path served by inference and

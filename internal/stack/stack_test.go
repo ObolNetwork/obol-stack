@@ -481,14 +481,22 @@ func TestDestroyOldBackendIfSwitching_SkipConfirmStillDestroys(t *testing.T) {
 }
 
 func TestOllamaHostIPForBackend_K3s(t *testing.T) {
-	// k3s backend should return 127.0.0.1 (already an IP, no DNS resolution needed)
+	// k3s runs on the host, so the configured Ollama host is 127.0.0.1 — but
+	// the result feeds a Kubernetes Endpoints object, and Kubernetes rejects
+	// loopback addresses there (enforced since v1.33). The resolver must
+	// substitute the host's routable address instead.
 	ip, err := ollamaHostIPForBackend(BackendK3s)
 	if err != nil {
 		t.Fatalf("unexpected error for k3s backend: %v", err)
 	}
 
-	if ip != "127.0.0.1" {
-		t.Errorf("expected 127.0.0.1 for k3s backend, got %s", ip)
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		t.Fatalf("expected a valid IP for k3s backend, got %q", ip)
+	}
+
+	if parsed.IsLoopback() {
+		t.Errorf("k3s backend returned loopback %s; Kubernetes rejects loopback in Endpoints", ip)
 	}
 }
 
@@ -512,16 +520,18 @@ func TestOllamaHostIPForBackend_K3d(t *testing.T) {
 }
 
 func TestOllamaHostIPForBackend_AlreadyIP(t *testing.T) {
-	// Verify the function passes through an already-numeric IP unchanged.
-	// k3s returns "127.0.0.1" from ollamaHostForBackend, so it should
-	// short-circuit on net.ParseIP without attempting DNS.
+	// The resolver short-circuits on net.ParseIP rather than attempting DNS
+	// when the configured host is already numeric. k3s is the numeric case
+	// (127.0.0.1), so this exercises that path — the loopback guard then
+	// swaps it for a routable address, which must still be a valid IP and
+	// must not have gone through a DNS lookup failure.
 	ip, err := ollamaHostIPForBackend(BackendK3s)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if ip != "127.0.0.1" {
-		t.Errorf("expected pass-through of 127.0.0.1, got %s", ip)
+	if net.ParseIP(ip) == nil {
+		t.Errorf("expected a valid IP address, got %q", ip)
 	}
 }
 

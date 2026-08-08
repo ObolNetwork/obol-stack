@@ -1,11 +1,48 @@
 package main
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 )
+
+func TestApplySellerProfileUsesServerSideApplyForInlineImages(t *testing.T) {
+	cfg := &config.Config{ConfigDir: t.TempDir(), BinDir: t.TempDir()}
+	argsPath := filepath.Join(t.TempDir(), "kubectl-args")
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' \"$@\" > %q\ncat >/dev/null\n", argsPath)
+	if err := os.WriteFile(filepath.Join(cfg.BinDir, "kubectl"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	profile := schemas.StorefrontProfile{
+		LogoURL: "data:image/png;base64," + strings.Repeat("a", 270_000),
+	}
+	if err := applySellerProfile(cfg, profile); err != nil {
+		t.Fatalf("applySellerProfile: %v", err)
+	}
+
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(args)
+	for _, want := range []string{
+		"apply\n",
+		"--server-side\n",
+		"--force-conflicts\n",
+		"--field-manager=obol-storefront-profile\n",
+		"-f\n-\n",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("kubectl args missing %q:\n%s", want, got)
+		}
+	}
+}
 
 func TestClearProfileFields(t *testing.T) {
 	base := schemas.StorefrontProfile{

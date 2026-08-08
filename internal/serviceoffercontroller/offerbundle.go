@@ -20,7 +20,7 @@ import (
 // resources per origin. An offer with spec.hostname therefore gets its own
 // discovery documents — an openapi.json scoped to just that offer with
 // paths rooted at "/", a /.well-known/x402 resource list, and a minimal
-// landing page — served by the same static-site httpd via per-offer ConfigMap
+// landing page — served by the same catalog httpd via per-offer ConfigMap
 // keys and Exact-match rewrite routes on the offer's hostname.
 
 // offerBundleFile is one generated file: Key is the ConfigMap data key,
@@ -52,7 +52,10 @@ func offerBundleKey(offer *monetizeapi.ServiceOffer, file string) string {
 // content hash and roll the shared discovery pod. The production caller
 // passes the Controller's upstreamOpenAPICache.get, refreshed independently
 // from each offer's own reconcile.
-func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.StorefrontProfile, upstreamOpenAPI func(*monetizeapi.ServiceOffer) map[string]any) []offerBundleFile {
+// published is the currently-served ConfigMap data (bundle key → content), or
+// nil on the first ever reconcile. It is only read for offers whose upstream
+// probe has not settled yet — see the comment at the !settled branch below.
+func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.StorefrontProfile, upstreamOpenAPI func(*monetizeapi.ServiceOffer) (map[string]any, bool), published map[string]string) []offerBundleFile {
 	var bundles []offerBundleFile
 	for _, offer := range offers {
 		if offer == nil || offer.Spec.Hostname == "" {
@@ -62,15 +65,37 @@ func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.Store
 		// branding block overrides the storefront profile field-wise
 		// (empty fields inherit).
 		originProfile := storefront.MergeProfile(profile, offer.Spec.Branding.ProfilePatch())
-		upstreamDoc := upstreamOpenAPI(offer)
+		upstreamDoc, settled := upstreamOpenAPI(offer)
 		openapiContent := buildOfferScopedOpenAPI(offer, originProfile)
 		x402Content := buildOfferWellKnownX402(offer)
-		if upstreamDoc != nil {
+		switch {
+		case upstreamDoc != nil:
 			if rewritten, ok := rewriteUpstreamOpenAPI(upstreamDoc, offer, originProfile); ok {
 				openapiContent = rewritten
 			}
 			if expanded := buildOfferWellKnownX402FromOpenAPI(offer, upstreamDoc); expanded != "" {
 				x402Content = expanded
+			}
+		case !settled:
+			// We have not probed this offer yet. The upstream-derived document
+			// enumerates one resource per real paid route; the fallback above
+			// collapses to the offer root. Publishing the fallback now would
+			// visibly thin out discovery for an offer we simply have not asked
+			// about — which is exactly what happens on every controller
+			// restart, because the cache is process-local and the shared
+			// bundle is rebuilt from it on EVERY offer's reconcile, including
+			// reconciles belonging to other offers.
+			//
+			// The ConfigMap survives the restart, so prefer what is already
+			// being served until this offer's own reconcile settles the probe.
+			// Stale beats thinner. Once settled, the branches above own the
+			// content — including settled-with-no-document, where the fallback
+			// is the correct final answer.
+			if prev, ok := published[offerBundleKey(offer, "openapi.json")]; ok && prev != "" {
+				openapiContent = prev
+			}
+			if prev, ok := published[offerBundleKey(offer, "x402.json")]; ok && prev != "" {
+				x402Content = prev
 			}
 		}
 		bundles = append(bundles,
@@ -95,6 +120,16 @@ func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.Store
 				Content: buildOfferLandingHTML(offer, originProfile),
 			},
 		)
+		if offer.IsAgent() {
+			// The chat widget page is themed and titled per offer (same
+			// resolved profile as the landing page); the heavy vendor
+			// bundle stays shared at the httpd root.
+			bundles = append(bundles, offerBundleFile{
+				Key:     offerBundleKey(offer, "chat.html"),
+				Path:    offerBundleDir(offer) + "/chat.html",
+				Content: buildOfferChatHTML(offer, originProfile),
+			})
+		}
 	}
 	sort.Slice(bundles, func(i, j int) bool { return bundles[i].Key < bundles[j].Key })
 	return bundles
@@ -217,13 +252,31 @@ func openAPIRelPathForOfferRoute(offer *monetizeapi.ServiceOffer, routePath stri
 // offer without probing). Tracks the x402 discovery-list shape used by
 // facilitator /discovery/resources feeds.
 func buildOfferWellKnownX402(offer *monetizeapi.ServiceOffer) string {
-	origin := offer.EffectiveOrigin()
+	doc := map[string]any{
+		"x402Version": 2,
+		"resources":   wellKnownResourcesForOffer(offer, offer.EffectiveOrigin(), "/"),
+	}
+	encoded, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return `{"x402Version":2,"resources":[]}`
+	}
+	return string(encoded)
+}
+
+// wellKnownResourcesForOffer builds one /.well-known/x402 resource entry per
+// paid route on offer, rooted at origin+pathPrefix. Shared by the per-offer
+// hostname-bound bundle (origin=offer.EffectiveOrigin(), pathPrefix="/") and
+// the aggregate storefront catalog's fallback document
+// (buildAggregateWellKnownX402 in render.go; origin=baseURL,
+// pathPrefix=offer.EffectivePath()) so both surfaces describe the same paid
+// operations identically.
+func wellKnownResourcesForOffer(offer *monetizeapi.ServiceOffer, origin, pathPrefix string) []any {
 	var resources []any
 	for _, rt := range offer.EffectiveRoutes() {
 		if rt.EffectiveGate() != monetizeapi.GatePaid {
 			continue
 		}
-		method := "POST"
+		method := defaultPaidMethod(offer, rt.Path)
 		if len(rt.Methods) > 0 {
 			method = strings.ToUpper(rt.Methods[0])
 		}
@@ -242,7 +295,7 @@ func buildOfferWellKnownX402(offer *monetizeapi.ServiceOffer) string {
 			desc = offerDescription(offer, "x402 payment-gated service.")
 		}
 		resources = append(resources, map[string]any{
-			"resource":    origin + joinOpenAPIPath("/", openAPIRelPathForOfferRoute(offer, rt.Path)),
+			"resource":    origin + joinOpenAPIPath(pathPrefix, openAPIRelPathForOfferRoute(offer, rt.Path)),
 			"type":        "http",
 			"method":      method,
 			"description": desc,
@@ -250,15 +303,7 @@ func buildOfferWellKnownX402(offer *monetizeapi.ServiceOffer) string {
 			"accepts":     accepts,
 		})
 	}
-	doc := map[string]any{
-		"x402Version": 2,
-		"resources":   resources,
-	}
-	encoded, err := json.MarshalIndent(doc, "", "  ")
-	if err != nil {
-		return `{"x402Version":2,"resources":[]}`
-	}
-	return string(encoded)
+	return resources
 }
 
 // wellKnownAccept renders one payment option in the 402-requirement shape
@@ -345,6 +390,9 @@ func buildOfferLandingHTML(offer *monetizeapi.ServiceOffer, profile schemas.Stor
 	var out strings.Builder
 	err := offerLandingTmpl.Execute(&out, map[string]any{
 		"Title": title,
+		// Agent-type offers get the embedded chat widget: the /chat and
+		// /chat-vendor.js Exact routes exist on the hostname iff IsAgent.
+		"ChatEnabled": offer.IsAgent(),
 		// Meta/OG tags keep the plain text; the body renders the markdown.
 		"Description":     desc,
 		"DescriptionHTML": storefront.RenderRichText(desc),

@@ -143,6 +143,8 @@ func TestRouteSurface_Golden_SkillMDListsEveryRoute(t *testing.T) {
 		"`POST https://example.com/services/audit/submit` — 0.5 USDC/request — Submit source for audit",
 		"`GET https://example.com/services/audit/jobs` — free (covers sub-paths)",
 		"`GET https://example.com/services/audit/reports` — free, wallet sign-in required (SIWX/EIP-4361 — see the offer's `/auth` page) (covers sub-paths)",
+		// Root-priced "/*": POST, because the offer root serves index.html on
+		// GET and only POST falls through to the payment gate.
 		"`POST https://example.com/services/audit` — 0.1 USDC/request (covers sub-paths)",
 		// Buy prompts + try-it must target the primary paid route, not the root.
 		"curl -i https://example.com/services/audit/submit",

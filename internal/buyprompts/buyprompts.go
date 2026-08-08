@@ -33,6 +33,15 @@ const (
 	PromptGenericLLM = "generic-llm"
 	// PromptCLI is the shell command a human runs from an obol-stack host.
 	PromptCLI = "cli"
+	// PromptAgentCash is pasted into an AgentCash-connected agent/wallet
+	// (Merit Systems MCP/CLI). Discovery: OpenAPI `x-payment-info` + `/.well-known/x402`.
+	PromptAgentCash = "agentcash"
+	// PromptPoncho is pasted into Poncho chat (https://tryponcho.com) — same
+	// Merit/AgentCash discovery + wallet-pay path.
+	PromptPoncho = "poncho"
+	// PromptBankr is pasted into Bankr chat or a Bankr-CLI agent.
+	// http: chat auto-pay. agent/inference: `bankr wallet sign` + long curl.
+	PromptBankr = "bankr"
 )
 
 // Input describes one purchasable service. All fields are display-ready
@@ -158,7 +167,10 @@ func modelOr(in Input, placeholder string) string {
 }
 
 func agentBlock(in Input) Block {
-	modelFlag := modelOr(in, "<model-id>")
+	// Deliberately no model anywhere: an Obol Agent runs its own pinned
+	// model, skills, and memory — the buyer never picks one, pay-agent takes
+	// no --model, and the agent ignores the chat-completions `model` field,
+	// so the wire example omits it too.
 	return Block{
 		CallShape: CallShape{
 			Method:    "POST",
@@ -171,8 +183,8 @@ func agentBlock(in Input) Block {
 				"Use the buy-x402 skill's `pay-agent` command to buy one round of work from this "+
 					"Obol Agent — it has its own skills, tools, and memory, not just a model. Edit the "+
 					"message, then run:\n\n"+
-					"pay-agent %s --model %q --message %q",
-				in.URL, modelFlag, task(in),
+					"pay-agent %s --message %q",
+				in.URL, task(in),
 			),
 			PromptGenericLLM: fmt.Sprintf(
 				"Help me call the Obol Agent at %s — it's an autonomous agent (tools + skills + memory), "+
@@ -186,8 +198,38 @@ func agentBlock(in Input) Block {
 				"python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py go %s --message %q",
 				in.URL, task(in),
 			),
+			PromptAgentCash: fmt.Sprintf(
+				"Call the Obol Agent at %s — gated by %s (OpenAPI `x-payment-info` + `/.well-known/x402`). "+
+					"POST %s with Content-Type application/json, client timeout ≥180s, and this body:\n"+
+					"```json\n{\"model\":%q,\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":%q}]}\n```\n"+
+					"Use AgentCash auto-pay (x402) — do not craft X-PAYMENT by hand. "+
+					"Treat as paid ONLY if the response includes a non-null payment receipt / tx hash "+
+					"(or X-PAYMENT-RESPONSE). If `payment` is null, report unpaid/failed — do not claim success.",
+				in.URL, GuideRef(in.SiteURL), ChatCompletionsURL(in.URL), modelOr(in, "hermes-agent"), task(in),
+			),
+			PromptPoncho: fmt.Sprintf(
+				"Call the Obol Agent at %s — gated by %s (OpenAPI `x-payment-info` + `/.well-known/x402`). "+
+					"POST %s with timeout ≥180s and body:\n"+
+					"```json\n{\"model\":%q,\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":%q}]}\n```\n"+
+					"Confirm the quoted payment. Treat as paid ONLY if a payment receipt / tx hash is shown; "+
+					"if payment is missing, report unpaid/failed.",
+				in.URL, GuideRef(in.SiteURL), ChatCompletionsURL(in.URL), modelOr(in, "hermes-agent"), task(in),
+			),
+			PromptBankr: fmt.Sprintf(
+				"Buy one turn from the Obol Agent at %s via Bankr CLI — not Bankr chat/Apps. "+
+					"1) Probe POST %s (body below) without payment; take ONE `accepts[]` entry and reuse it "+
+					"ENTIRE as the payment payload's `accepted` object — every field "+
+					"(scheme, network, maxAmountRequired, asset, payTo, maxTimeoutSeconds, extra). "+
+					"Do not rebuild or drop fields (`unsupported_scheme` means you stripped the entry). "+
+					"2) `bankr wallet sign` EIP-3009 with `validAfter=0` or `now-600` (never `now`), `validBefore=now+900`. "+
+					"3) Base64-encode the x402 v2 payload; curl POST with `X-PAYMENT`, `Content-Type: application/json`, "+
+					"`curl --max-time 300`, body:\n"+
+					"```json\n{\"model\":%q,\"stream\":true,\"messages\":[{\"role\":\"user\",\"content\":%q}]}\n```\n"+
+					"Treat as paid ONLY if `X-PAYMENT-RESPONSE` / a tx hash appears; on timeout check the chain explorer before retry.",
+				in.URL, ChatCompletionsURL(in.URL), modelOr(in, "hermes-agent"), task(in),
+			),
 		},
-		Example: ChatExample(in.URL, in.Model, in.TaskExample),
+		Example: ChatExample(in.URL, "", in.TaskExample),
 	}
 }
 
@@ -216,6 +258,27 @@ func inferenceBlock(in Input) Block {
 				in.URL, model, ChatCompletionsURL(in.URL), GuideRef(in.SiteURL),
 			),
 			PromptCLI: fmt.Sprintf("obol buy inference %s", in.URL),
+			PromptAgentCash: fmt.Sprintf(
+				"Call the remote LLM at %s (model %s) via POST %s, paid with %s "+
+					"(OpenAPI `x-payment-info` + `/.well-known/x402`). POST with `stream:true`, "+
+					"timeout ≥180s, body `{\"model\":%q,\"stream\":true,\"messages\":[...]}`. "+
+					"Use AgentCash auto-pay. Treat as paid ONLY if a non-null payment receipt / tx hash is returned.",
+				in.URL, model, ChatCompletionsURL(in.URL), GuideRef(in.SiteURL), model,
+			),
+			PromptPoncho: fmt.Sprintf(
+				"Call the remote LLM at %s (model %s) via POST %s, paid with %s "+
+					"(OpenAPI `x-payment-info` + `/.well-known/x402`). Body "+
+					"`{\"model\":%q,\"stream\":true,\"messages\":[...]}`, timeout ≥180s. "+
+					"Confirm payment; treat as paid ONLY if a receipt / tx hash is shown.",
+				in.URL, model, ChatCompletionsURL(in.URL), GuideRef(in.SiteURL), model,
+			),
+			PromptBankr: fmt.Sprintf(
+				"Buy the remote LLM at %s (model %s) at %s via Bankr CLI — not Bankr chat/Apps. "+
+					"Probe without payment; copy `accepts[]` network/amount/asset/payTo VERBATIM; "+
+					"`bankr wallet sign` EIP-3009 with `validAfter=0` or `now-600` (never `now`); "+
+					"curl with `X-PAYMENT`, `--max-time 300`, `stream:true`, body model=%q. Paid with %s.",
+				in.URL, model, ChatCompletionsURL(in.URL), model, GuideRef(in.SiteURL),
+			),
 		},
 		// The model field is required by chat-completions upstreams for
 		// inference offers, so the example keeps a placeholder when the
@@ -254,6 +317,24 @@ func httpBlock(in Input) Block {
 			PromptCLI: fmt.Sprintf(
 				"python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py go %s",
 				in.URL,
+			),
+			PromptAgentCash: fmt.Sprintf(
+				"Call the paid HTTP endpoint at %s once. It's gated by %s.%s%s "+
+					"This origin publishes AgentCash discovery (OpenAPI `x-payment-info` + `/.well-known/x402`). "+
+					"Use AgentCash auto-pay. Treat as paid ONLY if a non-null payment receipt / tx hash is returned.",
+				in.URL, GuideRef(in.SiteURL), priceClause, netClause,
+			),
+			PromptPoncho: fmt.Sprintf(
+				"Call the paid HTTP endpoint at %s once.%s%s "+
+					"Discovery: OpenAPI `x-payment-info` + `/.well-known/x402`. "+
+					"Confirm payment; treat as paid ONLY if a receipt / tx hash is shown.",
+				in.URL, priceClause, netClause,
+			),
+			PromptBankr: fmt.Sprintf(
+				"Buy the HTTP endpoint at %s with Bankr chat auto-pay.%s%s "+
+					"If chat returns `facilitator_error`, retry once; if it keeps failing, use "+
+					"`bankr wallet sign` with `validAfter=0` or `now-600`, then curl with `X-PAYMENT`.",
+				in.URL, priceClause, netClause,
 			),
 		},
 	}

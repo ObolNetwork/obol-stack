@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import type { ReactNode } from "react";
 import type { Service, ServicePayment } from "@/types";
 import { RichText } from "@/components/RichText";
 
@@ -61,8 +62,16 @@ function normalizeOfferType(t: string): "inference" | "agent" | "http" {
   return "http";
 }
 
-type Tab = "agent" | "other-ai" | "code";
+type Tab = "agent" | "external" | "code";
+type ExternalBuyerTool = "agentcash" | "poncho" | "bankr" | "generic-llm";
 const AGENT_TASK_PLACEHOLDER = "Summarise the README and list the top 3 risks.";
+
+const EXTERNAL_BUYER_TOOLS: { id: ExternalBuyerTool; label: string }[] = [
+  { id: "agentcash", label: "AgentCash" },
+  { id: "poncho", label: "Poncho" },
+  { id: "bankr", label: "Bankr" },
+  { id: "generic-llm", label: "Another AI" },
+];
 
 function resolvedAgentTask(task: string): string {
   return task.trim() || AGENT_TASK_PLACEHOLDER;
@@ -77,7 +86,7 @@ function resolvedAgentTask(task: string): string {
 // instructions.
 function buyPrompt(
   service: Service,
-  key: "obol-agent" | "generic-llm" | "cli",
+  key: "obol-agent" | "generic-llm" | "cli" | "agentcash" | "poncho" | "bankr",
   agentTask?: string,
 ): string | null {
   const raw = service.buy?.prompts?.[key];
@@ -116,6 +125,8 @@ ${buildAgentPayAgentCommand(endpoint, model, agentTask)}`;
 export function ServiceCard({ service }: { service: Service }) {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState<Tab>("agent");
+  const [externalTool, setExternalTool] =
+    useState<ExternalBuyerTool>("agentcash");
   const [copied, setCopied] = useState(false);
   const [agentTask, setAgentTask] = useState("");
 
@@ -249,7 +260,7 @@ export function ServiceCard({ service }: { service: Service }) {
         </div>
         {endpointOrigin(service.endpoint) ? (
           <div className="col-span-2">
-            <span className="text-text-muted">API docs</span>
+            <span className="block text-text-muted">API docs</span>
             <a
               // service.docsPath deep-links to this operation inside the
               // Scalar UI (anchor format is controller-published so the
@@ -340,14 +351,16 @@ export function ServiceCard({ service }: { service: Service }) {
               requireTask={needsAgentTask}
             />
           )}
-          {tab === "other-ai" && (
-            <BuyViaOtherAgent
+          {tab === "external" && (
+            <BuyViaExternalTool
               service={service}
               opt={opt}
               kind={kind}
               agentTask={agentTask}
               taskReady={taskReady}
               requireTask={needsAgentTask}
+              tool={externalTool}
+              onToolChange={setExternalTool}
             />
           )}
           {tab === "code" && (
@@ -369,11 +382,11 @@ export function ServiceCard({ service }: { service: Service }) {
 function TabBar({ tab, onChange }: { tab: Tab; onChange: (t: Tab) => void }) {
   const tabs: { id: Tab; label: string }[] = [
     { id: "agent", label: "Ask your Obol agent" },
-    { id: "other-ai", label: "Ask another AI agent" },
+    { id: "external", label: "Pay with a buyer tool" },
     { id: "code", label: "Buy with code" },
   ];
   return (
-    <div className="flex gap-1 border-b border-stroke">
+    <div className="flex flex-wrap gap-1 border-b border-stroke">
       {tabs.map((t) => {
         const active = t.id === tab;
         return (
@@ -474,13 +487,18 @@ function BuyViaObolAgent({
   );
 }
 
-function BuyViaOtherAgent({
+// BuyViaExternalTool is the single "Pay with a buyer tool" tab: a pill
+// selector (AgentCash / Poncho / Bankr / Another AI) picks which published
+// buy prompt + intro to show.
+function BuyViaExternalTool({
   service,
   opt,
   kind,
   agentTask,
   taskReady,
   requireTask,
+  tool,
+  onToolChange,
 }: {
   service: Service;
   opt: ServicePayment;
@@ -488,43 +506,60 @@ function BuyViaOtherAgent({
   agentTask: string;
   taskReady: boolean;
   requireTask: boolean;
+  tool: ExternalBuyerTool;
+  onToolChange: (t: ExternalBuyerTool) => void;
 }) {
-
   // Canonical prompts from the catalog buy block; inline strings are only
-  // fallbacks for pre-buy-block catalogs.
+  // fallbacks for pre-buy-block catalogs (these predate the agentcash/bankr
+  // keys too, so all three tools share the same generic fallback copy).
   let prompt: string;
   if (kind === "inference") {
     const model = service.model || "the advertised model";
     prompt =
-      buyPrompt(service, "generic-llm") ??
+      buyPrompt(service, tool) ??
       `${docsRef(service.endpoint)} I want to use the remote LLM at ${service.endpoint} (model ${model}) as a paid OpenAI-compatible chat-completions endpoint. Pre-sign a budget of EIP-3009 or Permit2 authorisations and POST chat-completions bodies with the X-PAYMENT header attached.`;
   } else if (kind === "agent") {
     // An agent runs its own pinned model server-side and ignores the request's
     // model field, so we don't tell the buyer which model it uses — the request
     // shape is what matters.
     prompt =
-      buyPrompt(service, "generic-llm", agentTask) ??
+      buyPrompt(service, tool, agentTask) ??
       `${docsRef(service.endpoint)} Help me call the Obol Agent at ${service.endpoint} — it's an autonomous agent (tools + skills + memory), not a raw LLM. POST OpenAI-style chat-completions JSON to ${service.endpoint}/v1/chat/completions with this user message in \`messages\`: {"role":"user","content":${quoteAgentTask(agentTask)}}. Attach a signed EIP-3009 or Permit2 authorisation as \`X-PAYMENT\`, and report what the agent does.`;
   } else {
     prompt =
-      buyPrompt(service, "generic-llm") ??
+      buyPrompt(service, tool) ??
       `I want to purchase a service offered by an Obol Agent at ${service.endpoint} for ${opt.price} on ${opt.network}. Please install the run-obol-stack skill from https://github.com/ObolNetwork/skills, ask me for permission to set up the obol stack, and use the buy-x402 skill to make the purchase on my behalf.`;
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
+      <div
+        className="inline-flex flex-wrap gap-1 rounded-lg border border-stroke bg-bg01 p-1"
+        role="tablist"
+        aria-label="Buyer tool"
+      >
+        {EXTERNAL_BUYER_TOOLS.map((t) => {
+          const active = tool === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => onToolChange(t.id)}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors cursor-pointer ${
+                active
+                  ? "bg-obol-green/15 text-obol-green border border-obol-green/30"
+                  : "text-text-body border border-transparent hover:text-text-light"
+              }`}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
       <p className="text-xs text-text-muted">
-        Paste this into Claude, ChatGPT, Gemini, or any AI agent with
-        internet access. The buy-x402 skill from{" "}
-        <a
-          href="https://github.com/ObolNetwork/skills"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-obol-green hover:underline"
-        >
-          ObolNetwork/skills
-        </a>{" "}
-        bootstraps the stack and asks for your permission before spending.
+        {externalBuyerIntro(tool, kind)}
       </p>
       <Snippet
         code={prompt}
@@ -533,6 +568,116 @@ function BuyViaOtherAgent({
       />
     </div>
   );
+}
+
+function externalBuyerIntro(
+  tool: ExternalBuyerTool,
+  kind: "inference" | "agent" | "http",
+): ReactNode {
+  switch (tool) {
+    case "agentcash":
+      return (
+        <>
+          Paste this into your{" "}
+          <a
+            href="https://agentcash.dev"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-obol-green hover:underline"
+          >
+            AgentCash
+          </a>
+          -connected agent. This origin already publishes AgentCash&apos;s
+          discovery convention — OpenAPI{" "}
+          <code className="font-mono text-obol-green">x-payment-info</code>{" "}
+          plus a{" "}
+          <code className="font-mono text-obol-green">/.well-known/x402</code>{" "}
+          fallback — so it can price this call automatically.
+        </>
+      );
+    case "poncho":
+      // Merit consumer chat on the AgentCash micropayment layer — same
+      // discovery as AgentCash, not Bankr's scoped auto-pay. Agent offers
+      // still need a long client timeout.
+      return (
+        <>
+          Paste this into{" "}
+          <a
+            href="https://tryponcho.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-obol-green hover:underline"
+          >
+            Poncho
+          </a>{" "}
+          chat. Poncho uses AgentCash micropayments and the same OpenAPI{" "}
+          <code className="font-mono text-obol-green">x-payment-info</code> /{" "}
+          <code className="font-mono text-obol-green">/.well-known/x402</code>{" "}
+          discovery — enable the USDC wallet if asked
+          {kind === "http"
+            ? ""
+            : ", and keep the client timeout ≥180s for agent/LLM calls"}
+          .
+        </>
+      );
+    case "bankr":
+      // HTTP: paste into Bankr chat — auto-pay works for fast endpoints.
+      // Agent/inference: Cursor + `bankr wallet sign` + long curl (chat/Apps
+      // hit ~30s `rpc timeout`).
+      if (kind === "http") {
+        return (
+          <>
+            Paste this into{" "}
+            <a
+              href="https://skills.bankr.bot"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-obol-green hover:underline"
+            >
+              Bankr
+            </a>{" "}
+            chat (or Max Mode) — prefer chat auto-pay for this fast HTTP
+            offer. Do not ask chat to run{" "}
+            <code className="font-mono text-obol-green">bankr wallet sign</code>
+            ; if auto-pay keeps failing, use a Bankr-CLI agent instead.
+          </>
+        );
+      }
+      return (
+        <>
+          Paste this into a{" "}
+          <a
+            href="https://skills.bankr.bot"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-obol-green hover:underline"
+          >
+            Bankr
+          </a>
+          -CLI agent (e.g. Cursor) — not Bankr chat auto-pay and not a Bankr
+          App. This prompt uses{" "}
+          <code className="font-mono text-obol-green">bankr wallet sign</code>
+          {" + ≥180s curl (Bankr chat/Apps hit `rpc timeout` at ~30s on agent offers)"}
+          ; check BaseScan before any retry.
+        </>
+      );
+    case "generic-llm":
+      return (
+        <>
+          Paste this into Claude, ChatGPT, Gemini, or any AI agent with
+          internet access. The buy-x402 skill from{" "}
+          <a
+            href="https://github.com/ObolNetwork/skills"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-obol-green hover:underline"
+          >
+            ObolNetwork/skills
+          </a>{" "}
+          bootstraps the stack and asks for your permission before spending.
+        </>
+      );
+  }
 }
 
 function BuyWithCode({

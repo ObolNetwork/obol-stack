@@ -29,6 +29,9 @@ type PricingConfig struct {
 
 	// Routes defines per-route pricing rules. First match wins.
 	Routes []RouteRule `yaml:"routes"`
+
+	// AuthCaptureUnlock configures the optional paid agent-unlock endpoint.
+	AuthCaptureUnlock *AuthCaptureUnlockConfig `yaml:"authCaptureUnlock,omitempty"`
 }
 
 // RoutePayment is one accepted payment option for a route — a single

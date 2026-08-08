@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"math/big"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -25,6 +24,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/agentcrd"
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/images"
@@ -4872,33 +4872,12 @@ func createHostService(cfg *config.Config, name, ns, port string) error {
 // For k3s (bare-metal) the host is localhost; for k3d the host is
 // reachable via Docker networking.
 func resolveHostIP(cfg *config.Config) (string, error) {
-	// Check if this is a k3s (bare-metal) backend — host is localhost.
-	if backend := stack.DetectExistingBackend(cfg); backend == stack.BackendK3s {
-		return "127.0.0.1", nil
-	}
-
-	// k3d / Docker: try DNS resolution of host.docker.internal or host.k3d.internal.
-	for _, host := range []string{"host.docker.internal", "host.k3d.internal"} {
-		if addrs, err := net.LookupHost(host); err == nil && len(addrs) > 0 {
-			return addrs[0], nil
-		}
-	}
-	// macOS Docker Desktop fallback: well-known VM gateway.
-	if runtime.GOOS == "darwin" {
-		return "192.168.65.254", nil
-	}
-	// Linux fallback: docker0 bridge IP.
-	if iface, err := net.InterfaceByName("docker0"); err == nil {
-		if addrs, err := iface.Addrs(); err == nil {
-			for _, addr := range addrs {
-				if ipNet, ok := addr.(*net.IPNet); ok && ipNet.IP.To4() != nil {
-					return ipNet.IP.String(), nil
-				}
-			}
-		}
-	}
-
-	return "", errors.New("cannot determine host IP; ensure Docker is running or using k3s backend")
+	// Delegates to the same resolver `obol stack up` uses for the ollama
+	// Endpoints. This used to be a second copy of that strategy, which drifted:
+	// it returned 127.0.0.1 for the k3s backend, and Kubernetes rejects
+	// loopback addresses in Endpoints (enforced since v1.33) — which is exactly
+	// what this result is used to build. One resolver, one loopback guard.
+	return stackdefaults.OllamaHostIPForBackend(stack.DetectExistingBackend(cfg))
 }
 
 // buildInferenceServiceOfferSpec builds a ServiceOffer spec for a host-side

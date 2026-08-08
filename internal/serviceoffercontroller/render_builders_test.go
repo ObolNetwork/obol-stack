@@ -103,7 +103,7 @@ func TestBuildAgentIdentityRegistrationDeployment_RestrictedPSS(t *testing.T) {
 // TestBuildStaticSiteConfigMap: exposes skill.md + services.json + openapi.json
 // + api docs HTML + httpd conf.
 func TestBuildStaticSiteConfigMap(t *testing.T) {
-	cm := buildStaticSiteConfigMap("# Catalog", `{"displayName":"Acme","tagline":"t","logoUrl":"https://x/logo.png","services":[{"name":"a"}]}`, `{"openapi":"3.1.0"}`, "<html>shell</html>", nil)
+	cm := buildStaticSiteConfigMap("# Catalog", `{"displayName":"Acme","tagline":"t","logoUrl":"https://x/logo.png","services":[{"name":"a"}]}`, `{"openapi":"3.1.0"}`, "<html>shell</html>", `{"x402Version":2,"resources":[]}`, nil)
 
 	if cm.GetName() != staticSiteConfigMapName {
 		t.Errorf("name = %q, want %q", cm.GetName(), staticSiteConfigMapName)
@@ -121,11 +121,19 @@ func TestBuildStaticSiteConfigMap(t *testing.T) {
 	if data["openapi.json"] != `{"openapi":"3.1.0"}` {
 		t.Errorf("openapi.json payload mismatch, got %v", data["openapi.json"])
 	}
+	if data["x402.json"] != `{"x402Version":2,"resources":[]}` {
+		t.Errorf("x402.json payload mismatch, got %v", data["x402.json"])
+	}
 	if data["api.html"] != "<html>shell</html>" {
 		t.Errorf("api.html payload mismatch, got %v", data["api.html"])
 	}
 	if conf, _ := data["httpd.conf"].(string); !strings.Contains(conf, ".md:text/markdown") || !strings.Contains(conf, ".json:application/json") || !strings.Contains(conf, ".html:text/html") {
 		t.Errorf("httpd.conf missing required mime mappings: %q", conf)
+	}
+	// Text types must declare charset=utf-8 or UTF-8 content (em dashes,
+	// accented descriptions) renders as Latin-1 mojibake.
+	if conf, _ := data["httpd.conf"].(string); !strings.Contains(conf, ".md:text/markdown; charset=utf-8") || !strings.Contains(conf, ".html:text/html; charset=utf-8") {
+		t.Errorf("httpd.conf text types missing charset=utf-8: %q", conf)
 	}
 	// Managed-by label so the controller owns cleanup on uninstall.
 	lbls, _ := cm.Object["metadata"].(map[string]any)["labels"].(map[string]any)
@@ -164,6 +172,7 @@ func TestBuildStaticSiteDeployment(t *testing.T) {
 	expectedPaths := map[string]string{
 		"services.json": "api/services.json",
 		"openapi.json":  "openapi.json",
+		"x402.json":     "wellknown-x402.json",
 		"api.html":      "api/index.html",
 	}
 	foundPaths := map[string]string{}

@@ -28,6 +28,12 @@ const (
 	containerName = "obol-dns"
 	dnsImage      = "alpine:3.21"
 	domain        = "obol.stack"
+	// StorefrontPreviewHostname is the local-only operator storefront preview
+	// origin. Like domain it is a fixed property of every local stack, so
+	// EnsureHostsEntries always emits it — the managed block is replaced
+	// wholesale on each call, and callers that only know about agent
+	// hostnames would otherwise drop it (see internal/hermes, internal/openclaw).
+	StorefrontPreviewHostname = "storefront-preview.obol.stack"
 
 	// OS name constants for runtime.GOOS comparisons.
 	osDarwin = "darwin"
@@ -134,14 +140,16 @@ func isValidHostname(h string) bool {
 	return validHostnameRegex.MatchString(h)
 }
 
-// EnsureHostsEntries adds /etc/hosts entries for the given hostnames.
-// Always includes "obol.stack" plus any additional hostnames (e.g. openclaw subdomains).
-// Entries are idempotent — existing managed block is replaced.
-func EnsureHostsEntries(hostnames []string) error {
-	// Always include the base domain.
-	all := []string{domain}
+// buildHostsBlock renders the managed /etc/hosts block for the given hostnames.
+//
+// The base domain and the storefront preview origin are always emitted: this
+// function replaces the managed block wholesale, and most callers only know
+// about agent hostnames, so anything not unconditional here gets dropped by
+// whichever caller writes last.
+func buildHostsBlock(hostnames []string) string {
+	all := []string{domain, StorefrontPreviewHostname}
 
-	seen := map[string]bool{domain: true}
+	seen := map[string]bool{domain: true, StorefrontPreviewHostname: true}
 	for _, h := range hostnames {
 		if h != "" && !seen[h] && isValidHostname(h) {
 			all = append(all, h)
@@ -149,7 +157,6 @@ func EnsureHostsEntries(hostnames []string) error {
 		}
 	}
 
-	// Build the managed block.
 	var block strings.Builder
 	block.WriteString(hostsMarkerBegin + "\n")
 
@@ -158,6 +165,16 @@ func EnsureHostsEntries(hostnames []string) error {
 	}
 
 	block.WriteString(hostsMarkerEnd + "\n")
+
+	return block.String()
+}
+
+// EnsureHostsEntries adds /etc/hosts entries for the given hostnames.
+// Always includes "obol.stack" plus any additional hostnames (e.g. openclaw subdomains).
+// Entries are idempotent — existing managed block is replaced.
+func EnsureHostsEntries(hostnames []string) error {
+	block := strings.Builder{}
+	block.WriteString(buildHostsBlock(hostnames))
 
 	data, err := os.ReadFile(hostsFile)
 	if err != nil {

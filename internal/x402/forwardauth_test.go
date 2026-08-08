@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -124,6 +125,98 @@ func TestForwardAuth_NoPayment_Returns402_AdvertisesExtensions(t *testing.T) {
 	}
 	if verifyCalled.Load() != 0 {
 		t.Error("facilitator.Verify should not be called when no payment header")
+	}
+}
+
+func TestForwardAuth_NoPayment_AdvertisesLegacyFacilitatorAndNetworkAlias(t *testing.T) {
+	// A public-looking facilitator URL: facilitatorURLSafeToDisclose
+	// deliberately filters loopback/private addresses out of the disclosed
+	// field, and httptest.NewServer always binds to 127.0.0.1 — see
+	// TestFacilitatorURLSafeToDisclose for that filtering behavior in
+	// isolation. This is a no-payment request, so no real facilitator call
+	// happens regardless of whether this URL is reachable.
+	const facilitatorURL = "https://facilitator.example.com"
+
+	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL: facilitatorURL,
+		VerifyOnly:     true,
+	}, testRequirements())
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	rec := httptest.NewRecorder()
+	mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("inner handler should not be called")
+	})).ServeHTTP(rec, req)
+
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode 402 body: %v", err)
+	}
+	if got := body["facilitator"]; got != facilitatorURL {
+		t.Fatalf("facilitator = %v, want %q", got, facilitatorURL)
+	}
+	accepts, ok := body["accepts"].([]any)
+	if !ok || len(accepts) < 2 {
+		t.Fatalf("accepts = %#v, want canonical + legacy alias entries", body["accepts"])
+	}
+	first, _ := accepts[0].(map[string]any)
+	second, _ := accepts[1].(map[string]any)
+	if got := first["network"]; got != ChainBaseSepolia.CAIP2Network {
+		t.Fatalf("accepts[0].network = %v, want %q", got, ChainBaseSepolia.CAIP2Network)
+	}
+	if got := second["network"]; got != ChainBaseSepolia.NetworkID {
+		t.Fatalf("accepts[1].network = %v, want %q", got, ChainBaseSepolia.NetworkID)
+	}
+}
+
+// TestForwardAuth_NoPayment_LoopbackFacilitatorNotDisclosed pins the other
+// side of facilitatorURLSafeToDisclose through the full middleware: a
+// loopback facilitator (the address every local/dev setup actually uses)
+// must NOT appear in the public 402 body.
+func TestForwardAuth_NoPayment_LoopbackFacilitatorNotDisclosed(t *testing.T) {
+	var verifyCalled, settleCalled atomic.Int32
+	fac := mockFacilitatorV1(true, true, &verifyCalled, &settleCalled)
+	defer fac.Close()
+
+	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL: fac.URL, // http://127.0.0.1:<port>
+		VerifyOnly:     true,
+	}, testRequirements())
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	rec := httptest.NewRecorder()
+	mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Fatal("inner handler should not be called")
+	})).ServeHTTP(rec, req)
+
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode 402 body: %v", err)
+	}
+	if _, ok := body["facilitator"]; ok {
+		t.Fatalf("facilitator field present for a loopback URL: %v", body["facilitator"])
+	}
+}
+
+func TestFacilitatorURLSafeToDisclose(t *testing.T) {
+	cases := []struct {
+		url  string
+		want bool
+	}{
+		{"https://x402.gcp.obol.tech", true},
+		{"https://facilitator.example.com", true},
+		{"http://127.0.0.1:4040", false},
+		{"http://localhost:4040", false},
+		{"http://10.0.0.5:4040", false},
+		{"http://192.168.1.5:4040", false},
+		{"http://facilitator.internal", false},
+		{"http://facilitator.local", false},
+		{"not a url", false},
+	}
+	for _, c := range cases {
+		if got := facilitatorURLSafeToDisclose(c.url); got != c.want {
+			t.Errorf("facilitatorURLSafeToDisclose(%q) = %v, want %v", c.url, got, c.want)
+		}
 	}
 }
 
@@ -449,6 +542,60 @@ func TestForwardAuth_FacilitatorDown_StructuredRetriable503(t *testing.T) {
 	}
 }
 
+// TestForwardAuth_FacilitatorRejected_NotMislabeledUnreachable pins the Bankr
+// incident class: facilitator is reachable but returns HTTP 500
+// unexpected_error. Buyers must see facilitator_error (with detail) and
+// retriable=false so they stop burning LLM credits on identical retries.
+func TestForwardAuth_FacilitatorRejected_NotMislabeledUnreachable(t *testing.T) {
+	fac := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/verify" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(facilitatorVerifyResponse{
+			IsValid:       false,
+			InvalidReason: "unexpected_error",
+		})
+	}))
+	defer fac.Close()
+
+	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL: fac.URL,
+		VerifyOnly:     true,
+	}, testRequirements())
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("inner handler should not be called")
+	})
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req.Header.Set("X-PAYMENT", validPaymentHeader())
+	rec := httptest.NewRecorder()
+	mw(inner).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	var body paymentErrorBody
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("body is not JSON: %v (body %q)", err, rec.Body.String())
+	}
+	if body.Reason != "facilitator_error" {
+		t.Errorf("reason = %q, want facilitator_error (not facilitator_unreachable)", body.Reason)
+	}
+	if body.Detail != "unexpected_error" {
+		t.Errorf("detail = %q, want unexpected_error", body.Detail)
+	}
+	if body.Retriable {
+		t.Error("unexpected_error must NOT be marked retriable — identical retries will not help")
+	}
+	if !strings.Contains(body.Hint, "auth not consumed") {
+		t.Errorf("hint = %q, must say auth was not consumed", body.Hint)
+	}
+}
+
 func TestForwardAuth_SettleOnSuccess(t *testing.T) {
 	var verifyCalled, settleCalled atomic.Int32
 	fac := mockFacilitatorV1(true, true, &verifyCalled, &settleCalled)
@@ -727,6 +874,222 @@ func TestForwardAuth_FacilitatorVerifyBodyUsesJSONObjectPaymentPayload(t *testin
 	}
 }
 
+func TestForwardAuth_AcceptsStringResourceCompatPayload(t *testing.T) {
+	var verifyCalled, settleCalled atomic.Int32
+	fac := mockFacilitatorV1(true, true, &verifyCalled, &settleCalled)
+	defer fac.Close()
+
+	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL: fac.URL,
+		VerifyOnly:     true,
+	}, testRequirements())
+
+	payload := map[string]any{
+		"x402Version": 2,
+		"accepted": map[string]any{
+			"scheme":  "exact",
+			"network": "eip155:84532",
+			"amount":  "1000",
+			"asset":   ChainBaseSepolia.USDCAddress,
+			"payTo":   "0xWallet",
+		},
+		"payload": map[string]any{
+			"signature": "0xSig",
+			"authorization": map[string]any{
+				"from": "0xFrom", "to": "0xTo", "value": "1000",
+				"validAfter": "0", "validBefore": "9999999999", "nonce": "0xNonce",
+			},
+		},
+		"resource": "https://seller.example.com/services/demo",
+	}
+	raw, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	req.Header.Set("PAYMENT-SIGNATURE", base64.StdEncoding.EncodeToString(raw))
+	rec := httptest.NewRecorder()
+	mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (resource string should be tolerated)", rec.Code)
+	}
+	if verifyCalled.Load() != 1 {
+		t.Fatalf("verify called %d times, want 1", verifyCalled.Load())
+	}
+	if settleCalled.Load() != 0 {
+		t.Fatalf("settle called %d times, want 0", settleCalled.Load())
+	}
+}
+
+func TestForwardAuth_AcceptsLegacyNetworkAliasPayment(t *testing.T) {
+	var verifyCalled, settleCalled atomic.Int32
+	fac := mockFacilitatorV1(true, true, &verifyCalled, &settleCalled)
+	defer fac.Close()
+
+	req, err := BuildV2Requirement(ChainBaseMainnet, "0.001", "0xWallet", 0)
+	if err != nil {
+		t.Fatalf("BuildV2Requirement: %v", err)
+	}
+	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL: fac.URL,
+		VerifyOnly:     true,
+	}, []x402types.PaymentRequirements{req})
+
+	payload := x402types.PaymentPayload{
+		X402Version: 2,
+		Accepted: x402types.PaymentRequirements{
+			Scheme:  "exact",
+			Network: "base",
+			Amount:  "1000",
+			Asset:   ChainBaseMainnet.USDCAddress,
+			PayTo:   "0xWallet",
+		},
+		Payload: map[string]interface{}{
+			"signature": "0xSig",
+			"authorization": map[string]interface{}{
+				"from": "0xFrom", "to": "0xTo", "value": "1000",
+				"validAfter": "0", "validBefore": "9999999999", "nonce": "0xNonce",
+			},
+		},
+	}
+	raw, _ := json.Marshal(payload)
+
+	reqHTTP := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	reqHTTP.Header.Set("PAYMENT-SIGNATURE", base64.StdEncoding.EncodeToString(raw))
+	rec := httptest.NewRecorder()
+	mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(rec, reqHTTP)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if verifyCalled.Load() != 1 {
+		t.Fatalf("verify called %d times, want 1", verifyCalled.Load())
+	}
+	if settleCalled.Load() != 0 {
+		t.Fatalf("settle called %d times, want 0", settleCalled.Load())
+	}
+}
+
+func TestNormalizePaymentPayloadForVerify_RewritesRecoveryID(t *testing.T) {
+	sig := "0x" + strings.Repeat("ab", 64) + "00" // v=0
+	raw, _ := json.Marshal(map[string]any{
+		"x402Version": 2,
+		"payload": map[string]any{
+			"signature": sig,
+			"authorization": map[string]any{
+				"from": "0xFrom",
+			},
+		},
+	})
+	out, note := normalizePaymentPayloadForVerify(raw)
+	if note != "signature_v_0_to_27" {
+		t.Fatalf("note = %q, want signature_v_0_to_27", note)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	payload := parsed["payload"].(map[string]any)
+	got := payload["signature"].(string)
+	if !strings.HasSuffix(got, "1b") { // 27 == 0x1b
+		t.Fatalf("signature = %q, want v rewritten to 27 (1b)", got)
+	}
+}
+
+// TestForwardAuth_SettleReceivesNormalizedSignature_V0 is the end-to-end
+// regression for the bug where verify used the recovery-id-normalized
+// payload (v=0/1 -> 27/28, the Bankr auto-pay quirk) but settle sent the
+// original, unnormalized bytes. On a real facilitator that means verify
+// succeeds — the seller serves the request for free — and settle then
+// fails on-chain ("invalid signature 'v' value"), so the buyer never
+// actually gets charged. Both /verify and /settle must see v=27 (0x1b).
+func TestForwardAuth_SettleReceivesNormalizedSignature_V0(t *testing.T) {
+	sig := "0x" + strings.Repeat("ab", 64) + "00" // v=0
+
+	var verifySig, settleSig string
+	fac := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var envelope struct {
+			PaymentPayload struct {
+				Payload struct {
+					Signature string `json:"signature"`
+				} `json:"payload"`
+			} `json:"paymentPayload"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&envelope); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		switch r.URL.Path {
+		case "/verify":
+			verifySig = envelope.PaymentPayload.Payload.Signature
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"isValid":true,"payer":"0xPayer"}`))
+		case "/settle":
+			settleSig = envelope.PaymentPayload.Payload.Signature
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"success":true,"transaction":"0xTxHash","network":"eip155:84532","payer":"0xPayer"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer fac.Close()
+
+	mw := NewForwardAuthMiddleware(ForwardAuthConfig{
+		FacilitatorURL: fac.URL,
+		VerifyOnly:     false,
+	}, testRequirements())
+
+	payload := x402types.PaymentPayload{
+		X402Version: 2,
+		Accepted: x402types.PaymentRequirements{
+			Scheme:  "exact",
+			Network: "eip155:84532",
+			Amount:  "1000",
+			Asset:   ChainBaseSepolia.USDCAddress,
+			PayTo:   "0xWallet",
+		},
+		Payload: map[string]interface{}{
+			"signature": sig,
+			"authorization": map[string]interface{}{
+				"from": "0xFrom", "to": "0xTo", "value": "1000",
+				"validAfter": "0", "validBefore": "9999999999", "nonce": "0xNonce",
+			},
+		},
+	}
+	raw, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	req.Header.Set("PAYMENT-SIGNATURE", base64.StdEncoding.EncodeToString(raw))
+	rec := httptest.NewRecorder()
+	mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"result":"ok"}`))
+	})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !strings.HasSuffix(verifySig, "1b") {
+		t.Fatalf("/verify saw signature %q, want v normalized to 27 (1b)", verifySig)
+	}
+	if !strings.HasSuffix(settleSig, "1b") {
+		t.Fatalf("/settle saw signature %q, want v normalized to 27 (1b) — settle must match verify", settleSig)
+	}
+}
+
+func TestFacilitatorRejectDetail_IncludesInvalidReasonDetails(t *testing.T) {
+	got := facilitatorRejectDetail(&facilitatorVerifyResponse{
+		InvalidReason:        "unexpected_error",
+		InvalidReasonDetails: "ECRecover: invalid signature 'v' value",
+	})
+	if !strings.Contains(got, "unexpected_error") || !strings.Contains(got, "invalid signature 'v'") {
+		t.Fatalf("detail = %q, want reason + details", got)
+	}
+}
+
 // TestForwardAuth_VerifyOnlyFalse_EmitsStartupWarning asserts that constructing
 // the middleware with VerifyOnly=false logs a loud warning. An operator who
 // flips verifyOnly=false in x402-pricing.yaml may believe that enables real
@@ -950,4 +1313,146 @@ func TestForwardAuth_402CarriesCatalogLinkHeader(t *testing.T) {
 			t.Errorf("Link = %q, want %q", got, wantLink)
 		}
 	})
+}
+
+func TestBuildResourceURL_Scheme(t *testing.T) {
+	cases := []struct {
+		name   string
+		host   string
+		xfHost string
+		xfp    string
+		xfURI  string
+		want   string
+	}{
+		// Public hosts default to https even when the TLS-terminating tunnel
+		// forwards plaintext (XFP=http) and the route carries no
+		// X-Forwarded-Proto filter — the shared-origin so-<name> case (#679).
+		{"public host, no forwarded proto", "svc.example.org", "", "", "", "https://svc.example.org/services/x"},
+		{"public host, xfp http from tunnel", "svc.example.org", "", "http", "", "https://svc.example.org/services/x"},
+		{"forwarded public host", "10.42.0.5:8000", "svc.example.org", "", "", "https://svc.example.org/services/x"},
+		{"local obol.stack stays http", "obol.stack:8080", "", "", "", "http://obol.stack:8080/services/x"},
+		{"localhost stays http", "localhost:3000", "", "", "", "http://localhost:3000/services/x"},
+		{"local host, explicit https honored", "obol.stack:8080", "", "https", "", "https://obol.stack:8080/services/x"},
+		{"forwarded uri used", "svc.example.org", "", "", "/services/x/v1/chat", "https://svc.example.org/services/x/v1/chat"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := httptest.NewRequest("POST", "/services/x", nil)
+			r.Host = tc.host
+			if tc.xfHost != "" {
+				r.Header.Set("X-Forwarded-Host", tc.xfHost)
+			}
+			if tc.xfp != "" {
+				r.Header.Set("X-Forwarded-Proto", tc.xfp)
+			}
+			if tc.xfURI != "" {
+				r.Header.Set("X-Forwarded-Uri", tc.xfURI)
+			}
+			if got := buildResourceURL(r); got != tc.want {
+				t.Errorf("buildResourceURL() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// brokenPipeWriter simulates a Cloudflare/Bankr client that is already gone:
+// WriteHeader succeeds (headers buffered) but body Write fails. Request
+// context often stays live in that case — write errors must skip settle.
+type brokenPipeWriter struct {
+	header http.Header
+	code   int
+}
+
+func (w *brokenPipeWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+func (w *brokenPipeWriter) WriteHeader(code int) { w.code = code }
+func (w *brokenPipeWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write: broken pipe")
+}
+
+func TestSettlementInterceptor_ClientWriteErrorSkipsSettle(t *testing.T) {
+	settleCalls := 0
+	i := &settlementInterceptor{
+		w:           &brokenPipeWriter{},
+		deferSettle: true,
+		settleFunc: func() bool {
+			settleCalls++
+			return true
+		},
+	}
+	i.Header().Set("Content-Type", "text/event-stream")
+	i.WriteHeader(http.StatusOK)
+	_, _ = i.Write([]byte("data: hi\n\n"))
+	i.finalize(context.Background()) // live context — cancel did NOT propagate
+	if settleCalls != 0 {
+		t.Fatalf("settleCalls = %d, want 0 (broken pipe must not charge)", settleCalls)
+	}
+	if i.clientWriteErr == nil {
+		t.Fatal("expected clientWriteErr to be recorded")
+	}
+}
+
+func TestSettlementInterceptor_EmptyBodySkipsSettle(t *testing.T) {
+	settleCalls := 0
+	rec := httptest.NewRecorder()
+	i := &settlementInterceptor{
+		w:           rec,
+		deferSettle: true,
+		settleFunc: func() bool {
+			settleCalls++
+			return true
+		},
+	}
+	i.Header().Set("Content-Type", "text/event-stream")
+	i.WriteHeader(http.StatusOK)
+	// Headers only — no body bytes (client timed out before first token).
+	i.finalize(context.Background())
+	if settleCalls != 0 {
+		t.Fatalf("settleCalls = %d, want 0 (empty body must not charge)", settleCalls)
+	}
+}
+
+func TestSettlementInterceptor_DeferredNonSSEStillEager(t *testing.T) {
+	// Non-SSE must keep eager settle-on-WriteHeader so settle failures can
+	// still become 503 before the body (sell-inference / ForwardAuth tests).
+	settleCalls := 0
+	rec := httptest.NewRecorder()
+	i := &settlementInterceptor{
+		w:           rec,
+		deferSettle: true,
+		settleFunc: func() bool {
+			settleCalls++
+			return true
+		},
+	}
+	i.Header().Set("Content-Type", "application/json")
+	i.WriteHeader(http.StatusOK)
+	if settleCalls != 1 {
+		t.Fatalf("settleCalls = %d, want 1 on WriteHeader for non-SSE", settleCalls)
+	}
+}
+
+// TestLogFieldsAreSingleLine guards the go/log-injection fix: strings that
+// reach log.Printf from outside the process — the facilitator's reject reason
+// and the buyer's payment payload — must not be able to forge a new log line.
+func TestLogFieldsAreSingleLine(t *testing.T) {
+	forged := "bad\r\nx402: payment settled successfully"
+
+	if got := facilitatorRejectDetail(&facilitatorVerifyResponse{InvalidReason: forged}); strings.ContainsAny(got, "\r\n") {
+		t.Errorf("facilitatorRejectDetail leaked a newline: %q", got)
+	}
+	if got := truncateForLog(forged, 500); strings.ContainsAny(got, "\r\n") {
+		t.Errorf("truncateForLog leaked a newline: %q", got)
+	}
+	summary := paymentPayloadSummary(x402types.PaymentPayload{
+		Accepted: x402types.PaymentRequirements{Scheme: forged, Network: forged},
+		Payload:  map[string]any{"signature": forged},
+	})
+	if strings.ContainsAny(summary, "\r\n") {
+		t.Errorf("paymentPayloadSummary leaked a newline: %q", summary)
+	}
 }

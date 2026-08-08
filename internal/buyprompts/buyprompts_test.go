@@ -37,11 +37,11 @@ func TestBuild_ChatOffersTeachCanonicalPath(t *testing.T) {
 }
 
 // TestBuild_AllTypesCarryEveryPromptKey ensures every surface can rely on
-// the three standard prompt keys existing for every offer type.
+// the standard prompt keys existing for every offer type.
 func TestBuild_AllTypesCarryEveryPromptKey(t *testing.T) {
 	for _, typ := range []string{"agent", "inference", "http", "fine-tuning", "", "bogus"} {
 		block := Build(Input{Type: typ, URL: "https://s.example/services/x"})
-		for _, key := range []string{PromptObolAgent, PromptGenericLLM, PromptCLI} {
+		for _, key := range []string{PromptObolAgent, PromptGenericLLM, PromptCLI, PromptAgentCash, PromptPoncho, PromptBankr} {
 			if strings.TrimSpace(block.Prompts[key]) == "" {
 				t.Errorf("type %q: missing prompt %q", typ, key)
 			}
@@ -59,6 +59,91 @@ func TestBuild_UnknownTypeGetsHTTPSemantics(t *testing.T) {
 	}
 	if !strings.Contains(block.Prompts[PromptObolAgent], "`pay`") {
 		t.Errorf("unknown type obol-agent prompt should teach single-shot pay:\n%s", block.Prompts[PromptObolAgent])
+	}
+}
+
+// TestBuild_BankrPromptTeachesManualWalletSign pins type-specific Bankr copy:
+// agent/inference forbid chat/Apps auto-pay and teach `bankr wallet sign`;
+// http prefers Bankr chat auto-pay. Network fields come from accepts[] — never
+// a hardcoded chain id / explorer.
+func TestBuild_BankrPromptTeachesManualWalletSign(t *testing.T) {
+	for _, typ := range []string{"agent", "inference"} {
+		p := Build(Input{
+			Type:  typ,
+			URL:   "https://seller.example.com/services/demo",
+			Model: "claude-sonnet-4-6",
+		}).Prompts[PromptBankr]
+		for _, want := range []string{"bankr wallet sign", "validAfter", "accepts[]", "--max-time 300"} {
+			if !strings.Contains(p, want) {
+				t.Errorf("%s bankr prompt missing %q:\n%s", typ, want, p)
+			}
+		}
+		for _, forbid := range []string{"eip155:8453", "BaseScan", "alias `base`"} {
+			if strings.Contains(p, forbid) {
+				t.Errorf("%s bankr prompt must not hardcode network %q:\n%s", typ, forbid, p)
+			}
+		}
+	}
+
+	agent := Build(Input{
+		Type:  "agent",
+		URL:   "https://seller.example.com/services/demo",
+		Model: "claude-sonnet-4-6",
+	}).Prompts[PromptBankr]
+	for _, want := range []string{"maxTimeoutSeconds", "extra", "unsupported_scheme", "ENTIRE"} {
+		if !strings.Contains(agent, want) {
+			t.Errorf("agent bankr prompt missing full-accepts guidance %q:\n%s", want, agent)
+		}
+	}
+
+	httpPrompt := Build(Input{
+		Type:         "http",
+		URL:          "https://seller.example.com/services/demo",
+		PriceDisplay: "0.001 USDC per request",
+		NetworkLabel: "Base Sepolia",
+	}).Prompts[PromptBankr]
+	for _, want := range []string{"Bankr chat", "auto-pay", "0.001 USDC", "Base Sepolia"} {
+		if !strings.Contains(httpPrompt, want) {
+			t.Errorf("http bankr prompt missing %q:\n%s", want, httpPrompt)
+		}
+	}
+	if strings.Contains(httpPrompt, "not Bankr chat") {
+		t.Errorf("http bankr prompt must prefer chat auto-pay:\n%s", httpPrompt)
+	}
+}
+
+// TestBuild_PonchoPromptMirrorsMeritDiscovery pins Poncho as an AgentCash-
+// family buyer (shared x-payment-info discovery). The storefront tab labels
+// Poncho; the prompt itself is a direct order (no "paste into" framing).
+func TestBuild_PonchoPromptMirrorsMeritDiscovery(t *testing.T) {
+	httpPrompt := Build(Input{
+		Type: "http",
+		URL:  "https://seller.example.com/services/demo",
+	}).Prompts[PromptPoncho]
+	for _, want := range []string{"x-payment-info", "/.well-known/x402", "Call the paid HTTP endpoint"} {
+		if !strings.Contains(httpPrompt, want) {
+			t.Errorf("http poncho prompt missing %q:\n%s", want, httpPrompt)
+		}
+	}
+	for _, forbid := range []string{"Paste into", "tryponcho.com", "Help me"} {
+		if strings.Contains(httpPrompt, forbid) {
+			t.Errorf("http poncho prompt must be a direct order; still has %q:\n%s", forbid, httpPrompt)
+		}
+	}
+	agent := Build(Input{
+		Type:  "agent",
+		URL:   "https://seller.example.com/services/demo",
+		Model: "claude-sonnet-4-6",
+	}).Prompts[PromptPoncho]
+	for _, want := range []string{"≥180s", "/v1/chat/completions", "Call the Obol Agent"} {
+		if !strings.Contains(agent, want) {
+			t.Errorf("agent poncho prompt missing %q:\n%s", want, agent)
+		}
+	}
+	for _, forbid := range []string{"Paste into", "Help me"} {
+		if strings.Contains(agent, forbid) {
+			t.Errorf("agent poncho prompt must be a direct order; still has %q:\n%s", forbid, agent)
+		}
 	}
 }
 
@@ -90,5 +175,24 @@ func TestBuild_AgentPromptRunsAsIs(t *testing.T) {
 	}
 	if !strings.Contains(block.Prompts[PromptCLI], "buy.py go ") {
 		t.Errorf("cli prompt should use the go front door:\n%s", block.Prompts[PromptCLI])
+	}
+}
+
+// TestBuild_GenericLLMMatchesMainStyle pins that the generic-llm prompt stays
+// the concise main-branch wording (no external-tool digressions).
+func TestBuild_GenericLLMMatchesMainStyle(t *testing.T) {
+	agent := Build(Input{
+		Type: "agent", URL: "https://s.example/services/a", SiteURL: "https://s.example", Model: "m1",
+	}).Prompts[PromptGenericLLM]
+	if strings.Contains(agent, "AgentCash") || strings.Contains(agent, "Bankr") || strings.Contains(agent, "Poncho") {
+		t.Errorf("generic-llm must stay tool-agnostic:\n%s", agent)
+	}
+	http := Build(Input{
+		Type: "http", URL: "https://s.example/services/h", SiteURL: "https://s.example",
+		PriceDisplay: "0.001 USDC per request", NetworkLabel: "Base",
+	}).Prompts[PromptGenericLLM]
+	want := "Fetch it with no payment to read the 402 `accepts[]` pricing"
+	if !strings.Contains(http, want) {
+		t.Errorf("http generic-llm missing main-style accepts[] flow:\n%s", http)
 	}
 }

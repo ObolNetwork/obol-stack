@@ -33,7 +33,7 @@ func TestBuildBazaarExtension(t *testing.T) {
 		wantModel string
 	}{
 		{"inference", "llama-3-70b", "llama-3-70b"},
-		{"agent", "qwen3.5:9b", "qwen3.5:9b"},
+		{"agent", "qwen3.5:9b", "your-model-id"}, // agent model is internal — placeholder, never the real id
 		{"inference", "", "your-model-id"},
 		{"http", "", ""},
 		{"", "", ""}, // static config routes fall back to the generic shape

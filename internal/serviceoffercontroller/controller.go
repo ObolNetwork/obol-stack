@@ -1352,11 +1352,12 @@ func (c *Controller) reconcileStaticSite(ctx context.Context, override *monetize
 	// on tunnel restarts (the configMap informer re-enqueues every offer
 	// when tunnelURL changes — see enqueueDiscoveryRefresh).
 	openAPIJSON := buildOpenAPIDocument(offers, baseURL, resolvedProfile)
+	wellKnownX402JSON := buildAggregateWellKnownX402(offers, baseURL)
 	apiDocsHTML := scalarHTML(resolvedProfile)
-	bundles := buildOfferBundles(offers, resolvedProfile, c.upstreamOpenAPICache.get)
-	contentHash := computeStaticSiteContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)
+	bundles := buildOfferBundles(offers, resolvedProfile, c.upstreamOpenAPICache.getSettled, c.publishedStaticSiteData(ctx))
+	contentHash := computeStaticSiteContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML, wellKnownX402JSON, bundles)
 
-	unchanged, err := c.staticSiteContentUnchanged(ctx, content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)
+	unchanged, err := c.staticSiteContentUnchanged(ctx, content, servicesJSON, openAPIJSON, apiDocsHTML, wellKnownX402JSON, bundles)
 	if err != nil {
 		return err
 	}
@@ -1366,7 +1367,7 @@ func (c *Controller) reconcileStaticSite(ctx context.Context, override *monetize
 		return nil
 	}
 
-	if err := c.applyObject(ctx, c.configMaps.Namespace(staticSiteNamespace), buildStaticSiteConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)); err != nil {
+	if err := c.applyObject(ctx, c.configMaps.Namespace(staticSiteNamespace), buildStaticSiteConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML, wellKnownX402JSON, bundles)); err != nil {
 		return err
 	}
 	if err := c.applyObject(ctx, c.deployments.Namespace(staticSiteNamespace), buildStaticSiteDeployment(contentHash, bundles)); err != nil {
@@ -1387,6 +1388,9 @@ func (c *Controller) reconcileStaticSite(ctx context.Context, override *monetize
 		return err
 	}
 	if err := c.applyObject(ctx, c.httpRoutes.Namespace(staticSiteNamespace), buildOpenAPIHTTPRoute()); err != nil {
+		return err
+	}
+	if err := c.applyObject(ctx, c.httpRoutes.Namespace(staticSiteNamespace), buildWellKnownX402HTTPRoute()); err != nil {
 		return err
 	}
 	if err := c.applyObject(ctx, c.httpRoutes.Namespace(staticSiteNamespace), buildAPIDocsHTTPRoute()); err != nil {

@@ -42,11 +42,19 @@ var upstreamOpenAPIClient = &http.Client{
 // directly.
 var tryUpstreamOpenAPI = fetchUpstreamOpenAPI
 
+// offerHasProbeableUpstream reports whether this offer could ever serve an
+// upstream OpenAPI document. Agent and inference offers describe their own
+// wire format, and an offer with no upstream Service has nothing to probe.
+// For those a nil fetch is TERMINAL — there is no point retrying — whereas
+// for every other offer a nil is a transient miss. upstreamOpenAPICache.refresh
+// relies on that distinction to decide what it may cache.
+func offerHasProbeableUpstream(offer *monetizeapi.ServiceOffer) bool {
+	return offer != nil && !offer.IsAgent() && !offer.IsInference() &&
+		strings.TrimSpace(offer.Spec.Upstream.Service) != ""
+}
+
 func fetchUpstreamOpenAPI(offer *monetizeapi.ServiceOffer) map[string]any {
-	if offer == nil || offer.IsAgent() || offer.IsInference() {
-		return nil
-	}
-	if strings.TrimSpace(offer.Spec.Upstream.Service) == "" {
+	if !offerHasProbeableUpstream(offer) {
 		return nil
 	}
 	base := upstreamOpenAPIBase(offer)
@@ -147,18 +155,41 @@ type upstreamOpenAPICache struct {
 // get returns the cached doc, or nil if no fetch has completed yet for this
 // offer's current generation.
 func (c *upstreamOpenAPICache) get(offer *monetizeapi.ServiceOffer) map[string]any {
+	doc, _ := c.getSettled(offer)
+	return doc
+}
+
+// getSettled is get plus whether the cache has a SETTLED answer for this
+// offer — i.e. a fetch has completed at least once. A nil doc means two very
+// different things and callers that render discovery documents must tell them
+// apart:
+//
+//   - settled=true, doc=nil  → we probed and there is no upstream document.
+//     The route-table fallback is the correct, final answer.
+//   - settled=false          → we have not probed yet (the controller just
+//     started, or this offer has not reconciled since). Rendering the fallback
+//     here would publish a thinner document than the one already being served.
+//
+// The cache is process-local, so every controller restart begins unsettled for
+// every offer.
+func (c *upstreamOpenAPICache) getSettled(offer *monetizeapi.ServiceOffer) (map[string]any, bool) {
 	if offer == nil {
-		return nil
+		return nil, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.entries[offer.UID].doc
+	entry, ok := c.entries[offer.UID]
+	return entry.doc, ok
 }
 
 // refresh fetches (via fetch) and caches the result, but only when the
 // offer's generation has moved on from what's cached — a requeue with no
 // spec change (e.g. the 5s convergence retry, a tunnel URL change) reuses
 // the last-good result instead of hitting the upstream again.
+//
+// A failed probe on an offer that could serve a document is NOT cached; see
+// the comment at the nil check below. The cache holds last-GOOD results, so a
+// transient miss must not be allowed to pin the degraded fallback.
 func (c *upstreamOpenAPICache) refresh(offer *monetizeapi.ServiceOffer, fetch func(*monetizeapi.ServiceOffer) map[string]any) {
 	if offer == nil {
 		return
@@ -170,6 +201,20 @@ func (c *upstreamOpenAPICache) refresh(offer *monetizeapi.ServiceOffer, fetch fu
 		return
 	}
 	doc := fetch(offer)
+	if doc == nil && offerHasProbeableUpstream(offer) {
+		// A miss on an offer that COULD serve a document is transient — the
+		// upstream may still be rolling out, or the probe's short timeout may
+		// simply have been tight. Recording it would pin this generation to the
+		// route-table fallback until someone edits the CR, and because
+		// reconcileStaticSite rebuilds the shared bundle from this cache on
+		// every offer's reconcile, that one miss would also overwrite a good
+		// document for the whole stack. Leave the generation unrecorded so the
+		// next reconcile retries, and keep any last-good doc: stale beats
+		// silently collapsed. Offers that can never serve one (agent,
+		// inference, no upstream Service) still cache their nil below, so they
+		// are probed once per generation rather than on every reconcile.
+		return
+	}
 	c.mu.Lock()
 	if c.entries == nil {
 		c.entries = map[types.UID]upstreamOpenAPICacheEntry{}

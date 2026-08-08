@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,49 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 )
+
+func TestBuildStorefrontPreviewHTTPRouteSecurity(t *testing.T) {
+	route := buildStorefrontPreviewHTTPRoute()
+	data, err := json.Marshal(route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rendered := string(data)
+
+	for _, want := range []string{
+		`"hostnames":["storefront-preview.obol.stack"]`,
+		`"name":"Content-Security-Policy"`,
+		`frame-ancestors 'self' http://obol.stack:* https://obol.stack:*`,
+		`"name":"Permissions-Policy"`,
+		`camera=(), microphone=(), geolocation=(), payment=()`,
+		`"name":"X-Content-Type-Options","value":"nosniff"`,
+		`"name":"tunnel-storefront","port":3000`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("preview route missing %q:\n%s", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, `"hostnames":[]`) {
+		t.Fatalf("preview route must never become hostless:\n%s", rendered)
+	}
+}
+
+func TestStorefrontImageUsesPersistedDevTag(t *testing.T) {
+	t.Setenv("OBOL_DEVELOPMENT", "true")
+	cfg := &config.Config{ConfigDir: t.TempDir()}
+	if err := os.WriteFile(
+		filepath.Join(cfg.ConfigDir, ".dev-image-tag"),
+		[]byte("dev-abc1234"),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	const want = "ghcr.io/obolnetwork/obol-stack-public-storefront:dev-abc1234"
+	if got := storefrontImage(cfg); got != want {
+		t.Fatalf("storefrontImage() = %q, want %q", got, want)
+	}
+}
 
 func TestWaitReadyTimeout(t *testing.T) {
 	t.Setenv("FLOW_TUNNEL_TIMEOUT", "")
@@ -162,6 +206,7 @@ func TestBuildLocalManagedConfigYAMLDeduplicates(t *testing.T) {
 // every invocation (argv) to logPath and, for a `get serviceoffers.obol.org`
 // query, prints boundHostname as the sole offer-bound hostname -- just enough
 // to drive offerBoundHostnames()/DeleteStorefront() without a real cluster.
+// Apply stdin is appended so callers can assert which resources were published.
 func writeFakeKubectl(t *testing.T, cfg *config.Config, logPath, boundHostname string) {
 	t.Helper()
 	if err := os.MkdirAll(cfg.BinDir, 0o755); err != nil {
@@ -171,9 +216,14 @@ func writeFakeKubectl(t *testing.T, cfg *config.Config, logPath, boundHostname s
 echo "$@" >> %q
 case "$*" in
   *"get serviceoffers.obol.org"*) echo %q ;;
+  *apply*)
+    echo "---APPLY---" >> %q
+    cat >> %q
+    echo >> %q
+    ;;
 esac
 exit 0
-`, logPath, boundHostname)
+`, logPath, boundHostname, logPath, logPath, logPath)
 	if err := os.WriteFile(filepath.Join(cfg.BinDir, "kubectl"), []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake kubectl: %v", err)
 	}
@@ -181,11 +231,10 @@ exit 0
 
 // TestCreateStorefront_TearsDownWhenAllHostsOfferBound guards the Canary402
 // fix: when every hostname CreateStorefront was asked to serve turns out to
-// be offer-bound, it must tear down the previously-applied tunnel-storefront
-// HTTPRoute (via DeleteStorefront) instead of a no-op `return nil` that would
-// leave a stale, wider-hostname route on the cluster shadowing the offer's
-// own dedicated-origin route (equal PathPrefix-/ specificity, older route
-// wins the Gateway API tie).
+// be offer-bound, it must tear down the previously-applied public
+// tunnel-storefront HTTPRoute instead of leaving a stale wider-hostname
+// route shadowing the offer's dedicated-origin route. The local preview
+// renderer (Deployment/Service + storefront-preview route) is retained.
 func TestCreateStorefront_TearsDownWhenAllHostsOfferBound(t *testing.T) {
 	cfg := newHostnameTestConfig(t)
 	writeFakeKubeconfig(t, cfg)
@@ -206,8 +255,52 @@ func TestCreateStorefront_TearsDownWhenAllHostsOfferBound(t *testing.T) {
 	if !strings.Contains(log, "delete httproute/tunnel-storefront") {
 		t.Fatalf("CreateStorefront must tear down the stale tunnel-storefront HTTPRoute when every requested hostname is offer-bound; kubectl invocations:\n%s", log)
 	}
-	if strings.Contains(log, "apply") {
-		t.Fatalf("CreateStorefront must not re-apply the storefront HTTPRoute when every requested hostname is offer-bound; kubectl invocations:\n%s", log)
+	if !strings.Contains(log, "apply") {
+		t.Fatalf("CreateStorefront must retain the local storefront renderer when every requested hostname is offer-bound; kubectl invocations:\n%s", log)
+	}
+	if !strings.Contains(log, `"hostnames":["storefront-preview.obol.stack"]`) {
+		t.Fatalf("CreateStorefront must keep the local-only preview HTTPRoute; kubectl invocations:\n%s", log)
+	}
+	if strings.Contains(log, `"hostnames":["example.com"]`) {
+		t.Fatalf("CreateStorefront must not re-publish the public catch-all for offer-bound hostnames; kubectl invocations:\n%s", log)
+	}
+	if strings.Contains(log, "delete httproute/storefront-preview") ||
+		strings.Contains(log, "delete deployment/tunnel-storefront") ||
+		strings.Contains(log, "delete service/tunnel-storefront") {
+		t.Fatalf("CreateStorefront must not delete the local preview renderer when only public hosts are offer-bound; kubectl invocations:\n%s", log)
+	}
+}
+
+// TestDeleteStorefront_KeepsLocalPreview ensures tearing down the public
+// catch-all (tunnel delete / last quick-tunnel offer) still leaves the
+// operator branding editor a local renderer to iframe.
+func TestDeleteStorefront_KeepsLocalPreview(t *testing.T) {
+	cfg := newHostnameTestConfig(t)
+	writeFakeKubeconfig(t, cfg)
+
+	logPath := filepath.Join(cfg.ConfigDir, "kubectl.log")
+	writeFakeKubectl(t, cfg, logPath, "")
+
+	if err := DeleteStorefront(cfg); err != nil {
+		t.Fatalf("DeleteStorefront: %v", err)
+	}
+
+	logBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read kubectl log: %v", err)
+	}
+	log := string(logBytes)
+
+	if !strings.Contains(log, "delete httproute/tunnel-storefront") {
+		t.Fatalf("DeleteStorefront must remove the public catch-all; kubectl invocations:\n%s", log)
+	}
+	if strings.Contains(log, "delete httproute/storefront-preview") ||
+		strings.Contains(log, "delete deployment/tunnel-storefront") ||
+		strings.Contains(log, "delete service/tunnel-storefront") {
+		t.Fatalf("DeleteStorefront must not tear down the local preview renderer; kubectl invocations:\n%s", log)
+	}
+	if !strings.Contains(log, `"hostnames":["storefront-preview.obol.stack"]`) {
+		t.Fatalf("DeleteStorefront must re-ensure the local preview route; kubectl invocations:\n%s", log)
 	}
 }
 

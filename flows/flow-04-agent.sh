@@ -236,11 +236,17 @@ fi
 # dashboard host. Obol edge-redirects "/" → /auth/password-login so operators
 # can open the pretty host; Hermes's own /auth/login?provider=basic still 500s.
 # See docs/guides/hermes-dashboard-login.md.
-dash_code() { curl --resolve "${HERMES_DASHBOARD_HOST}:${ingress_port}:127.0.0.1" \
-    -s -o /dev/null -w "%{http_code}" --max-time 10 "$@" 2>/dev/null; }
+# Both helpers swallow curl's exit status and emit "000" on a connection
+# failure. lib.sh runs under `set -euo pipefail`, and these are called inside
+# command substitutions, so an unguarded curl exit 7 (CURLE_COULDNT_CONNECT)
+# aborts the ENTIRE flow at whichever probe hit it first — you lose every
+# remaining step and the report shows a truncated log rather than a failed
+# assertion. A dead ingress must fail these steps, not kill the run.
+dash_code() { local out; out=$(curl --resolve "${HERMES_DASHBOARD_HOST}:${ingress_port}:127.0.0.1" \
+    -s -o /dev/null -w "%{http_code}" --max-time 10 "$@" 2>/dev/null) || true; printf '%s' "${out:-000}"; }
 # -L follows redirect once so we can assert the pretty root lands on a non-500 page.
-dash_code_follow() { curl --resolve "${HERMES_DASHBOARD_HOST}:${ingress_port}:127.0.0.1" \
-    -s -o /dev/null -w "%{http_code}" --max-time 10 -L --max-redirs 3 "$@" 2>/dev/null; }
+dash_code_follow() { local out; out=$(curl --resolve "${HERMES_DASHBOARD_HOST}:${ingress_port}:127.0.0.1" \
+    -s -o /dev/null -w "%{http_code}" --max-time 10 -L --max-redirs 3 "$@" 2>/dev/null) || true; printf '%s' "${out:-000}"; }
 dash_status="" dash_protected="" dash_login="" dash_root="" dash_root_final=""
 for i in $(seq 1 15); do
     dash_status=$(dash_code "$HERMES_DASHBOARD_URL/api/status")

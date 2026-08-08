@@ -2,6 +2,7 @@ package x402
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -264,10 +265,15 @@ func TestVerifier_MultiPayment_AdvertisesAllAndSettlesChosen(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
 		t.Fatalf("parse 402 body: %v (body=%s)", err, w.Body.String())
 	}
-	if len(got.Accepts) != 2 {
-		t.Fatalf("accepts length = %d, want 2 (multi-currency offer)", len(got.Accepts))
+	if len(got.Accepts) != 4 {
+		// 2 payment options × (CAIP-2 + legacy network alias) for Bankr/legacy
+		// buyers — see legacyCompatRequirements.
+		t.Fatalf("accepts length = %d, want 4 (2 options × CAIP-2+legacy)", len(got.Accepts))
 	}
-	amounts := map[string]string{got.Accepts[0].PayTo: got.Accepts[0].Amount, got.Accepts[1].PayTo: got.Accepts[1].Amount}
+	amounts := map[string]string{}
+	for _, a := range got.Accepts {
+		amounts[a.PayTo] = a.Amount
+	}
 	if amounts[payToPrimary] != "1000" || amounts[payToSecond] != "2000" {
 		t.Fatalf("accepts amounts = %v, want primary→1000 secondary→2000", amounts)
 	}
@@ -627,6 +633,54 @@ func TestVerifier_HandleProxy_UpstreamFailure_DoesNotSettle(t *testing.T) {
 	}
 }
 
+// TestWriteUpstreamProxyError_ContextCanceled pins the Bankr/AgentCash
+// mislabel fix: client timeout after verify must NOT look like a payment
+// failure — structured JSON + X-Payment-Settled:false + 504.
+func TestWriteUpstreamProxyError_ContextCanceled(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeUpstreamProxyError(w, context.Canceled)
+	if w.Code != http.StatusGatewayTimeout {
+		t.Fatalf("status = %d, want 504", w.Code)
+	}
+	if w.Header().Get("X-Payment-Settled") != "false" {
+		t.Fatalf("X-Payment-Settled = %q, want false", w.Header().Get("X-Payment-Settled"))
+	}
+	if w.Header().Get("X-Payment-Verified") != "true" {
+		t.Fatalf("X-Payment-Verified = %q, want true", w.Header().Get("X-Payment-Verified"))
+	}
+	var body map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["reason"] != "client_timeout_or_disconnect" {
+		t.Fatalf("reason = %v", body["reason"])
+	}
+	if body["paymentSettled"] != false {
+		t.Fatalf("paymentSettled = %v, want false", body["paymentSettled"])
+	}
+	if body["paymentVerified"] != true {
+		t.Fatalf("paymentVerified = %v, want true", body["paymentVerified"])
+	}
+	if body["retriable"] != false {
+		t.Fatalf("retriable = %v, want false (no auto-retry storms)", body["retriable"])
+	}
+}
+
+func TestWriteUpstreamProxyError_Generic(t *testing.T) {
+	w := httptest.NewRecorder()
+	writeUpstreamProxyError(w, fmt.Errorf("connection reset"))
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", w.Code)
+	}
+	var body map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body["reason"] != "upstream_unavailable" {
+		t.Fatalf("reason = %v", body["reason"])
+	}
+}
+
 // TestVerifier_HandleProxy_StreamsSSEChunks proves the seller-gateway path
 // (Traefik → x402-verifier → upstream) preserves Server-Sent Events streaming
 // end-to-end. This is what makes `obol sell agent` usable as an OpenAI-
@@ -709,9 +763,6 @@ func TestVerifier_HandleProxy_StreamsSSEChunks(t *testing.T) {
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
 		t.Fatalf("Content-Type = %q, want text/event-stream*", ct)
 	}
-	if resp.Header.Get("X-PAYMENT-RESPONSE") == "" {
-		t.Fatal("expected X-PAYMENT-RESPONSE on a streaming success")
-	}
 
 	// Read each SSE event ("data: ...\n\n") and capture the elapsed time
 	// since the request started. If anything in the chain buffers the
@@ -762,11 +813,87 @@ func TestVerifier_HandleProxy_StreamsSSEChunks(t *testing.T) {
 			arrivals[0], arrivals[3], spread, 2*chunkGap, arrivals)
 	}
 
+	// Deferred settlement puts the receipt in HTTP trailers after the SSE
+	// body completes (so a mid-stream disconnect cannot have already charged).
+	_, _ = io.Copy(io.Discard, resp.Body)
+	receipt := resp.Header.Get("X-PAYMENT-RESPONSE")
+	if receipt == "" {
+		receipt = resp.Trailer.Get("X-PAYMENT-RESPONSE")
+	}
+	if receipt == "" {
+		t.Fatal("expected X-PAYMENT-RESPONSE header or trailer on a streaming success")
+	}
+
 	if fac.verifyCalls.Load() != 1 {
 		t.Fatalf("verify calls = %d, want 1", fac.verifyCalls.Load())
 	}
 	if fac.settleCalls.Load() != 1 {
-		t.Fatalf("settle calls = %d, want 1 (settle is one-shot per paid request, not per chunk)", fac.settleCalls.Load())
+		t.Fatalf("settle calls = %d, want 1 (settle is one-shot per paid request, after the stream completes)", fac.settleCalls.Load())
+	}
+}
+
+// TestVerifier_HandleProxy_NoSettleWhenClientCancelsMidStream proves the
+// deferred-settlement invariant: verify may succeed and upstream may even
+// start streaming, but a canceled client must not trigger /settle.
+func TestVerifier_HandleProxy_NoSettleWhenClientCancelsMidStream(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+
+	started := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\n"))
+		if flusher != nil {
+			flusher.Flush()
+		}
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer upstream.Close()
+
+	v := newTestVerifier(t, fac.URL, []RouteRule{{
+		Pattern:     "/services/demo/*",
+		Price:       "0.0001",
+		UpstreamURL: upstream.URL,
+		StripPrefix: "/services/demo",
+		OfferType:   "agent",
+	}})
+
+	srv := httptest.NewServer(http.HandlerFunc(v.HandleProxy))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, srv.URL+"/services/demo/v1/chat/completions", strings.NewReader(`{"stream":true}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("client.Do: %v", err)
+	}
+	// Wait until upstream has flushed the first SSE byte, then cancel —
+	// the old settle-on-WriteHeader path would already have charged here.
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("upstream never started streaming")
+	}
+	cancel()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+
+	// Give finalize a moment to observe the canceled context.
+	time.Sleep(50 * time.Millisecond)
+
+	if fac.verifyCalls.Load() != 1 {
+		t.Fatalf("verify calls = %d, want 1", fac.verifyCalls.Load())
+	}
+	if fac.settleCalls.Load() != 0 {
+		t.Fatalf("settle calls = %d, want 0 (mid-stream cancel must not charge)", fac.settleCalls.Load())
 	}
 }
 
