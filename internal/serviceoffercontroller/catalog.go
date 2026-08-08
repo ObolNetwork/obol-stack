@@ -40,7 +40,7 @@ func (c *Controller) listServiceOffersForCatalog(ctx context.Context, override *
 	return offers, nil
 }
 
-func skillCatalogContentMatches(cm *unstructured.Unstructured, content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) bool {
+func staticSiteContentMatches(cm *unstructured.Unstructured, content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) bool {
 	if cm == nil {
 		return false
 	}
@@ -75,22 +75,22 @@ func skillCatalogContentMatches(cm *unstructured.Unstructured, content, services
 	return true
 }
 
-func (c *Controller) skillCatalogContentUnchanged(ctx context.Context, content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) (bool, error) {
-	cm, err := c.configMaps.Namespace(skillCatalogNamespace).Get(ctx, skillCatalogConfigMapName, metav1.GetOptions{})
+func (c *Controller) staticSiteContentUnchanged(ctx context.Context, content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) (bool, error) {
+	cm, err := c.configMaps.Namespace(staticSiteNamespace).Get(ctx, staticSiteConfigMapName, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return skillCatalogContentMatches(cm, content, servicesJSON, openAPIJSON, apiDocsHTML, bundles), nil
+	return staticSiteContentMatches(cm, content, servicesJSON, openAPIJSON, apiDocsHTML, bundles), nil
 }
 
-func computeSkillCatalogContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) string {
+func computeStaticSiteContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML string, bundles []offerBundleFile) string {
 	return fmt.Sprintf("%x", md5Sum(content+servicesJSON+openAPIJSON+apiDocsHTML+bundleDigestInput(bundles)))[:8]
 }
 
-func skillCatalogDeployedContentHash(deployment *unstructured.Unstructured) string {
+func staticSiteDeployedContentHash(deployment *unstructured.Unstructured) string {
 	if deployment == nil {
 		return ""
 	}

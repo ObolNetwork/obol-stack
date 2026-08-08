@@ -76,6 +76,7 @@ func networkCommand(cfg *config.Config) *cli.Command {
 			networkAddCommand(cfg),
 			networkRemoveCommand(cfg),
 			networkStatusCommand(cfg),
+			networkERPCCommand(cfg),
 		},
 	}
 }
@@ -534,6 +535,91 @@ func networkStatusCommand(cfg *config.Config) *cli.Command {
 	}
 }
 
+// network erpc — durable operator eRPC config that survives stack up (#763).
+// Verbs match sell-info set/reset (host-side intent) + status.
+// ---------------------------------------------------------------------------
+
+func networkERPCCommand(cfg *config.Config) *cli.Command {
+	return &cli.Command{
+		Name:  "erpc",
+		Usage: "Manage durable operator eRPC config (host-side; re-applied on stack up so local baskets are not lost)",
+		Commands: []*cli.Command{
+			{
+				Name:  "set",
+				Usage: "Set durable eRPC config from a YAML file and merge it into the live ConfigMap",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:     "file",
+						Aliases:  []string{"f"},
+						Usage:    "YAML fragment: networks, upstreams, rateLimiters, cachePoliciesAdd (saved to $CONFIG_DIR/rpc/erpc-overlay.yaml)",
+						Required: true,
+					},
+				},
+				Action: func(_ context.Context, cmd *cli.Command) error {
+					return network.SetERPC(cfg, getUI(cmd), cmd.String("file"))
+				},
+			},
+			{
+				Name:  "status",
+				Usage: "Show the durable eRPC config on disk",
+				Action: func(_ context.Context, cmd *cli.Command) error {
+					u := getUI(cmd)
+					st, err := network.StatusERPC(cfg)
+					if err != nil {
+						return err
+					}
+					u.Printf("eRPC operator config\n")
+					u.Printf("====================\n\n")
+					u.Printf("Path: %s\n", st.Path)
+					if !st.Present {
+						u.Info("Status: not set")
+						u.Info("Set with: obol network erpc set -f <file.yaml>")
+						return nil
+					}
+					u.Printf("Status: set (v%d, hash %s)\n", st.Version, st.ContentHash)
+					switch st.ClusterSync {
+					case "":
+						u.Info("Cluster: unknown (could not reach cluster to check for drift)")
+					case network.ERPCSyncInSync:
+						u.Info("Cluster: in-sync")
+					case network.ERPCSyncNotApplied:
+						u.Warn("Cluster: not-applied (overlay is on disk but not on the live ConfigMap — run `obol network erpc set -f <file>` or `obol stack up`)")
+					default:
+						u.Warnf("Cluster: %s (live ConfigMap does not match the on-disk overlay — re-run `obol network erpc set -f <file>`)", st.ClusterSync)
+					}
+					u.Printf("Networks (%d):\n", st.NetworkCount)
+					for _, k := range st.NetworkKeys {
+						u.Printf("  - %s\n", k)
+					}
+					if st.NetworkCount == 0 {
+						u.Info("  (none)")
+					}
+					u.Printf("Upstreams (%d):\n", st.UpstreamCount)
+					for _, id := range st.UpstreamIDs {
+						u.Printf("  - %s\n", id)
+					}
+					if st.UpstreamCount == 0 {
+						u.Info("  (none)")
+					}
+					u.Printf("Rate-limit budgets: %d\n", st.BudgetCount)
+					u.Printf("Cache policies to add: %d\n", st.CachePolicyAdd)
+					return nil
+				},
+			},
+			{
+				Name:  "reset",
+				Usage: "Reset durable eRPC config (strip from live ConfigMap and delete host file)",
+				Action: func(_ context.Context, cmd *cli.Command) error {
+					return network.ResetERPC(cfg, getUI(cmd))
+				},
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			return cli.ShowSubcommandHelp(cmd)
+		},
+	}
+}
+
 // chainIDToName returns a human-readable name for a chain ID.
 func chainIDToName(chainID int) string {
 	names := map[int]string{
@@ -550,6 +636,7 @@ func chainIDToName(chainID int) string {
 		43114:    "Avalanche",
 		59144:    "Linea",
 		84532:    "Base Sepolia",
+		999:      "HyperEVM",
 		534352:   "Scroll",
 		560048:   "Hoodi",
 		11155111: "Sepolia",

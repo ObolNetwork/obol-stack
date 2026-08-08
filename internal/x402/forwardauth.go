@@ -598,19 +598,70 @@ func facilitatorSettle(ctx context.Context, client *http.Client, facilitatorURL 
 }
 
 func buildResourceURL(r *http.Request) string {
-	scheme := "http"
-	if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
-		scheme = "https"
-	}
+	// Scheme matches resolveSiteURL: default https for public hosts so a
+	// Cloudflare-terminated tunnel that forwards plaintext (X-Forwarded-Proto
+	// often "http") still advertises https:// resource URLs that match what
+	// discovery and x402scan probe.
 	host := r.Host
 	if forwardedHost := r.Header.Get("X-Forwarded-Host"); forwardedHost != "" {
 		host = forwardedHost
 	}
-	uri := r.RequestURI
-	if forwardedURI := r.Header.Get("X-Forwarded-Uri"); forwardedURI != "" {
-		uri = forwardedURI
+	scheme := "https"
+	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") != "https" && isLocalHost(host) {
+		scheme = "http"
 	}
-	return scheme + "://" + host + uri
+
+	path := r.URL.Path
+	if r.URL.RawQuery != "" {
+		path = path + "?" + r.URL.RawQuery
+	}
+	if forwardedURI := r.Header.Get("X-Forwarded-Uri"); forwardedURI != "" {
+		path = forwardedURI
+	}
+
+	// Dedicated-origin offers rewrite /public → /services/<name>/public before
+	// the verifier matches. Challenge resource.URL must use the public path
+	// the buyer/discovery saw, not the internal rewritten path.
+	if rule := routeRuleFrom(r.Context()); rule != nil && rule.Hostname != "" {
+		if strings.EqualFold(stripHostPort(host), stripHostPort(rule.Hostname)) {
+			rawPath := r.URL.Path
+			if forwardedURI := r.Header.Get("X-Forwarded-Uri"); forwardedURI != "" {
+				if u, err := parsePathOnly(forwardedURI); err == nil {
+					rawPath = u
+				}
+			}
+			pub := publicPrefix(rule, host) + stripRoutePrefix(rule.StripPrefix, rawPath)
+			if r.URL.RawQuery != "" && !strings.Contains(pub, "?") {
+				pub += "?" + r.URL.RawQuery
+			}
+			path = pub
+		}
+	}
+
+	return scheme + "://" + host + path
+}
+
+func stripHostPort(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		return h
+	}
+	return host
+}
+
+// parsePathOnly returns the path (and optional query) from a URI that may be
+// path-only (/foo) or absolute (https://h/foo?q=1).
+func parsePathOnly(uri string) (string, error) {
+	if strings.HasPrefix(uri, "/") {
+		return uri, nil
+	}
+	// Absolute form — rare for X-Forwarded-Uri; fall back to as-is path parse.
+	if i := strings.Index(uri, "://"); i >= 0 {
+		rest := uri[i+3:]
+		if j := strings.Index(rest, "/"); j >= 0 {
+			return rest[j:], nil
+		}
+	}
+	return uri, nil
 }
 
 // settlementInterceptor wraps a ResponseWriter to intercept the status code.

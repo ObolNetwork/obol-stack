@@ -18,6 +18,10 @@ func hostnameOffer() *monetizeapi.ServiceOffer {
 	return offer
 }
 
+// noUpstreamOpenAPI is the buildOfferBundles cache-lookup stub for tests
+// that don't exercise the upstream-OpenAPI path.
+func noUpstreamOpenAPI(*monetizeapi.ServiceOffer) map[string]any { return nil }
+
 // TestBuildHostHTTPRoute pins the dedicated-origin route topology: Exact
 // discovery rules rewriting into the offer's bundle files on the catalog
 // httpd, and a PathPrefix / rule rewriting the public path-world into
@@ -35,18 +39,19 @@ func TestBuildHostHTTPRoute(t *testing.T) {
 	}
 
 	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
-	if len(rules) != 4 {
-		t.Fatalf("rules = %d, want 4 (/, /openapi.json, /.well-known/x402, catch-all)", len(rules))
+	if len(rules) != 5 {
+		t.Fatalf("rules = %d, want 5 (/, openapi, x402, agent-registration, catch-all)", len(rules))
 	}
 
 	// Rule shapes: first three Exact → catalog httpd with full-path
 	// rewrite; last PathPrefix / → verifier with prefix rewrite + headers.
 	wantExact := map[string]string{
-		"/":                 "/offers/sec/audit/index.html",
-		"/openapi.json":     "/offers/sec/audit/openapi.json",
-		"/.well-known/x402": "/offers/sec/audit/x402.json",
+		"/":                                    "/offers/sec/audit/index.html",
+		"/openapi.json":                        "/offers/sec/audit/openapi.json",
+		"/.well-known/x402":                    "/offers/sec/audit/x402.json",
+		"/.well-known/agent-registration.json": "/offers/sec/audit/agent-registration.json",
 	}
-	for i := 0; i < 3; i++ {
+	for i := 0; i < 4; i++ {
 		rule := rules[i].(map[string]any)
 		match := rule["matches"].([]any)[0].(map[string]any)["path"].(map[string]any)
 		if match["type"] != "Exact" {
@@ -59,12 +64,12 @@ func TestBuildHostHTTPRoute(t *testing.T) {
 			t.Errorf("rule %d (%s) rewrites to %v, want %s", i, public, got, wantExact[public])
 		}
 		backend := rule["backendRefs"].([]any)[0].(map[string]any)
-		if backend["name"] != skillCatalogConfigMapName || backend["namespace"] != skillCatalogNamespace {
+		if backend["name"] != staticSiteConfigMapName || backend["namespace"] != staticSiteNamespace {
 			t.Errorf("rule %d backend = %v", i, backend)
 		}
 	}
 
-	catchall := rules[3].(map[string]any)
+	catchall := rules[4].(map[string]any)
 	match := catchall["matches"].([]any)[0].(map[string]any)["path"].(map[string]any)
 	if match["type"] != "PathPrefix" || match["value"] != "/" {
 		t.Fatalf("catch-all match = %v", match)
@@ -105,13 +110,13 @@ func TestBuildOfferBundles(t *testing.T) {
 	profile := schemas.StorefrontProfile{DisplayName: "Acme", ContactEmail: "ops@acme.example"}
 	offer := hostnameOffer()
 
-	if got := buildOfferBundles([]*monetizeapi.ServiceOffer{routeTableOffer()}, profile); len(got) != 0 {
+	if got := buildOfferBundles([]*monetizeapi.ServiceOffer{routeTableOffer()}, profile, noUpstreamOpenAPI); len(got) != 0 {
 		t.Fatalf("path-only offer produced bundles: %v", got)
 	}
 
-	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile)
-	if len(bundles) != 3 {
-		t.Fatalf("len(bundles) = %d, want 3", len(bundles))
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile, noUpstreamOpenAPI)
+	if len(bundles) != 4 {
+		t.Fatalf("len(bundles) = %d, want 4", len(bundles))
 	}
 	byPath := map[string]string{}
 	for _, f := range bundles {
@@ -178,6 +183,72 @@ func TestBuildOfferBundles(t *testing.T) {
 	}
 }
 
+// TestBuildOfferBundles_InferenceOfferAgreesWithOpenAPI pins that a
+// hostname-bound inference offer (no custom Spec.Routes — synthesized
+// root catch-all) advertises the same paid path on both discovery
+// surfaces: openapi.json paths and /.well-known/x402 resources.
+// Before the openAPIRelPathForOfferRoute fix, x402 collapsed "/*" to
+// the bare origin while openapi hard-coded /v1/chat/completions.
+func TestBuildOfferBundles_InferenceOfferAgreesWithOpenAPI(t *testing.T) {
+	profile := schemas.StorefrontProfile{DisplayName: "Acme"}
+	offer := &monetizeapi.ServiceOffer{
+		ObjectMeta: metav1.ObjectMeta{Name: "chat", Namespace: "llm"},
+		Spec: monetizeapi.ServiceOfferSpec{
+			Type:     "inference",
+			Hostname: "chat.v1337.example",
+			Upstream: monetizeapi.ServiceOfferUpstream{Service: "gateway", Namespace: "llm", Port: 8080},
+			Payment: monetizeapi.ServiceOfferPayment{
+				Network: "base-sepolia",
+				PayTo:   "0x1111111111111111111111111111111111111111",
+				Price:   monetizeapi.ServiceOfferPriceTable{PerRequest: "0.1"},
+			},
+			// Spec.Routes intentionally empty: EffectiveRoutes synthesizes /*.
+		},
+		Status: monetizeapi.ServiceOfferStatus{
+			Conditions: []monetizeapi.Condition{
+				{Type: "ModelReady", Status: "True"},
+				{Type: "UpstreamHealthy", Status: "True"},
+				{Type: "PaymentGateReady", Status: "True"},
+				{Type: "RoutePublished", Status: "True"},
+			},
+		},
+	}
+
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile, noUpstreamOpenAPI)
+	byPath := map[string]string{}
+	for _, f := range bundles {
+		byPath[f.Path] = f.Content
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(byPath["offers/llm/chat/openapi.json"]), &doc); err != nil {
+		t.Fatalf("openapi bundle: %v", err)
+	}
+	paths := doc["paths"].(map[string]any)
+	if len(paths) != 1 {
+		t.Fatalf("paths = %v, want exactly one key", mapKeys(paths))
+	}
+	if _, ok := paths["/v1/chat/completions"]; !ok {
+		t.Fatalf("paths = %v, want /v1/chat/completions", mapKeys(paths))
+	}
+
+	var wk struct {
+		Resources []struct {
+			Resource string `json:"resource"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal([]byte(byPath["offers/llm/chat/x402.json"]), &wk); err != nil {
+		t.Fatalf("x402 bundle: %v", err)
+	}
+	if len(wk.Resources) != 1 {
+		t.Fatalf("len(resources) = %d, want 1", len(wk.Resources))
+	}
+	want := "https://chat.v1337.example/v1/chat/completions"
+	if wk.Resources[0].Resource != want {
+		t.Errorf("resources[0].resource = %q, want %q (must agree with openapi.json path)", wk.Resources[0].Resource, want)
+	}
+}
+
 // TestBuildOfferBundles_BrandingOverride pins the per-origin identity merge:
 // spec.branding fields override the storefront profile on the dedicated
 // origin's surfaces, empty fields inherit.
@@ -195,7 +266,7 @@ func TestBuildOfferBundles_BrandingOverride(t *testing.T) {
 		Description: "**Deep** audits by AuditCo.",
 	}
 
-	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile)
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile, noUpstreamOpenAPI)
 	byPath := map[string]string{}
 	for _, f := range bundles {
 		byPath[f.Path] = f.Content
@@ -262,8 +333,87 @@ func TestCatalogAdvertisesDedicatedOrigin(t *testing.T) {
 		t.Fatalf("catalog endpoint = %+v, want dedicated origin", catalog.Services)
 	}
 
-	skill := buildSkillCatalogMarkdown([]*monetizeapi.ServiceOffer{offer}, "https://shared.example", nil)
+	skill := buildSkillMarkdown([]*monetizeapi.ServiceOffer{offer}, "https://shared.example", nil)
 	if !strings.Contains(skill, "`POST https://audit.v1337.example/submit`") {
 		t.Errorf("skill.md routes not rooted at dedicated origin:\n%.400s", skill)
+	}
+}
+
+// TestHostRouteDiscoveryRulesAreGETOnly pins the method scoping: a
+// root-priced offer advertises POST <origin>/ as its paid resource, so the
+// Exact "/" discovery rule must only capture GETs — POSTs fall through to
+// the PathPrefix payment gate.
+func TestHostRouteDiscoveryRulesAreGETOnly(t *testing.T) {
+	offer := hostnameOffer()
+	offer.Spec.Type = "agent"
+	route := buildHostHTTPRoute(offer)
+	rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+	for i, raw := range rules[:len(rules)-1] { // all but the catch-all
+		match := raw.(map[string]any)["matches"].([]any)[0].(map[string]any)
+		if match["method"] != "GET" {
+			t.Errorf("rule %d (%v) method = %v, want GET", i, match["path"], match["method"])
+		}
+	}
+	last := rules[len(rules)-1].(map[string]any)["matches"].([]any)[0].(map[string]any)
+	if _, scoped := last["method"]; scoped {
+		t.Errorf("catch-all must match every method")
+	}
+}
+
+func TestBuildOfferBundles_UpstreamOpenAPI(t *testing.T) {
+	profile := schemas.StorefrontProfile{DisplayName: "Acme", ContactEmail: "ops@acme.example"}
+	offer := hostnameOffer()
+	offer.Spec.Registration.Name = "Hyperliquid Trading Intelligence"
+	offer.Spec.Registration.Description = "Full first-party catalog."
+	upstream := func(*monetizeapi.ServiceOffer) map[string]any {
+		return map[string]any{
+			"openapi": "3.1.0",
+			"info":    map[string]any{"title": "upstream-title", "version": "1.1.0"},
+			"paths": map[string]any{
+				"/v1/leaderboard": map[string]any{
+					"get": map[string]any{
+						"summary": "Leaderboard", "security": []any{map[string]any{"x402": []any{}}},
+						"x-payment-info": map[string]any{"price": map[string]any{"amount": "0.001"}},
+						"responses":      map[string]any{"200": map[string]any{}, "402": map[string]any{}},
+					},
+				},
+				"/v1/markets/overview": map[string]any{
+					"get": map[string]any{"summary": "Free overview", "security": []any{}, "responses": map[string]any{"200": map[string]any{}}},
+				},
+			},
+		}
+	}
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile, upstream)
+	byPath := map[string]string{}
+	for _, f := range bundles {
+		byPath[f.Path] = f.Content
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(byPath["offers/sec/audit/openapi.json"]), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc["info"].(map[string]any)["title"] != "Hyperliquid Trading Intelligence" {
+		t.Errorf("title = %v", doc["info"])
+	}
+	if _, ok := doc["paths"].(map[string]any)["/v1/leaderboard"]; !ok {
+		t.Fatalf("missing leaderboard in paths: %v", doc["paths"])
+	}
+	var wk struct {
+		Resources []struct {
+			Resource string `json:"resource"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal([]byte(byPath["offers/sec/audit/x402.json"]), &wk); err != nil {
+		t.Fatal(err)
+	}
+	if len(wk.Resources) != 1 || !strings.Contains(wk.Resources[0].Resource, "/v1/leaderboard") {
+		t.Fatalf("x402 resources = %+v", wk.Resources)
+	}
+	var reg map[string]any
+	if err := json.Unmarshal([]byte(byPath["offers/sec/audit/agent-registration.json"]), &reg); err != nil {
+		t.Fatal(err)
+	}
+	if reg["name"] != "Hyperliquid Trading Intelligence" {
+		t.Errorf("reg name = %v", reg["name"])
 	}
 }

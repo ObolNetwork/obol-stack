@@ -11,9 +11,9 @@ import (
 )
 
 // isInteractive returns true if prompts should be shown.
-// Returns false in JSON mode or when stdin is not a terminal.
+// Returns false in JSON mode, when not a TTY, or when OBOL_NONINTERACTIVE=true.
 func (u *UI) isInteractive() bool {
-	return !u.IsJSON() && u.IsTTY()
+	return !u.IsJSON() && u.IsTTY() && os.Getenv("OBOL_NONINTERACTIVE") != "true"
 }
 
 // Confirm asks a yes/no question, returns true for "y"/"yes".

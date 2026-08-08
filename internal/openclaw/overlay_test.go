@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"gopkg.in/yaml.v3"
 )
 
 // testConfig creates a temp config dir with a .stack-id file for testing.
@@ -111,21 +112,21 @@ func TestOverlayYAML_LiteLLMRouted(t *testing.T) {
 	yaml := TranslateToOverlayYAML(result)
 
 	// Agent model should have ollama/ prefix
-	if !strings.Contains(yaml, "agentModel: openai/claude-sonnet-4-5-20250929") {
+	if !strings.Contains(yaml, `agentModel: "openai/claude-sonnet-4-5-20250929"`) {
 		t.Errorf("YAML missing agentModel, got:\n%s", yaml)
 	}
 
 	// openai should be enabled with LiteLLM baseUrl
-	if !strings.Contains(yaml, "openai:\n    enabled: true") {
+	if !strings.Contains(yaml, "\"openai\":\n    enabled: true") {
 		t.Errorf("YAML missing enabled openai provider, got:\n%s", yaml)
 	}
 
-	if !strings.Contains(yaml, "baseUrl: http://litellm.llm.svc.cluster.local:4000/v1") {
+	if !strings.Contains(yaml, `baseUrl: "http://litellm.llm.svc.cluster.local:4000/v1"`) {
 		t.Errorf("YAML missing LiteLLM baseUrl, got:\n%s", yaml)
 	}
 
 	// apiKeyEnvVar should be OPENAI_API_KEY (LiteLLM master key injected via this env var)
-	if !strings.Contains(yaml, "apiKeyEnvVar: OPENAI_API_KEY") {
+	if !strings.Contains(yaml, `apiKeyEnvVar: "OPENAI_API_KEY"`) {
 		t.Errorf("YAML missing apiKeyEnvVar, got:\n%s", yaml)
 	}
 
@@ -140,16 +141,16 @@ func TestOverlayYAML_LiteLLMRouted(t *testing.T) {
 	}
 
 	// Cloud model should appear in ollama's model list
-	if !strings.Contains(yaml, "- id: claude-sonnet-4-5-20250929") {
+	if !strings.Contains(yaml, `- id: "claude-sonnet-4-5-20250929"`) {
 		t.Errorf("YAML missing cloud model ID, got:\n%s", yaml)
 	}
 
 	// anthropic and ollama should be disabled
-	if !strings.Contains(yaml, "anthropic:\n    enabled: false") {
+	if !strings.Contains(yaml, "\"anthropic\":\n    enabled: false") {
 		t.Errorf("YAML missing disabled anthropic, got:\n%s", yaml)
 	}
 
-	if !strings.Contains(yaml, "ollama:\n    enabled: false") {
+	if !strings.Contains(yaml, "\"ollama\":\n    enabled: false") {
 		t.Errorf("YAML missing disabled ollama, got:\n%s", yaml)
 	}
 }
@@ -159,7 +160,7 @@ func TestGenerateOverlayValues_OllamaDefaultWithModels(t *testing.T) {
 	models := []string{"llama3.2:3b", "mistral:7b"}
 	yaml := generateOverlayValues(testConfig(t), "openclaw-default.obol.stack", nil, false, models, "")
 
-	if !strings.Contains(yaml, "agentModel: openai/llama3.2:3b") {
+	if !strings.Contains(yaml, `agentModel: "openai/llama3.2:3b"`) {
 		t.Errorf("default overlay missing ollama agentModel, got:\n%s", yaml)
 	}
 
@@ -167,12 +168,50 @@ func TestGenerateOverlayValues_OllamaDefaultWithModels(t *testing.T) {
 		t.Errorf("default overlay missing LiteLLM baseUrl, got:\n%s", yaml)
 	}
 
-	if !strings.Contains(yaml, "id: llama3.2:3b") {
+	if !strings.Contains(yaml, `id: "llama3.2:3b"`) {
 		t.Errorf("default overlay missing first model, got:\n%s", yaml)
 	}
 
-	if !strings.Contains(yaml, "id: mistral:7b") {
+	if !strings.Contains(yaml, `id: "mistral:7b"`) {
 		t.Errorf("default overlay missing second model, got:\n%s", yaml)
+	}
+}
+
+// TestGenerateOverlayValues_OllamaModelNameInjection is a #775-style
+// regression test for a listOllamaModels() name (or its derived display
+// name) breaking out of the hand-formatted "- id: %s\n  name: %s\n" lines
+// and injecting new YAML keys into the overlay applied via `helmfile sync`.
+func TestGenerateOverlayValues_OllamaModelNameInjection(t *testing.T) {
+	malicious := "x\nimage:\n  repository: pwned-by-ollama\nrbac:\n  create: false"
+
+	rendered := generateOverlayValues(testConfig(t), "openclaw-default.obol.stack", nil, false, []string{malicious}, "")
+
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(rendered), &doc); err != nil {
+		t.Fatalf("rendered overlay is not valid YAML: %v\n%s", err, rendered)
+	}
+
+	if img, ok := doc["image"].(map[string]any); ok {
+		if _, hasRepo := img["repository"]; hasRepo {
+			t.Errorf("attacker injected an 'image.repository' key: %#v\nrendered:\n%s", img, rendered)
+		}
+	}
+
+	modelsSection, _ := doc["models"].(map[string]any)
+	openai, _ := modelsSection["openai"].(map[string]any)
+
+	modelList, _ := openai["models"].([]any)
+	if len(modelList) != 1 {
+		t.Fatalf("expected 1 model entry, got %d\nrendered:\n%s", len(modelList), rendered)
+	}
+
+	entry, _ := modelList[0].(map[string]any)
+	if entry["id"] != malicious {
+		t.Errorf("id = %#v, want single scalar %q (no injected keys); rendered:\n%s", entry["id"], malicious, rendered)
+	}
+
+	if entry["name"] != ollamaModelDisplayName(malicious) {
+		t.Errorf("name = %#v, want single scalar %q; rendered:\n%s", entry["name"], ollamaModelDisplayName(malicious), rendered)
 	}
 }
 
@@ -380,11 +419,11 @@ erpc:
 			t.Fatal("expected change")
 		}
 
-		if !strings.Contains(updated, "id: claude-sonnet-4-5-20250929") {
+		if !strings.Contains(updated, `id: "claude-sonnet-4-5-20250929"`) {
 			t.Errorf("missing claude model in updated overlay:\n%s", updated)
 		}
 
-		if !strings.Contains(updated, "id: gpt-4o") {
+		if !strings.Contains(updated, `id: "gpt-4o"`) {
 			t.Errorf("missing gpt model in updated overlay:\n%s", updated)
 		}
 		// eRPC section should still be present
@@ -427,8 +466,44 @@ erpc:
 			t.Fatal("expected change")
 		}
 
-		if !strings.Contains(updated, "id: llama3.2:3b") {
+		if !strings.Contains(updated, `id: "llama3.2:3b"`) {
 			t.Errorf("missing model in updated overlay:\n%s", updated)
+		}
+	})
+
+	// #775-style regression: a malicious/malformed Ollama model name must not
+	// break out of the "  - id: "+m hand-formatted line and inject new keys
+	// into the overlay applied via `helmfile sync`.
+	t.Run("model name injection", func(t *testing.T) {
+		malicious := "x\nimage:\n  repository: pwned-by-ollama\nrbac:\n  create: false"
+
+		updated, changed := patchOverlayModelList(overlay, []string{malicious})
+		if !changed {
+			t.Fatal("expected change")
+		}
+
+		var doc map[string]any
+		if err := yaml.Unmarshal([]byte(updated), &doc); err != nil {
+			t.Fatalf("patched overlay is not valid YAML: %v\n%s", err, updated)
+		}
+
+		if img, ok := doc["image"].(map[string]any); ok {
+			if _, hasRepo := img["repository"]; hasRepo {
+				t.Errorf("attacker injected an 'image.repository' key: %#v\nupdated:\n%s", img, updated)
+			}
+		}
+
+		modelsSection, _ := doc["models"].(map[string]any)
+		openai, _ := modelsSection["openai"].(map[string]any)
+
+		modelList, _ := openai["models"].([]any)
+		if len(modelList) != 1 {
+			t.Fatalf("expected 1 model entry, got %d\nupdated:\n%s", len(modelList), updated)
+		}
+
+		entry, _ := modelList[0].(map[string]any)
+		if entry["id"] != malicious {
+			t.Errorf("id = %#v, want single scalar %q (no injected keys); updated:\n%s", entry["id"], malicious, updated)
 		}
 	})
 }

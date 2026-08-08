@@ -137,7 +137,7 @@ func TestRouteSurface_Golden_VerifierAndOpenAPIAgree(t *testing.T) {
 // appears in skill.md with its method, full URL, and effective price.
 func TestRouteSurface_Golden_SkillMDListsEveryRoute(t *testing.T) {
 	offer := routeTableOffer()
-	content := buildSkillCatalogMarkdown([]*monetizeapi.ServiceOffer{offer}, "https://example.com", nil)
+	content := buildSkillMarkdown([]*monetizeapi.ServiceOffer{offer}, "https://example.com", nil)
 
 	for _, want := range []string{
 		"`POST https://example.com/services/audit/submit` — 0.5 USDC/request — Submit source for audit",

@@ -83,6 +83,23 @@ func DashboardHostname(runtime Runtime, id string) string {
 	return Hostname(runtime, id)
 }
 
+// dnsLabelMaxLen is the RFC 1123 DNS label limit.
+const dnsLabelMaxLen = 63
+
+// MaxIDLength returns the longest id that keeps every DNS label this
+// package derives from it (namespace/hostname "<runtime>-<id>", and for
+// Hermes the "-ui" DashboardHostname suffix) within the 63-character DNS
+// label limit. validate.Name alone allows ids up to 63 chars, which is too
+// permissive here since Onboard prepends a runtime prefix before the id
+// ever reaches a Kubernetes object.
+func MaxIDLength(runtime Runtime) int {
+	reserved := len(string(runtime)) + 1 // "<runtime>-"
+	if runtime == Hermes {
+		reserved += len("-ui") // DashboardHostname's "hermes-<id>-ui" label
+	}
+	return dnsLabelMaxLen - reserved
+}
+
 func Hostnames(runtime Runtime, id string) []string {
 	if strings.TrimSpace(id) == "" {
 		return nil

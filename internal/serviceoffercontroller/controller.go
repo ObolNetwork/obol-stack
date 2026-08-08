@@ -76,7 +76,13 @@ type Controller struct {
 	identityQueue             workqueue.TypedRateLimitingInterface[string]
 	purchaseQueue             workqueue.TypedRateLimitingInterface[string]
 	agentQueue                workqueue.TypedRateLimitingInterface[string]
-	catalogMu                 sync.Mutex
+	staticSiteMu              sync.Mutex
+
+	// upstreamOpenAPICache is populated from each offer's own reconcile
+	// (refresh, outside staticSiteMu) and only ever read by
+	// reconcileStaticSite's buildOfferBundles call (under staticSiteMu) —
+	// see upstream_openapi.go.
+	upstreamOpenAPICache upstreamOpenAPICache
 
 	pendingAuths sync.Map // key: "ns/name" → []map[string]string
 
@@ -351,25 +357,25 @@ func (c *Controller) enqueueStorefrontProfileRefresh(obj any) {
 	if u.GetNamespace() != storefront.ProfileNamespace || u.GetName() != storefront.ProfileConfigMap {
 		return
 	}
-	log.Printf("serviceoffer-controller: storefront profile change detected, refreshing skill catalog")
-	c.enqueueSkillCatalogRefresh()
+	log.Printf("serviceoffer-controller: storefront profile change detected, refreshing static site")
+	c.enqueueStaticSiteRefresh()
 }
 
-func (c *Controller) enqueueSkillCatalogRefresh() {
+func (c *Controller) enqueueStaticSiteRefresh() {
 	items := c.offerInformer.GetStore().List()
 	if len(items) > 0 {
 		// Any single offer reconcile rebuilds the full catalog.
 		c.enqueueOffer(items[0])
 		return
 	}
-	go c.refreshSkillCatalogAsync()
+	go c.refreshStaticSiteAsync()
 }
 
-func (c *Controller) refreshSkillCatalogAsync() {
+func (c *Controller) refreshStaticSiteAsync() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if err := c.reconcileSkillCatalog(ctx, nil); err != nil {
-		log.Printf("serviceoffer-controller: refresh skill catalog: %v", err)
+	if err := c.reconcileStaticSite(ctx, nil); err != nil {
+		log.Printf("serviceoffer-controller: refresh static site: %v", err)
 	}
 }
 
@@ -467,9 +473,10 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 			now := metav1.Now()
 			tombstone.DeletionTimestamp = &now
 		}
-		if err := c.reconcileSkillCatalog(ctx, &tombstone); err != nil {
+		if err := c.reconcileStaticSite(ctx, &tombstone); err != nil {
 			return err
 		}
+		c.upstreamOpenAPICache.forget(offer.UID)
 		return c.removeFinalizer(ctx, raw, serviceOfferFinalizer)
 	}
 
@@ -661,10 +668,17 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 		// requiring a spec mutation or unrelated ConfigMap update.
 		c.offerQueue.AddAfter(offer.Namespace+"/"+offer.Name, 5*time.Second)
 	}
-	// Rebuild the skill catalog on every reconcile so tunnel URL changes and
-	// offer status updates propagate immediately. reconcileSkillCatalog skips
+	// Refresh this offer's upstream OpenAPI cache from its own reconcile,
+	// outside staticSiteMu, at most once per generation — see
+	// upstreamOpenAPICache and buildOfferBundles for why the rebuild below
+	// must never fetch live.
+	if offer.Spec.Hostname != "" {
+		c.upstreamOpenAPICache.refresh(offer, tryUpstreamOpenAPI)
+	}
+	// Rebuild the static site on every reconcile so tunnel URL changes and
+	// offer status updates propagate immediately. reconcileStaticSite skips
 	// ConfigMap/Deployment writes when the rendered hash is unchanged.
-	return c.reconcileSkillCatalog(ctx, nil)
+	return c.reconcileStaticSite(ctx, nil)
 }
 
 func (c *Controller) reconcileDeletingOffer(ctx context.Context, offer *monetizeapi.ServiceOffer) error {
@@ -747,13 +761,23 @@ func (c *Controller) reconcileUpstream(ctx context.Context, status *monetizeapi.
 	}
 	defer response.Body.Close()
 
-	if response.StatusCode >= 500 {
-		setCondition(status, "UpstreamHealthy", "False", "Unhealthy", fmt.Sprintf("HTTP %d from upstream", response.StatusCode))
+	// Require a 2xx health response. Treating any <500 (including 404) as
+	// healthy left agents with a wrong healthPath (or a never-started API)
+	// stuck in UpstreamHealthy=True and then Ready=True while paid traffic
+	// 404'd end-to-end.
+	if !upstreamHealthStatusOK(response.StatusCode) {
+		setCondition(status, "UpstreamHealthy", "False", "Unhealthy", fmt.Sprintf("HTTP %d from upstream health path %s", response.StatusCode, offer.EffectiveHealthPath()))
 		return false, nil
 	}
 
 	setCondition(status, "UpstreamHealthy", "True", "Healthy", fmt.Sprintf("Upstream responded with HTTP %d", response.StatusCode))
 	return true, nil
+}
+
+// upstreamHealthStatusOK reports whether an HTTP status from the offer's
+// healthPath should count as UpstreamHealthy=True.
+func upstreamHealthStatusOK(code int) bool {
+	return code >= 200 && code < 300
 }
 
 func (c *Controller) reconcilePaymentGate(ctx context.Context, status *monetizeapi.ServiceOfferStatus, offer *monetizeapi.ServiceOffer) error {
@@ -793,15 +817,45 @@ func (c *Controller) reconcilePaymentGate(ctx context.Context, status *monetizea
 
 func (c *Controller) reconcileRoute(ctx context.Context, status *monetizeapi.ServiceOfferStatus, offer *monetizeapi.ServiceOffer) error {
 	// Protection middleware must exist before the routes that reference it
-	// (Traefik drops routes with a dangling ExtensionRef).
-	if hasLimits(offer) {
-		if err := c.applyObject(ctx, c.middlewares.Namespace(offer.Namespace), buildLimitsMiddleware(offer)); err != nil {
+	// (Traefik drops routes with a dangling ExtensionRef). inFlightReq and
+	// rateLimit are separate Middleware CRs — a combined CR is rejected by
+	// Traefik while the ServiceOffer still looked Ready.
+	for _, mw := range buildLimitsMiddlewares(offer) {
+		if err := c.applyObject(ctx, c.middlewares.Namespace(offer.Namespace), mw); err != nil {
 			setCondition(status, "RoutePublished", "False", "ApplyFailed", err.Error())
 			return err
 		}
-	} else {
-		err := c.middlewares.Namespace(offer.Namespace).Delete(ctx, limitsMiddlewareName(offer.Name), metav1.DeleteOptions{})
+	}
+	// Tear down unused limit CRs (including the legacy combined -limits name).
+	for _, name := range []string{
+		limitsInFlightMiddlewareName(offer.Name),
+		limitsRPSMiddlewareName(offer.Name),
+		legacyLimitsMiddlewareName(offer.Name),
+	} {
+		wanted := false
+		for _, mw := range buildLimitsMiddlewares(offer) {
+			if mw.GetName() == name {
+				wanted = true
+				break
+			}
+		}
+		if wanted {
+			continue
+		}
+		err := c.middlewares.Namespace(offer.Namespace).Delete(ctx, name, metav1.DeleteOptions{})
 		if err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
+	// Delete both superseded ReferenceGrant names every reconcile so grants
+	// orphaned by a rename don't linger and collide with another offer: the
+	// pre-4726dcfe non-namespaced name, and the 4726dcfe dash-joined name that
+	// the injective hash suffix replaced.
+	for _, staleGrant := range []string{
+		legacyBackendReferenceGrantName(offer.Name),
+		intermediateBackendReferenceGrantName(offer.Namespace, offer.Name),
+	} {
+		if err := c.referenceGrants.Namespace("x402").Delete(ctx, staleGrant, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
 	}
@@ -809,10 +863,28 @@ func (c *Controller) reconcileRoute(ctx context.Context, status *monetizeapi.Ser
 		setCondition(status, "RoutePublished", "False", "ApplyFailed", err.Error())
 		return err
 	}
+	route, err := c.httpRoutes.Namespace(offer.Namespace).Get(ctx, childName(offer.Name), metav1.GetOptions{})
+	if err != nil {
+		setCondition(status, "RoutePublished", "False", "ApplyFailed", err.Error())
+		return err
+	}
+	if !httpRouteAccepted(route) {
+		setCondition(status, "RoutePublished", "False", "WaitingForTraefikAcceptance", "HTTPRoute applied but not yet accepted by Traefik")
+		return nil
+	}
 	if offer.Spec.Hostname != "" {
 		if err := c.applyObject(ctx, c.httpRoutes.Namespace(offer.Namespace), buildHostHTTPRoute(offer)); err != nil {
 			setCondition(status, "RoutePublished", "False", "ApplyFailed", err.Error())
 			return err
+		}
+		hostRoute, err := c.httpRoutes.Namespace(offer.Namespace).Get(ctx, hostChildName(offer.Name), metav1.GetOptions{})
+		if err != nil {
+			setCondition(status, "RoutePublished", "False", "ApplyFailed", err.Error())
+			return err
+		}
+		if !httpRouteAccepted(hostRoute) {
+			setCondition(status, "RoutePublished", "False", "WaitingForTraefikAcceptance", "Host HTTPRoute applied but not yet accepted by Traefik")
+			return nil
 		}
 	} else {
 		// Hostname removed from the spec: tear the host route down so the
@@ -836,6 +908,11 @@ func (c *Controller) reconcileRegistrationStatus(ctx context.Context, status *mo
 		if err := c.deleteRegistrationRequest(ctx, offer.Namespace, offer.Name); err != nil {
 			return err
 		}
+		// Disabling registration must stop reporting whatever agentId was
+		// last recorded — otherwise a disabled offer keeps showing a
+		// (possibly stale, wrong-chain) id in status/CLI output.
+		status.AgentID = ""
+		status.RegistrationTxHash = ""
 		setCondition(status, "Registered", "True", "Disabled", "Registration disabled")
 		return nil
 	}
@@ -877,8 +954,7 @@ func (c *Controller) reconcileRegistrationStatus(ctx context.Context, status *mo
 		if err != nil {
 			return err
 		}
-		request.Status = registrationRequestStatusWithIdentity(request, identity)
-		applySharedRegistrationStatus(status, offer, owner, request)
+		applySharedRegistrationStatus(status, offer, owner, identity, request)
 		return nil
 	}
 
@@ -898,14 +974,7 @@ func (c *Controller) reconcileRegistrationStatus(ctx context.Context, status *mo
 		return err
 	}
 
-	status.AgentID = request.Status.AgentID
-	status.RegistrationTxHash = request.Status.RegistrationTxHash
-	if agentID := monetizeapi.AgentIdentityAgentIDForChain(identity.Status, offer.Spec.Payment.Network); agentID != "" {
-		status.AgentID = agentID
-		request.Status = registrationRequestStatusWithIdentity(request, identity)
-	}
-
-	applySharedRegistrationStatus(status, offer, owner, request)
+	applySharedRegistrationStatus(status, offer, owner, identity, request)
 	return nil
 }
 
@@ -1044,7 +1113,12 @@ func (c *Controller) reconcileRegistrationActive(ctx context.Context, raw *unstr
 		return c.updateRegistrationStatus(ctx, raw, status)
 	}
 	registrationChain := firstNonEmpty(request.Spec.Chain, offer.Spec.Payment.Network)
-	agentID := firstNonEmpty(monetizeapi.AgentIdentityAgentIDForChain(identity.Status, registrationChain), status.AgentID, offer.Status.AgentID)
+	// Chain-scoped only: status.AgentID/offer.Status.AgentID are not
+	// chain-tagged, so falling back to them here would reuse a
+	// wrong-chain id after a network switch and skip the on-chain
+	// ownership verification below. AgentIdentityAgentIDForChain
+	// correctly returns "" until this chain has a verified registration.
+	agentID := monetizeapi.AgentIdentityAgentIDForChain(identity.Status, registrationChain)
 	txHash := firstNonEmpty(status.RegistrationTxHash, offer.Status.RegistrationTxHash)
 
 	offers, err := c.registrationOffersForIdentity(defaultAgentIdentityKey(), "", "")
@@ -1187,21 +1261,18 @@ func (c *Controller) recoverRegistration(ctx context.Context, client *erc8004.Cl
 
 func (c *Controller) reconcileRegistrationTombstone(ctx context.Context, raw *unstructured.Unstructured, request *monetizeapi.RegistrationRequest, offer *monetizeapi.ServiceOffer, baseURL string) error {
 	status := request.Status
-	identityRaw, identity, err := c.ensureAgentIdentityForOffer(ctx, offer)
+	_, identity, err := c.ensureAgentIdentityForOffer(ctx, offer)
 	if err != nil {
 		status.Phase = registrationPhaseAwaitingExternal
 		status.Message = truncateMessage(fmt.Sprintf("Waiting for AgentIdentity tombstone: %v", err))
 		return c.updateRegistrationStatus(ctx, raw, status)
 	}
+	// Chain-scoped only — see reconcileRegistrationActive for why the
+	// status.AgentID/offer.Status.AgentID fallbacks are dropped. Since
+	// agentID is now always exactly what AgentIdentityAgentIDForChain
+	// already returns, there is nothing left to backfill into identity.
 	registrationChain := firstNonEmpty(request.Spec.Chain, offer.Spec.Payment.Network)
-	agentID := firstNonEmpty(monetizeapi.AgentIdentityAgentIDForChain(identity.Status, registrationChain), status.AgentID, offer.Status.AgentID)
-
-	if agentID != "" && monetizeapi.AgentIdentityAgentIDForChain(identity.Status, registrationChain) == "" {
-		identity.Status = agentIdentityStatusFromRegistration(identity, registrationChain, agentID)
-		if err := c.updateAgentIdentityStatus(ctx, identityRaw, identity.Status); err != nil {
-			return err
-		}
-	}
+	agentID := monetizeapi.AgentIdentityAgentIDForChain(identity.Status, registrationChain)
 
 	document := BuildIdentityRegistrationDocument(IdentityRegistrationView{
 		Identity: identity,
@@ -1246,16 +1317,16 @@ func (c *Controller) loadStorefrontProfile(ctx context.Context) (*schemas.Storef
 	return storefront.ParseProfile(raw)
 }
 
-// reconcileSkillCatalog rebuilds the /skill.md ConfigMap/Deployment/Service/
+// reconcileStaticSite rebuilds the /skill.md ConfigMap/Deployment/Service/
 // HTTPRoute from the current set of operationally-ready ServiceOffers. Offers
 // are listed from the API server so every reconcile sees a consistent snapshot;
 // override replaces or appends a just-created offer the list has not observed yet.
 // ConfigMap and Deployment are only applied when the rendered catalog hash differs
 // from the live obol-skill-md Deployment annotation, so idle reconciles do not
-// roll the skill-catalog pod.
-func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *monetizeapi.ServiceOffer) error {
-	c.catalogMu.Lock()
-	defer c.catalogMu.Unlock()
+// roll the static-site pod.
+func (c *Controller) reconcileStaticSite(ctx context.Context, override *monetizeapi.ServiceOffer) error {
+	c.staticSiteMu.Lock()
+	defer c.staticSiteMu.Unlock()
 
 	baseURL, err := c.registrationBaseURL(ctx)
 	if err != nil {
@@ -1271,7 +1342,7 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	if err != nil {
 		return err
 	}
-	content := buildSkillCatalogMarkdown(offers, baseURL, storefrontProfile)
+	content := buildSkillMarkdown(offers, baseURL, storefrontProfile)
 	servicesJSON := buildServiceCatalogJSON(offers, baseURL, storefrontProfile)
 	resolvedProfile := storefront.ResolvePublished(storefrontProfile, baseURL)
 	// buildOpenAPIDocument prefers the tunnel URL for the public `servers[0]`
@@ -1282,10 +1353,10 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 	// when tunnelURL changes — see enqueueDiscoveryRefresh).
 	openAPIJSON := buildOpenAPIDocument(offers, baseURL, resolvedProfile)
 	apiDocsHTML := scalarHTML(resolvedProfile)
-	bundles := buildOfferBundles(offers, resolvedProfile)
-	contentHash := computeSkillCatalogContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)
+	bundles := buildOfferBundles(offers, resolvedProfile, c.upstreamOpenAPICache.get)
+	contentHash := computeStaticSiteContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)
 
-	unchanged, err := c.skillCatalogContentUnchanged(ctx, content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)
+	unchanged, err := c.staticSiteContentUnchanged(ctx, content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)
 	if err != nil {
 		return err
 	}
@@ -1295,30 +1366,30 @@ func (c *Controller) reconcileSkillCatalog(ctx context.Context, override *moneti
 		return nil
 	}
 
-	if err := c.applyObject(ctx, c.configMaps.Namespace(skillCatalogNamespace), buildSkillCatalogConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)); err != nil {
+	if err := c.applyObject(ctx, c.configMaps.Namespace(staticSiteNamespace), buildStaticSiteConfigMap(content, servicesJSON, openAPIJSON, apiDocsHTML, bundles)); err != nil {
 		return err
 	}
-	if err := c.applyObject(ctx, c.deployments.Namespace(skillCatalogNamespace), buildSkillCatalogDeployment(contentHash, bundles)); err != nil {
+	if err := c.applyObject(ctx, c.deployments.Namespace(staticSiteNamespace), buildStaticSiteDeployment(contentHash, bundles)); err != nil {
 		return err
 	}
-	if err := c.applyObject(ctx, c.services.Namespace(skillCatalogNamespace), buildSkillCatalogService()); err != nil {
+	if err := c.applyObject(ctx, c.services.Namespace(staticSiteNamespace), buildStaticSiteService()); err != nil {
 		return err
 	}
 	// Headers Middleware must exist before the routes that reference it, or
 	// Traefik drops the routes for a dangling ExtensionRef.
-	if err := c.applyObject(ctx, c.middlewares.Namespace(skillCatalogNamespace), buildCatalogHeadersMiddleware()); err != nil {
+	if err := c.applyObject(ctx, c.middlewares.Namespace(staticSiteNamespace), buildCatalogHeadersMiddleware()); err != nil {
 		return err
 	}
-	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildSkillCatalogHTTPRoute()); err != nil {
+	if err := c.applyObject(ctx, c.httpRoutes.Namespace(staticSiteNamespace), buildStaticSiteHTTPRoute()); err != nil {
 		return err
 	}
-	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildServicesJSONHTTPRoute()); err != nil {
+	if err := c.applyObject(ctx, c.httpRoutes.Namespace(staticSiteNamespace), buildServicesJSONHTTPRoute()); err != nil {
 		return err
 	}
-	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildOpenAPIHTTPRoute()); err != nil {
+	if err := c.applyObject(ctx, c.httpRoutes.Namespace(staticSiteNamespace), buildOpenAPIHTTPRoute()); err != nil {
 		return err
 	}
-	if err := c.applyObject(ctx, c.httpRoutes.Namespace(skillCatalogNamespace), buildAPIDocsHTTPRoute()); err != nil {
+	if err := c.applyObject(ctx, c.httpRoutes.Namespace(staticSiteNamespace), buildAPIDocsHTTPRoute()); err != nil {
 		return err
 	}
 	readyOffers := countReadyServiceOffers(offers)
@@ -1341,10 +1412,14 @@ func (c *Controller) deleteRouteChildren(ctx context.Context, offer *monetizeapi
 		resource dynamic.ResourceInterface
 		name     string
 	}{
-		{resource: c.referenceGrants.Namespace("x402"), name: backendReferenceGrantName(offer.Name)},
+		{resource: c.referenceGrants.Namespace("x402"), name: backendReferenceGrantName(offer.Namespace, offer.Name)},
+		{resource: c.referenceGrants.Namespace("x402"), name: legacyBackendReferenceGrantName(offer.Name)},
+		{resource: c.referenceGrants.Namespace("x402"), name: intermediateBackendReferenceGrantName(offer.Namespace, offer.Name)},
 		{resource: c.httpRoutes.Namespace(offer.Namespace), name: childName(offer.Name)},
 		{resource: c.httpRoutes.Namespace(offer.Namespace), name: hostChildName(offer.Name)},
-		{resource: c.middlewares.Namespace(offer.Namespace), name: limitsMiddlewareName(offer.Name)},
+		{resource: c.middlewares.Namespace(offer.Namespace), name: limitsInFlightMiddlewareName(offer.Name)},
+		{resource: c.middlewares.Namespace(offer.Namespace), name: limitsRPSMiddlewareName(offer.Name)},
+		{resource: c.middlewares.Namespace(offer.Namespace), name: legacyLimitsMiddlewareName(offer.Name)},
 	} {
 		err := deletion.resource.Delete(ctx, deletion.name, metav1.DeleteOptions{})
 		if err != nil && !apierrors.IsNotFound(err) {
@@ -1404,25 +1479,53 @@ func selectRegistrationOwner(offers []*monetizeapi.ServiceOffer) *monetizeapi.Se
 	return offers[0]
 }
 
-func applySharedRegistrationStatus(status *monetizeapi.ServiceOfferStatus, offer, owner *monetizeapi.ServiceOffer, request *monetizeapi.RegistrationRequest) {
-	status.AgentID = request.Status.AgentID
-	status.RegistrationTxHash = request.Status.RegistrationTxHash
+// applySharedRegistrationStatus copies a shared RegistrationRequest's phase
+// onto offer's status, but the agentId itself is never trusted straight off
+// request.Status: that subresource belongs to the registration owner and is
+// never chain-tagged, so it can't tell whether it was recorded under
+// offer's own Spec.Payment.Network or a different chain the owner (or offer
+// itself, before a network switch) used previously. The agentId is instead
+// always re-derived from the chain-scoped AgentIdentity record — if the
+// identity has no registration for offer's chain, agentId stays empty and
+// Registered does not flip True on the strength of a foreign chain's id.
+func applySharedRegistrationStatus(status *monetizeapi.ServiceOfferStatus, offer, owner *monetizeapi.ServiceOffer, identity *monetizeapi.AgentIdentity, request *monetizeapi.RegistrationRequest) {
+	agentID := monetizeapi.AgentIdentityAgentIDForChain(identity.Status, offer.Spec.Payment.Network)
+	status.AgentID = agentID
+	// The tx hash lives on the same chain-blind request.Status subresource
+	// the agentId was retired from, so it is only mirrored once the offer's
+	// own chain has a recorded registration for it to describe.
+	status.RegistrationTxHash = ""
+	if agentID != "" {
+		status.RegistrationTxHash = request.Status.RegistrationTxHash
+	}
 
 	if !isConditionTrue(*status, "RoutePublished") {
 		setCondition(status, "Registered", "False", "WaitingForRoute", "Waiting for route publication before shared registration")
 		return
 	}
 
-	if requestPhaseReady(request.Status.Phase) {
-		message := defaultString(request.Status.Message, "Registration reconciled")
+	// Registered only ever flips True on the strength of a chain-scoped
+	// agentId. requestPhaseReady(request.Status.Phase) alone is NOT a
+	// sufficient condition: Phase is set by whoever last reconciled this
+	// RegistrationRequest for whatever chain it targeted at that time, and
+	// (like the AgentID field) is never chain-tagged — it can read stale
+	// "Registered" from a chain the offer (or, when shared, the owner) has
+	// since moved off. Every legitimate Phase=Registered transition sets
+	// agentID for that same chain in the same reconcile pass, so requiring
+	// agentID != "" here costs no real case while closing the stale-phase
+	// gap (this is also what tempers the request.Status.AgentID-based
+	// widening 84dcbf83 added — that source is gone, but a bare Phase
+	// check has the identical staleness problem).
+	if agentID != "" {
+		message := defaultString(request.Status.Message, fmt.Sprintf("Recorded agent %s", agentID))
 		if owner != nil && (owner.Namespace != offer.Namespace || owner.Name != offer.Name) {
-			if request.Status.AgentID != "" {
-				message = fmt.Sprintf("Shared registration via %s/%s recorded agent %s", owner.Namespace, owner.Name, request.Status.AgentID)
-			} else {
-				message = fmt.Sprintf("Shared registration via %s/%s is active", owner.Namespace, owner.Name)
-			}
+			message = fmt.Sprintf("Shared registration via %s/%s recorded agent %s", owner.Namespace, owner.Name, agentID)
 		}
-		setCondition(status, "Registered", "True", request.Status.Phase, message)
+		reason := defaultString(request.Status.Phase, "Active")
+		if !requestPhaseReady(request.Status.Phase) {
+			reason = "Active"
+		}
+		setCondition(status, "Registered", "True", reason, message)
 		return
 	}
 
@@ -1589,6 +1692,10 @@ func httpRouteAccepted(route *unstructured.Unstructured) bool {
 	if err != nil || !found {
 		return false
 	}
+	// metadata.generation defaults to 0 when absent (e.g. hand-built test
+	// fixtures), matching a condition's absent observedGeneration below so
+	// older/incomplete fixtures still compare equal.
+	routeGeneration, _, _ := unstructured.NestedInt64(route.Object, "metadata", "generation")
 	for _, parent := range parents {
 		parentMap, ok := parent.(map[string]any)
 		if !ok {
@@ -1598,11 +1705,26 @@ func httpRouteAccepted(route *unstructured.Unstructured) bool {
 		if !ok {
 			continue
 		}
+		// Both default to false: each must be affirmatively reported True at
+		// the CURRENT generation. Defaulting resolvedRefs to true would be
+		// fail-open — a stale or not-yet-emitted ResolvedRefs (behind
+		// metadata.generation, or False from a rejected prior spec) would be
+		// skipped by the observedGeneration guard below and leave the true
+		// default intact, publishing a route Traefik hasn't resolved.
 		accepted := false
-		resolvedRefs := true
+		resolvedRefs := false
 		for _, condition := range conditions {
 			condMap, ok := condition.(map[string]any)
 			if !ok {
+				continue
+			}
+			// A condition Traefik hasn't reconciled against the current spec
+			// yet (observedGeneration behind metadata.generation) still
+			// reflects the PREVIOUS generation's verdict — don't trust it,
+			// or an update to an already-accepted route would flip
+			// RoutePublished True before Traefik has actually checked it.
+			observedGeneration, _, _ := unstructured.NestedInt64(condMap, "observedGeneration")
+			if observedGeneration != routeGeneration {
 				continue
 			}
 			condType, _ := condMap["type"].(string)

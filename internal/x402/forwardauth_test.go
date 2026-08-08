@@ -79,9 +79,11 @@ func validPaymentHeader() string {
 }
 
 func testRequirements() []x402types.PaymentRequirements {
-	return []x402types.PaymentRequirements{
-		BuildV2Requirement(ChainBaseSepolia, "0.001", "0xWallet", 0),
+	req, err := BuildV2Requirement(ChainBaseSepolia, "0.001", "0xWallet", 0)
+	if err != nil {
+		panic(err) // hardcoded valid literal — an error here is a test bug
 	}
+	return []x402types.PaymentRequirements{req}
 }
 
 func TestForwardAuth_NoPayment_Returns402_AdvertisesExtensions(t *testing.T) {

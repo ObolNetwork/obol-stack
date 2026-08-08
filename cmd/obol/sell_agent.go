@@ -82,7 +82,7 @@ Examples:
 			&cli.StringFlag{
 				Name:    "description",
 				Aliases: []string{"register-description"},
-				Usage:   "Human-readable description of the service. Surfaced on the 402 payment page, in the storefront catalog, and (when registration is enabled) on the ERC-8004 registration document. Defaults to the agent's objective.",
+				Usage:   "Human-readable description of the service. Surfaced on the 402 payment page, in the storefront catalog, and (when registration is enabled) on the ERC-8004 registration document. Defaults to a generic service description.",
 			},
 		}, acceptFlags()...),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -228,9 +228,9 @@ Examples:
 			if regName == "" {
 				regName = name
 			}
-			regDesc := strings.TrimSpace(cmd.String("description"))
-			if regDesc == "" {
-				regDesc = agent.Objective
+			regDesc := resolveAgentOfferDescription(cmd.String("description"), agent.Objective)
+			if regDesc == "" && register {
+				u.Warnf("No --description set; the storefront listing will use a generic description. Pass --description to customize it.")
 			}
 
 			// Build the ServiceOffer manifest. type=agent + agent.ref tells
@@ -694,6 +694,18 @@ func agentOfferRegistrationMetadata(agent *agentRefForSale, price, symbol, chain
 		metadata["model"] = strings.TrimSpace(agent.Model)
 	}
 	return metadata
+}
+
+// resolveAgentOfferDescription returns the value to write to
+// spec.registration.description given the --description flag and the
+// agent's Objective. It deliberately ignores objective: that field is
+// operator-authored system-prompt text (tool addresses, wallet details,
+// operational instructions) and must never default onto the public
+// storefront listing. An operator who wants a description must pass
+// --description explicitly; otherwise the controller's own generic
+// fallback applies.
+func resolveAgentOfferDescription(flagValue, objective string) string {
+	return strings.TrimSpace(flagValue)
 }
 
 // agentOfferBundle wraps an agent-typed ServiceOffer manifest together

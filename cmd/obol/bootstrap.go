@@ -31,7 +31,7 @@ func bootstrapCommand(cfg *config.Config) *cli.Command {
 
 			// Step 1: Initialize stack
 			backendName := stack.DetectExistingBackend(cfg)
-			if err := stack.Init(cfg, u, false, backendName); err != nil {
+			if err := stack.Init(cfg, u, false, backendName, false); err != nil {
 				if !strings.Contains(err.Error(), "already exists") {
 					return fmt.Errorf("bootstrap init failed: %w", err)
 				}

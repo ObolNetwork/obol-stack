@@ -1151,6 +1151,31 @@ func UpsertAgentIdentityRegistration(status AgentIdentityStatus, chain, agentID 
 	return status
 }
 
+// RemoveAgentIdentityRegistration drops chain's registration, if any. It is
+// the counterpart to UpsertAgentIdentityRegistration and exists as the
+// operator remediation path for a registration that was written under the
+// wrong chain (e.g. `obol sell identity forget <chain>`) — there is no
+// automatic removal anywhere else, since the durable-identity/tombstone
+// design otherwise treats a recorded registration as permanent.
+func RemoveAgentIdentityRegistration(status AgentIdentityStatus, chain string) AgentIdentityStatus {
+	chain = strings.TrimSpace(chain)
+	if chain == "" {
+		return status
+	}
+	// Allocate rather than filter status.Registrations in place: this is an
+	// exported helper and a future caller could pass in an informer-cached
+	// object whose backing array must not be mutated out from under it.
+	out := make([]AgentIdentityRegistration, 0, len(status.Registrations))
+	for _, registration := range status.Registrations {
+		if strings.EqualFold(strings.TrimSpace(registration.Chain), chain) {
+			continue
+		}
+		out = append(out, registration)
+	}
+	status.Registrations = out
+	return status
+}
+
 func HasAgentIdentityRegistrations(status AgentIdentityStatus) bool {
 	for _, registration := range status.Registrations {
 		if strings.TrimSpace(registration.Chain) != "" && strings.TrimSpace(registration.AgentID) != "" {

@@ -18,8 +18,10 @@ func TestName(t *testing.T) {
 		"-leading-hyphen", // starts with hyphen
 		"has spaces",
 		"has_underscore",
-		"../etc/passwd", // path traversal
+		"../etc/passwd",                // path traversal
 		"a" + string(make([]byte, 63)), // too long (64 chars)
+		"has\nnewline",                 // /etc/hosts injection (Canary402 agent --id finding)
+		"has/slash",
 	}
 	for _, s := range invalid {
 		if err := Name(s); err == nil {

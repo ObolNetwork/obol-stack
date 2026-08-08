@@ -40,6 +40,30 @@ func TestGetNMDNSMode(t *testing.T) {
 	_ = mode
 }
 
+func TestIsValidHostname(t *testing.T) {
+	valid := []string{"obol.stack", "hermes-abc.obol.stack", "openclaw-my-agent.obol.stack", "a"}
+	for _, h := range valid {
+		if !isValidHostname(h) {
+			t.Errorf("isValidHostname(%q) = false, want true", h)
+		}
+	}
+
+	// Belt-and-suspenders guard for the Canary402 audit finding: a hostname
+	// carrying a newline (e.g. from an unsanitized agent --id) must never be
+	// written to /etc/hosts, even if it slipped past upstream validation.
+	invalid := []string{
+		"",
+		"evil\n127.0.0.1 attacker.com",
+		"has space",
+		"has/slash",
+	}
+	for _, h := range invalid {
+		if isValidHostname(h) {
+			t.Errorf("isValidHostname(%q) = true, want false", h)
+		}
+	}
+}
+
 func TestHasNMDnsmasqConfig(t *testing.T) {
 	// On a clean system without obol config, this should return false
 	// unless the test system has it installed

@@ -177,7 +177,10 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 	// Create x402 payment requirement. The standalone gateway has no
 	// operator surface for MaxTimeoutSeconds yet, so pass 0 to fall back
 	// to DefaultMaxTimeoutSeconds.
-	requirement := x402pkg.BuildV2Requirement(g.config.Chain, g.config.PricePerRequest, g.config.WalletAddress, 0)
+	requirement, err := x402pkg.BuildV2Requirement(g.config.Chain, g.config.PricePerRequest, g.config.WalletAddress, 0)
+	if err != nil {
+		return nil, fmt.Errorf("invalid price %q: %w", g.config.PricePerRequest, err)
+	}
 
 	// Configure x402 ForwardAuth middleware. The bazaar discovery extension
 	// advertises the chat-completions invocation shape on every 402 so

@@ -1,11 +1,14 @@
 package tunnel
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ObolNetwork/obol-stack/internal/config"
 )
 
 func TestWaitReadyTimeout(t *testing.T) {
@@ -152,6 +155,83 @@ func TestBuildLocalManagedConfigYAMLDeduplicates(t *testing.T) {
 	}
 	if !strings.Contains(out, "- hostname: a.example.com") {
 		t.Fatalf("expected normalized lowercase hostname:\n%s", out)
+	}
+}
+
+// writeFakeKubectl drops an executable kubectl stub into cfg.BinDir that logs
+// every invocation (argv) to logPath and, for a `get serviceoffers.obol.org`
+// query, prints boundHostname as the sole offer-bound hostname -- just enough
+// to drive offerBoundHostnames()/DeleteStorefront() without a real cluster.
+func writeFakeKubectl(t *testing.T, cfg *config.Config, logPath, boundHostname string) {
+	t.Helper()
+	if err := os.MkdirAll(cfg.BinDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin dir: %v", err)
+	}
+	script := fmt.Sprintf(`#!/bin/sh
+echo "$@" >> %q
+case "$*" in
+  *"get serviceoffers.obol.org"*) echo %q ;;
+esac
+exit 0
+`, logPath, boundHostname)
+	if err := os.WriteFile(filepath.Join(cfg.BinDir, "kubectl"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake kubectl: %v", err)
+	}
+}
+
+// TestCreateStorefront_TearsDownWhenAllHostsOfferBound guards the Canary402
+// fix: when every hostname CreateStorefront was asked to serve turns out to
+// be offer-bound, it must tear down the previously-applied tunnel-storefront
+// HTTPRoute (via DeleteStorefront) instead of a no-op `return nil` that would
+// leave a stale, wider-hostname route on the cluster shadowing the offer's
+// own dedicated-origin route (equal PathPrefix-/ specificity, older route
+// wins the Gateway API tie).
+func TestCreateStorefront_TearsDownWhenAllHostsOfferBound(t *testing.T) {
+	cfg := newHostnameTestConfig(t)
+	writeFakeKubeconfig(t, cfg)
+
+	logPath := filepath.Join(cfg.ConfigDir, "kubectl.log")
+	writeFakeKubectl(t, cfg, logPath, "example.com")
+
+	if err := CreateStorefront(cfg, "example.com"); err != nil {
+		t.Fatalf("CreateStorefront: %v", err)
+	}
+
+	logBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read kubectl log: %v", err)
+	}
+	log := string(logBytes)
+
+	if !strings.Contains(log, "delete httproute/tunnel-storefront") {
+		t.Fatalf("CreateStorefront must tear down the stale tunnel-storefront HTTPRoute when every requested hostname is offer-bound; kubectl invocations:\n%s", log)
+	}
+	if strings.Contains(log, "apply") {
+		t.Fatalf("CreateStorefront must not re-apply the storefront HTTPRoute when every requested hostname is offer-bound; kubectl invocations:\n%s", log)
+	}
+}
+
+// TestRefreshStorefront_NoOpWithoutTunnelState guards a first `obol sell
+// ... --hostname X --no-register` before any persistent tunnel has ever been
+// created: storefrontHostnames("") has nothing to report (no persistent
+// tunnel state, no quick-tunnel URL to parse), so RefreshStorefront must
+// no-op quietly instead of calling CreateStorefront with zero hostnames and
+// surfacing its "requires at least one hostname" error as a confusing
+// warning. EnsureTunnelForSell reconciles the storefront later once the
+// tunnel exists.
+func TestRefreshStorefront_NoOpWithoutTunnelState(t *testing.T) {
+	cfg := newHostnameTestConfig(t)
+	writeFakeKubeconfig(t, cfg)
+
+	logPath := filepath.Join(cfg.ConfigDir, "kubectl.log")
+	writeFakeKubectl(t, cfg, logPath, "")
+
+	if err := RefreshStorefront(cfg); err != nil {
+		t.Fatalf("RefreshStorefront should no-op without tunnel state, got error: %v", err)
+	}
+
+	if _, err := os.ReadFile(logPath); err == nil {
+		t.Fatal("RefreshStorefront must not invoke kubectl when there is no hostname to publish")
 	}
 }
 

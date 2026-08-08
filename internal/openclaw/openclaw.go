@@ -28,6 +28,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
+	"github.com/ObolNetwork/obol-stack/internal/validate"
 	petname "github.com/dustinkirkland/golang-petname"
 )
 
@@ -166,6 +167,19 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 		u.Infof("Generated deployment ID: %s", id)
 	} else {
 		u.Infof("Using deployment ID: %s", id)
+	}
+
+	// id becomes a DNS label (hostname, namespace) below, so it must be
+	// restricted to a safe charset — an unsanitized id (e.g. containing a
+	// newline) could otherwise inject arbitrary /etc/hosts entries.
+	if err := validate.Name(id); err != nil {
+		return fmt.Errorf("invalid agent id: %w", err)
+	}
+	// validate.Name alone allows ids up to 63 chars, but Onboard derives the
+	// "openclaw-<id>" DNS label below — bound id here so that stays ≤63
+	// instead of failing later with an opaque Kubernetes error.
+	if max := agentruntime.MaxIDLength(agentruntime.OpenClaw); len(id) > max {
+		return fmt.Errorf("agent id %q is too long (%d chars): must be at most %d chars so %q-<id> fits the 63-character DNS label limit", id, len(id), max, appName)
 	}
 
 	deploymentDir := DeploymentPath(cfg, id)
@@ -1914,8 +1928,8 @@ func patchOverlayModelList(content string, models []string) (string, bool) {
 			} else {
 				result = append(result, indent+"models:")
 				for _, m := range models {
-					result = append(result, indent+"  - id: "+m)
-					result = append(result, indent+"    name: "+ollamaModelDisplayName(m))
+					result = append(result, indent+"  - id: "+yamlScalar(m))
+					result = append(result, indent+"    name: "+yamlScalar(ollamaModelDisplayName(m)))
 				}
 			}
 
@@ -2035,7 +2049,7 @@ rbac:
 	b.WriteString("openclaw:\n")
 
 	if agentModel != "" {
-		fmt.Fprintf(&b, "  agentModel: %s\n", agentModel)
+		fmt.Fprintf(&b, "  agentModel: %s\n", yamlScalar(agentModel))
 	}
 
 	b.WriteString(`  gateway:
@@ -2062,7 +2076,7 @@ models:
 		b.WriteString("    models:\n")
 
 		for _, m := range ollamaModels {
-			fmt.Fprintf(&b, "      - id: %s\n        name: %s\n", m, ollamaModelDisplayName(m))
+			fmt.Fprintf(&b, "      - id: %s\n        name: %s\n", yamlScalar(m), yamlScalar(ollamaModelDisplayName(m)))
 		}
 	} else {
 		b.WriteString("    models: []\n")

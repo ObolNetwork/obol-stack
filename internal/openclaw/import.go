@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/model"
+	"gopkg.in/yaml.v3"
 )
 
 // API key environment variable names for known providers.
@@ -217,14 +218,14 @@ func TranslateToOverlayYAML(result *ImportResult) string {
 	var b strings.Builder
 
 	if result.AgentModel != "" {
-		fmt.Fprintf(&b, "openclaw:\n  agentModel: %s\n\n", result.AgentModel)
+		fmt.Fprintf(&b, "openclaw:\n  agentModel: %s\n\n", yamlScalar(result.AgentModel))
 	}
 
 	if len(result.Providers) > 0 {
 		b.WriteString("models:\n")
 
 		for _, p := range result.Providers {
-			fmt.Fprintf(&b, "  %s:\n", p.Name)
+			fmt.Fprintf(&b, "  %s:\n", yamlScalar(p.Name))
 
 			if p.Disabled {
 				b.WriteString("    enabled: false\n")
@@ -234,7 +235,7 @@ func TranslateToOverlayYAML(result *ImportResult) string {
 			b.WriteString("    enabled: true\n")
 
 			if p.BaseURL != "" {
-				fmt.Fprintf(&b, "    baseUrl: %s\n", p.BaseURL)
+				fmt.Fprintf(&b, "    baseUrl: %s\n", yamlScalar(p.BaseURL))
 			}
 			// Always emit api to override any stale base chart value.
 			// Empty string makes the Helm template omit it from JSON,
@@ -246,17 +247,17 @@ func TranslateToOverlayYAML(result *ImportResult) string {
 			}
 
 			if p.APIKeyEnvVar != "" {
-				fmt.Fprintf(&b, "    apiKeyEnvVar: %s\n", p.APIKeyEnvVar)
+				fmt.Fprintf(&b, "    apiKeyEnvVar: %s\n", yamlScalar(p.APIKeyEnvVar))
 			}
 
 			if len(p.Models) > 0 {
 				b.WriteString("    models:\n")
 
 				for _, m := range p.Models {
-					fmt.Fprintf(&b, "      - id: %s\n", m.ID)
+					fmt.Fprintf(&b, "      - id: %s\n", yamlScalar(m.ID))
 
 					if m.Name != "" {
-						fmt.Fprintf(&b, "        name: %s\n", m.Name)
+						fmt.Fprintf(&b, "        name: %s\n", yamlScalar(m.Name))
 					}
 				}
 			}
@@ -456,4 +457,24 @@ func extractEnvVarName(s string) (string, bool) {
 // isEnvVarRef returns true if the value looks like an environment variable reference (${...})
 func isEnvVarRef(s string) bool {
 	return strings.Contains(s, "${")
+}
+
+// yamlScalar renders s as a double-quoted YAML scalar so it can be safely
+// interpolated into the hand-built overlay YAML. Values sourced from an
+// imported ~/.openclaw/openclaw.json are untrusted: without this, an
+// embedded newline (e.g. "x\nimage:\n  repository: evil") would let the
+// string break out of its field and inject new keys into values-obol.yaml,
+// which is later applied to the cluster via `helmfile sync`.
+func yamlScalar(s string) string {
+	node := yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s, Style: yaml.DoubleQuotedStyle}
+
+	out, err := yaml.Marshal(&node)
+	if err != nil {
+		// Unreachable for a plain string scalar; fall back to a manual
+		// double-quote/escape rather than emit the untrusted value raw.
+		r := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`, "\r", `\r`, "\t", `\t`)
+		return `"` + r.Replace(s) + `"`
+	}
+
+	return strings.TrimSuffix(string(out), "\n")
 }

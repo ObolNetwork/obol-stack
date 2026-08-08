@@ -139,7 +139,7 @@ func TestHTTPRouteAccepted(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "only Accepted condition (ResolvedRefs implicitly True by default)",
+			name: "only Accepted condition, ResolvedRefs absent — not yet accepted (fail closed)",
 			route: &unstructured.Unstructured{Object: map[string]any{
 				"status": map[string]any{
 					"parents": []any{
@@ -151,7 +151,7 @@ func TestHTTPRouteAccepted(t *testing.T) {
 					},
 				},
 			}},
-			want: true, // function defaults resolvedRefs to true when absent
+			want: false, // ResolvedRefs must be affirmatively True; absent is not trusted
 		},
 		{
 			name: "multiple parents: first bad, second good",
@@ -180,6 +180,81 @@ func TestHTTPRouteAccepted(t *testing.T) {
 				"status": map[string]any{
 					"parents": []any{
 						map[string]any{"controllerName": "example/traefik"},
+					},
+				},
+			}},
+			want: false,
+		},
+		{
+			// #767 route-acceptance gate: an UPDATE to an already-accepted
+			// route must not be trusted until Traefik reconciles the new
+			// spec. Status still reflects generation 1's verdict while the
+			// route is now at generation 2.
+			name: "Accepted=True but observedGeneration behind metadata.generation",
+			route: &unstructured.Unstructured{Object: map[string]any{
+				"metadata": map[string]any{"generation": int64(2)},
+				"status": map[string]any{
+					"parents": []any{
+						map[string]any{
+							"conditions": []any{
+								map[string]any{"type": "Accepted", "status": "True", "observedGeneration": int64(1)},
+								map[string]any{"type": "ResolvedRefs", "status": "True", "observedGeneration": int64(1)},
+							},
+						},
+					},
+				},
+			}},
+			want: false,
+		},
+		{
+			name: "Accepted=True with observedGeneration matching metadata.generation",
+			route: &unstructured.Unstructured{Object: map[string]any{
+				"metadata": map[string]any{"generation": int64(2)},
+				"status": map[string]any{
+					"parents": []any{
+						map[string]any{
+							"conditions": []any{
+								map[string]any{"type": "Accepted", "status": "True", "observedGeneration": int64(2)},
+								map[string]any{"type": "ResolvedRefs", "status": "True", "observedGeneration": int64(2)},
+							},
+						},
+					},
+				},
+			}},
+			want: true,
+		},
+		{
+			// Fail-closed: Accepted is current+True but ResolvedRefs is
+			// stale (behind metadata.generation) and False. The stale
+			// ResolvedRefs must NOT be ignored-as-true — the route has not
+			// been resolved against the current spec.
+			name: "Accepted current True but ResolvedRefs stale False",
+			route: &unstructured.Unstructured{Object: map[string]any{
+				"metadata": map[string]any{"generation": int64(2)},
+				"status": map[string]any{
+					"parents": []any{
+						map[string]any{
+							"conditions": []any{
+								map[string]any{"type": "Accepted", "status": "True", "observedGeneration": int64(2)},
+								map[string]any{"type": "ResolvedRefs", "status": "False", "observedGeneration": int64(1)},
+							},
+						},
+					},
+				},
+			}},
+			want: false,
+		},
+		{
+			name: "Accepted current True but ResolvedRefs absent",
+			route: &unstructured.Unstructured{Object: map[string]any{
+				"metadata": map[string]any{"generation": int64(2)},
+				"status": map[string]any{
+					"parents": []any{
+						map[string]any{
+							"conditions": []any{
+								map[string]any{"type": "Accepted", "status": "True", "observedGeneration": int64(2)},
+							},
+						},
 					},
 				},
 			}},

@@ -777,7 +777,9 @@ func TestSellRegister_Flags(t *testing.T) {
 
 	requireFlags(t, flags,
 		"chain",
-		"endpoint", "name", "description", "image",
+		// "endpoint" is kept as a deprecated alias of "origin" so existing
+		// scripts (e.g. flows/flow-14-live-obol-base-sepolia.sh) keep working.
+		"origin", "endpoint", "name", "description", "image",
 		// --sponsored is intentionally retained as a deprecated flag that
 		// errors with a clear message; users with old muscle memory or stale
 		// docs need a louder signal than "unknown flag".
@@ -787,6 +789,109 @@ func TestSellRegister_Flags(t *testing.T) {
 	assertStringDefault(t, flags, "chain", "mainnet")
 	assertStringDefault(t, flags, "name", "Obol Agent")
 	assertStringDefault(t, flags, "description", "Obol Stack AI agent with x402 payment-gated services")
+}
+
+func TestNormalizeAgentOrigin(t *testing.T) {
+	for _, tc := range []struct {
+		in      string
+		want    string
+		errPart string
+	}{
+		{in: "https://store.example.com", want: "https://store.example.com"},
+		{in: "https://store.example.com/", want: "https://store.example.com"},
+		{in: "https://abc-def.trycloudflare.com", want: "https://abc-def.trycloudflare.com"},
+		{in: "https://store.example.com/services/myagent", errPart: "no path"},
+		{in: "https://store.example.com/.well-known/agent-registration.json", errPart: "no path"},
+		{in: "not a url", errPart: "no path"},
+		{in: "", errPart: "no path"},
+		// Scheme-less and non-HTTP origins must be rejected, not silently
+		// accepted — a bare "//host" or "ftp://host" would mint a malformed,
+		// unfetchable on-chain agentURI.
+		{in: "//store.example.com", errPart: "http or https"},
+		{in: "ftp://store.example.com", errPart: "http or https"},
+	} {
+		got, err := normalizeAgentOrigin(tc.in)
+		if tc.errPart != "" {
+			if err == nil || !strings.Contains(err.Error(), tc.errPart) {
+				t.Fatalf("%q: expected error containing %q, got %v", tc.in, tc.errPart, err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%q: %v", tc.in, err)
+		}
+		if got != tc.want {
+			t.Fatalf("%q: got %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestOfferEligibleForAutoEnable guards enableRegistrationOnOffers' chain
+// filter: `obol sell register --network base` must not flip on an offer
+// pinned to a different, never-registered network (84dcbf83 originally
+// enabled every disabled offer cluster-wide with no chain check at all).
+func TestOfferEligibleForAutoEnable(t *testing.T) {
+	registered := map[string]bool{"base": true, "base-sepolia": true}
+
+	offer := func(network string, enabled bool) monetizeapi.ServiceOffer {
+		return monetizeapi.ServiceOffer{
+			Spec: monetizeapi.ServiceOfferSpec{
+				Payment:      monetizeapi.ServiceOfferPayment{Network: network},
+				Registration: monetizeapi.ServiceOfferRegistration{Enabled: enabled},
+			},
+		}
+	}
+
+	optedOut := offer("base", false)
+	optedOut.Annotations = map[string]string{autoRegisterOptOutAnnotation: "true"}
+
+	tests := []struct {
+		name string
+		o    monetizeapi.ServiceOffer
+		want bool
+	}{
+		{"disabled offer on a just-registered network", offer("base", false), true},
+		{"disabled offer on a different, unregistered network", offer("ethereum", false), false},
+		{"already-enabled offer on a just-registered network", offer("base", true), false},
+		{"disabled offer on an unregistered network stays disabled", offer("polygon", false), false},
+		{"opt-out annotation exempts an otherwise-eligible offer", optedOut, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := offerEligibleForAutoEnable(tc.o, registered); got != tc.want {
+				t.Errorf("offerEligibleForAutoEnable(network=%s, enabled=%v) = %v, want %v",
+					tc.o.Spec.Payment.Network, tc.o.Spec.Registration.Enabled, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestDefaultHealthPathForUpstream pins the --upstream-specific health-path
+// defaults: ollama serves 2xx only at "/" (neither /health nor
+// /health/readiness), so under the 2xx-only UpstreamHealthy gate the plain
+// "/health" default would leave the offer permanently un-Ready.
+func TestDefaultHealthPathForUpstream(t *testing.T) {
+	tests := []struct {
+		name       string
+		upstream   string
+		healthPath string
+		want       string
+	}{
+		{"ollama gets / when health-path unset", "ollama", "", "/"},
+		{"ollama gets / when health-path left at the flag default", "ollama", "/health", "/"},
+		{"ollama case-insensitive", "Ollama", "/health", "/"},
+		{"ollama explicit override is respected", "ollama", "/custom-health", "/custom-health"},
+		{"litellm still defaults to /health/readiness", "litellm", "/health", "/health/readiness"},
+		{"other upstream keeps the flag default", "my-svc", "/health", "/health"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := defaultHealthPathForUpstream(tc.upstream, tc.healthPath); got != tc.want {
+				t.Errorf("defaultHealthPathForUpstream(%q, %q) = %q, want %q",
+					tc.upstream, tc.healthPath, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestSellPricing_Flags(t *testing.T) {
@@ -865,6 +970,16 @@ func TestIsTransientRegistrationError(t *testing.T) {
 		{name: "rpc 500", err: errors.New("erc8004: register tx: 500 Internal Server Error"), want: true},
 		{name: "timeout", err: errors.New("context deadline exceeded while waiting for headers"), want: true},
 		{name: "revert", err: errors.New("erc8004: register tx: execution reverted"), want: false},
+		// registerWithRecovery pins and reuses the same nonce across a
+		// broadcast-timeout retry, so these three responses mean no new tx
+		// was accepted (no double-mint risk) — they must be transient so the
+		// retry loop keeps giving recoverRegistrationByOwnerAndURI time to
+		// see the original broadcast land, instead of reporting an
+		// already-landed mint as failed.
+		{name: "already known", err: errors.New("already known"), want: true},
+		{name: "nonce too low", err: errors.New("nonce too low"), want: true},
+		{name: "replacement underpriced", err: errors.New("replacement transaction underpriced"), want: true},
+		{name: "nonce error uppercase variant", err: errors.New("Nonce Too Low"), want: true},
 	}
 
 	for _, tt := range tests {
@@ -2621,5 +2736,68 @@ func TestOfferPathCollisionInList_Hostname(t *testing.T) {
 	}
 	if err := offerPathCollisionInList(listing, "agent-a", "alpha", "/services/alpha", "audit.v1337.example"); err != nil {
 		t.Fatalf("self-update must pass: %v", err)
+	}
+}
+
+// TestResolvePriceTable_RejectsMalformedPrice is the regression guard for
+// the Canary402 finding: an EU-style comma decimal ("0,01") or other
+// malformed --price value used to sail through resolvePriceTable with zero
+// validation, silently mispricing the offer at $0 (decimalToAtomic parses
+// "0" and drops the rest) or panicking the verifier hot path on every
+// request (nil *big.Float from a discarded Parse error). --per-mtok/--per-hour
+// already validate via ApproximateRequestPriceFrom*; --price/--per-request
+// must too.
+func TestResolvePriceTable_RejectsMalformedPrice(t *testing.T) {
+	badPrices := []string{"0,01", "abc", "$0.01", "-1", ""}
+
+	for _, price := range badPrices {
+		t.Run(price, func(t *testing.T) {
+			var resolveErr error
+			cmd := &cli.Command{
+				Name: "x",
+				Flags: []cli.Flag{
+					&cli.StringFlag{Name: "price"},
+					&cli.StringFlag{Name: "per-request"},
+					&cli.StringFlag{Name: "per-mtok"},
+					&cli.StringFlag{Name: "per-hour"},
+				},
+				Action: func(_ context.Context, c *cli.Command) error {
+					_, resolveErr = resolvePriceTable(c, true)
+					return nil
+				},
+			}
+			if err := cmd.Run(context.Background(), []string{"x", "--price", price}); err != nil {
+				t.Fatalf("cmd.Run: %v", err)
+			}
+			if resolveErr == nil {
+				t.Fatalf("resolvePriceTable(--price=%q) expected error, got nil", price)
+			}
+		})
+	}
+
+	// A well-formed price must still pass.
+	var resolveErr error
+	var got schemas.PriceTable
+	cmd := &cli.Command{
+		Name: "x",
+		Flags: []cli.Flag{
+			&cli.StringFlag{Name: "price"},
+			&cli.StringFlag{Name: "per-request"},
+			&cli.StringFlag{Name: "per-mtok"},
+			&cli.StringFlag{Name: "per-hour"},
+		},
+		Action: func(_ context.Context, c *cli.Command) error {
+			got, resolveErr = resolvePriceTable(c, true)
+			return nil
+		},
+	}
+	if err := cmd.Run(context.Background(), []string{"x", "--price", "0.01"}); err != nil {
+		t.Fatalf("cmd.Run: %v", err)
+	}
+	if resolveErr != nil {
+		t.Fatalf("resolvePriceTable(--price=0.01): unexpected error %v", resolveErr)
+	}
+	if got.PerRequest != "0.01" {
+		t.Fatalf("PerRequest = %q, want 0.01", got.PerRequest)
 	}
 }

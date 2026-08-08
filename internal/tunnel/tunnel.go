@@ -20,6 +20,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/images"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
+	"github.com/ObolNetwork/obol-stack/internal/version"
 )
 
 const (
@@ -987,18 +988,13 @@ func freeLocalPort() (int, error) {
 }
 
 // SyncTunnelConfigMap creates or patches the obol-stack-config ConfigMap in the
-// obol-frontend namespace with the current tunnel URL. The frontend reads this
-// ConfigMap to construct the correct dashboard URL.
+// obol-frontend namespace with the current tunnel URL and the running Obol CLI
+// version. The frontend reads this ConfigMap for the public tunnel URL and the
+// footer version display. Server-side apply merges fields; call after
+// obol-frontend exists (helmfile).
 func SyncTunnelConfigMap(cfg *config.Config, tunnelURL string) error {
 	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-
-	// Ensure the namespace exists (non-fatal if it doesn't).
-	_ = exec.Command(kubectlPath,
-		"--kubeconfig", kubeconfigPath,
-		"create", "namespace", "obol-frontend",
-		"--dry-run=client", "-o", "yaml",
-	).Run()
 
 	manifest := fmt.Sprintf(`apiVersion: v1
 kind: ConfigMap
@@ -1006,8 +1002,9 @@ metadata:
   name: obol-stack-config
   namespace: obol-frontend
 data:
-  tunnelURL: %s
-`, strings.TrimRight(tunnelURL, "/"))
+  tunnelURL: %q
+  obolVersion: %q
+`, strings.TrimRight(tunnelURL, "/"), version.Version)
 
 	// Server-side apply avoids the flaky client-side /openapi/v2 download on k3d.
 	cmd := exec.Command(kubectlPath,
@@ -1020,6 +1017,55 @@ data:
 		return fmt.Errorf("kubectl apply failed: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
+	return nil
+}
+
+// stackConfigVersionFieldManager scopes the obolVersion-only apply to its own
+// server-side-apply field manager.
+//
+// This is load-bearing, not cosmetic. Server-side apply deletes fields a
+// manager previously owned but no longer sends. SyncTunnelConfigMap applies
+// {tunnelURL, obolVersion} under kubectl's default manager; if this
+// obolVersion-only apply reused that manager, every call would prune
+// tunnelURL — which serviceoffer-controller reads for the ERC-8004
+// registration doc and the OpenAPI `servers` block, and the frontend reads for
+// the agent registration and marketplace URLs. Quick-tunnel stacks would never
+// get it back on `obol stack up`, because the tunnel stays dormant there and
+// SyncTunnelConfigMap is not called again.
+const stackConfigVersionFieldManager = "obol-stack-version"
+
+// stackConfigVersionApplyArgs builds the kubectl argv for the obolVersion-only
+// apply. Split out so the field-manager invariant above is unit-testable.
+func stackConfigVersionApplyArgs(kubeconfigPath string) []string {
+	return []string{
+		"--kubeconfig", kubeconfigPath,
+		"apply", "--server-side", "--force-conflicts",
+		"--field-manager=" + stackConfigVersionFieldManager,
+		"-f", "-",
+	}
+}
+
+// SyncStackConfigVersion SSA-merges only obolVersion into
+// obol-frontend/obol-stack-config, leaving tunnelURL untouched. Used on stack
+// up when no tunnel sync runs yet (after infra deploy creates the namespace).
+func SyncStackConfigVersion(cfg *config.Config) error {
+	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	manifest := fmt.Sprintf(`apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: obol-stack-config
+  namespace: obol-frontend
+data:
+  obolVersion: %q
+`, version.Version)
+
+	cmd := exec.Command(kubectlPath, stackConfigVersionApplyArgs(kubeconfigPath)...)
+	cmd.Stdin = strings.NewReader(manifest)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("kubectl apply obol-stack-config failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
 	return nil
 }
 
@@ -1040,6 +1086,29 @@ func EnsureTunnelForSell(cfg *config.Config, u *ui.UI) (string, error) {
 	}
 
 	return tunnelURL, nil
+}
+
+// RefreshStorefront re-applies the storefront's HTTPRoute against the
+// tunnel's currently tracked hostnames, narrowing or tearing it down for any
+// hostname that is now offer-bound. CreateStorefront only sees ServiceOffer
+// bindings that already exist on the cluster at call time, so a hostname
+// bound by a manifest applied AFTER the tunnel was last (re)created — e.g.
+// `obol sell ... --hostname X` — needs this explicit follow-up to be
+// reflected immediately, instead of shadowing the offer's route until some
+// later, unrelated tunnel/sell invocation happens to run CreateStorefront
+// again (Canary402).
+//
+// It no-ops quietly when there is no persistent tunnel/hostname state yet
+// (e.g. a first `obol sell ... --hostname X --no-register` before any
+// tunnel has ever been created) — CreateStorefront has nothing to publish
+// in that case, and EnsureTunnelForSell reconciles the storefront once the
+// tunnel comes up.
+func RefreshStorefront(cfg *config.Config) error {
+	hosts := storefrontHostnames(cfg, "")
+	if len(hosts) == 0 {
+		return nil
+	}
+	return CreateStorefront(cfg, hosts...)
 }
 
 // Stop scales the cloudflared deployment to 0 replicas.
@@ -1292,9 +1361,14 @@ func CreateStorefront(cfg *config.Config, hostnames ...string) error {
 		}
 		hosts = kept
 		if len(hosts) == 0 {
-			// Every tracked hostname is offer-bound; nothing for the
-			// storefront to serve — a valid configuration.
-			return nil
+			// Every tracked hostname is offer-bound: the storefront has
+			// nothing left to serve at any hostname. Tear it down instead
+			// of leaving the previously-applied HTTPRoute (with the now-
+			// stale wider host list) on the cluster — Gateway API breaks
+			// the resulting PathPrefix-/ tie by route age, so that stale
+			// route would otherwise keep shadowing the offer's own
+			// dedicated-origin route.
+			return DeleteStorefront(cfg)
 		}
 	}
 
