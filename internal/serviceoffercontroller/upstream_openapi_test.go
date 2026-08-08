@@ -54,8 +54,8 @@ func TestRewriteUpstreamOpenAPI_SizeCapFallsBack(t *testing.T) {
 	// openapi.json (buildOfferScopedOpenAPI) instead of failing the whole
 	// static site.
 	fallback := buildOfferScopedOpenAPI(offer, schemas.StorefrontProfile{})
-	upstream := func(*monetizeapi.ServiceOffer) map[string]any { return oversized }
-	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, schemas.StorefrontProfile{}, upstream)
+	upstream := func(*monetizeapi.ServiceOffer) (map[string]any, bool) { return oversized, true }
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, schemas.StorefrontProfile{}, upstream, nil)
 	var openapiContent string
 	for _, f := range bundles {
 		if f.Path == "offers/sec/audit/openapi.json" {
@@ -115,7 +115,7 @@ func TestUpstreamOpenAPICache_DeterministicAcrossFlappingFetch(t *testing.T) {
 	// itself, however many times it's called (the static-site rebuild that
 	// happens on every offer's reconcile).
 	for i := 0; i < 3; i++ {
-		buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, schemas.StorefrontProfile{}, cache.get)
+		buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, schemas.StorefrontProfile{}, cache.getSettled, nil)
 	}
 	if fetchCount != 2 {
 		t.Fatalf("fetchCount after 3 bundle rebuilds = %d, want 2 (buildOfferBundles must not fetch)", fetchCount)

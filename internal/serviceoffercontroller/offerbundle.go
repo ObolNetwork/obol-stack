@@ -52,7 +52,10 @@ func offerBundleKey(offer *monetizeapi.ServiceOffer, file string) string {
 // content hash and roll the shared discovery pod. The production caller
 // passes the Controller's upstreamOpenAPICache.get, refreshed independently
 // from each offer's own reconcile.
-func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.StorefrontProfile, upstreamOpenAPI func(*monetizeapi.ServiceOffer) map[string]any) []offerBundleFile {
+// published is the currently-served ConfigMap data (bundle key → content), or
+// nil on the first ever reconcile. It is only read for offers whose upstream
+// probe has not settled yet — see the comment at the !settled branch below.
+func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.StorefrontProfile, upstreamOpenAPI func(*monetizeapi.ServiceOffer) (map[string]any, bool), published map[string]string) []offerBundleFile {
 	var bundles []offerBundleFile
 	for _, offer := range offers {
 		if offer == nil || offer.Spec.Hostname == "" {
@@ -62,15 +65,37 @@ func buildOfferBundles(offers []*monetizeapi.ServiceOffer, profile schemas.Store
 		// branding block overrides the storefront profile field-wise
 		// (empty fields inherit).
 		originProfile := storefront.MergeProfile(profile, offer.Spec.Branding.ProfilePatch())
-		upstreamDoc := upstreamOpenAPI(offer)
+		upstreamDoc, settled := upstreamOpenAPI(offer)
 		openapiContent := buildOfferScopedOpenAPI(offer, originProfile)
 		x402Content := buildOfferWellKnownX402(offer)
-		if upstreamDoc != nil {
+		switch {
+		case upstreamDoc != nil:
 			if rewritten, ok := rewriteUpstreamOpenAPI(upstreamDoc, offer, originProfile); ok {
 				openapiContent = rewritten
 			}
 			if expanded := buildOfferWellKnownX402FromOpenAPI(offer, upstreamDoc); expanded != "" {
 				x402Content = expanded
+			}
+		case !settled:
+			// We have not probed this offer yet. The upstream-derived document
+			// enumerates one resource per real paid route; the fallback above
+			// collapses to the offer root. Publishing the fallback now would
+			// visibly thin out discovery for an offer we simply have not asked
+			// about — which is exactly what happens on every controller
+			// restart, because the cache is process-local and the shared
+			// bundle is rebuilt from it on EVERY offer's reconcile, including
+			// reconciles belonging to other offers.
+			//
+			// The ConfigMap survives the restart, so prefer what is already
+			// being served until this offer's own reconcile settles the probe.
+			// Stale beats thinner. Once settled, the branches above own the
+			// content — including settled-with-no-document, where the fallback
+			// is the correct final answer.
+			if prev, ok := published[offerBundleKey(offer, "openapi.json")]; ok && prev != "" {
+				openapiContent = prev
+			}
+			if prev, ok := published[offerBundleKey(offer, "x402.json")]; ok && prev != "" {
+				x402Content = prev
 			}
 		}
 		bundles = append(bundles,

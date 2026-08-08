@@ -22,7 +22,9 @@ func hostnameOffer() *monetizeapi.ServiceOffer {
 
 // noUpstreamOpenAPI is the buildOfferBundles cache-lookup stub for tests
 // that don't exercise the upstream-OpenAPI path.
-func noUpstreamOpenAPI(*monetizeapi.ServiceOffer) map[string]any { return nil }
+// noUpstreamOpenAPI is a SETTLED probe with no document: the offer was asked
+// and has none, so the route-table fallback is the correct final answer.
+func noUpstreamOpenAPI(*monetizeapi.ServiceOffer) (map[string]any, bool) { return nil, true }
 
 // TestBuildHostHTTPRoute pins the dedicated-origin route topology: Exact
 // discovery rules rewriting into the offer's bundle files on the catalog
@@ -112,11 +114,11 @@ func TestBuildOfferBundles(t *testing.T) {
 	profile := schemas.StorefrontProfile{DisplayName: "Acme", ContactEmail: "ops@acme.example"}
 	offer := hostnameOffer()
 
-	if got := buildOfferBundles([]*monetizeapi.ServiceOffer{routeTableOffer()}, profile, noUpstreamOpenAPI); len(got) != 0 {
+	if got := buildOfferBundles([]*monetizeapi.ServiceOffer{routeTableOffer()}, profile, noUpstreamOpenAPI, nil); len(got) != 0 {
 		t.Fatalf("path-only offer produced bundles: %v", got)
 	}
 
-	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile, noUpstreamOpenAPI)
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile, noUpstreamOpenAPI, nil)
 	if len(bundles) != 4 {
 		t.Fatalf("len(bundles) = %d, want 4", len(bundles))
 	}
@@ -216,7 +218,7 @@ func TestBuildOfferBundles_InferenceOfferAgreesWithOpenAPI(t *testing.T) {
 		},
 	}
 
-	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile, noUpstreamOpenAPI)
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile, noUpstreamOpenAPI, nil)
 	byPath := map[string]string{}
 	for _, f := range bundles {
 		byPath[f.Path] = f.Content
@@ -268,7 +270,7 @@ func TestBuildOfferBundles_BrandingOverride(t *testing.T) {
 		Description: "**Deep** audits by AuditCo.",
 	}
 
-	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile, noUpstreamOpenAPI)
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile, noUpstreamOpenAPI, nil)
 	byPath := map[string]string{}
 	for _, f := range bundles {
 		byPath[f.Path] = f.Content
@@ -458,7 +460,7 @@ func TestStaticSiteServesChatWidget(t *testing.T) {
 	// Per-offer page: agent offers gain a chat.html bundle file carrying
 	// the landing page's theme tokens and title; non-agent offers do not.
 	profile := schemas.StorefrontProfile{DisplayName: "Acme"}
-	plain := buildOfferBundles([]*monetizeapi.ServiceOffer{hostnameOffer()}, profile, noUpstreamOpenAPI)
+	plain := buildOfferBundles([]*monetizeapi.ServiceOffer{hostnameOffer()}, profile, noUpstreamOpenAPI, nil)
 	for _, f := range plain {
 		if strings.HasSuffix(f.Path, "chat.html") {
 			t.Fatalf("non-agent offer rendered a chat page: %s", f.Path)
@@ -466,7 +468,7 @@ func TestStaticSiteServesChatWidget(t *testing.T) {
 	}
 	agent := hostnameOffer()
 	agent.Spec.Type = "agent"
-	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{agent}, profile, noUpstreamOpenAPI)
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{agent}, profile, noUpstreamOpenAPI, nil)
 	var chat string
 	for _, f := range bundles {
 		if f.Path == "offers/sec/audit/chat.html" {
@@ -525,7 +527,7 @@ func TestBuildOfferBundles_UpstreamOpenAPI(t *testing.T) {
 	offer := hostnameOffer()
 	offer.Spec.Registration.Name = "Hyperliquid Trading Intelligence"
 	offer.Spec.Registration.Description = "Full first-party catalog."
-	upstream := func(*monetizeapi.ServiceOffer) map[string]any {
+	upstream := func(*monetizeapi.ServiceOffer) (map[string]any, bool) {
 		return map[string]any{
 			"openapi": "3.1.0",
 			"info":    map[string]any{"title": "upstream-title", "version": "1.1.0"},
@@ -541,9 +543,9 @@ func TestBuildOfferBundles_UpstreamOpenAPI(t *testing.T) {
 					"get": map[string]any{"summary": "Free overview", "security": []any{}, "responses": map[string]any{"200": map[string]any{}}},
 				},
 			},
-		}
+		}, true
 	}
-	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile, upstream)
+	bundles := buildOfferBundles([]*monetizeapi.ServiceOffer{offer}, profile, upstream, nil)
 	byPath := map[string]string{}
 	for _, f := range bundles {
 		byPath[f.Path] = f.Content
