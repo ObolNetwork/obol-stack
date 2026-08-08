@@ -7,7 +7,9 @@
 #      remote-signer in the agent's namespace)
 #   2. Gate it with `obol sell agent <name>` (creates a ServiceOffer of
 #      type=agent referencing the Agent)
-#   3. Probe → expect 402 with extra.agentModel + extra.agentSkills
+#   3. Probe → expect 402 with extra.agentSkills + extra.agentRuntime, and
+#      NO extra.agentModel (the model id is stripped on purpose — see
+#      mergeAgentExtras and TestMergeAgentExtras_AddsAgentFieldsButNotModel)
 #   4. Leave paid-call/settlement coverage to flow-08 until this scenario's
 #      commerce path is promoted into CI as a first-class smoke.
 #
@@ -231,7 +233,14 @@ else
     CURL_BASE="curl"
 fi
 
-step "402 response carries agentModel + agentSkills"
+# The 402 must surface what a buyer needs to choose the offer — the runtime
+# and the skill list — and must NOT leak the underlying model id. Stripping
+# agentModel is deliberate: mergeAgentExtras (internal/x402/verifier.go)
+# writes only agentSkills and agentRuntime, and
+# TestMergeAgentExtras_AddsAgentFieldsButNotModel asserts that agentModel is
+# never surfaced, because the buyer does not select one and it is an internal
+# detail. This step asserts that contract in both directions.
+step "402 response carries agentSkills + agentRuntime, and strips agentModel"
 body_402=$($CURL_BASE -s --max-time 10 -X POST \
     "$BASE_URL/services/$OFFER_NAME/v1/chat/completions" \
     -H "Content-Type: application/json" \
@@ -240,13 +249,14 @@ if echo "$body_402" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
 extra = d['accepts'][0].get('extra') or {}
-assert extra.get('agentModel'), 'agentModel missing'
 assert extra.get('agentSkills'), 'agentSkills missing'
-print(f\"OK: model={extra['agentModel']} skills={','.join(extra['agentSkills'])}\")
+assert extra.get('agentRuntime'), 'agentRuntime missing'
+assert 'agentModel' not in extra, f\"agentModel leaked: {extra.get('agentModel')!r}\"
+print(f\"OK: runtime={extra['agentRuntime']} skills={','.join(extra['agentSkills'])}\")
 " 2>&1 | grep -q "^OK:"; then
-    pass "402 extra surfaces agent metadata"
+    pass "402 extra surfaces agent metadata without leaking the model id"
 else
-    fail "402 missing agent metadata — ${body_402:0:300}"
+    fail "402 agent metadata contract violated — ${body_402:0:300}"
 fi
 
 # §4: Paid path intentionally deferred.
