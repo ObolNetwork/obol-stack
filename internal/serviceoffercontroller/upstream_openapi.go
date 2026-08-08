@@ -155,12 +155,31 @@ type upstreamOpenAPICache struct {
 // get returns the cached doc, or nil if no fetch has completed yet for this
 // offer's current generation.
 func (c *upstreamOpenAPICache) get(offer *monetizeapi.ServiceOffer) map[string]any {
+	doc, _ := c.getSettled(offer)
+	return doc
+}
+
+// getSettled is get plus whether the cache has a SETTLED answer for this
+// offer — i.e. a fetch has completed at least once. A nil doc means two very
+// different things and callers that render discovery documents must tell them
+// apart:
+//
+//   - settled=true, doc=nil  → we probed and there is no upstream document.
+//     The route-table fallback is the correct, final answer.
+//   - settled=false          → we have not probed yet (the controller just
+//     started, or this offer has not reconciled since). Rendering the fallback
+//     here would publish a thinner document than the one already being served.
+//
+// The cache is process-local, so every controller restart begins unsettled for
+// every offer.
+func (c *upstreamOpenAPICache) getSettled(offer *monetizeapi.ServiceOffer) (map[string]any, bool) {
 	if offer == nil {
-		return nil
+		return nil, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.entries[offer.UID].doc
+	entry, ok := c.entries[offer.UID]
+	return entry.doc, ok
 }
 
 // refresh fetches (via fetch) and caches the result, but only when the

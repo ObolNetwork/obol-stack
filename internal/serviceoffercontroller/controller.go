@@ -1354,7 +1354,7 @@ func (c *Controller) reconcileStaticSite(ctx context.Context, override *monetize
 	openAPIJSON := buildOpenAPIDocument(offers, baseURL, resolvedProfile)
 	wellKnownX402JSON := buildAggregateWellKnownX402(offers, baseURL)
 	apiDocsHTML := scalarHTML(resolvedProfile)
-	bundles := buildOfferBundles(offers, resolvedProfile, c.upstreamOpenAPICache.get)
+	bundles := buildOfferBundles(offers, resolvedProfile, c.upstreamOpenAPICache.getSettled, c.publishedStaticSiteData(ctx))
 	contentHash := computeStaticSiteContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML, wellKnownX402JSON, bundles)
 
 	unchanged, err := c.staticSiteContentUnchanged(ctx, content, servicesJSON, openAPIJSON, apiDocsHTML, wellKnownX402JSON, bundles)

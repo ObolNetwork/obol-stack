@@ -88,6 +88,20 @@ func (c *Controller) staticSiteContentUnchanged(ctx context.Context, content, se
 	return staticSiteContentMatches(cm, content, servicesJSON, openAPIJSON, apiDocsHTML, wellKnownX402JSON, bundles), nil
 }
 
+// publishedStaticSiteData returns the currently-served ConfigMap data, or nil
+// when it does not exist yet. buildOfferBundles uses it to hold the line on an
+// offer whose upstream probe has not settled since this process started —
+// see the !settled branch there. A read error is not fatal: the caller simply
+// renders from scratch, which is the pre-existing behaviour.
+func (c *Controller) publishedStaticSiteData(ctx context.Context) map[string]string {
+	cm, err := c.configMaps.Namespace(staticSiteNamespace).Get(ctx, staticSiteConfigMapName, metav1.GetOptions{})
+	if err != nil || cm == nil {
+		return nil
+	}
+	data, _, _ := unstructured.NestedStringMap(cm.Object, "data")
+	return data
+}
+
 func computeStaticSiteContentHash(content, servicesJSON, openAPIJSON, apiDocsHTML, wellKnownX402JSON string, bundles []offerBundleFile) string {
 	// The embedded vendor bundle is part of the served content: fold it in
 	// so a controller upgrade that changes it re-applies the ConfigMap and
