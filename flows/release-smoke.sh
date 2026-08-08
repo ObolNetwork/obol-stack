@@ -77,7 +77,11 @@ prepare_workspace() {
     mv "$tmp_obol" "$OBOL"
 
     local tool src
-    for tool in kubectl helm helmfile k3d k9s openclaw; do
+    # k3s is linked here too: internal/stack/backend_k3s.go resolves it at
+    # cfg.BinDir/k3s with NO PATH fallback, so without this OBOL_BACKEND=k3s
+    # could never be exercised by the smoke — every run died on
+    # "prerequisites check failed: k3s not found at <workspace>/bin/k3s".
+    for tool in kubectl helm helmfile k3d k3s k9s openclaw; do
         src=$(command -v "$tool" 2>/dev/null || true)
         [ -n "$src" ] && ln -sf "$src" "$OBOL_BIN_DIR/$tool"
     done
@@ -87,6 +91,13 @@ prepare_workspace() {
             return 1
         fi
     done
+    # k3s stays optional so k3d-only hosts are unaffected — but if the run
+    # actually asks for the k3s backend, fail here with an actionable message
+    # rather than inside the first flow's prerequisites check.
+    if [ "${OBOL_BACKEND:-}" = "k3s" ] && [ ! -x "$OBOL_BIN_DIR/k3s" ]; then
+        echo "OBOL_BACKEND=k3s but k3s is not on PATH — install it or unset OBOL_BACKEND" >&2
+        return 1
+    fi
 
     echo "==> Ensuring Python payment dependencies"
     ensure_payment_python_deps

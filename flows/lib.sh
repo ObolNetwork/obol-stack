@@ -565,7 +565,12 @@ bootstrap_flow_workspace() {
     reset_flow_workspace "$dir"
     cp "$picked" "$dir/bin/obol"
     chmod +x "$dir/bin/obol"
-    for tool in kubectl helm helmfile k3d k9s openclaw; do
+    # k3s belongs in this list: internal/stack/backend_k3s.go resolves it at
+    # cfg.BinDir/k3s with NO PATH fallback, so omitting it made OBOL_BACKEND=k3s
+    # impossible to exercise from the flows at all — every run died on
+    # "prerequisites check failed: k3s not found at <workspace>/bin/k3s".
+    # It is linked only when present, so k3d-only hosts are unaffected.
+    for tool in kubectl helm helmfile k3d k3s k9s openclaw; do
         src=$(command -v "$tool" 2>/dev/null || printf '%s\n' "$OBOL_ROOT/.workspace/bin/$tool")
         [ -f "$src" ] && ln -sf "$src" "$dir/bin/$tool" 2>/dev/null
     done
