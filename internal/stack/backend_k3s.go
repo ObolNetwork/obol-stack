@@ -63,6 +63,9 @@ func (b *K3sBackend) Init(cfg *config.Config, u *ui.UI, stackID string, force bo
 	k3sConfig := embed.K3sConfig
 	k3sConfig = strings.ReplaceAll(k3sConfig, "{{STACK_ID}}", stackID)
 	k3sConfig = strings.ReplaceAll(k3sConfig, "{{DATA_DIR}}", absDataDir)
+	// LAN SANs so worker nodes can join this server by IP or hostname.
+	k3sConfig = strings.ReplaceAll(k3sConfig, "{{NODE_IP}}", OutboundIP())
+	k3sConfig = strings.ReplaceAll(k3sConfig, "{{NODE_HOSTNAME}}", nodeHostname())
 
 	k3sConfigPath := filepath.Join(cfg.ConfigDir, k3sConfigFile)
 	if err := os.WriteFile(k3sConfigPath, []byte(k3sConfig), 0o600); err != nil {

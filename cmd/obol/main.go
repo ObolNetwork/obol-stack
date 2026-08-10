@@ -290,6 +290,9 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 					},
 					stackExportCommand(cfg),
 					stackImportCommand(cfg),
+					// Node management lives under `obol stack` (per review:
+					// it is cluster lifecycle, not its own top-level verb).
+					nodeCommand(cfg),
 				},
 			},
 			// ============================================================
