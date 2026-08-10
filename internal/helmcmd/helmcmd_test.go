@@ -236,3 +236,41 @@ func contains(haystack, needle string) bool {
 	}
 	return false
 }
+
+func TestParseHelmRepoList(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want map[string]string
+	}{
+		{
+			name: "two repos",
+			in:   `[{"name":"obol","url":"https://obolnetwork.github.io/helm-charts/"},{"name":"ethpandaops","url":"https://ethpandaops.github.io/ethereum-helm-charts"}]`,
+			want: map[string]string{
+				"obol":        "https://obolnetwork.github.io/helm-charts/",
+				"ethpandaops": "https://ethpandaops.github.io/ethereum-helm-charts",
+			},
+		},
+		{
+			name: "empty array",
+			in:   `[]`,
+			want: map[string]string{},
+		},
+		{
+			name: "entry without url skipped",
+			in:   `[{"name":"broken","url":""},{"name":"obol","url":"https://example.com"}]`,
+			want: map[string]string{"obol": "https://example.com"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseHelmRepoList([]byte(tc.in))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
