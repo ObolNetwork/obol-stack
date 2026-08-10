@@ -29,7 +29,7 @@ const (
 	hermesDataPVC      = "hermes-data"
 	hermesAPIPath      = "/health"
 	// renovate: datasource=docker depName=nousresearch/hermes-agent
-	defaultHermesImage = "nousresearch/hermes-agent:v2026.7.7.2"
+	defaultHermesImage = "nousresearch/hermes-agent:v2026.8.3"
 )
 
 // agentLabels returns the standard label set we attach to every primitive
