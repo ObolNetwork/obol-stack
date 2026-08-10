@@ -20,6 +20,8 @@ const (
 	erpcDeployment    = "erpc"
 )
 
+var errNoERPCRegistration = errors.New("network does not expose an eRPC upstream")
+
 // networkChainIDs maps network names to EVM chain IDs.
 var networkChainIDs = map[string]int{
 	"mainnet":      1,
@@ -27,6 +29,59 @@ var networkChainIDs = map[string]int{
 	"sepolia":      11155111,
 	"base":         8453,
 	"base-sepolia": 84532,
+}
+
+type localERPCRegistration struct {
+	ChainID  int
+	Alias    string
+	Endpoint string
+}
+
+type localERPCValues struct {
+	Network string `yaml:"network"`
+	Chain   string `yaml:"chain"`
+}
+
+func resolveLocalERPCRegistration(networkType, id string, values localERPCValues) (localERPCRegistration, error) {
+	namespace := fmt.Sprintf("%s-%s", networkType, id)
+
+	switch networkType {
+	case "ethereum":
+		chainID, ok := networkChainIDs[values.Network]
+		if !ok {
+			return localERPCRegistration{}, fmt.Errorf("unknown network %q — no chain ID mapping", values.Network)
+		}
+
+		return localERPCRegistration{
+			ChainID:  chainID,
+			Alias:    values.Network,
+			Endpoint: fmt.Sprintf("http://ethereum-execution.%s.svc.cluster.local:8545", namespace),
+		}, nil
+	case "hl-node":
+		chain := strings.TrimSpace(values.Chain)
+		if chain == "" {
+			chain = values.Network
+		}
+
+		switch strings.ToLower(strings.TrimSpace(chain)) {
+		case "mainnet":
+			return localERPCRegistration{
+				ChainID:  999,
+				Alias:    "hyperevm",
+				Endpoint: fmt.Sprintf("http://hl-node.%s.svc.cluster.local:3001/evm", namespace),
+			}, nil
+		case "testnet":
+			return localERPCRegistration{
+				ChainID:  998,
+				Alias:    "hyperevm-testnet",
+				Endpoint: fmt.Sprintf("http://hl-node.%s.svc.cluster.local:3001/evm", namespace),
+			}, nil
+		default:
+			return localERPCRegistration{}, fmt.Errorf("unknown hl-node chain %q — expected mainnet or testnet", chain)
+		}
+	default:
+		return localERPCRegistration{}, errNoERPCRegistration
+	}
 }
 
 // RegisterERPCUpstream reads the deployed network's RPC endpoint and adds
@@ -43,24 +98,18 @@ func RegisterERPCUpstream(cfg *config.Config, networkType, id string) error {
 		return fmt.Errorf("could not read values.yaml: %w", err)
 	}
 
-	var values struct {
-		Network string `yaml:"network"`
-	}
+	var values localERPCValues
 	if err := yaml.Unmarshal(valuesContent, &values); err != nil {
 		return fmt.Errorf("could not parse values.yaml: %w", err)
 	}
 
-	chainID, ok := networkChainIDs[values.Network]
-	if !ok {
-		return fmt.Errorf("unknown network %q — no chain ID mapping", values.Network)
+	reg, err := resolveLocalERPCRegistration(networkType, id, values)
+	if err != nil {
+		return err
 	}
-
-	// Build the internal RPC endpoint for this network's execution client
-	namespace := fmt.Sprintf("%s-%s", networkType, id)
-	endpoint := fmt.Sprintf("http://ethereum-execution.%s.svc.cluster.local:8545", namespace)
 	upstreamID := fmt.Sprintf("local-%s-%s", networkType, id)
 
-	return patchERPCUpstream(cfg, upstreamID, endpoint, chainID, values.Network, true)
+	return patchERPCUpstream(cfg, upstreamID, reg.Endpoint, reg.ChainID, reg.Alias, true)
 }
 
 // DeregisterERPCUpstream removes a previously registered local upstream

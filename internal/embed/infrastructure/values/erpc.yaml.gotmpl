@@ -16,7 +16,10 @@ replicas: 1
 
 image:
   repository: ghcr.io/erpc/erpc
-  tag: 0.0.64
+  # 0.1.x: unified selection-policy engine + in-house failsafe + dRPC REST discovery.
+  # NOTE: the legacy `selectionPolicy.evalFunction` blocks below are deprecated in 0.1.x
+  # (compat-shimmed to `selectionPolicy.eval`, emit a deprecation warning) — migrate in a follow-up.
+  tag: 0.1.1
   pullPolicy: IfNotPresent
 
 # Config file

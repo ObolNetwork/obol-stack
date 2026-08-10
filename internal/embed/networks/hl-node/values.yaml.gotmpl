@@ -1,0 +1,27 @@
+# Configuration via CLI flags
+# Template fields populated by obol CLI during network installation
+
+# @enum Mainnet,Testnet
+# @default Mainnet
+# @description Hyperliquid chain to follow
+chain: {{.Chain}}
+
+# @default --write-trades --serve-eth-rpc
+# @description hl-visor run-non-validator flags. Add --write-fills/--write-order-statuses/--write-raw-book-diffs for more data (each adds tens of GB/day). --serve-eth-rpc exposes HyperEVM JSON-RPC on :3001/evm.
+flags: "{{.Flags}}"
+
+# @default
+# @description Pinned gossip root peer IP for fast deterministic peering (from POST {"type":"gossipRootIps"} to api.hyperliquid.xyz/info). Empty = auto-discover. Gossip ports 4001/4002 must be publicly reachable to sync.
+rootIp: "{{.RootIp}}"
+
+# @default
+# @description Cluster node hostname to pin to (nodeSelector kubernetes.io/hostname). MUST be x86-64, Ubuntu-capable, >=500GB SSD (ideally 128GB RAM). Empty = schedule anywhere.
+host: "{{.Host}}"
+
+# @default hl-node:dev
+# @description Container image (built from obol-exex-indexer deploy/hl-node; must be present on the target node's container runtime or published to a registry).
+image: "{{.Image}}"
+
+# @default 1500Gi
+# @description Data volume size. Chain writes ~100GB/day with write-* flags — prune/rotate or size generously.
+storageSize: {{.StorageSize}}

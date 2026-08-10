@@ -1,0 +1,121 @@
+repositories:
+  - name: bedag
+    url: https://bedag.github.io/helm-charts/
+
+releases:
+  # Hyperliquid non-validating node (closed x86-64 hl-visor binary, containerized on ubuntu:24.04).
+  # hostNetwork so gossip 4001/4002 bind to the node IP (must be publicly reachable to sync).
+  - name: hl-node
+    namespace: hl-node-{{ .Values.id }}
+    createNamespace: true
+    chart: bedag/raw
+    values:
+      - resources:
+          - apiVersion: apps/v1
+            kind: StatefulSet
+            metadata:
+              name: hl-node
+              namespace: hl-node-{{ .Values.id }}
+              labels:
+                app: hl-node
+                app.kubernetes.io/part-of: obol.stack
+                obol.stack/id: {{ .Values.id }}
+                obol.stack/app: hl-node
+            spec:
+              serviceName: hl-node
+              replicas: 1
+              selector:
+                matchLabels:
+                  app: hl-node
+              template:
+                metadata:
+                  labels:
+                    app: hl-node
+                spec:
+                  {{- if .Values.host }}
+                  nodeSelector:
+                    kubernetes.io/hostname: {{ .Values.host }}
+                  {{- end }}
+                  hostNetwork: true
+                  dnsPolicy: ClusterFirstWithHostNet
+                  containers:
+                    - name: hl-node
+                      image: {{ .Values.image }}
+                      imagePullPolicy: IfNotPresent
+                      env:
+                        - name: HL_CHAIN
+                          value: "{{ .Values.chain }}"
+                        - name: HL_FLAGS
+                          value: "{{ .Values.flags }}"
+                        - name: HL_DATA_DIR
+                          value: /hl-data
+                        - name: HL_ROOT_IP
+                          value: "{{ .Values.rootIp }}"
+                      ports:
+                        - containerPort: 4001
+                          name: gossip1
+                        - containerPort: 4002
+                          name: gossip2
+                        - containerPort: 3001
+                          name: evm-rpc
+                      volumeMounts:
+                        - name: data
+                          mountPath: /hl-data
+                      # Official non-validator rec is 128Gi; this is best-effort on smaller nodes.
+                      # No memory limit so the node can use host RAM + swap instead of being OOMKilled.
+                      resources:
+                        requests:
+                          cpu: "4"
+                          memory: "8Gi"
+              volumeClaimTemplates:
+                - metadata:
+                    name: data
+                  spec:
+                    accessModes:
+                      - ReadWriteOnce
+                    storageClassName: local-path
+                    resources:
+                      requests:
+                        storage: {{ .Values.storageSize }}
+          - apiVersion: v1
+            kind: Service
+            metadata:
+              name: hl-node
+              namespace: hl-node-{{ .Values.id }}
+              labels:
+                app: hl-node
+            spec:
+              selector:
+                app: hl-node
+              ports:
+                - name: evm-rpc
+                  port: 3001
+                  targetPort: 3001
+
+  # Metadata ConfigMap for frontend discovery
+  - name: hl-node-metadata
+    namespace: hl-node-{{ .Values.id }}
+    chart: bedag/raw
+    values:
+      - resources:
+          - apiVersion: v1
+            kind: ConfigMap
+            metadata:
+              name: hl-node-{{ .Values.id }}-metadata
+              namespace: hl-node-{{ .Values.id }}
+              labels:
+                app.kubernetes.io/part-of: obol.stack
+                obol.stack/id: {{ .Values.id }}
+                obol.stack/app: hl-node
+            data:
+              metadata.json: |
+                {
+                  "chain": "{{ .Values.chain }}",
+                  "type": "hyperliquid-node",
+                  "endpoints": {
+                    "hyperevm-rpc": {
+                      "internal": "http://hl-node.hl-node-{{ .Values.id }}.svc.cluster.local:3001/evm"
+                    }
+                  },
+                  "tradeData": "node_trades/node_fills hourly JSONL under the data volume (/hl-data/data)"
+                }

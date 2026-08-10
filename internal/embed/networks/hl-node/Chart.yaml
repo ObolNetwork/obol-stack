@@ -1,0 +1,5 @@
+apiVersion: v2
+name: hl-node-local
+description: Local Hyperliquid non-validating node resources
+type: application
+version: 0.1.0
