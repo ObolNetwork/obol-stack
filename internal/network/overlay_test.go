@@ -1,12 +1,14 @@
 package network
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"gopkg.in/yaml.v3"
 )
 
@@ -172,10 +174,10 @@ projects:
 				"evm":      map[string]any{"chainId": 999},
 			},
 			{
-				"id":               "hyperevm-official",
-				"endpoint":         "https://rpc.hyperliquid.xyz/evm",
-				"evm":              map[string]any{"chainId": 999},
-				"rateLimitBudget":  "hyperevm-official",
+				"id":              "hyperevm-official",
+				"endpoint":        "https://rpc.hyperliquid.xyz/evm",
+				"evm":             map[string]any{"chainId": 999},
+				"rateLimitBudget": "hyperevm-official",
 			},
 		},
 		RateLimiters: map[string]any{
@@ -447,6 +449,158 @@ func TestResetERPC_RestoresBaseEntriesOverlayReplaced(t *testing.T) {
 	to := nm["failsafe"].(map[string]any)["timeout"].(map[string]any)["duration"]
 	if to != "30s" {
 		t.Errorf("base network failsafe not restored, got duration=%v", to)
+	}
+}
+
+func TestReconcileERPCOverlayConfig_ReplacesDisjointOverlay(t *testing.T) {
+	erpcConfig := map[string]any{
+		"projects": []any{
+			map[string]any{
+				"id": "rpc",
+				"networks": []any{
+					map[string]any{"alias": "base", "evm": map[string]any{"chainId": 8453}},
+				},
+				"upstreams": []any{
+					map[string]any{"id": "chart-base", "endpoint": "https://base.example.com"},
+				},
+			},
+		},
+	}
+	prov := &erpcProvenance{}
+	overlayA := &ERPCOverlay{
+		Version: 1,
+		Networks: []map[string]any{
+			{"alias": "network-a", "evm": map[string]any{"chainId": 111}},
+		},
+		Upstreams: []map[string]any{
+			{"id": "upstream-a", "endpoint": "https://a.example.com"},
+		},
+	}
+	if err := reconcileERPCOverlayConfig(erpcConfig, overlayA, prov); err != nil {
+		t.Fatal(err)
+	}
+	pruneERPCProvenance(prov, overlayA)
+
+	overlayB := &ERPCOverlay{
+		Version: 1,
+		Networks: []map[string]any{
+			{"alias": "network-b", "evm": map[string]any{"chainId": 222}},
+		},
+		Upstreams: []map[string]any{
+			{"id": "upstream-b", "endpoint": "https://b.example.com"},
+		},
+	}
+	if err := reconcileERPCOverlayConfig(erpcConfig, overlayB, prov); err != nil {
+		t.Fatal(err)
+	}
+	pruneERPCProvenance(prov, overlayB)
+
+	project := erpcConfigProject(erpcConfig)
+	upstreamIDs := map[string]bool{}
+	for _, upstream := range asMapSlice(project["upstreams"]) {
+		id, _ := upstream["id"].(string)
+		upstreamIDs[id] = true
+	}
+	if upstreamIDs["upstream-a"] {
+		t.Fatal("upstream-a from the previous overlay remained live")
+	}
+	if !upstreamIDs["chart-base"] || !upstreamIDs["upstream-b"] {
+		t.Fatalf("upstreams after replacement = %v, want chart-base + upstream-b", upstreamIDs)
+	}
+
+	networkKeys := map[string]bool{}
+	for _, network := range asMapSlice(project["networks"]) {
+		networkKeys[networkMergeKey(network)] = true
+	}
+	if networkKeys["chain:111"] {
+		t.Fatal("network-a from the previous overlay remained live")
+	}
+	if !networkKeys["chain:8453"] || !networkKeys["chain:222"] {
+		t.Fatalf("networks after replacement = %v, want base + network-b", networkKeys)
+	}
+	if _, tracked := prov.Upstreams["upstream-a"]; tracked {
+		t.Fatal("retired upstream remained in pruned provenance")
+	}
+	if _, tracked := prov.Networks["chain:111"]; tracked {
+		t.Fatal("retired network remained in pruned provenance")
+	}
+}
+
+func TestReconcileERPCOverlayConfig_RestoresBaseEntryOmittedByReplacement(t *testing.T) {
+	erpcConfig := map[string]any{
+		"projects": []any{
+			map[string]any{
+				"id":       "rpc",
+				"networks": []any{},
+				"upstreams": []any{
+					map[string]any{"id": "shared", "endpoint": "https://chart.example.com"},
+				},
+			},
+		},
+	}
+	prov := &erpcProvenance{}
+	overlayA := &ERPCOverlay{
+		Version: 1,
+		Upstreams: []map[string]any{
+			{"id": "shared", "endpoint": "https://overlay.example.com"},
+		},
+	}
+	if err := reconcileERPCOverlayConfig(erpcConfig, overlayA, prov); err != nil {
+		t.Fatal(err)
+	}
+	pruneERPCProvenance(prov, overlayA)
+
+	overlayB := &ERPCOverlay{
+		Version: 1,
+		Upstreams: []map[string]any{
+			{"id": "new", "endpoint": "https://new.example.com"},
+		},
+	}
+	if err := reconcileERPCOverlayConfig(erpcConfig, overlayB, prov); err != nil {
+		t.Fatal(err)
+	}
+
+	project := erpcConfigProject(erpcConfig)
+	got := map[string]string{}
+	for _, upstream := range asMapSlice(project["upstreams"]) {
+		id, _ := upstream["id"].(string)
+		endpoint, _ := upstream["endpoint"].(string)
+		got[id] = endpoint
+	}
+	if got["shared"] != "https://chart.example.com" {
+		t.Fatalf("shared upstream = %q, want restored chart value", got["shared"])
+	}
+	if got["new"] != "https://new.example.com" {
+		t.Fatalf("new upstream = %q, want replacement overlay value", got["new"])
+	}
+}
+
+func TestResetERPC_ClusterFailureRetainsRecoveryFiles(t *testing.T) {
+	cfg := &config.Config{ConfigDir: t.TempDir(), BinDir: t.TempDir()}
+	ov := &ERPCOverlay{
+		Version: 1,
+		Upstreams: []map[string]any{
+			{"id": "overlay-upstream", "endpoint": "https://overlay.example.com"},
+		},
+	}
+	if err := writeERPCOverlay(cfg, ov); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeERPCProvenance(cfg, &erpcProvenance{
+		Upstreams: map[string]*map[string]any{"overlay-upstream": nil},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	err := ResetERPC(cfg, ui.NewForTest(&stdout, &stderr))
+	if err == nil {
+		t.Fatal("ResetERPC succeeded without a running cluster")
+	}
+	for _, path := range []string{erpcOverlayPath(cfg), erpcProvenancePath(cfg)} {
+		if _, statErr := os.Stat(path); statErr != nil {
+			t.Fatalf("recovery file %s was removed after cleanup failure: %v", path, statErr)
+		}
 	}
 }
 
