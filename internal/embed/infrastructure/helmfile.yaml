@@ -23,6 +23,26 @@ values:
   # quick tunnel that should be preserved across the sync.
   - cloudflared:
       enabled: true
+  # x402 gateway settings. authCaptureUnlock is the opt-in paid unlock gate;
+  # off by default, so no fee is taken and the verifier's pricing config is
+  # byte-identical to before unless a stack configures it. Override with a
+  # state-values file or e.g.
+  #   --state-values-set x402.authCaptureUnlock.enabled=true
+  # NOTE: the hosted facilitator only supports auth-capture on Base Sepolia.
+  # For Base mainnet set x402.facilitatorURL to the in-cluster sidecar
+  # (http://localhost:8090).
+  - x402:
+      facilitatorURL: "https://x402.gcp.obol.tech"
+      authCaptureUnlock:
+        enabled: false
+        offerPrefix: ""
+        price: ""
+        network: ""
+        payTo: ""
+        feeRecipient: ""
+        minFeeBps: 0
+        maxFeeBps: 0
+        captureAuthorizer: ""
 
 releases:
   # Monitoring stack (Prometheus operator + Prometheus). Must run before
@@ -130,6 +150,10 @@ releases:
     values:
       - dataDir: /data
       - network: "{{ .Values.network }}"
+      # Passed through so the paid unlock gate is declarative and survives a
+      # re-sync. Off unless the stack sets it — see base/values.yaml.
+      - x402:
+          {{- toYaml .Values.x402 | nindent 10 }}
 
   # Cloudflare Tunnel (dormant until configured via obol tunnel login/provision).
   # `condition: cloudflared.enabled` lets `obol stack up` flip this off when an
