@@ -18,10 +18,25 @@ import (
 // inline auth-capture payment on its first request; handleAuthEndpoints
 // suppresses its free SIWX sign-in endpoints.
 
-// isUnlockOffer reports whether rule is the configured auth-capture unlock offer.
+// isUnlockOffer reports whether rule is an auth-capture unlock offer.
+//
+// Selection is by OFFER TYPE, not by a configured path: every agent offer is
+// unlock-gated, http offers never are. An agent is sold as a conversation a
+// human opens in the chat widget — connect wallet, pay once, then per-turn
+// billing — so the paid sign-in belongs to the whole type. http offers are
+// machine-to-machine APIs with no session concept, and gating them would tax
+// per-request traffic that never signs in.
+//
+// Deriving this from the type rather than an operator-set offerPrefix is what
+// makes the platform fee ship WITH the product: an operator does not opt in
+// per offer, and there is no longer a one-unlock-offer-per-stack ceiling.
+//
+// rule.AgentRuntime is populated from the ServiceOffer in serviceoffer_source.go
+// and is the same signal mergeAgentExtras already uses to decide a rule is an
+// agent, so this adds no new plumbing.
 func (v *Verifier) isUnlockOffer(cfg *PricingConfig, rule *RouteRule) bool {
 	return cfg != nil && cfg.AuthCaptureUnlock != nil && cfg.AuthCaptureUnlock.Enabled &&
-		strings.TrimSuffix(rule.StripPrefix, "/") == strings.TrimSuffix(cfg.AuthCaptureUnlock.OfferPrefix, "/")
+		rule != nil && rule.AgentRuntime != ""
 }
 
 // handlePaidUnlock runs the auth-capture pay->settle->mint flow for the unlock
@@ -36,8 +51,25 @@ func (v *Verifier) handlePaidUnlock(w http.ResponseWriter, r *http.Request, rule
 	}
 	uc := *cfg.AuthCaptureUnlock
 
+	// Resolve per-offer fallbacks BEFORE validating: every agent offer is now
+	// unlock-gated, so price and the seller leg come from the OFFER unless the
+	// operator pinned them globally. Without this each agent's unlock revenue
+	// would land in one wallet at one price. Validate then sees the values that
+	// will actually be advertised.
+	if uc.Price == "" {
+		// One turn's worth buys the session.
+		uc.Price = rule.Price
+	}
+	if uc.PayTo == "" {
+		uc.PayTo = rule.PayTo
+	}
+	if uc.Network == "" {
+		uc.Network = rule.Network
+	}
+
 	if err := uc.Validate(); err != nil {
-		log.Printf("x402-verifier: auth-capture unlock config invalid: %v", err)
+		log.Printf("x402-verifier: auth-capture unlock config invalid for %s/%s: %v",
+			rule.OfferNamespace, rule.OfferName, err)
 		writeUnlockJSON(w, http.StatusInternalServerError, map[string]any{"error": "unlock_misconfigured"})
 		return
 	}

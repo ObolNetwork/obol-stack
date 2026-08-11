@@ -14,11 +14,16 @@ const (
 	defaultRefundDeadlineSecs  = 1800
 )
 
-// AuthCaptureUnlockConfig configures the single offer whose SIWX session is
-// minted only after an auth-capture payment verifies and settles.
+// AuthCaptureUnlockConfig configures the paid sign-in applied to AGENT offers:
+// their SIWX session is minted only after an auth-capture payment verifies and
+// settles. Which offers it covers is decided by type (see isUnlockOffer), not
+// by config — this struct only carries how the payment is priced and split.
+//
+// Price, Network and PayTo are OVERRIDES. Left empty they fall back to the
+// agent offer's own values, so a stack with several agents needs no per-agent
+// configuration and each seller is paid to their own address.
 type AuthCaptureUnlockConfig struct {
 	Enabled             bool   `yaml:"enabled"`
-	OfferPrefix         string `yaml:"offerPrefix"`
 	Price               string `yaml:"price"`
 	Network             string `yaml:"network"`
 	PayTo               string `yaml:"payTo"`
@@ -45,14 +50,19 @@ func (c *AuthCaptureUnlockConfig) Validate() error {
 	}
 
 	if c.Enabled {
-		if c.OfferPrefix == "" {
-			return fmt.Errorf("offerPrefix must be non-empty when enabled")
-		}
 		if c.FeeRecipient == "" {
 			return fmt.Errorf("feeRecipient must be non-empty when enabled")
 		}
 		if c.CaptureAuthorizer == "" {
 			return fmt.Errorf("captureAuthorizer must be non-empty when enabled")
+		}
+		// Price is resolved per-offer from the agent's own price, so it is
+		// deliberately NOT required here — but if it never resolves, the
+		// requirement builder would advertise an empty amount. handlePaidUnlock
+		// fills it from the rule before calling Validate's caller, so an empty
+		// price at this point means neither config nor offer priced it.
+		if c.Price == "" {
+			return fmt.Errorf("price is empty and the offer does not declare one")
 		}
 	}
 	if c.MinFeeBps > c.MaxFeeBps {

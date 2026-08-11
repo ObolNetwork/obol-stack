@@ -20,12 +20,14 @@ const (
 	testFeeRecipient      = "0x1111111111111111111111111111111111111111"
 	testCaptureAuthorizer = "0x2222222222222222222222222222222222222222"
 	testUnlockPayer       = "0xAbCdEfabcdefABCDefAbcdefabCDefABcDefAbCd"
+	// Unlock offers are now selected by offer TYPE, not by a configured
+	// path, so this is just where the fixture agent happens to live.
+	testOfferPrefix       = "/services/agent"
 )
 
 func validAuthCaptureConfig() AuthCaptureUnlockConfig {
 	return AuthCaptureUnlockConfig{
 		Enabled:           true,
-		OfferPrefix:       "/services/agent",
 		Price:             "1.00",
 		FeeRecipient:      testFeeRecipient,
 		MinFeeBps:         100,
@@ -211,10 +213,12 @@ func TestPaidUnlock_InlineFirstMessage(t *testing.T) {
 		Routes: []RouteRule{{
 			Pattern:        "/services/agent/*",
 			Gate:           "auth",
-			StripPrefix:    unlockConfig.OfferPrefix,
+			StripPrefix:    testOfferPrefix,
 			UpstreamURL:    upstream.URL,
 			OfferNamespace: "test",
 			OfferName:      "agent",
+			// Selects the unlock gate: isUnlockOffer keys on the agent type.
+			AgentRuntime:   "hermes",
 		}},
 		AuthCaptureUnlock: &unlockConfig,
 	})
@@ -222,7 +226,7 @@ func TestPaidUnlock_InlineFirstMessage(t *testing.T) {
 		t.Fatalf("NewVerifier: %v", err)
 	}
 
-	path := unlockConfig.OfferPrefix + "/chat"
+	path := testOfferPrefix + "/chat"
 	req := httptest.NewRequest(http.MethodGet, path, nil)
 	w := httptest.NewRecorder()
 	v.HandleProxy(w, req)
@@ -345,10 +349,12 @@ func TestPaidUnlock_SettleErrorSurfacesTxHash(t *testing.T) {
 		Routes: []RouteRule{{
 			Pattern:        "/services/agent/*",
 			Gate:           "auth",
-			StripPrefix:    unlockConfig.OfferPrefix,
+			StripPrefix:    testOfferPrefix,
 			UpstreamURL:    "http://upstream.invalid",
 			OfferNamespace: "test",
 			OfferName:      "agent",
+			// Selects the unlock gate: isUnlockOffer keys on the agent type.
+			AgentRuntime:   "hermes",
 		}},
 		AuthCaptureUnlock: &unlockConfig,
 	})
@@ -356,7 +362,7 @@ func TestPaidUnlock_SettleErrorSurfacesTxHash(t *testing.T) {
 		t.Fatalf("NewVerifier: %v", err)
 	}
 
-	path := unlockConfig.OfferPrefix + "/chat"
+	path := testOfferPrefix + "/chat"
 	challengeReq := httptest.NewRequest(http.MethodGet, path, nil)
 	cw := httptest.NewRecorder()
 	v.HandleProxy(cw, challengeReq)
@@ -510,10 +516,12 @@ func TestPaidUnlock_RejectsTamperedPayment(t *testing.T) {
 		Routes: []RouteRule{{
 			Pattern:        "/services/agent/*",
 			Gate:           "auth",
-			StripPrefix:    unlockConfig.OfferPrefix,
+			StripPrefix:    testOfferPrefix,
 			UpstreamURL:    upstream.URL,
 			OfferNamespace: "test",
 			OfferName:      "agent",
+			// Selects the unlock gate: isUnlockOffer keys on the agent type.
+			AgentRuntime:   "hermes",
 		}},
 		AuthCaptureUnlock: &unlockConfig,
 	})
@@ -521,7 +529,7 @@ func TestPaidUnlock_RejectsTamperedPayment(t *testing.T) {
 		t.Fatalf("NewVerifier: %v", err)
 	}
 
-	path := unlockConfig.OfferPrefix + "/chat"
+	path := testOfferPrefix + "/chat"
 	cw := httptest.NewRecorder()
 	v.HandleProxy(cw, httptest.NewRequest(http.MethodGet, path, nil))
 	var challenge struct {

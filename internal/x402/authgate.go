@@ -282,18 +282,19 @@ func (v *Verifier) handleAuthEndpoints(w http.ResponseWriter, r *http.Request) b
 		return false
 	}
 	cfg := v.config.Load()
-	if cfg != nil && cfg.AuthCaptureUnlock != nil && cfg.AuthCaptureUnlock.Enabled &&
-		strings.TrimSuffix(prefix, "/") == strings.TrimSuffix(cfg.AuthCaptureUnlock.OfferPrefix, "/") {
-		// ponytail: unlock-gated offer: paid /unlock is the only mint path; free SIWX signin
-		// suppressed here. Ceiling: one unlock offer (global config); per-offer via CRD is the
-		// follow-up.
-		return false
-	}
 
 	// Only offers that actually declare an auth route get sign-in
 	// endpoints — everything else falls through to normal route matching
 	// (and its fail-closed handling).
 	rule := v.authRuleForPrefix(prefix)
+
+	if v.isUnlockOffer(cfg, rule) {
+		// Unlock-gated offer: paid /unlock is the only mint path, so the free
+		// SIWX sign-in is suppressed here. Selection is by offer type — see
+		// isUnlockOffer — so this now covers every agent offer rather than a
+		// single configured prefix.
+		return false
+	}
 	if rule == nil {
 		return false
 	}
