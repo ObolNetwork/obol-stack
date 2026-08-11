@@ -20,6 +20,11 @@ metadata:
 ---
 # Static gateway settings plus optional manual routes. In cluster mode the
 # gateway merges these with dynamic routes derived from ready ServiceOffers.
+#
+# authCaptureUnlock is rendered from values so it SURVIVES `obol stack up`.
+# Hand-patching this ConfigMap works until the next sync, which restores the
+# chart default and silently disables the fee split — that has already
+# happened once on a live stack.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -29,10 +34,34 @@ data:
   pricing.yaml: |
     wallet: ""
     chain: "base"
-    facilitatorURL: "https://x402.gcp.obol.tech"
+    facilitatorURL: "{{ .Values.x402.facilitatorURL | default "https://x402.gcp.obol.tech" }}"
     # verifyOnly applies to the legacy /verify endpoint only. The shared seller
     # gateway path always settles after upstream success.
     verifyOnly: true
+    {{- with .Values.x402.authCaptureUnlock }}
+    {{- if .enabled }}
+    # Paid unlock gate. The offer named by offerPrefix must already expose a
+    # `gate: auth` route (its free SIWX sign-in is suppressed); buyers mint a
+    # session by paying once instead. minFeeBps/maxFeeBps bound the cut the
+    # buyer signs; the remainder goes to payTo.
+    authCaptureUnlock:
+      enabled: true
+      offerPrefix: {{ .offerPrefix | quote }}
+      price: {{ .price | quote }}
+      network: {{ .network | quote }}
+      payTo: {{ .payTo | quote }}
+      feeRecipient: {{ .feeRecipient | quote }}
+      minFeeBps: {{ .minFeeBps }}
+      maxFeeBps: {{ .maxFeeBps }}
+      captureAuthorizer: {{ .captureAuthorizer | quote }}
+      {{- with .captureDeadlineSecs }}
+      captureDeadlineSecs: {{ . }}
+      {{- end }}
+      {{- with .refundDeadlineSecs }}
+      refundDeadlineSecs: {{ . }}
+      {{- end }}
+    {{- end }}
+    {{- end }}
     routes: []
 
 ---
