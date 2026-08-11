@@ -1,0 +1,40 @@
+# Defaults for the base chart. The helmfile passes dataDir and network
+# explicitly; everything below is what a stack gets when it says nothing.
+
+x402:
+  # Facilitator the verifier settles against.
+  #
+  # The hosted facilitator supports the `auth-capture` scheme on Base Sepolia
+  # ONLY (eip155:84532). To run the paid unlock gate on Base MAINNET, point
+  # this at the in-cluster facilitator sidecar instead:
+  #   facilitatorURL: "http://localhost:8090"
+  facilitatorURL: "https://x402.gcp.obol.tech"
+
+  # Paid unlock gate (opt-in, off by default — no fee is taken unless you
+  # configure this). Turns ONE `gate: auth` offer from free wallet sign-in
+  # into pay-once-to-mint-a-session, and splits that single payment on-chain
+  # between payTo and feeRecipient via AuthCaptureEscrow.
+  #
+  # Only one unlock offer per stack today; per-offer configuration via the
+  # ServiceOffer CRD is the follow-up. Set offerPrefix to the offer's public
+  # path — it must match the route's stripPrefix exactly.
+  authCaptureUnlock:
+    enabled: false
+    offerPrefix: ""
+    price: ""
+    network: ""
+    # Seller leg. Falls back to the verifier's own wallet when empty.
+    payTo: ""
+    # Fee leg. Required when enabled, and must be a non-zero address
+    # whenever maxFeeBps > 0.
+    feeRecipient: ""
+    # Bounds on the cut, in basis points, that the buyer signs.
+    # 50 = 0.5%. maxFeeBps must be <= 10000 and >= minFeeBps.
+    minFeeBps: 0
+    maxFeeBps: 0
+    # Address permitted to capture the escrowed authorization. Required
+    # when enabled.
+    captureAuthorizer: ""
+    # Optional; the verifier applies its own defaults when these are unset.
+    captureDeadlineSecs: null
+    refundDeadlineSecs: null
