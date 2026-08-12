@@ -3,14 +3,12 @@ package x402
 import (
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"log"
 	"math/big"
 	"net/http"
 	"strings"
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus"
 	x402types "github.com/x402-foundation/x402/go/v2/types"
 )
 
@@ -20,8 +18,18 @@ import (
 
 // isUnlockOffer reports whether rule is the configured auth-capture unlock offer.
 func (v *Verifier) isUnlockOffer(cfg *PricingConfig, rule *RouteRule) bool {
-	return cfg != nil && cfg.AuthCaptureUnlock != nil && cfg.AuthCaptureUnlock.Enabled &&
-		strings.TrimSuffix(rule.StripPrefix, "/") == strings.TrimSuffix(cfg.AuthCaptureUnlock.OfferPrefix, "/")
+	if cfg == nil || cfg.AuthCaptureUnlock == nil || !cfg.AuthCaptureUnlock.Enabled {
+		return false
+	}
+	// An empty offerPrefix means no unlock offer, NOT "match everything". The
+	// same config block also drives the per-request platform fee, which needs
+	// no prefix — without this guard, enabling the fee would silently convert
+	// every root-mounted gate:auth offer (StripPrefix "") into a paid unlock.
+	prefix := strings.TrimSuffix(cfg.AuthCaptureUnlock.OfferPrefix, "/")
+	if prefix == "" {
+		return false
+	}
+	return strings.TrimSuffix(rule.StripPrefix, "/") == prefix
 }
 
 // handlePaidUnlock runs the auth-capture pay->settle->mint flow for the unlock
@@ -67,7 +75,9 @@ func (v *Verifier) handlePaidUnlock(w http.ResponseWriter, r *http.Request, rule
 	if payTo == "" {
 		payTo = cfg.Wallet
 	}
-	req, err := BuildAuthCaptureRequirement(chain, asset, &uc, payTo, time.Now())
+	// maxTimeoutSeconds=0 → ClampMaxTimeoutSeconds → DefaultMaxTimeoutSeconds.
+	// Independent of CaptureDeadlineSecs (escrow hold written into Extra).
+	req, err := BuildAuthCaptureRequirement(chain, asset, &uc, payTo, 0, time.Now())
 	if err != nil {
 		log.Printf("x402-verifier: build auth-capture unlock requirement: %v", err)
 		writeUnlockJSON(w, http.StatusInternalServerError, map[string]any{"error": "unlock_misconfigured"})
@@ -115,7 +125,7 @@ func (v *Verifier) handlePaidUnlock(w http.ResponseWriter, r *http.Request, rule
 		return
 	}
 	signedReq := payload.Accepted
-	if err := validateSignedUnlockRequirement(signedReq, req, uc, asset, time.Now().Unix()); err != nil {
+	if err := validateSignedAuthCapture(signedReq, req, uc.CaptureDeadlineSecs, time.Now().Unix()); err != nil {
 		log.Printf("x402-verifier: unlock payment policy mismatch: %v", err)
 		writeUnlockJSON(w, http.StatusPaymentRequired, map[string]any{"error": "payment_policy_mismatch", "detail": err.Error()})
 		return
@@ -156,16 +166,7 @@ func (v *Verifier) handlePaidUnlock(w http.ResponseWriter, r *http.Request, rule
 		return
 	}
 
-	amount, ok := new(big.Int).SetString(req.Amount, 10)
-	if !ok {
-		log.Printf("x402-verifier: parse auth-capture unlock amount %q for metrics", req.Amount)
-	} else {
-		feeBps := uc.MaxFeeBps
-		fee := new(big.Int).Div(new(big.Int).Mul(amount, big.NewInt(int64(feeBps))), big.NewInt(10000))
-		labels := prometheus.Labels{"network": req.Network, "asset": req.Asset, "fee_recipient": uc.FeeRecipient}
-		v.metrics.settledVolumeAtomic.With(labels).Add(bigIntToFloat(amount))
-		v.metrics.feeRevenueAtomic.With(labels).Add(bigIntToFloat(fee))
-	}
+	v.recordFeeRevenue(req, uc.FeeRecipient, uc.MaxFeeBps)
 
 	wallet := settleResp.Payer
 	if wallet == "" {
@@ -215,65 +216,9 @@ func bigIntToFloat(x *big.Int) float64 {
 	return f
 }
 
-// validateSignedUnlockRequirement checks the requirement the client signed
-// (payload.accepted) against the offer's policy (expected, built from config).
-// It permits the client's server-issued deadlines to differ from `expected`'s
-// freshly rebuilt ones (only sanity-checking them), but pins every
-// economically-sensitive field so a client cannot redirect the fee, underpay,
-// or swap the authorizer. Returns nil when the signed requirement is safe to
-// settle.
-func validateSignedUnlockRequirement(signed, expected x402types.PaymentRequirements, uc AuthCaptureUnlockConfig, asset AssetInfo, now int64) error {
-	if signed.Scheme != "auth-capture" {
-		return fmt.Errorf("scheme %q, want auth-capture", signed.Scheme)
-	}
-	if signed.Network != expected.Network {
-		return fmt.Errorf("network %q, want %q", signed.Network, expected.Network)
-	}
-	if !strings.EqualFold(signed.Asset, expected.Asset) {
-		return fmt.Errorf("asset %q, want %q", signed.Asset, expected.Asset)
-	}
-	if !strings.EqualFold(signed.PayTo, expected.PayTo) {
-		return fmt.Errorf("payTo %q, want %q", signed.PayTo, expected.PayTo)
-	}
-	if signed.Amount != expected.Amount {
-		return fmt.Errorf("amount %q, want %q", signed.Amount, expected.Amount)
-	}
-	ex := signed.Extra
-	if ex == nil {
-		return fmt.Errorf("missing extra")
-	}
-	if !strings.EqualFold(exStr(ex, "captureAuthorizer"), uc.CaptureAuthorizer) {
-		return fmt.Errorf("captureAuthorizer mismatch")
-	}
-	if !strings.EqualFold(exStr(ex, "feeRecipient"), uc.FeeRecipient) {
-		return fmt.Errorf("feeRecipient mismatch")
-	}
-	if exU64(ex, "minFeeBps") != uint64(uc.MinFeeBps) {
-		return fmt.Errorf("minFeeBps %d, want %d", exU64(ex, "minFeeBps"), uc.MinFeeBps)
-	}
-	if exU64(ex, "maxFeeBps") != uint64(uc.MaxFeeBps) {
-		return fmt.Errorf("maxFeeBps %d, want %d", exU64(ex, "maxFeeBps"), uc.MaxFeeBps)
-	}
-	if b, _ := ex["autoCapture"].(bool); !b {
-		return fmt.Errorf("autoCapture not true")
-	}
-	if exStr(ex, "assetTransferMethod") != asset.TransferMethod {
-		return fmt.Errorf("assetTransferMethod %q, want %q", exStr(ex, "assetTransferMethod"), asset.TransferMethod)
-	}
-	cd, rd := exI64(ex, "captureDeadline"), exI64(ex, "refundDeadline")
-	if cd <= now+6 {
-		return fmt.Errorf("captureDeadline %d not > now+6 (%d)", cd, now+6)
-	}
-	if rd < cd {
-		return fmt.Errorf("refundDeadline %d < captureDeadline %d", rd, cd)
-	}
-	return nil
-}
-
-// exStr/exF64/exU64/exI64 coerce a JSON-decoded Extra value (numbers arrive as
-// float64) to a concrete type; missing/wrong-typed keys yield the zero value.
-func exStr(m map[string]interface{}, k string) string { s, _ := m[k].(string); return s }
-
+// exF64/exI64 coerce a JSON-decoded Extra value (numbers arrive as float64)
+// to a concrete type; missing/wrong-typed keys yield the zero value.
+// Used by validateSignedAuthCapture for deadline bounds.
 func exF64(m map[string]interface{}, k string) float64 {
 	switch v := m[k].(type) {
 	case float64:
@@ -289,8 +234,7 @@ func exF64(m map[string]interface{}, k string) float64 {
 	return 0
 }
 
-func exU64(m map[string]interface{}, k string) uint64 { return uint64(exF64(m, k)) }
-func exI64(m map[string]interface{}, k string) int64  { return int64(exF64(m, k)) }
+func exI64(m map[string]interface{}, k string) int64 { return int64(exF64(m, k)) }
 
 func facilitatorDetail(reason, message string) string {
 	detail := strings.TrimSpace(strings.TrimSpace(reason) + " " + strings.TrimSpace(message))

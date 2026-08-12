@@ -31,28 +31,44 @@ type AuthCaptureUnlockConfig struct {
 	RefundDeadlineSecs  uint64 `yaml:"refundDeadlineSecs"`
 }
 
-// Validate applies deadline defaults and rejects unusable auth-capture
-// configuration before a payment is sent to the facilitator.
-func (c *AuthCaptureUnlockConfig) Validate() error {
-	if c == nil {
-		return fmt.Errorf("authCaptureUnlock config is nil")
-	}
+// applyDeadlineDefaults fills unset capture/refund windows. Split out of
+// Validate so callers that need the effective deadlines without a priced
+// requirement (the per-request fee bounds a client-echoed captureDeadline
+// against them) get the same numbers Validate would have applied.
+func (c *AuthCaptureUnlockConfig) applyDeadlineDefaults() {
 	if c.CaptureDeadlineSecs == 0 {
 		c.CaptureDeadlineSecs = defaultCaptureDeadlineSecs
 	}
 	if c.RefundDeadlineSecs == 0 {
 		c.RefundDeadlineSecs = defaultRefundDeadlineSecs
 	}
+}
+
+// Validate applies deadline defaults and rejects unusable auth-capture
+// configuration before a payment is sent to the facilitator.
+func (c *AuthCaptureUnlockConfig) Validate() error {
+	if c == nil {
+		return fmt.Errorf("authCaptureUnlock config is nil")
+	}
+	c.applyDeadlineDefaults()
 
 	if c.Enabled {
-		if c.OfferPrefix == "" {
-			return fmt.Errorf("offerPrefix must be non-empty when enabled")
-		}
+		// offerPrefix is deliberately NOT required: it selects the standalone
+		// paid-unlock offer, and the same config block now also drives the
+		// per-request platform fee, which selects by offer type instead. Empty
+		// means "no unlock offer, fee only" (see isUnlockOffer).
 		if c.FeeRecipient == "" {
 			return fmt.Errorf("feeRecipient must be non-empty when enabled")
 		}
 		if c.CaptureAuthorizer == "" {
 			return fmt.Errorf("captureAuthorizer must be non-empty when enabled")
+		}
+		// Revenue metrics assume a fixed fee (amount * maxFeeBps / 10000). The
+		// auth-capture scheme permits any value in [minFeeBps, maxFeeBps] at
+		// charge(), but the facilitator does not yet report which fee was
+		// applied — a range would silently mis-attribute revenue until it does.
+		if c.MinFeeBps != c.MaxFeeBps {
+			return fmt.Errorf("minFeeBps (%d) must equal maxFeeBps (%d) when enabled: revenue metrics assume a fixed fee; a range needs the facilitator to report the applied fee first", c.MinFeeBps, c.MaxFeeBps)
 		}
 	}
 	if c.MinFeeBps > c.MaxFeeBps {
@@ -91,7 +107,13 @@ func validNonZeroAddress(address string) bool {
 
 // BuildAuthCaptureRequirement builds the strict auth-capture wire shape
 // expected by the facilitator.
-func BuildAuthCaptureRequirement(chain ChainInfo, asset AssetInfo, c *AuthCaptureUnlockConfig, payTo string, now time.Time) (x402types.PaymentRequirements, error) {
+//
+// maxTimeoutSeconds is the client SIGNING window (clients derive
+// preApprovalExpiry = now + maxTimeoutSeconds). It is independent of
+// CaptureDeadlineSecs, the longer escrow-hold deadline written into Extra.
+// Pass the same value the exact twin uses so dual-scheme 402s advertise
+// identical MaxTimeoutSeconds; pass 0 to fall back via ClampMaxTimeoutSeconds.
+func BuildAuthCaptureRequirement(chain ChainInfo, asset AssetInfo, c *AuthCaptureUnlockConfig, payTo string, maxTimeoutSeconds int64, now time.Time) (x402types.PaymentRequirements, error) {
 	if err := c.Validate(); err != nil {
 		return x402types.PaymentRequirements{}, fmt.Errorf("validate auth-capture config: %w", err)
 	}
@@ -101,12 +123,13 @@ func BuildAuthCaptureRequirement(chain ChainInfo, asset AssetInfo, c *AuthCaptur
 	}
 
 	return x402types.PaymentRequirements{
-		Scheme:            "auth-capture",
-		Network:           chain.CAIP2Network,
-		Asset:             asset.Address,
-		Amount:            atomicAmount,
-		PayTo:             payTo,
-		MaxTimeoutSeconds: int(ClampMaxTimeoutSeconds(int64(c.CaptureDeadlineSecs))),
+		Scheme:  "auth-capture",
+		Network: chain.CAIP2Network,
+		Asset:   asset.Address,
+		Amount:  atomicAmount,
+		PayTo:   payTo,
+		// Signing window only — not CaptureDeadlineSecs (escrow hold).
+		MaxTimeoutSeconds: int(ClampMaxTimeoutSeconds(maxTimeoutSeconds)),
 		Extra: map[string]interface{}{
 			"name":                asset.EIP712Name,
 			"version":             asset.EIP712Version,

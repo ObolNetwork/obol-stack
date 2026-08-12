@@ -24,11 +24,12 @@ const (
 
 func validAuthCaptureConfig() AuthCaptureUnlockConfig {
 	return AuthCaptureUnlockConfig{
-		Enabled:           true,
-		OfferPrefix:       "/services/agent",
-		Price:             "1.00",
-		FeeRecipient:      testFeeRecipient,
-		MinFeeBps:         100,
+		Enabled:      true,
+		OfferPrefix:  "/services/agent",
+		Price:        "1.00",
+		FeeRecipient: testFeeRecipient,
+		// min == max required when enabled (revenue metrics assume a fixed fee).
+		MinFeeBps:         250,
 		MaxFeeBps:         250,
 		CaptureAuthorizer: testCaptureAuthorizer,
 	}
@@ -50,10 +51,14 @@ func TestBuildAuthCaptureRequirement_ExtraShape(t *testing.T) {
 		asset,
 		&config,
 		"0x3333333333333333333333333333333333333333",
+		DefaultMaxTimeoutSeconds,
 		now,
 	)
 	if err != nil {
 		t.Fatalf("BuildAuthCaptureRequirement: %v", err)
+	}
+	if req.MaxTimeoutSeconds != int(DefaultMaxTimeoutSeconds) {
+		t.Errorf("MaxTimeoutSeconds = %d, want %d (signing window, not capture deadline)", req.MaxTimeoutSeconds, DefaultMaxTimeoutSeconds)
 	}
 	if req.Scheme != "auth-capture" {
 		t.Errorf("Scheme = %q, want auth-capture", req.Scheme)
@@ -119,6 +124,35 @@ func TestAuthCaptureUnlockConfig_Validate(t *testing.T) {
 				c.MaxFeeBps = 250
 			},
 			wantErr: true,
+		},
+		{
+			// Revenue metrics assume a fixed fee; a range would silently corrupt
+			// attribution until the facilitator reports the applied bps.
+			name: "rejects fee range when enabled (min != max)",
+			mutate: func(c *AuthCaptureUnlockConfig) {
+				c.MinFeeBps = 0
+				c.MaxFeeBps = 100
+			},
+			wantErr: true,
+		},
+		{
+			name: "accepts fixed fee when enabled (min == max)",
+			mutate: func(c *AuthCaptureUnlockConfig) {
+				c.MinFeeBps = 50
+				c.MaxFeeBps = 50
+			},
+			wantErr: false,
+		},
+		{
+			// Disabled configs may still carry a range for future use; only
+			// MinFeeBps > MaxFeeBps is rejected outside the enabled block.
+			name: "allows fee range when disabled",
+			mutate: func(c *AuthCaptureUnlockConfig) {
+				c.Enabled = false
+				c.MinFeeBps = 0
+				c.MaxFeeBps = 100
+			},
+			wantErr: false,
 		},
 		{
 			name: "rejects max fee above 10000",
@@ -248,7 +282,7 @@ func TestPaidUnlock_InlineFirstMessage(t *testing.T) {
 
 	// A real v2 wire PaymentPayload carries the signed requirement in `accepted`
 	// (scheme/network are read from it); the verifier settles against that, so it
-	// must pass validateSignedUnlockRequirement (which it does — it IS the
+	// must pass validateSignedAuthCapture (which it does — it IS the
 	// challenge requirement the verifier just issued).
 	wireJSON, _ := json.Marshal(map[string]any{
 		"x402Version": 2,
@@ -396,15 +430,15 @@ func TestPaidUnlock_SettleErrorSurfacesTxHash(t *testing.T) {
 	}
 }
 
-// TestValidateSignedUnlockRequirement guards the money path: the verifier
-// settles the requirement the CLIENT signed (payload.accepted), so a client
-// must not be able to redirect the fee, underpay, or swap the authorizer. Each
-// case takes a genuine requirement, JSON-round-trips it (so Extra numbers are
-// float64 exactly as they arrive via x402types.ToPaymentPayload — this is what
-// exercises the ex* coercion), flips one field, and asserts rejection. The
-// permitted exception is deadline drift (the server reissues fresh deadlines on
-// each 402, so the signed ones legitimately differ from `expected`).
-func TestValidateSignedUnlockRequirement(t *testing.T) {
+// TestValidateSignedAuthCapture_UnlockPath guards the unlock money path: the
+// verifier settles the requirement the CLIENT signed (payload.accepted), so a
+// client must not be able to redirect the fee, underpay, or swap the
+// authorizer. Retargeted from the deleted validateSignedUnlockRequirement onto
+// the shared validateSignedAuthCapture (stricter: whole Extra map + capture
+// deadline upper bound). Each case JSON-round-trips a genuine requirement (so
+// Extra numbers are float64 as via ToPaymentPayload), flips one field, and
+// asserts rejection. Deadline drift within bounds is the permitted exception.
+func TestValidateSignedAuthCapture_UnlockPath(t *testing.T) {
 	now := time.Unix(1_790_000_000, 0)
 	cfg := validAuthCaptureConfig()
 	asset := AssetInfo{
@@ -417,13 +451,13 @@ func TestValidateSignedUnlockRequirement(t *testing.T) {
 	}
 	const payTo = "0x3333333333333333333333333333333333333333"
 	const attacker = "0x9999999999999999999999999999999999999999"
-	expected, err := BuildAuthCaptureRequirement(ChainBaseSepolia, asset, &cfg, payTo, now)
+	expected, err := BuildAuthCaptureRequirement(ChainBaseSepolia, asset, &cfg, payTo, DefaultMaxTimeoutSeconds, now)
 	if err != nil {
 		t.Fatalf("BuildAuthCaptureRequirement: %v", err)
 	}
 	// signedFrom returns `expected` after a JSON round-trip (Extra numbers ->
 	// float64), then applies mutate — mirroring the real client->ToPaymentPayload
-	// decode path so the ex* coercion is actually exercised.
+	// decode path so Extra numeric coercion is actually exercised.
 	signedFrom := func(mutate func(*x402types.PaymentRequirements)) x402types.PaymentRequirements {
 		raw, _ := json.Marshal(expected)
 		var s x402types.PaymentRequirements
@@ -460,11 +494,16 @@ func TestValidateSignedUnlockRequirement(t *testing.T) {
 		{"rejects missing extra", func(s *x402types.PaymentRequirements) { s.Extra = nil }, "extra"},
 		{"rejects expired captureDeadline", func(s *x402types.PaymentRequirements) { s.Extra["captureDeadline"] = float64(now.Unix() + 6) }, "captureDeadline"},
 		{"rejects inverted refundDeadline", func(s *x402types.PaymentRequirements) { s.Extra["refundDeadline"] = float64(captureDeadline(s) - 1) }, "refundDeadline"},
+		// validateSignedAuthCapture also upper-bounds captureDeadline (the old
+		// unlock-only validator did not).
+		{"rejects captureDeadline past configured window", func(s *x402types.PaymentRequirements) {
+			s.Extra["captureDeadline"] = float64(now.Unix() + int64(cfg.CaptureDeadlineSecs) + 1)
+		}, "captureDeadline"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			signed := signedFrom(tt.mutate)
-			err := validateSignedUnlockRequirement(signed, expected, cfg, asset, now.Unix())
+			err := validateSignedAuthCapture(signed, expected, cfg.CaptureDeadlineSecs, now.Unix())
 			if tt.wantErr == "" {
 				if err != nil {
 					t.Fatalf("want nil, got %v", err)
