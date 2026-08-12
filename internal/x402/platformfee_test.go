@@ -178,7 +178,7 @@ func TestValidateSignedAuthCapture(t *testing.T) {
 		EIP712Version:  "2",
 		TransferMethod: "eip3009",
 	}
-	offered, err := BuildAuthCaptureRequirement(chain, asset, fee, "0x1111111111111111111111111111111111111111", now)
+	offered, err := BuildAuthCaptureRequirement(chain, asset, fee, "0x1111111111111111111111111111111111111111", DefaultMaxTimeoutSeconds, now)
 	if err != nil {
 		t.Fatalf("BuildAuthCaptureRequirement: %v", err)
 	}

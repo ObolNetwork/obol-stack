@@ -74,18 +74,22 @@ func (v *Verifier) platformFeeHooks(cfg *PricingConfig, mr *matchedRoute) (
 }
 
 // buildPlatformFeeRequirement builds the auth-capture twin of an already-built
-// exact requirement: same chain, asset, payTo and price, but routed through the
-// escrow so minFeeBps..maxFeeBps reaches feeRecipient on-chain at charge time.
+// exact requirement: same chain, asset, payTo, price, and maxTimeoutSeconds
+// (signing window), but routed through the escrow so minFeeBps..maxFeeBps
+// reaches feeRecipient on-chain at charge time.
+//
+// maxTimeoutSeconds must match the exact twin's so dual-scheme 402s advertise
+// identical client signing windows; it is independent of CaptureDeadlineSecs.
 //
 // Returns nil (and logs) when the fee cannot be priced or the config is
 // unusable. Callers keep serving the exact requirement in that case — a
 // misconfigured fee must never take down a payable route.
-func buildPlatformFeeRequirement(fee *AuthCaptureUnlockConfig, chain ChainInfo, asset AssetInfo, price, payTo, pattern string) *x402types.PaymentRequirements {
+func buildPlatformFeeRequirement(fee *AuthCaptureUnlockConfig, chain ChainInfo, asset AssetInfo, price, payTo string, maxTimeoutSeconds int64, pattern string) *x402types.PaymentRequirements {
 	f := *fee
 	// Per-request fee: the price is the OFFER's per-turn price, never the
 	// config's. The config field only exists for the standalone unlock gate.
 	f.Price = price
-	req, err := BuildAuthCaptureRequirement(chain, asset, &f, payTo, time.Now())
+	req, err := BuildAuthCaptureRequirement(chain, asset, &f, payTo, maxTimeoutSeconds, time.Now())
 	if err != nil {
 		log.Printf("x402-verifier: platform fee unavailable for route %q, serving exact only: %v", pattern, err)
 		return nil

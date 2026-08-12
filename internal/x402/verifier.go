@@ -633,7 +633,9 @@ func (v *Verifier) resolvePaidRoute(cfg *PricingConfig, rule *RouteRule) (*match
 		// payment at verify. Leave it empty only when every chain this stack
 		// prices is known to be registered.
 		if fee != nil && (fee.Network == "" || fee.Network == chainName) {
-			if feeReq := buildPlatformFeeRequirement(fee, chain, asset, opt.Price, wallet, rule.Pattern); feeReq != nil {
+			// Same MaxTimeoutSeconds as the exact twin (opt.MaxTimeoutSeconds) —
+			// signing window, not CaptureDeadlineSecs escrow hold.
+			if feeReq := buildPlatformFeeRequirement(fee, chain, asset, opt.Price, wallet, opt.MaxTimeoutSeconds, rule.Pattern); feeReq != nil {
 				reqs = append(reqs, *feeReq)
 				optLabels = append(optLabels, labelsForPaymentOption(rule, opt))
 			}

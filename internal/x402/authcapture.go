@@ -63,6 +63,13 @@ func (c *AuthCaptureUnlockConfig) Validate() error {
 		if c.CaptureAuthorizer == "" {
 			return fmt.Errorf("captureAuthorizer must be non-empty when enabled")
 		}
+		// Revenue metrics assume a fixed fee (amount * maxFeeBps / 10000). The
+		// auth-capture scheme permits any value in [minFeeBps, maxFeeBps] at
+		// charge(), but the facilitator does not yet report which fee was
+		// applied — a range would silently mis-attribute revenue until it does.
+		if c.MinFeeBps != c.MaxFeeBps {
+			return fmt.Errorf("minFeeBps (%d) must equal maxFeeBps (%d) when enabled: revenue metrics assume a fixed fee; a range needs the facilitator to report the applied fee first", c.MinFeeBps, c.MaxFeeBps)
+		}
 	}
 	if c.MinFeeBps > c.MaxFeeBps {
 		return fmt.Errorf("minFeeBps %d exceeds maxFeeBps %d", c.MinFeeBps, c.MaxFeeBps)
@@ -100,7 +107,13 @@ func validNonZeroAddress(address string) bool {
 
 // BuildAuthCaptureRequirement builds the strict auth-capture wire shape
 // expected by the facilitator.
-func BuildAuthCaptureRequirement(chain ChainInfo, asset AssetInfo, c *AuthCaptureUnlockConfig, payTo string, now time.Time) (x402types.PaymentRequirements, error) {
+//
+// maxTimeoutSeconds is the client SIGNING window (clients derive
+// preApprovalExpiry = now + maxTimeoutSeconds). It is independent of
+// CaptureDeadlineSecs, the longer escrow-hold deadline written into Extra.
+// Pass the same value the exact twin uses so dual-scheme 402s advertise
+// identical MaxTimeoutSeconds; pass 0 to fall back via ClampMaxTimeoutSeconds.
+func BuildAuthCaptureRequirement(chain ChainInfo, asset AssetInfo, c *AuthCaptureUnlockConfig, payTo string, maxTimeoutSeconds int64, now time.Time) (x402types.PaymentRequirements, error) {
 	if err := c.Validate(); err != nil {
 		return x402types.PaymentRequirements{}, fmt.Errorf("validate auth-capture config: %w", err)
 	}
@@ -110,12 +123,13 @@ func BuildAuthCaptureRequirement(chain ChainInfo, asset AssetInfo, c *AuthCaptur
 	}
 
 	return x402types.PaymentRequirements{
-		Scheme:            "auth-capture",
-		Network:           chain.CAIP2Network,
-		Asset:             asset.Address,
-		Amount:            atomicAmount,
-		PayTo:             payTo,
-		MaxTimeoutSeconds: int(ClampMaxTimeoutSeconds(int64(c.CaptureDeadlineSecs))),
+		Scheme:  "auth-capture",
+		Network: chain.CAIP2Network,
+		Asset:   asset.Address,
+		Amount:  atomicAmount,
+		PayTo:   payTo,
+		// Signing window only — not CaptureDeadlineSecs (escrow hold).
+		MaxTimeoutSeconds: int(ClampMaxTimeoutSeconds(maxTimeoutSeconds)),
 		Extra: map[string]interface{}{
 			"name":                asset.EIP712Name,
 			"version":             asset.EIP712Version,
