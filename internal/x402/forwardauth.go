@@ -317,6 +317,15 @@ func legacyCompatRequirements(requirements []x402types.PaymentRequirements) []x4
 	out := make([]x402types.PaymentRequirements, 0, len(requirements)*2)
 	for _, req := range requirements {
 		out = append(out, req)
+		// The alias exists for legacy buyers that predate CAIP-2 networks, and
+		// those are all v1 "exact" buyers. auth-capture is v2-only, so an alias
+		// entry for it can only be picked by a client that would then be
+		// rejected: validateSignedAuthCapture pins the network it signed against
+		// our canonical form, and settling a buyer's alias verbatim is exactly
+		// what findMatchingRequirementV1 warns against.
+		if req.Scheme == SchemeAuthCapture {
+			continue
+		}
 		chain, err := ResolveChainInfo(req.Network)
 		if err != nil || chain.Name == "" || chain.Name == req.Network {
 			continue

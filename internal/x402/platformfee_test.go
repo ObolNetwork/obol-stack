@@ -262,3 +262,40 @@ func TestValidateSignedAuthCapture(t *testing.T) {
 		}
 	})
 }
+
+// TestPlatformFee_NoLegacyNetworkAlias keeps the 402 free of an auth-capture
+// entry under the legacy network name. The alias exists for pre-CAIP-2 buyers,
+// which are all v1 exact buyers; an auth-capture alias could only be picked by
+// a client that validateSignedAuthCapture would then reject on the network.
+func TestPlatformFee_NoLegacyNetworkAlias(t *testing.T) {
+	agent := RouteRule{Pattern: "/agent/*", Price: "0.01", AgentRuntime: "hermes"}
+	v, cfg := newFeeVerifier(t, testFeeConfig(), []RouteRule{agent})
+
+	mr, ok := v.resolvePaidRoute(cfg, &agent)
+	if !ok {
+		t.Fatal("agent route did not resolve")
+	}
+	advertised := legacyCompatRequirements(mr.requirements)
+
+	var authCapture, exactAliases int
+	for _, req := range advertised {
+		switch {
+		case req.Scheme == SchemeAuthCapture:
+			authCapture++
+			if req.Network != "eip155:84532" {
+				t.Errorf("auth-capture advertised under legacy network %q — v2-only scheme must use CAIP-2 alone", req.Network)
+			}
+		case req.Network == "base-sepolia":
+			exactAliases++
+		}
+	}
+	if authCapture != 1 {
+		t.Errorf("want exactly 1 auth-capture entry, got %d", authCapture)
+	}
+	if exactAliases != 1 {
+		t.Errorf("want the exact legacy alias preserved for v1 buyers, got %d", exactAliases)
+	}
+	if advertised[0].Scheme != SchemeAuthCapture {
+		t.Errorf("advertised accepts[0].scheme = %q, want %q", advertised[0].Scheme, SchemeAuthCapture)
+	}
+}
