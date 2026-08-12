@@ -1,10 +1,19 @@
 package x402
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	x402types "github.com/x402-foundation/x402/go/v2/types"
 )
 
@@ -25,10 +34,19 @@ func testFeeConfig() *AuthCaptureUnlockConfig {
 
 func newFeeVerifier(t *testing.T, fee *AuthCaptureUnlockConfig, routes []RouteRule) (*Verifier, *PricingConfig) {
 	t.Helper()
+	return newFeeVerifierWithFacilitator(t, "http://facilitator.invalid", fee, routes)
+}
+
+// newFeeVerifierWithFacilitator is the paid-round-trip constructor: existing
+// unit tests never hit the facilitator, so a dead URL is fine for them, but
+// HandleProxy's per-request path must call /verify and /settle against a real
+// mock.
+func newFeeVerifierWithFacilitator(t *testing.T, facilitatorURL string, fee *AuthCaptureUnlockConfig, routes []RouteRule) (*Verifier, *PricingConfig) {
+	t.Helper()
 	cfg := &PricingConfig{
 		Wallet:            "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 		Chain:             "base-sepolia",
-		FacilitatorURL:    "http://facilitator.invalid",
+		FacilitatorURL:    facilitatorURL,
 		Routes:            routes,
 		AuthCaptureUnlock: fee,
 	}
@@ -297,5 +315,144 @@ func TestPlatformFee_NoLegacyNetworkAlias(t *testing.T) {
 	}
 	if advertised[0].Scheme != SchemeAuthCapture {
 		t.Errorf("advertised accepts[0].scheme = %q, want %q", advertised[0].Scheme, SchemeAuthCapture)
+	}
+}
+
+// TestPlatformFee_PaidRoundTrip is the only test that actually runs the two
+// platformFeeHooks closures end-to-end through HandleProxy: resolveMatched
+// substitutes the client-signed auth-capture requirement before /verify, and
+// onSettled records fee revenue after /settle. Without this, a regression that
+// stops wiring the hooks would leave every unit assertion green while fees
+// silently stop being collected. The tamper half proves ResolveMatched
+// short-circuits before the facilitator is ever called.
+func TestPlatformFee_PaidRoundTrip(t *testing.T) {
+	const payer = "0xAbCdEfabcdefABCDefAbcdefabCDefABcDefAbCd"
+	var facilitatorCalls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/verify", func(w http.ResponseWriter, r *http.Request) {
+		facilitatorCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"isValid":true,"payer":%q}`, payer)
+	})
+	mux.HandleFunc("/settle", func(w http.ResponseWriter, r *http.Request) {
+		facilitatorCalls.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"success":true,"payer":%q,"transaction":"0xabc","network":"eip155:84532"}`, payer)
+	})
+	facilitator := httptest.NewServer(mux)
+	t.Cleanup(facilitator.Close)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("CHAT_OK"))
+	}))
+	t.Cleanup(upstream.Close)
+
+	const path = "/agent/chat"
+	v, _ := newFeeVerifierWithFacilitator(t, facilitator.URL, testFeeConfig(), []RouteRule{{
+		Pattern:        "/agent/*",
+		Price:          "0.01",
+		AgentRuntime:   "hermes",
+		UpstreamURL:    upstream.URL,
+		OfferNamespace: "test",
+		OfferName:      "agent",
+	}})
+
+	// Challenge alone must not touch the facilitator — only a paid retry does.
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	w := httptest.NewRecorder()
+	v.HandleProxy(w, req)
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("challenge status = %d, want 402; body: %s", w.Code, w.Body.String())
+	}
+	var challenge struct {
+		X402Version int                             `json:"x402Version"`
+		Accepts     []x402types.PaymentRequirements `json:"accepts"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &challenge); err != nil {
+		t.Fatalf("decode challenge: %v", err)
+	}
+	// Wire body may also carry the exact legacy-network alias (3 entries), but
+	// the fee entry must still lead — buyers take the first scheme they speak.
+	if len(challenge.Accepts) < 2 {
+		t.Fatalf("want fee+exact accepts, got %d: %#v", len(challenge.Accepts), challenge.Accepts)
+	}
+	if challenge.Accepts[0].Scheme != SchemeAuthCapture {
+		t.Fatalf("accepts[0].scheme = %q, want %q — the fee entry must come first or buyers take the free one",
+			challenge.Accepts[0].Scheme, SchemeAuthCapture)
+	}
+	if got := facilitatorCalls.Load(); got != 0 {
+		t.Fatalf("facilitator calls after challenge = %d, want 0", got)
+	}
+
+	amount, err := strconv.ParseInt(challenge.Accepts[0].Amount, 10, 64)
+	if err != nil || amount <= 0 {
+		t.Fatalf("accepts[0].Amount = %q, want a positive integer atomic amount", challenge.Accepts[0].Amount)
+	}
+	// 50 bps of the route price, integer division — same formula as recordFeeRevenue.
+	wantFee := float64(amount * 50 / 10000)
+	wantSettled := float64(amount)
+
+	// Stub payment: accepted is the fee requirement the challenge just issued,
+	// so validateSignedAuthCapture passes and resolveMatched returns it verbatim.
+	wireJSON, _ := json.Marshal(map[string]any{
+		"x402Version": 2,
+		"payload":     map[string]any{"stub": true},
+		"accepted":    challenge.Accepts[0],
+	})
+	paymentHeader := base64.StdEncoding.EncodeToString(wireJSON)
+	req = httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("X-PAYMENT", paymentHeader)
+	w = httptest.NewRecorder()
+	v.HandleProxy(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("paid status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "CHAT_OK") {
+		t.Fatalf("paid body = %q, want CHAT_OK (proxy must forward to the real upstream)", w.Body.String())
+	}
+
+	labels := prometheus.Labels{
+		"network":       challenge.Accepts[0].Network,
+		"asset":         challenge.Accepts[0].Asset,
+		"fee_recipient": testFeeRecipient,
+	}
+	if got := testutil.ToFloat64(v.metrics.feeRevenueAtomic.With(labels)); got != wantFee {
+		t.Errorf("fee revenue atomic = %v, want %v (amount %d × 50 bps / 10000)", got, wantFee, amount)
+	}
+	if got := testutil.ToFloat64(v.metrics.settledVolumeAtomic.With(labels)); got != wantSettled {
+		t.Errorf("settled volume atomic = %v, want %v", got, wantSettled)
+	}
+	paidCalls := facilitatorCalls.Load()
+	if paidCalls == 0 {
+		t.Fatal("paid request did not call facilitator — resolveMatched/onSettled never ran")
+	}
+
+	// Redirect the fee to an attacker in the signed accepted requirement. The
+	// resolveMatched hook must reject this before /verify — otherwise a
+	// facilitator would settle a fee we never intended to collect.
+	tampered := challenge.Accepts[0]
+	ex := make(map[string]any, len(tampered.Extra))
+	for k, val := range tampered.Extra {
+		ex[k] = val
+	}
+	ex["feeRecipient"] = "0x9999999999999999999999999999999999999999"
+	tampered.Extra = ex
+	tamperedWire, _ := json.Marshal(map[string]any{
+		"x402Version": 2,
+		"payload":     map[string]any{"stub": true},
+		"accepted":    tampered,
+	})
+	req = httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("X-PAYMENT", base64.StdEncoding.EncodeToString(tamperedWire))
+	w = httptest.NewRecorder()
+	v.HandleProxy(w, req)
+	if w.Code != http.StatusPaymentRequired {
+		t.Fatalf("tampered status = %d, want 402; body: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "payment_policy_mismatch") {
+		t.Errorf("tampered body = %q, want payment_policy_mismatch", w.Body.String())
+	}
+	if got := facilitatorCalls.Load(); got != paidCalls {
+		t.Errorf("facilitator calls after tamper = %d, want unchanged %d (rejected pre-forward)", got, paidCalls)
 	}
 }
