@@ -97,6 +97,41 @@ Client
 4. Client retries with `X-PAYMENT: <base64-encoded-proof>`
 5. Verifier validates proof and forwards request to upstream
 
+## Platform fee on agent offers (`authCaptureUnlock`)
+
+Off by default. When enabled, every **agent** offer advertises two ways to pay
+the same price:
+
+```json
+"accepts": [
+  { "scheme": "auth-capture", "amount": "10000", "extra": { "feeRecipient": "0x…", "minFeeBps": 50, "maxFeeBps": 50, "autoCapture": true } },
+  { "scheme": "exact",        "amount": "10000" }
+]
+```
+
+The `auth-capture` entry routes the payment through the AuthCaptureEscrow, which
+splits `feeBps` to `feeRecipient` on-chain at `charge()` time. It is advertised
+first because an x402 client filters `accepts[]` down to the schemes it has
+registered and then takes the first survivor — so a buyer that speaks
+auth-capture pays the fee, and an exact-only buyer falls through to the second
+entry and is unaffected.
+
+The fee is charged on **every paid request**, not once per session: `autoCapture`
+makes each charge single-shot.
+
+Scope and constraints:
+
+- **Agent offers only.** `http` offers keep advertising `exact` alone — their
+  buyers are third-party clients we do not ship.
+- **`network` scopes the fee to one chain.** A facilitator only registers
+  auth-capture for the chains it was configured with; advertising the fee where
+  it can't settle would fail payments for capable buyers. Confirm the chain
+  appears in the facilitator's `/supported` before widening.
+- **A buyer that ignores the scheme filter** and blindly signs `accepts[0]`
+  will attempt auth-capture. Clients built on `@x402/*` filter correctly.
+- The fee is enforced by distribution, not cryptography: an operator can turn
+  it off.
+
 ## Important
 
 This Traefik `ForwardAuth` flow is a gating step, not the final settlement point for the supported production path. Final settlement belongs in a component that can observe the upstream result, such as `x402-buyer` or the standalone `obol sell inference` gateway.

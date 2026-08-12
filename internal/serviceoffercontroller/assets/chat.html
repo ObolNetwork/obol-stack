@@ -97,7 +97,8 @@
 // --minify from the exact versions proven by the x402trace paid harness) — no CDN at runtime
 import { createWalletClient, createPublicClient, custom, http, erc20Abi,
          formatUnits, parseUnits, keccak256, privateKeyToAccount, base, baseSepolia,
-         wrapFetchWithPayment, x402Client, ExactEvmScheme, toClientEvmSigner } from "./chat-vendor.js?v=895fd923";
+         wrapFetchWithPayment, x402Client, ExactEvmScheme, AuthCaptureEvmScheme,
+         toClientEvmSigner } from "./chat-vendor.js?v=75205f4a";
 
 const ENDPOINT = "/v1/chat/completions";
 const AGENT = {{.Title}};
@@ -268,8 +269,17 @@ async function signin() {
     // one message. The "above this page's safety cap" error copy below depends
     // on this being the real cap. (A legit price change is picked up on reload.)
     // A missing/zero amount is dropped, not treated as free.
+    // Both schemes are registered because the agent advertises both: the
+    // auth-capture entry comes first and carries the platform fee split, the
+    // exact entry behind it is the compatibility path for buyers that don't
+    // speak auth-capture. x402Client filters accepts[] down to the schemes
+    // registered here and then takes the first survivor, so registering both
+    // means this page pays auth-capture whenever the seller offers it and
+    // silently falls back to exact when it doesn't.
+    const signer = toClientEvmSigner(burner, pub);
     const x = new x402Client()
-      .register(net, new ExactEvmScheme(toClientEvmSigner(burner, pub)))
+      .register(net, new AuthCaptureEvmScheme(signer))
+      .register(net, new ExactEvmScheme(signer))
       .registerPolicy((_v, reqs) => reqs.filter((q) => {
         const amt = BigInt(q.amount ?? q.maxAmountRequired ?? "0");
         const cap = (price !== null && price > 0n) ? price : balance;

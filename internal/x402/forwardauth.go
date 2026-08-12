@@ -60,6 +60,24 @@ type ForwardAuthConfig struct {
 	// the offer advertises a single option.
 	OnPaymentMatched func(x402types.PaymentRequirements)
 
+	// ResolveMatchedRequirement, if non-nil, is handed the buyer's payload and
+	// the requirement it matched, and returns the requirement to verify and
+	// settle against. An error rejects the payment as a policy mismatch (402);
+	// nothing is charged.
+	//
+	// Exists for auth-capture, which MUST be settled against the requirement the
+	// client actually signed: its signed PaymentInfo hash commits the
+	// server-issued captureDeadline/refundDeadline, and those are now-relative,
+	// so the copy we rebuild for this request has already drifted past the one
+	// the buyer signed against. Every other scheme leaves this nil and keeps
+	// settling against our own requirement.
+	ResolveMatchedRequirement func(x402types.PaymentPayload, x402types.PaymentRequirements) (x402types.PaymentRequirements, error)
+
+	// OnPaymentSettled, if non-nil, is invoked with the requirement that
+	// settled and the payer address, once settlement has succeeded on-chain.
+	// The verifier uses it to attribute platform-fee revenue.
+	OnPaymentSettled func(req x402types.PaymentRequirements, payer string)
+
 	// OnPaymentFailure, if non-nil, is invoked once per payment-flow failure
 	// with the machine-readable reason (the same string written into the
 	// response body / extensions.paymentFailure). Lets the caller attribute
@@ -299,6 +317,15 @@ func legacyCompatRequirements(requirements []x402types.PaymentRequirements) []x4
 	out := make([]x402types.PaymentRequirements, 0, len(requirements)*2)
 	for _, req := range requirements {
 		out = append(out, req)
+		// The alias exists for legacy buyers that predate CAIP-2 networks, and
+		// those are all v1 "exact" buyers. auth-capture is v2-only, so an alias
+		// entry for it can only be picked by a client that would then be
+		// rejected: validateSignedAuthCapture pins the network it signed against
+		// our canonical form, and settling a buyer's alias verbatim is exactly
+		// what findMatchingRequirementV1 warns against.
+		if req.Scheme == SchemeAuthCapture {
+			continue
+		}
 		chain, err := ResolveChainInfo(req.Network)
 		if err != nil || chain.Name == "" || chain.Name == req.Network {
 			continue
@@ -692,6 +719,25 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 				cfg.OnPaymentMatched(matchedReq)
 			}
 
+			// Scheme-specific substitution of the requirement we verify and
+			// settle against (auth-capture; see ResolveMatchedRequirement).
+			// Rejects before any facilitator call, so a policy mismatch never
+			// reaches the chain.
+			if cfg.ResolveMatchedRequirement != nil {
+				resolved, err := cfg.ResolveMatchedRequirement(payload, matchedReq)
+				if err != nil {
+					log.Printf("x402: signed requirement rejected: %v; payload summary %s", err, paymentPayloadSummary(payload))
+					reportFailure("payment_policy_mismatch")
+					send(w, withPaymentFailure(r, paymentFailure{
+						Reason: "payment_policy_mismatch",
+						Detail: err.Error(),
+						Hint:   "sign one accepts[] entry verbatim — only the payment's own deadlines may differ from the challenge",
+					}), requirements, cfg.Extensions)
+					return
+				}
+				matchedReq = resolved
+			}
+
 			verifyPayload := payloadBytes
 			if normalized, note := normalizePaymentPayloadForVerify(payloadBytes); note != "" {
 				verifyPayload = normalized
@@ -821,6 +867,13 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 					encodedSettle := base64.StdEncoding.EncodeToString(settleJSON)
 					w.Header().Set("X-PAYMENT-RESPONSE", encodedSettle)
 					w.Header().Set("PAYMENT-RESPONSE", encodedSettle)
+					if cfg.OnPaymentSettled != nil {
+						payer := settleResp.Payer
+						if payer == "" {
+							payer = verifyResp.Payer
+						}
+						cfg.OnPaymentSettled(matchedReq, payer)
+					}
 					return true
 				},
 				onFailure: func(statusCode int) {

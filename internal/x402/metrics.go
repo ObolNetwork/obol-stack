@@ -74,14 +74,14 @@ func newVerifierMetrics() *verifierMetrics {
 		feeRevenueAtomic: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "obol_x402_verifier_fee_revenue_atomic_total",
-				Help: "Platform fee captured via auth-capture unlock, in atomic token units (fixed-rate: amount*maxFeeBps/10000).",
+				Help: "Platform fee captured via auth-capture (per-request platform fee and unlock offer), in atomic token units (fixed-rate: amount*maxFeeBps/10000).",
 			},
 			[]string{"network", "asset", "fee_recipient"},
 		),
 		settledVolumeAtomic: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "obol_x402_verifier_settled_volume_atomic_total",
-				Help: "Total settled unlock volume, atomic token units.",
+				Help: "Total settled auth-capture volume (per-request platform fee and unlock offer), atomic token units.",
 			},
 			[]string{"network", "asset", "fee_recipient"},
 		),

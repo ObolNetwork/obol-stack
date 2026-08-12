@@ -30,7 +30,10 @@ type PricingConfig struct {
 	// Routes defines per-route pricing rules. First match wins.
 	Routes []RouteRule `yaml:"routes"`
 
-	// AuthCaptureUnlock configures the optional paid agent-unlock endpoint.
+	// AuthCaptureUnlock configures auth-capture: the per-request platform fee
+	// on agent offers (see platformfee.go) and, when offerPrefix names one, the
+	// standalone paid-unlock endpoint (see unlockgate.go). Both split feeBps to
+	// feeRecipient on-chain; they differ in what triggers the charge.
 	AuthCaptureUnlock *AuthCaptureUnlockConfig `yaml:"authCaptureUnlock,omitempty"`
 }
 
