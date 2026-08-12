@@ -31,23 +31,32 @@ type AuthCaptureUnlockConfig struct {
 	RefundDeadlineSecs  uint64 `yaml:"refundDeadlineSecs"`
 }
 
-// Validate applies deadline defaults and rejects unusable auth-capture
-// configuration before a payment is sent to the facilitator.
-func (c *AuthCaptureUnlockConfig) Validate() error {
-	if c == nil {
-		return fmt.Errorf("authCaptureUnlock config is nil")
-	}
+// applyDeadlineDefaults fills unset capture/refund windows. Split out of
+// Validate so callers that need the effective deadlines without a priced
+// requirement (the per-request fee bounds a client-echoed captureDeadline
+// against them) get the same numbers Validate would have applied.
+func (c *AuthCaptureUnlockConfig) applyDeadlineDefaults() {
 	if c.CaptureDeadlineSecs == 0 {
 		c.CaptureDeadlineSecs = defaultCaptureDeadlineSecs
 	}
 	if c.RefundDeadlineSecs == 0 {
 		c.RefundDeadlineSecs = defaultRefundDeadlineSecs
 	}
+}
+
+// Validate applies deadline defaults and rejects unusable auth-capture
+// configuration before a payment is sent to the facilitator.
+func (c *AuthCaptureUnlockConfig) Validate() error {
+	if c == nil {
+		return fmt.Errorf("authCaptureUnlock config is nil")
+	}
+	c.applyDeadlineDefaults()
 
 	if c.Enabled {
-		if c.OfferPrefix == "" {
-			return fmt.Errorf("offerPrefix must be non-empty when enabled")
-		}
+		// offerPrefix is deliberately NOT required: it selects the standalone
+		// paid-unlock offer, and the same config block now also drives the
+		// per-request platform fee, which selects by offer type instead. Empty
+		// means "no unlock offer, fee only" (see isUnlockOffer).
 		if c.FeeRecipient == "" {
 			return fmt.Errorf("feeRecipient must be non-empty when enabled")
 		}

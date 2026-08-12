@@ -286,12 +286,15 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 	// matchedLabels is updated to the option the buyer actually pays with, so
 	// revenue/failure metrics attribute to the right (chain, asset).
 	matchedLabels := primaryLabels
+	resolveMatched, onSettled := v.platformFeeHooks(cfg, mr)
 	middleware := NewForwardAuthMiddleware(ForwardAuthConfig{
-		FacilitatorURL:      cfg.FacilitatorURL,
-		VerifyOnly:          cfg.VerifyOnly,
-		Extensions:          mr.extensions,
-		SendPaymentRequired: NewHTMLAwarePaymentRequired(display),
-		OnPaymentMatched:    func(req x402types.PaymentRequirements) { matchedLabels = mr.labelsForMatched(req) },
+		FacilitatorURL:            cfg.FacilitatorURL,
+		VerifyOnly:                cfg.VerifyOnly,
+		Extensions:                mr.extensions,
+		SendPaymentRequired:       NewHTMLAwarePaymentRequired(display),
+		OnPaymentMatched:          func(req x402types.PaymentRequirements) { matchedLabels = mr.labelsForMatched(req) },
+		ResolveMatchedRequirement: resolveMatched,
+		OnPaymentSettled:          onSettled,
 		OnPaymentFailure: func(reason string) {
 			v.metrics.paymentFailureReasons.With(withReason(matchedLabels, reason)).Inc()
 		},
@@ -447,17 +450,20 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 
 	matchedLabels := primaryLabels
 	paymentFailed := false
+	resolveMatched, onSettled := v.platformFeeHooks(cfg, mr)
 	middleware := NewForwardAuthMiddleware(ForwardAuthConfig{
 		FacilitatorURL: cfg.FacilitatorURL,
 		// HandleProxy is the in-process seller gateway: it proxies to the real
 		// upstream and settles only after a <400 response, so verifyOnly=false
 		// is correct here. SettlesInProcess suppresses the (otherwise
 		// per-request) verifyOnly=false warning on this safe path.
-		VerifyOnly:          false,
-		SettlesInProcess:    true,
-		Extensions:          mr.extensions,
-		SendPaymentRequired: NewHTMLAwarePaymentRequired(display),
-		OnPaymentMatched:    func(req x402types.PaymentRequirements) { matchedLabels = mr.labelsForMatched(req) },
+		VerifyOnly:                false,
+		SettlesInProcess:          true,
+		Extensions:                mr.extensions,
+		SendPaymentRequired:       NewHTMLAwarePaymentRequired(display),
+		OnPaymentMatched:          func(req x402types.PaymentRequirements) { matchedLabels = mr.labelsForMatched(req) },
+		ResolveMatchedRequirement: resolveMatched,
+		OnPaymentSettled:          onSettled,
 		OnPaymentFailure: func(reason string) {
 			paymentFailed = true
 			v.metrics.paymentFailureReasons.With(withReason(matchedLabels, reason)).Inc()
@@ -578,7 +584,11 @@ func (v *Verifier) resolvePaidRoute(cfg *PricingConfig, rule *RouteRule) (*match
 	optLabels := make([]prometheus.Labels, 0, len(opts))
 	var primaryChain ChainInfo
 	var primaryAsset AssetInfo
+	var primaryResolved bool
 	var extensions map[string]any
+	// Platform fee (agent offers only). Resolved once: it is a property of the
+	// rule, not of an individual payment option.
+	fee := platformFeeForRule(cfg, rule)
 	for i := range opts {
 		opt := opts[i]
 		chainName := cfg.Chain
@@ -610,9 +620,28 @@ func (v *Verifier) resolvePaidRoute(cfg *PricingConfig, rule *RouteRule) (*match
 			continue
 		}
 		mergeAgentExtras(&req, rule)
+		// The fee-bearing twin is advertised AHEAD of its exact counterpart:
+		// a buyer that speaks auth-capture takes the first entry it can pay,
+		// so the fee is collected on-chain, while an exact-only buyer falls
+		// through to the second entry and keeps paying exactly as before.
+		// Nothing that works today stops working.
+		//
+		// fee.network, when set, restricts the fee to that chain. A facilitator
+		// only registers auth-capture for the chains it was configured with, so
+		// advertising the fee twin where the facilitator can't settle it would
+		// make it the first entry a capable buyer picks and then fail their
+		// payment at verify. Leave it empty only when every chain this stack
+		// prices is known to be registered.
+		if fee != nil && (fee.Network == "" || fee.Network == chainName) {
+			if feeReq := buildPlatformFeeRequirement(fee, chain, asset, opt.Price, wallet, rule.Pattern); feeReq != nil {
+				reqs = append(reqs, *feeReq)
+				optLabels = append(optLabels, labelsForPaymentOption(rule, opt))
+			}
+		}
 		reqs = append(reqs, req)
 		optLabels = append(optLabels, labelsForPaymentOption(rule, opt))
-		if len(reqs) == 1 {
+		if !primaryResolved {
+			primaryResolved = true
 			primaryChain = chain
 			primaryAsset = asset
 		}

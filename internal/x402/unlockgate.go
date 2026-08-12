@@ -20,8 +20,18 @@ import (
 
 // isUnlockOffer reports whether rule is the configured auth-capture unlock offer.
 func (v *Verifier) isUnlockOffer(cfg *PricingConfig, rule *RouteRule) bool {
-	return cfg != nil && cfg.AuthCaptureUnlock != nil && cfg.AuthCaptureUnlock.Enabled &&
-		strings.TrimSuffix(rule.StripPrefix, "/") == strings.TrimSuffix(cfg.AuthCaptureUnlock.OfferPrefix, "/")
+	if cfg == nil || cfg.AuthCaptureUnlock == nil || !cfg.AuthCaptureUnlock.Enabled {
+		return false
+	}
+	// An empty offerPrefix means no unlock offer, NOT "match everything". The
+	// same config block also drives the per-request platform fee, which needs
+	// no prefix — without this guard, enabling the fee would silently convert
+	// every root-mounted gate:auth offer (StripPrefix "") into a paid unlock.
+	prefix := strings.TrimSuffix(cfg.AuthCaptureUnlock.OfferPrefix, "/")
+	if prefix == "" {
+		return false
+	}
+	return strings.TrimSuffix(rule.StripPrefix, "/") == prefix
 }
 
 // handlePaidUnlock runs the auth-capture pay->settle->mint flow for the unlock

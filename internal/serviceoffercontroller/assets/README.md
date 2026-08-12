@@ -37,7 +37,7 @@ export { createWalletClient, createPublicClient, custom, http, erc20Abi,
 export { privateKeyToAccount } from "viem/accounts";
 export { base, baseSepolia } from "viem/chains";
 export { wrapFetchWithPayment, x402Client } from "@x402/fetch";
-export { ExactEvmScheme, toClientEvmSigner } from "@x402/evm";
+export { ExactEvmScheme, AuthCaptureEvmScheme, toClientEvmSigner } from "@x402/evm";
 EOF
 npx esbuild vendor-entry.mjs --bundle --format=esm --minify --target=es2022 \
   --outfile=chat-vendor.js
@@ -48,7 +48,7 @@ When the bundle is rebuilt, bump the `?v=` cache-buster on the
 chars — intermediaries (e.g. Cloudflare) cache `.js` aggressively.
 
 sha256 of the committed bundle:
-`895fd923aa84d7cf80e2b1df299068aa38dba7307a9a380526c0b5426489724d`
+`75205f4a3ed30f5f9a1a337e13c9284e6caaadbbc0b8b5039bfbc729a08af838`
 
 The pinned versions are the exact pair validated end-to-end against the
 x402-verifier with real on-chain settlements (X-PAYMENT v1 and
