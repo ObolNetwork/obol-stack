@@ -14,7 +14,7 @@ import (
 // payload never drifts silently. After a bump, refresh the SRI hash below
 // with scripts/update-scalar-sri.sh (the renovate PR body links it too).
 // renovate: datasource=npm depName=@scalar/api-reference
-const scalarBundleVersion = "1.64.0"
+const scalarBundleVersion = "1.68.0"
 
 // scalarBundleSRI is the Subresource Integrity hash for the pinned bundle.
 // The /api page is served over the public tunnel, so the third-party Scalar
@@ -24,7 +24,7 @@ const scalarBundleVersion = "1.64.0"
 // bundle and rewrites this constant). The hash is taken over the exact
 // (jsdelivr-minified) bytes that the pinned URL serves; it must be refreshed
 // in lockstep with scalarBundleVersion or the browser will block the script.
-const scalarBundleSRI = "sha384-MjGH/UsAZcRWbWSD70Yp9VOYGaCELxb+2a6meIvJsl5NkpqfdvkepJM6+ExL2Vmv"
+const scalarBundleSRI = "sha384-ayGz8N+NChlUEfR0zr5Zy3T6Q4lhcdiASJNoshS6+vxV56ZE300qfWNBjj9pqsLN"
 
 // scalarHTML returns the static HTML shell served at /api. It loads the
 // pinned @scalar/api-reference bundle from jsdelivr, points it at the
