@@ -29,11 +29,13 @@ const MetricsGrid = styled(Box, {
   gap: '$xxs',
   marginBottom: '$xl',
 
-  '@md': {
+  // obol-ui's published media only defines @sm (≤768px) and @bp2, so the
+  // tablet step is a raw query.
+  '@media (max-width: 1200px)': {
     gridTemplateColumns: 'repeat(2, 1fr)',
   },
 
-  '@media (max-width: 768px)': {
+  '@sm': {
     gridTemplateColumns: '1fr',
   },
 });
@@ -188,11 +190,13 @@ const PortsList = styled(Box, {
   gridTemplateColumns: 'repeat(4, 1fr)',
   gap: '$xxs',
 
-  '@md': {
+  // obol-ui's published media only defines @sm (≤768px) and @bp2, so the
+  // tablet step is a raw query.
+  '@media (max-width: 1200px)': {
     gridTemplateColumns: 'repeat(2, 1fr)',
   },
 
-  '@media (max-width: 768px)': {
+  '@sm': {
     gridTemplateColumns: '1fr',
   },
 });

@@ -1,6 +1,6 @@
 import { DM_Sans } from 'next/font/google';
 import type { Metadata } from 'next';
-import './globals.css';
+import { StitchesRegistry } from './StitchesRegistry';
 
 const dmSans = DM_Sans({
   variable: '--font-dm-sans',
@@ -11,6 +11,7 @@ const dmSans = DM_Sans({
 });
 
 export const metadata: Metadata = {
+  title: 'Obol Stack',
   robots: {
     index: false,
     follow: false,
@@ -26,10 +27,12 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Body background/colour come from the Stitches globals in
+  // src/lib/ui/theme.ts ($bg01), flushed server-side by StitchesRegistry.
   return (
     <html lang="en">
-      <body className={dmSans.variable} style={{ backgroundColor: '#091011' }}>
-        {children}
+      <body className={dmSans.variable}>
+        <StitchesRegistry>{children}</StitchesRegistry>
       </body>
     </html>
   );

@@ -31,15 +31,20 @@ export interface MarketplaceTableProps {
   storefrontUrl?: string;
 }
 
+// Fixed column widths add up to ~880px; below that the table scrolls inside
+// its own frame instead of pushing the page into horizontal overflow.
 const Wrapper = styled(Box, {
   borderRadius: '$2',
   border: '1px solid $stroke',
   background: '$bg02',
-  overflow: 'hidden',
+  overflowX: 'auto',
+  overflowY: 'hidden',
+  WebkitOverflowScrolling: 'touch',
 });
 
 const Table = styled('table', {
   width: '100%',
+  minWidth: 880,
   tableLayout: 'fixed',
   borderCollapse: 'collapse',
   fontFamily: '$fonts$body',

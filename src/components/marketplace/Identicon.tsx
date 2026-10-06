@@ -1,4 +1,6 @@
 'use client';
+import { theme } from '@obolnetwork/obol-ui';
+import { palette } from '@/lib/ui/theme';
 
 /**
  * Geometric identicon — 4x4 symmetric grid of squares filled or empty by
@@ -12,13 +14,15 @@ export interface IdenticonProps {
   rounded?: number;
 }
 
-const PALETTE = [
-  '#2FE4AB', // obolGreen
-  '#3CD2DD', // create / base cyan
-  '#9167E4', // coordinate purple
-  '#FABA5A', // obolGold
-  '#B6EA5C', // obolGreenLight
-  '#BB99FF', // coordinate hover
+// Raw values (SVG fills) taken from the obol-ui theme so identicons stay
+// on-palette.
+const PALETTE: string[] = [
+  theme.colors.obolGreen.value,
+  theme.colors.create.value,
+  theme.colors.coordinate.value,
+  palette.obolGoldSoft,
+  theme.colors.obolGreenLight.value,
+  theme.colors.coordinateHover.value,
 ];
 
 function hashSeed(seed: string): number {
@@ -54,7 +58,12 @@ export function Identicon({ seed, size = 38, rounded = 8 }: IdenticonProps) {
       aria-label={`identicon for ${seed.slice(0, 10)}`}
       style={{ flexShrink: 0 }}
     >
-      <rect width={size} height={size} rx={rounded} fill="#0A1416" />
+      <rect
+        width={size}
+        height={size}
+        rx={rounded}
+        fill={palette.identiconBg}
+      />
       {cells.map((on, i) => {
         if (!on) return null;
         const col = i % 4;

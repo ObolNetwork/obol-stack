@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { BrandingField, BrandingState } from './storefront-utils';
 import {
   buildCliCommand,
@@ -43,6 +43,17 @@ export function CommandModal({ branding, changedFields, onClose }: Props) {
   const [tab, setTab] = useState<Tab>('cli');
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  // Focus the dialog on open and close on Escape.
+  useEffect(() => {
+    closeRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
   const cliCmd = buildCliCommand(branding, changedFields);
   const claudePrompt = buildClaudeCodePrompt(branding, changedFields);
@@ -70,11 +81,15 @@ export function CommandModal({ branding, changedFields, onClose }: Props) {
       }}
       role="dialog"
       aria-modal="true"
+      aria-labelledby="command-modal-title"
     >
       <div className="shop-modal">
         <div className="shop-modal-header">
-          <h2 className="shop-modal-title">Apply branding</h2>
+          <h2 className="shop-modal-title" id="command-modal-title">
+            Apply branding
+          </h2>
           <button
+            ref={closeRef}
             className="shop-modal-close"
             onClick={onClose}
             type="button"

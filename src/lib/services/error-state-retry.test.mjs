@@ -5,7 +5,6 @@ import { resolve } from 'node:path';
 
 const RETRY_SURFACES = [
   'src/components/organisms/DashboardContent/DashboardContent.tsx',
-  'src/components/organisms/OpenClawList/OpenClawList.tsx',
   'src/components/organisms/ServiceList/ServiceList.tsx',
   'src/components/organisms/AgentRegistry/AgentRegistry.tsx',
 ];

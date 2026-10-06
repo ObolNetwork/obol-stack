@@ -7,11 +7,11 @@ import {
   Button,
   TextField,
   styled,
+  DialogTitle,
   ResponsiveDialog,
 } from '@obolnetwork/obol-ui';
 import { Button as BaseButton } from '@/components/atoms/Button';
 import { tones } from '@/lib/ui/tones';
-import { SectionTitle } from '../../atoms/SectionTitle';
 import { ChainSelector } from '../../atoms/ChainSelector';
 import { SellFlowSteps } from '../SellFlowSteps';
 import { useSellAgentModal } from './useSellAgentModal';
@@ -114,7 +114,17 @@ export function SellAgentModal({
       triggerElement={trigger as any}
     >
       <Flex css={{ paddingLeft: '$xs' }}>
-        <SectionTitle>Sell agent</SectionTitle>
+        {/* Radix Title gives the dialog its accessible name. */}
+        <DialogTitle
+          css={{
+            margin: 0,
+            fontSize: '$5',
+            fontWeight: '$semibold',
+            color: '$light',
+          }}
+        >
+          Sell agent
+        </DialogTitle>
       </Flex>
 
       {submitState === 'success' ? (

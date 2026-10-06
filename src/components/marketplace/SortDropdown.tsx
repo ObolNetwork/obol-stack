@@ -4,6 +4,7 @@ import type { ChangeEvent } from 'react';
 import { styled } from '@obolnetwork/obol-ui';
 
 import type { MarketplaceSort } from '@/lib/marketplace/types';
+import { inputFocus } from '@/lib/ui/theme';
 
 export interface SortDropdownProps {
   value: MarketplaceSort;
@@ -46,10 +47,7 @@ const Select = styled('select', {
     background: '$bg04',
     borderColor: '$bg05',
   },
-  '&:focus-visible': {
-    outline: 'none',
-    borderColor: '$obolGreen',
-  },
+  ...inputFocus,
 });
 
 /**

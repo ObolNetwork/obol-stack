@@ -15,6 +15,7 @@ import {
   obolBuyInferenceCommand,
 } from '@/lib/marketplace/buy-command';
 import type { ServiceListItem } from '@/lib/marketplace/types';
+import { inputFocus } from '@/lib/ui/theme';
 
 export interface BuyDrawerProps {
   item: ServiceListItem | null;
@@ -40,7 +41,7 @@ const Panel = styled(Box, {
   maxWidth: '100vw',
   display: 'flex',
   flexDirection: 'column',
-  background: '#091011',
+  background: '$bg01',
   borderLeft: '1px solid $stroke',
   boxShadow: '-8px 0 24px rgba(0, 0, 0, 0.4)',
   overflow: 'hidden',
@@ -161,7 +162,7 @@ const CountInput = styled('input', {
   color: '$light',
   fontSize: '$1',
   fontFamily: 'monospace',
-  '&:focus': { outline: 'none', borderColor: '$obolGreen' },
+  ...inputFocus,
 });
 
 const CodeBlock = styled('pre', {

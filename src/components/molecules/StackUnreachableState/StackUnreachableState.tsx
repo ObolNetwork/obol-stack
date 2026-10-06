@@ -3,6 +3,7 @@
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 import { ExclamationTriangleIcon } from '@radix-ui/react-icons';
 import { Button } from '@/components/atoms/Button';
+import { palette } from '@/lib/ui/theme';
 
 export interface StackUnreachableStateProps {
   /** Optional detail line (e.g. raw error message) shown below the help. */
@@ -73,7 +74,11 @@ export function StackUnreachableState({
   return (
     <Card role="alert" aria-live="polite">
       <TitleRow>
-        <ExclamationTriangleIcon width={20} height={20} color="#F4B400" />
+        <ExclamationTriangleIcon
+          width={20}
+          height={20}
+          color={palette.amberBright}
+        />
         <Title>Obol Stack unreachable</Title>
       </TitleRow>
       {helpText ? (

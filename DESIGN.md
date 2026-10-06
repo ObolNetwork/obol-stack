@@ -36,8 +36,17 @@ Inherits everything in
 [`obol-ui/DESIGN.md § 1`](../obol-packages/packages/obol-ui/DESIGN.md#1-brand-contract).
 Explicit reminders that bite often:
 
-- `<body>` background is `#091011` (`bg01`). It is currently set inline in
-  `src/app/layout.tsx` rather than via Tailwind — keep both in sync.
+- `<body>` background is `$bg01` (`#091011`), set by the Stitches globals in
+  `src/lib/ui/theme.ts` and flushed into the server HTML by
+  `src/app/StitchesRegistry.tsx`.
+- Colours: use obol-ui tokens (`$bg01`…`$bg05`, `$obolGreen`, `$light`,
+  `$body`, `$test`, …). `$stroke` is a local alias of `$bg04`. Values with no
+  token live in `palette` (`src/lib/ui/theme.ts`); status washes in
+  `src/lib/ui/tones.ts`. Don't hand-type hex in components.
+- Focus: never remove outlines without a replacement — use `focusVisible`
+  (rings) or `inputFocus` (bordered inputs) from `src/lib/ui/theme.ts`.
+- Breakpoints: obol-ui publishes only `@sm` (≤768px) and `@bp2` (≥769px);
+  use raw `@media` for other steps (e.g. 960px / 1200px).
 - DM Sans is loaded from `next/font/google` (`--font-dm-sans`). Don't import
   it again locally.
 - All copy uses sentence case — title case is reserved for `Obol Stack`,

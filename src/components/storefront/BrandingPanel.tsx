@@ -59,7 +59,7 @@ const LABEL_STYLE: React.CSSProperties = {
   fontSize: 11,
   textTransform: 'uppercase',
   letterSpacing: '0.08em',
-  color: '#8B9794',
+  color: 'var(--ink-3)',
 };
 
 function FileRow({
@@ -153,8 +153,8 @@ function FileRow({
               borderRadius: 8,
               flexShrink: 0,
               overflow: 'hidden',
-              border: '1px solid #DFDED6',
-              background: '#F4F4F1',
+              border: '1px solid var(--line-strong)',
+              background: 'var(--bg)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
@@ -164,16 +164,16 @@ function FileRow({
               // eslint-disable-next-line @next/next/no-img-element
               <img
                 src={value}
-                alt=""
+                alt={`${label} preview`}
                 style={{ width: '100%', height: '100%', objectFit: 'contain' }}
               />
             ) : (
-              <span style={{ fontSize: 11, color: '#8B9794' }}>—</span>
+              <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>—</span>
             )}
           </div>
           <label
             className="shop-btn"
-            style={{ cursor: 'pointer', borderColor: '#DFDED6' }}
+            style={{ cursor: 'pointer', borderColor: 'var(--line-strong)' }}
           >
             {value && value.startsWith('data:') ? 'Replace' : 'Upload'}
             <input
@@ -218,7 +218,7 @@ function FileRow({
               className="shop-btn"
               type="button"
               onClick={applyUrl}
-              style={{ borderColor: '#DFDED6' }}
+              style={{ borderColor: 'var(--line-strong)' }}
             >
               Use URL
             </button>
@@ -244,14 +244,14 @@ function FileRow({
                   height: 40,
                   borderRadius: 8,
                   overflow: 'hidden',
-                  border: '1px solid #DFDED6',
-                  background: '#F4F4F1',
+                  border: '1px solid var(--line-strong)',
+                  background: 'var(--bg)',
                 }}
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={value!}
-                  alt=""
+                  alt={`${label} preview`}
                   style={{
                     width: '100%',
                     height: '100%',
@@ -262,7 +262,7 @@ function FileRow({
               <span
                 style={{
                   fontSize: 11.5,
-                  color: '#8B9794',
+                  color: 'var(--ink-3)',
                   overflowWrap: 'anywhere',
                 }}
               >
@@ -273,9 +273,11 @@ function FileRow({
         </div>
       )}
 
-      {hint && <span style={{ fontSize: 11.5, color: '#8B9794' }}>{hint}</span>}
+      {hint && (
+        <span style={{ fontSize: 11.5, color: 'var(--ink-3)' }}>{hint}</span>
+      )}
       {error && (
-        <span role="alert" style={{ fontSize: 11.5, color: '#C94F2F' }}>
+        <span role="alert" style={{ fontSize: 11.5, color: 'var(--danger)' }}>
           {error}
         </span>
       )}
@@ -314,7 +316,7 @@ export function BrandingPanel({
               fontSize: 10.5,
               textTransform: 'uppercase',
               letterSpacing: '0.1em',
-              color: '#8B9794',
+              color: 'var(--ink-3)',
               marginBottom: 6,
             }}
           >
@@ -330,7 +332,7 @@ export function BrandingPanel({
           >
             Make it yours
           </h1>
-          <p style={{ margin: '8px 0 0', fontSize: 13, color: '#8B9794' }}>
+          <p style={{ margin: '8px 0 0', fontSize: 13, color: 'var(--ink-3)' }}>
             Operator-only editor. Preview uses the real public storefront —
             apply with <code>obol sell info set</code>.
           </p>
@@ -430,7 +432,7 @@ export function BrandingPanel({
               onClick={onReset}
               type="button"
               disabled={!hasChanges}
-              style={{ width: '100%', borderColor: '#DFDED6' }}
+              style={{ width: '100%', borderColor: 'var(--line-strong)' }}
             >
               Discard changes
             </button>
@@ -441,7 +443,7 @@ export function BrandingPanel({
               margin: 0,
               fontSize: 12.5,
               lineHeight: 1.5,
-              color: '#8B9794',
+              color: 'var(--ink-3)',
             }}
           >
             Draft changes appear in the preview instantly but are visible only

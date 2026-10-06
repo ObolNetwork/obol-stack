@@ -10,6 +10,7 @@ import {
 import { isFeatureEnabled } from '@/lib/config/featureFlags';
 import { useStackVersion } from '@/hooks/useStackVersion';
 import { releaseHref } from '@/lib/utils/release-href';
+import { focusVisible } from '@/lib/ui/theme';
 
 export interface FooterBarProps {
   className?: string;
@@ -39,10 +40,7 @@ const StyledLink = styled('a', {
     color: '$light',
   },
 
-  '&:focus': {
-    outline: 'none',
-    boxShadow: '0 0 0 2px $obolGreen',
-  },
+  ...focusVisible,
 });
 
 const IconWrapper = styled(Box, {

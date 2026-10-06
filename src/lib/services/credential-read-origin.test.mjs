@@ -4,10 +4,8 @@ import { describe, it } from 'node:test';
 
 const credentialReadRoutes = [
   'src/app/api/agents/token/route.ts',
-  'src/app/api/openclaw/token/route.ts',
   'src/app/api/agents/wallet/route.ts',
   'src/app/api/agents/wallets/route.ts',
-  'src/app/api/openclaw/wallet/route.ts',
 ];
 
 describe('credential read API routes', () => {

@@ -1,6 +1,5 @@
 import React from 'react';
-import { Box } from '@obolnetwork/obol-ui';
-import { styled } from '@/lib/stitches.config';
+import { Box, styled } from '@obolnetwork/obol-ui';
 
 export interface ProgressBarProps {
   value: number; // 0-100
@@ -21,7 +20,7 @@ const ProgressFill = styled(Box, {
         backgroundColor: '$obolGreenLight', // 21%-40% - Light green for good
       },
       warning: {
-        backgroundColor: '$orange', // 41%-60% - Orange for warning
+        backgroundColor: '$obolGold', // 41%-60% - Orange for warning
       },
       critical: {
         backgroundColor: '$test', // 61%-80% - Test color for critical

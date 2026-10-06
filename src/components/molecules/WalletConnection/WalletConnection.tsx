@@ -7,6 +7,7 @@ import { tones } from '@/lib/ui/tones';
 import { WalletModal } from '../WalletModal';
 import { truncateAddress } from '../../../utils/address';
 import { useWalletAssetBalances } from '../../../hooks/useWalletAssetBalances';
+import { palette } from '@/lib/ui/theme';
 
 // Wallet pill on the canonical Button atom; asymmetric padding keeps the
 // chain chip / avatar / balance chip optically inset within the pill.
@@ -48,8 +49,8 @@ const ChainPill = styled('span', {
       // No cyan tone exists; keep the Base-brand cyan text but take the
       // fill from the same 0.10-alpha wash pattern the tones use.
       cyan: {
-        background: 'rgba(60, 210, 221, 0.10)',
-        color: '#3CD2DD',
+        background: palette.cyanWash,
+        color: '$create',
       },
       neutral: {
         background: tones.neutral.bg,

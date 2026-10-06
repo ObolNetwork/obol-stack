@@ -22,6 +22,20 @@ export class StackUnreachableError extends Error {
   }
 }
 
+/** The catalog answered 404 for a detail slug. */
+export class ServiceNotFoundError extends Error {
+  constructor(message = 'Service not found in catalog snapshot') {
+    super(message);
+    this.name = 'ServiceNotFoundError';
+  }
+}
+
+export function isServiceNotFound(
+  error: unknown
+): error is ServiceNotFoundError {
+  return error instanceof Error && error.name === 'ServiceNotFoundError';
+}
+
 export function isStackUnreachable(
   error: unknown
 ): error is StackUnreachableError {

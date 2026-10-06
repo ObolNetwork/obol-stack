@@ -52,7 +52,10 @@ export const InputShell = styled('div', {
   borderRadius: '$2',
   overflow: 'hidden',
 
-  '&:focus-within': { borderColor: '$obolGreen' },
+  '&:focus-within': {
+    borderColor: '$obolGreen',
+    boxShadow: '0 0 0 1px $obolGreen',
+  },
 });
 
 export const Affix = styled('span', {
@@ -80,6 +83,7 @@ const NakedInput = styled('input', {
   color: '$light',
   fontSize: '$3',
   fontFamily: 'inherit',
+  // Focus is shown on the wrapper (focus-within ring) so it hugs the affixes.
   outline: 'none',
 
   variants: {

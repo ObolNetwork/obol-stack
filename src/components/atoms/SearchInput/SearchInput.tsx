@@ -1,5 +1,6 @@
 import React from 'react';
 import { styled } from '@obolnetwork/obol-ui';
+import { inputFocus } from '@/lib/ui/theme';
 
 export interface SearchInputProps extends React.InputHTMLAttributes<HTMLInputElement> {
   className?: string;
@@ -12,10 +13,9 @@ const StyledSearchInput = styled('input', {
   color: '$light',
   fontSize: '$2',
   padding: '6px 12px',
-  outline: 'none',
   width: '200px',
   '&::placeholder': { color: '$muted' },
-  '&:focus': { borderColor: '$obolGreen' },
+  ...inputFocus,
 });
 
 export function SearchInput({ className, ...props }: SearchInputProps) {

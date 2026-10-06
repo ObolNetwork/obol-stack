@@ -1,3 +1,5 @@
+'use client';
+
 import { Box, styled } from '@obolnetwork/obol-ui';
 
 import { DashboardTemplate } from '../../templates/DashboardTemplate';

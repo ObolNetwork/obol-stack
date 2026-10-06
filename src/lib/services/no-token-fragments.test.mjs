@@ -5,10 +5,7 @@ import { resolve } from 'node:path';
 
 const DASHBOARD_LINK_FILES = [
   'src/components/molecules/AgentInstanceCard/AgentInstanceCard.tsx',
-  'src/components/molecules/OpenClawInstanceCard/OpenClawInstanceCard.tsx',
   'src/hooks/useAgents.ts',
-  'src/hooks/useOpenClaw.ts',
-  'src/app/api/openclaw/token/route.ts',
 ];
 
 describe('dashboard token URLs', () => {
@@ -25,7 +22,7 @@ describe('dashboard token URLs', () => {
   });
 
   it('does not fetch token routes from dashboard card hooks', async () => {
-    for (const file of ['src/hooks/useAgents.ts', 'src/hooks/useOpenClaw.ts']) {
+    for (const file of ['src/hooks/useAgents.ts']) {
       const source = await readFile(resolve(process.cwd(), file), 'utf8');
       assert.equal(
         /\/api\/(?:agents|openclaw)\/token/.test(source),

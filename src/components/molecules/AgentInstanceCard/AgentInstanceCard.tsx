@@ -15,6 +15,7 @@ import {
 } from '../../../hooks/useAgents';
 import type { AgentInstance } from '@/types/agent';
 import { truncateAddress } from '@/utils/address';
+import { palette } from '@/lib/ui/theme';
 
 function displayModelName(raw: string): string {
   return raw.replace(/^openai\//, '');
@@ -88,7 +89,7 @@ const RuntimeBadge = styled(Text, {
   variants: {
     tone: {
       violet: {
-        color: '#B49BF0',
+        color: palette.lavender,
         backgroundColor: 'rgba(145,103,228,0.12)',
         border: '1px solid rgba(145,103,228,0.34)',
       },

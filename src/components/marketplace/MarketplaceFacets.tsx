@@ -14,6 +14,8 @@ import type {
 } from '@/lib/marketplace/types';
 import type { ChainName } from '@/types/dashboard';
 import type { ServiceOfferType } from '@/types/sell';
+import { inputFocus } from '@/lib/ui/theme';
+import { palette } from '@/lib/ui/theme';
 
 export interface MarketplaceFacetsProps {
   filters: MarketplaceFilters;
@@ -37,6 +39,12 @@ const Panel = styled(Box, {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: '$sm',
+  },
+
+  // Phones: one facet group per row so nothing overflows sideways.
+  '@sm': {
+    flexDirection: 'column',
+    flexWrap: 'nowrap',
   },
 });
 
@@ -64,13 +72,16 @@ const SearchInput = styled('input', {
   fontFamily: '$fonts$body',
 
   '&::placeholder': { color: '$body' },
-  '&:focus': { outline: 'none', borderColor: '$obolGreen' },
+  ...inputFocus,
 });
 
 const Group = styled(Box, {
   display: 'flex',
   flexDirection: 'column',
   gap: 6,
+  minWidth: 0,
+
+  '@sm': { width: '100%' },
 });
 
 const FieldLabel = styled(Text, {
@@ -122,7 +133,7 @@ const CheckBox = styled(Flex, {
   justifyContent: 'center',
   border: '1px solid',
   borderColor: '$stroke',
-  color: '#062018',
+  color: palette.inkOnGreen,
   flexShrink: 0,
 
   variants: {
@@ -226,6 +237,12 @@ const RangeInput = styled('input', {
   '&::-webkit-slider-runnable-track': { background: 'transparent' },
   '&::-moz-range-track': { background: 'transparent' },
   '&:focus': { outline: 'none' },
+  '&:focus-visible::-webkit-slider-thumb': {
+    boxShadow: '0 0 0 3px $colors$bg02, 0 0 0 5px $colors$obolGreen',
+  },
+  '&:focus-visible::-moz-range-thumb': {
+    boxShadow: '0 0 0 3px $colors$bg02, 0 0 0 5px $colors$obolGreen',
+  },
 });
 
 const RangeLabels = styled(Flex, {

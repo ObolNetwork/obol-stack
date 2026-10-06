@@ -17,7 +17,6 @@ describe('icon-only control accessibility', () => {
   it('uses semantic close buttons in chat sidebars', async () => {
     for (const file of [
       'src/components/molecules/AgentChatSidebar/AgentChatSidebar.tsx',
-      'src/components/molecules/OpenClawChatSidebar/OpenClawChatSidebar.tsx',
     ]) {
       const source = await read(file);
       // Close controls are real <button>s via the canonical Button atom.

@@ -1,5 +1,6 @@
 import React from 'react';
 import { Box, styled } from '@obolnetwork/obol-ui';
+import { palette } from '@/lib/ui/theme';
 
 export interface ChainChipProps {
   variant?:
@@ -35,7 +36,7 @@ const StyledChainChip = styled(Box, {
     variant: {
       fullMode: {
         background: 'rgba(60, 210, 221, 0.20)',
-        color: '#3CD2DD',
+        color: '$create',
       },
       lightMode: {
         background: 'rgba(217, 238, 243, 0.20)',
@@ -43,15 +44,15 @@ const StyledChainChip = styled(Box, {
       },
       aztecSequencer: {
         background: 'rgba(212, 255, 40, 0.20)',
-        color: '#D4FF28',
+        color: palette.chainLime,
       },
       erpcProxy: {
         background: 'rgba(145, 103, 228, 0.30)',
-        color: '#C4A8F5',
+        color: palette.chainLavender,
       },
       remoteNode: {
         background: 'rgba(91, 158, 255, 0.15)',
-        color: '#5B9EFF',
+        color: palette.chainBlue,
       },
       hoodi: {
         border: '1px solid $bg05',

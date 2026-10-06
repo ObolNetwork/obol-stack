@@ -8,6 +8,8 @@ import { useAgentChat } from '../../../hooks/useAgentChat';
 import { useAgentStatus } from '../../../hooks/useAgents';
 import { StatusIndicator } from '../../atoms/StatusIndicator';
 import type { AgentInstance } from '@/types/agent';
+import { inputFocus, palette } from '@/lib/ui/theme';
+import { tones } from '@/lib/ui/tones';
 
 interface AgentChatSidebarProps {
   instance: AgentInstance | null;
@@ -27,8 +29,8 @@ const SidebarOverlay = styled(Box, {
   zIndex: 30,
   display: 'flex',
   flexDirection: 'column',
-  backgroundColor: '#091011',
-  borderLeft: '1px solid #2D4D53',
+  backgroundColor: '$bg01',
+  borderLeft: '1px solid $bg05',
   transition: 'transform 0.3s ease-in-out',
 
   variants: {
@@ -53,10 +55,10 @@ const ResizeHandle = styled(Box, {
   zIndex: 32,
   transition: 'background-color 0.15s ease',
   '&:hover': {
-    backgroundColor: '#2FE4AB44',
+    backgroundColor: tones.success.border,
   },
   '&:active': {
-    backgroundColor: '#2FE4AB88',
+    backgroundColor: '$obolGreen',
   },
 });
 
@@ -66,19 +68,19 @@ const HeaderContainer = styled(Flex, {
   padding: '$xxs $sm',
   justifyContent: 'space-between',
   alignItems: 'center',
-  borderBottom: '1px solid #2D4D53',
+  borderBottom: '1px solid $bg05',
   flexShrink: 0,
 });
 
 const HeaderTitle = styled(Text, {
   fontSize: '$3',
   fontWeight: '$semibold',
-  color: '#e1e9eb',
+  color: '$textLight',
 });
 
 const RuntimeLabel = styled(Text, {
   fontSize: '$1',
-  color: '#b8c5c7',
+  color: '$textMiddle',
   textTransform: 'uppercase',
   letterSpacing: '0.08em',
 });
@@ -106,14 +108,14 @@ const MessageBubble = styled(Box, {
     role: {
       user: {
         alignSelf: 'flex-end',
-        backgroundColor: '#182d32',
-        color: '#e1e9eb',
+        backgroundColor: '$bg03',
+        color: '$textLight',
         borderRadius: '8px 0 8px 8px',
       },
       assistant: {
         alignSelf: 'flex-start',
-        backgroundColor: '#222829',
-        color: '#e1e9eb',
+        backgroundColor: palette.chatBubble,
+        color: '$textLight',
         borderRadius: '0 8px 8px 8px',
       },
     },
@@ -121,21 +123,21 @@ const MessageBubble = styled(Box, {
 });
 
 const InitialMessage = styled(Text, {
-  color: '#b8c5c7',
+  color: '$textMiddle',
   fontSize: '$3',
   lineHeight: '24px',
   padding: '$sm',
 });
 
 const ErrorMessage = styled(Text, {
-  color: '#ff6b6b',
+  color: '$test',
   fontSize: '$2',
   padding: '$xs $sm',
 });
 
 const InputContainer = styled(Flex, {
   padding: '$sm',
-  borderTop: '1px solid #2D4D53',
+  borderTop: '1px solid $bg05',
   gap: '$xs',
   alignItems: 'flex-end',
   flexShrink: 0,
@@ -146,18 +148,18 @@ const ChatInput = styled('textarea', {
   minHeight: '24px',
   maxHeight: '120px',
   padding: '12px 16px',
-  backgroundColor: '#111f22',
-  color: '#e1e9eb',
+  backgroundColor: '$bg02',
+  color: '$textLight',
   border: 'none',
   borderRadius: '8px',
   fontFamily: 'DM Sans',
   fontSize: '16px',
   lineHeight: '24px',
   resize: 'none',
-  outline: 'none',
+  ...inputFocus,
 
   '&::placeholder': {
-    color: '#6b7a7d',
+    color: '$grayMedium',
   },
 });
 
@@ -191,6 +193,7 @@ export function AgentChatSidebar({
   const isDragging = useRef(false);
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(DEFAULT_WIDTH);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   const handleResizeMouseDown = useCallback(
     (e: React.MouseEvent) => {
@@ -240,6 +243,21 @@ export function AgentChatSidebar({
     onClose();
   }, [clearMessages, onClose, onSidebarToggle]);
 
+  // Move focus into the panel when it opens; Escape closes it.
+  const handleCloseRef = useRef(handleClose);
+  useEffect(() => {
+    handleCloseRef.current = handleClose;
+  }, [handleClose]);
+  useEffect(() => {
+    if (!isSidebarOpen) return;
+    inputRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') handleCloseRef.current();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isSidebarOpen]);
+
   const handleSend = useCallback(() => {
     const trimmed = input.trim();
     if (!trimmed || isLoading || !instance) return;
@@ -255,8 +273,16 @@ export function AgentChatSidebar({
   };
 
   return (
-    <SidebarOverlay isOpen={isSidebarOpen} css={{ width: sidebarWidth }}>
-      <ResizeHandle onMouseDown={handleResizeMouseDown} />
+    <SidebarOverlay
+      as="aside"
+      aria-labelledby="agent-chat-title"
+      aria-hidden={!isSidebarOpen}
+      // Off-screen panel must not be reachable by Tab or screen readers.
+      inert={!isSidebarOpen}
+      isOpen={isSidebarOpen}
+      css={{ width: sidebarWidth, maxWidth: '100vw' }}
+    >
+      <ResizeHandle aria-hidden="true" onMouseDown={handleResizeMouseDown} />
 
       <HeaderContainer>
         <Flex
@@ -278,7 +304,7 @@ export function AgentChatSidebar({
               }
               size="sm"
             />
-            <HeaderTitle>
+            <HeaderTitle as="h2" id="agent-chat-title">
               {instance ? displayInstanceName(instance) : 'AI Agent'}
             </HeaderTitle>
           </Flex>
@@ -296,11 +322,14 @@ export function AgentChatSidebar({
         </Button>
       </HeaderContainer>
 
-      <MessagesContainer>
+      <MessagesContainer
+        role="log"
+        aria-live="polite"
+        aria-label="Chat messages"
+      >
         {!instance && (
           <InitialMessage>
-            Select a Hermes or OpenClaw instance from the dashboard to start
-            chatting.
+            Select an agent from the dashboard to start chatting.
           </InitialMessage>
         )}
         {instance && messages.length === 0 && (
@@ -320,12 +349,14 @@ export function AgentChatSidebar({
         {isLoading && (
           <MessageBubble role="assistant">Thinking...</MessageBubble>
         )}
-        {error && <ErrorMessage>{error}</ErrorMessage>}
+        {error && <ErrorMessage role="alert">{error}</ErrorMessage>}
         <div ref={messagesEndRef} />
       </MessagesContainer>
 
       <InputContainer>
         <ChatInput
+          ref={inputRef}
+          aria-label="Message"
           value={input}
           onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) =>
             setInput(e.target.value)

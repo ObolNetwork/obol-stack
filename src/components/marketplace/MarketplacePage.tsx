@@ -56,6 +56,7 @@ const Subtitle = styled(Text, {
 
 const ResultsBar = styled(Flex, {
   alignItems: 'center',
+  flexWrap: 'wrap',
   gap: '$sm',
 });
 

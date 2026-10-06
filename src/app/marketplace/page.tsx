@@ -1,17 +1,6 @@
-'use client';
+import { MarketplacePage } from '@/components/marketplace/MarketplacePage';
 
-import { useEffect, useState } from 'react';
-
-import { MarketplacePage } from '@/components/marketplace';
-
+// Providers are installed once at the marketplace layout level.
 export default function MarketplaceRoute() {
-  // Mirror the gate `src/app/page.tsx` uses — wagmi/RainbowKit need the DOM
-  // before hydration, so we delay rendering until mounted. Providers are
-  // installed once at the marketplace layout level.
-  const [hasMounted, setHasMounted] = useState(false);
-  useEffect(() => {
-    setHasMounted(true);
-  }, []);
-  if (!hasMounted) return null;
   return <MarketplacePage />;
 }

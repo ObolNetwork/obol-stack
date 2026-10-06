@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import dynamic from 'next/dynamic';
+import { notFound } from 'next/navigation';
 import { Box, Flex, Text, styled } from '@obolnetwork/obol-ui';
 
 import { Button } from '@/components/atoms/Button';
@@ -11,7 +12,10 @@ import { LoadingState } from '@/components/molecules/LoadingState';
 import { ErrorState } from '@/components/molecules/ErrorState';
 import { StackUnreachableState } from '@/components/molecules/StackUnreachableState';
 import { useServiceDetail } from '@/hooks/useServiceDetail';
-import { isStackUnreachable } from '@/lib/marketplace/errors';
+import {
+  isServiceNotFound,
+  isStackUnreachable,
+} from '@/lib/marketplace/errors';
 import { isErc8004Listing } from '@/lib/marketplace/types';
 
 import type { BuyDrawerProps } from './BuyDrawer';
@@ -221,6 +225,10 @@ export function MarketplaceDetail({ slug, onBack }: MarketplaceDetailProps) {
       </Layout>
     );
   }
+  if (isError && isServiceNotFound(error)) {
+    notFound();
+  }
+
   if (isError && isStackUnreachable(error)) {
     return (
       <Layout>

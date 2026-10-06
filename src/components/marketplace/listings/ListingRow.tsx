@@ -15,6 +15,7 @@ import type { ServiceOffer } from '@/types/sell';
 import { Identicon } from '../Identicon';
 import { Mono, RowBody } from '../ServicesChrome';
 import { StatusPill } from '../StatusPill';
+import { palette } from '@/lib/ui/theme';
 
 export const LISTING_TABLE_COLS =
   'minmax(260px, 1.6fr) 130px 130px minmax(180px, 1.1fr) 130px 130px';
@@ -92,7 +93,7 @@ const BadgePill = styled('span', {
       // Protocol/type chip keeps its own indigo hue — not a status tint.
       code: {
         background: 'rgba(98, 126, 234, 0.15)',
-        color: '#8fa3f0',
+        color: palette.periwinkle,
         borderColor: 'rgba(98, 126, 234, 0.35)',
       },
       green: {
@@ -105,11 +106,7 @@ const BadgePill = styled('span', {
 });
 
 export type ListingStatus =
-  | 'live'
-  | 'paused'
-  | 'draining'
-  | 'unreachable'
-  | 'degraded';
+  'live' | 'paused' | 'draining' | 'unreachable' | 'degraded';
 
 const STATUS_TONE: Record<ListingStatus, ToneName> = {
   live: 'success',

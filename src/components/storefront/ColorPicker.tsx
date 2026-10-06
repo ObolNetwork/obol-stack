@@ -176,7 +176,7 @@ export function ColorPicker({ label, value, onChange }: ColorPickerProps) {
             fontSize: 16,
             fontWeight: 600,
             lineHeight: 1,
-            color: '#16211F',
+            color: 'var(--ink)',
             mixBlendMode: 'difference',
             filter: 'invert(1)',
           }}
@@ -198,8 +198,8 @@ export function ColorPicker({ label, value, onChange }: ColorPickerProps) {
               right: 0,
               zIndex: 6,
               width: 208,
-              background: '#fff',
-              border: '1px solid #DFDED6',
+              background: 'var(--surface)',
+              border: '1px solid var(--line-strong)',
               borderRadius: 12,
               padding: 12,
               boxShadow: '0 16px 40px rgba(20,30,28,0.22)',
@@ -255,7 +255,7 @@ export function ColorPicker({ label, value, onChange }: ColorPickerProps) {
                   width: 16,
                   height: 16,
                   borderRadius: '50%',
-                  background: '#fff',
+                  background: 'var(--surface)',
                   border: '1px solid rgba(0,0,0,0.3)',
                   boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
                   transform: 'translate(-50%, -50%)',
@@ -279,11 +279,14 @@ export function ColorPicker({ label, value, onChange }: ColorPickerProps) {
                   height: 20,
                   borderRadius: 5,
                   background: value,
-                  border: '1px solid #DFDED6',
+                  border: '1px solid var(--line-strong)',
                   flexShrink: 0,
                 }}
               />
-              <span className="mono" style={{ fontSize: 13, color: '#8B9794' }}>
+              <span
+                className="mono"
+                style={{ fontSize: 13, color: 'var(--ink-3)' }}
+              >
                 #
               </span>
               <input
@@ -303,15 +306,14 @@ export function ColorPicker({ label, value, onChange }: ColorPickerProps) {
                 style={{
                   flex: 1,
                   minWidth: 0,
-                  border: '1px solid #DFDED6',
-                  background: '#F4F4F1',
+                  border: '1px solid var(--line-strong)',
+                  background: 'var(--bg)',
                   borderRadius: 6,
                   padding: '5px 8px',
                   fontSize: 13,
-                  color: '#16211F',
+                  color: 'var(--ink)',
                   textTransform: 'uppercase',
                   letterSpacing: '0.04em',
-                  outline: 'none',
                 }}
               />
             </div>

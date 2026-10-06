@@ -1,13 +1,15 @@
-'use client';
-
-import { useEffect, useState } from 'react';
+import { ClientOnly } from '@/components/atoms/ClientOnly';
+import { LoadingState } from '@/components/molecules/LoadingState';
 import { BrandingEditorPage } from '@/components/storefront/BrandingEditorPage';
 
+// The editor derives its preview origin from window.location, so it mounts
+// client-side; the dashboard shell around it still server-renders.
 export default function StorefrontRoute() {
-  const [hasMounted, setHasMounted] = useState(false);
-  useEffect(() => {
-    setHasMounted(true);
-  }, []);
-  if (!hasMounted) return null;
-  return <BrandingEditorPage />;
+  return (
+    <ClientOnly
+      fallback={<LoadingState message="Loading storefront editor…" />}
+    >
+      <BrandingEditorPage />
+    </ClientOnly>
+  );
 }

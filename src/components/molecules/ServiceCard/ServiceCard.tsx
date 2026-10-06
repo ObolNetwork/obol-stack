@@ -41,6 +41,7 @@ import type {
   ServiceOfferCondition,
   ServiceOfferType,
 } from '@/types/sell';
+import { palette } from '@/lib/ui/theme';
 
 interface ServiceCardProps {
   offer: ServiceOffer;
@@ -68,6 +69,8 @@ const TopRow = styled('div', {
   width: '100%',
   marginBottom: '$xs',
   gap: '$sm',
+
+  '@sm': { flexWrap: 'wrap' },
 });
 
 const HeaderMeta = styled('div', {
@@ -91,6 +94,7 @@ const ServiceName = styled(Text, {
   fontSize: '$4',
   fontWeight: '$semibold',
   color: '$light',
+  overflowWrap: 'anywhere',
 });
 
 const TypeBadge = styled(Text, {
@@ -146,6 +150,8 @@ const PriceRow = styled(Flex, {
   flexWrap: 'nowrap',
   marginTop: '$xs',
   width: '100%',
+
+  '@sm': { flexWrap: 'wrap' },
 });
 
 const InfoLabel = styled(Text, {
@@ -193,7 +199,7 @@ const SkillChip = styled(Text, {
 const DrainingBadge = styled(Text, {
   fontSize: '$1',
   fontWeight: '$semibold',
-  color: '#f5c542',
+  color: palette.gold,
   backgroundColor: 'rgba(245, 197, 66, 0.1)',
   border: '1px solid rgba(245, 197, 66, 0.35)',
   borderRadius: '4px',

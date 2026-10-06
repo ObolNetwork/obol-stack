@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { ServiceDetail } from '@/lib/marketplace/types';
 import {
   STACK_UNREACHABLE,
+  ServiceNotFoundError,
   StackUnreachableError,
 } from '@/lib/marketplace/errors';
 
@@ -25,7 +26,7 @@ export function useServiceDetail(slug: string | undefined) {
         });
       }
       if (res.status === 404) {
-        throw new Error('Service not found in catalog snapshot');
+        throw new ServiceNotFoundError();
       }
       if (!res.ok) {
         let body: { error?: string; code?: string } = {};
@@ -44,6 +45,9 @@ export function useServiceDetail(slug: string | undefined) {
       }
       return (await res.json()) as ServiceDetail;
     },
+    // A 404 is definitive; don't retry it three times before showing it.
+    retry: (failureCount, error) =>
+      !(error instanceof ServiceNotFoundError) && failureCount < 3,
     staleTime: 30_000,
     refetchOnWindowFocus: false,
   });

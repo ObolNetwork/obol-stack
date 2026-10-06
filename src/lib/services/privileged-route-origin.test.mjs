@@ -34,23 +34,6 @@ describe('privileged route origin guards', () => {
     );
   });
 
-  it('guards OpenClaw chat before parsing body or loading gateway credentials', async () => {
-    const source = await read('src/app/api/openclaw/chat/route.ts');
-
-    assertGuardBefore(
-      source,
-      'rejectCrossOrigin(request)',
-      /request\.json\(\)/,
-      'origin guard must run before parsing OpenClaw chat requests'
-    );
-    assertGuardBefore(
-      source,
-      'rejectCrossOrigin(request)',
-      /getGatewayToken/,
-      'origin guard must run before loading OpenClaw gateway tokens'
-    );
-  });
-
   it('guards ServiceOffer create and drain before Kubernetes writes', async () => {
     for (const route of [
       'src/app/api/sell/create/route.ts',
@@ -66,14 +49,12 @@ describe('privileged route origin guards', () => {
       );
     }
   });
-
 });
 
 describe('chat message rendering', () => {
   it('renders agent output as escaped React text, not trusted HTML', async () => {
     for (const file of [
       'src/components/molecules/AgentChatSidebar/AgentChatSidebar.tsx',
-      'src/components/molecules/OpenClawChatSidebar/OpenClawChatSidebar.tsx',
     ]) {
       const source = await read(file);
 

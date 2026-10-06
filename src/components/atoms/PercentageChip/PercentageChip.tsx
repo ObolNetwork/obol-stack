@@ -1,6 +1,5 @@
 import React from 'react';
-import { Box } from '@obolnetwork/obol-ui';
-import { styled } from '@/lib/stitches.config';
+import { Box, styled } from '@obolnetwork/obol-ui';
 
 export interface PercentageChipProps {
   percentage: number;
@@ -21,7 +20,7 @@ const getPercentageStyles = (percentage: number) => {
   } else if (percentage >= 41 && percentage <= 60) {
     return {
       background: 'rgba(232, 158, 48, 0.20)',
-      color: '$orange',
+      color: '$obolGold',
     };
   } else if (percentage >= 61 && percentage <= 80) {
     return {

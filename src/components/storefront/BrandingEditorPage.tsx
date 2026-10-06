@@ -149,7 +149,7 @@ export function BrandingEditorPage() {
         />
       ) : (
         <aside className="shop-panel shop-panel-embedded" aria-busy="true">
-          <div style={{ padding: 26, color: '#8B9794' }}>
+          <div style={{ padding: 26, color: 'var(--ink-3)' }}>
             Loading published storefront…
           </div>
         </aside>

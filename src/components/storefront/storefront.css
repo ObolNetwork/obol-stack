@@ -14,7 +14,13 @@
   --brand-btn-h: #7aefc9;
   --brand-soft: rgba(47, 228, 171, 0.09);
   --accent-fg: #08201a;
-  min-height: 100vh;
+  --danger: #c94f2f;
+  /* Editor height inside the dashboard shell (header + footer above/below). */
+  --shop-h: max(640px, calc(100vh - 220px));
+  min-height: var(--shop-h);
+  border: 1px solid var(--colors-stroke);
+  border-radius: 12px;
+  overflow: hidden;
   background: var(--bg);
   color: var(--ink);
 }
@@ -23,7 +29,7 @@
   display: grid;
   grid-template-columns: 1fr minmax(320px, 400px);
   grid-template-areas: 'preview panel';
-  min-height: 100vh;
+  min-height: var(--shop-h);
 }
 
 @media (max-width: 960px) {
@@ -40,7 +46,7 @@
   position: relative;
   width: 100%;
   max-width: none;
-  height: 100vh;
+  height: var(--shop-h);
   overflow: auto;
   background: var(--surface);
   border-left: 1px solid var(--line-strong);
@@ -51,7 +57,7 @@
   grid-area: preview;
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  min-height: var(--shop-h);
   background: #0c0c0d;
 }
 

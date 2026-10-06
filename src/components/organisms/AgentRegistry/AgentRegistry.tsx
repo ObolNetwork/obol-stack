@@ -24,6 +24,7 @@ import {
   registryChainBadges,
   registryHealthBadge,
 } from '@/lib/services/registry-display';
+import { palette } from '@/lib/ui/theme';
 
 const AvatarStack = styled('div', {
   display: 'flex',
@@ -45,14 +46,14 @@ const AvatarCircle = styled('div', {
 });
 
 const SEEDS = [
-  { letter: 'A', bg: 'rgba(47, 228, 171, 0.25)', color: '#2FE4AB' },
-  { letter: 'K', bg: 'rgba(60, 210, 221, 0.25)', color: '#3CD2DD' },
-  { letter: 'M', bg: 'rgba(145, 103, 228, 0.25)', color: '#9167E4' },
-  { letter: 'B', bg: 'rgba(250, 186, 90, 0.25)', color: '#FABA5A' },
-  { letter: 'S', bg: 'rgba(182, 234, 92, 0.25)', color: '#B6EA5C' },
-  { letter: 'H', bg: 'rgba(221, 96, 60, 0.25)', color: '#DD603C' },
-  { letter: 'P', bg: 'rgba(47, 228, 171, 0.25)', color: '#2FE4AB' },
-  { letter: 'C', bg: 'rgba(60, 210, 221, 0.25)', color: '#3CD2DD' },
+  { letter: 'A', bg: 'rgba(47, 228, 171, 0.25)', color: '$obolGreen' },
+  { letter: 'K', bg: 'rgba(60, 210, 221, 0.25)', color: '$create' },
+  { letter: 'M', bg: 'rgba(145, 103, 228, 0.25)', color: '$coordinate' },
+  { letter: 'B', bg: 'rgba(250, 186, 90, 0.25)', color: palette.obolGoldSoft },
+  { letter: 'S', bg: 'rgba(182, 234, 92, 0.25)', color: '$obolGreenLight' },
+  { letter: 'H', bg: 'rgba(221, 96, 60, 0.25)', color: '$test' },
+  { letter: 'P', bg: 'rgba(47, 228, 171, 0.25)', color: '$obolGreen' },
+  { letter: 'C', bg: 'rgba(60, 210, 221, 0.25)', color: '$create' },
 ];
 
 const AgentList = styled(Box, {

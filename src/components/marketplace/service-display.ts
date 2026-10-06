@@ -6,6 +6,7 @@ import { isErc8004Listing } from '@/lib/marketplace/types';
 import type { ServiceListItem } from '@/lib/marketplace/types';
 import type { ChainName } from '@/types/dashboard';
 import type { ServiceOfferType } from '@/types/sell';
+import { palette } from '@/lib/ui/theme';
 
 // Public registry explorer — the storefront equivalent for remote ERC-8004
 // listings, which aren't served by this cluster's storefront.
@@ -14,7 +15,7 @@ export const SCAN_URL = 'https://www.8004scan.io';
 // Darker-than-default label for filled-green primary buttons (Storefront,
 // New listing) so the text reads clearly against $obolGreen — the primary
 // variant's own colour is a mid-green with weak contrast.
-export const STOREFRONT_TEXT_CSS = { color: '#062018' } as const;
+export const STOREFRONT_TEXT_CSS = { color: palette.inkOnGreen } as const;
 
 export const BADGE_VARIANT: Record<
   ServiceOfferType,

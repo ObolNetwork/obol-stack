@@ -6,10 +6,10 @@ import {
   Flex,
   Text,
   styled,
+  DialogTitle,
   ResponsiveDialog,
 } from '@obolnetwork/obol-ui';
 import { Button } from '@/components/atoms/Button';
-import { SectionTitle } from '../../atoms/SectionTitle';
 import { tones } from '@/lib/ui/tones';
 
 interface StopDrainModalProps {
@@ -137,7 +137,16 @@ export function StopDrainModal({
     >
       <ModalContent>
         <Flex css={{ paddingLeft: '$xs' }}>
-          <SectionTitle>Stop selling</SectionTitle>
+          <DialogTitle
+            css={{
+              margin: 0,
+              fontSize: '$5',
+              fontWeight: '$semibold',
+              color: '$light',
+            }}
+          >
+            Stop selling
+          </DialogTitle>
         </Flex>
 
         <ModalBody>

@@ -37,12 +37,9 @@ export function useAnchorHash(
 
   // Check for hash in URL to auto-open sidebar
   // Hash fragments aren't available in Next.js App Router hooks, so we check client-side
-  const [hasHash, setHasHash] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return window.location.hash === hash;
-    }
-    return false;
-  });
+  // Start false on both server and client so hydration matches; the effect
+  // below syncs with window.location.hash right after mount.
+  const [hasHash, setHasHash] = useState(false);
 
   // Listen to hash changes
   useEffect(() => {

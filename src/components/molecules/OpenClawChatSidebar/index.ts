@@ -1,1 +1,0 @@
-export { OpenClawChatSidebar } from './OpenClawChatSidebar';

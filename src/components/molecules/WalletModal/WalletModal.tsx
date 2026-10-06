@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Image, Button, Flex, Text, styled, theme } from '@obolnetwork/obol-ui';
 import { Button as BaseButton } from '@/components/atoms/Button';
 import { Close } from '@/icons';
@@ -235,6 +235,15 @@ export function WalletModal({
 
   const chainId = useChainId();
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isOpen, onClose]);
+
   // Get token prices using combined hook
   const { ethPrice, ethChange24h, obolPrice, obolChange24h } = useTokenPrices();
 
@@ -263,7 +272,7 @@ export function WalletModal({
     onClose();
   };
   return (
-    <ModalContent>
+    <ModalContent role="dialog" aria-label="Wallet details">
       <CloseButton
         type="button"
         variant="bare"
