@@ -6,6 +6,7 @@ import {
   type StopRequestInput,
 } from './drain';
 import { rejectCrossOrigin } from '@/lib/middleware/origin-check';
+import { k8sErrorStatus } from '@/lib/services/k8s-errors';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -49,16 +50,21 @@ export async function POST(request: NextRequest) {
       parsed.value.name,
       patch as unknown as Record<string, unknown>
     );
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[Sell Stop] Error:', error);
-    if (error?.statusCode === 404 || error?.response?.statusCode === 404) {
+    if (k8sErrorStatus(error) === 404) {
       return NextResponse.json(
         { error: `ServiceOffer "${parsed.value.name}" not found` },
         { status: 404 }
       );
     }
     return NextResponse.json(
-      { error: error?.message || 'failed to drain ServiceOffer' },
+      {
+        error:
+          error instanceof Error && error.message
+            ? error.message
+            : 'failed to drain ServiceOffer',
+      },
       { status: 500 }
     );
   }

@@ -55,3 +55,9 @@ next-env.d.ts
 # obol
 charon-enr-private-key
 **/validator_keys/*
+
+# local state / legacy tooling (never commit)
+/.data/
+/.worktrees/
+yarn.lock
+.eslintrc*

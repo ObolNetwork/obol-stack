@@ -4,7 +4,7 @@ Thank you for helping improve the Obol Stack dashboard. This doc is the short pa
 
 ## Prerequisites
 
-- Node.js 22+, pnpm 10.30+
+- Node.js 24 LTS (`.nvmrc`), pnpm 10.30+
 - A live cluster is **not required** for UI contributions — `pnpm run dev:local` runs the frontend standalone and all tests pass without one
 - If you have access to **obol-stack**, run `obol stack up` to get a local cluster, then add `127.0.0.1 obol.stack` to `/etc/hosts` and use `pnpm run dev` for the full experience
 

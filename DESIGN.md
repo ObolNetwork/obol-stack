@@ -6,7 +6,7 @@ This surface assumes a wallet, lists agents/services/registry state, and is
 deliberately denser than the public storefront.
 
 Canonical design system: [`@obolnetwork/obol-ui`](../obol-packages/packages/obol-ui/DESIGN.md).
-This app **consumes that package** (currently `1.1.19` per `package.json`), so
+This app **consumes that package** (currently `1.1.21` per `package.json`), so
 tokens and primitives are inherited rather than re-declared. Bumps follow what
 the canonical doc spells out.
 
@@ -14,14 +14,14 @@ the canonical doc spells out.
 
 ## 1. Stack & boundaries
 
-- **Framework**: Next.js 16 (App Router, Turbopack), React 19, TypeScript strict.
-- **Styling**: Tailwind v4 + `@stitches/react` (transitively via obol-ui).
+- **Framework**: Next.js 16.3 (App Router, Turbopack), React 19, TypeScript strict.
+- **Styling**: `@stitches/react` via obol-ui (`styled`, `css`, theme tokens). No Tailwind.
 - **Component sourcing priority**:
   1. `@obolnetwork/obol-ui` atoms (Box, Button, Text, IconButton, Badge,
      Tooltip, Switch, Skeleton, …) — always first.
   2. obol-ui molecules (Card, Tabs, Accordion, Navbar, Table, …) when the
      shape matches.
-  3. Local Tailwind composition for dashboard-specific layouts that don't have
+  3. Local Stitches composition (`styled(Box, …)`) for dashboard-specific layouts that don't have
      a direct molecule (the section card + collapsible header + count badge
      pattern is currently local — see § 3).
   4. New bespoke components only when nothing above fits.

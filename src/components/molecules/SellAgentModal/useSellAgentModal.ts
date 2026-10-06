@@ -182,7 +182,7 @@ export function useSellAgentModal(
       setErrorMsg('');
       setFollowUpSteps([]);
     }, 200);
-  }, [agentName, defaultWallet, reset]);
+  }, [defaultWallet, reset]);
 
   return {
     open,

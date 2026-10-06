@@ -6,6 +6,8 @@ import {
   resolveSellAsset,
 } from '@/lib/services/sell-assets';
 import type { ServiceOfferType } from '@/types/sell';
+import { parseCreateSellRequest } from '@/lib/sell/create-request';
+import { k8sErrorStatus } from '@/lib/services/k8s-errors';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,38 +31,39 @@ function isAllowedNamespace(ns: string): boolean {
  * Full UI parity gaps: obol-stack `plans/frontend-sell-ui-gaps.md`.
  */
 export async function POST(request: NextRequest) {
+  const csrfReject = rejectCrossOrigin(request);
+  if (csrfReject) return csrfReject;
+
+  let raw: unknown;
   try {
-    const csrfReject = rejectCrossOrigin(request);
-    if (csrfReject) return csrfReject;
+    raw = await request.json();
+  } catch {
+    return NextResponse.json({ error: 'invalid JSON body' }, { status: 400 });
+  }
 
-    const body = await request.json();
-    const {
-      name,
-      namespace,
-      type,
-      wallet,
-      chain,
-      token,
-      pricePerRequest,
-      upstream,
-      port,
-      healthPath,
-      model,
-      agentRef,
-      skills,
-      description,
-    } = body;
+  const parsed = parseCreateSellRequest(raw);
+  if (!parsed.ok) {
+    return NextResponse.json({ error: parsed.error }, { status: 400 });
+  }
 
-    if (!name || !wallet || !chain || !pricePerRequest) {
-      return NextResponse.json(
-        {
-          error:
-            'Missing required fields: name, wallet, chain, pricePerRequest',
-        },
-        { status: 400 }
-      );
-    }
+  const {
+    name,
+    namespace,
+    type,
+    wallet,
+    chain,
+    token,
+    pricePerRequest,
+    upstream,
+    port,
+    healthPath,
+    model,
+    agentRef,
+    skills,
+    description,
+  } = parsed.value;
 
+  try {
     const serviceType = normalizeServiceOfferType(type);
 
     if (serviceType === 'inference' && !model) {
@@ -111,15 +114,15 @@ export async function POST(request: NextRequest) {
       token: paymentToken,
       asset,
       pricePerRequest,
-      model: isInference ? String(model).trim() : undefined,
+      model: isInference ? model : undefined,
       agentRef: isAgent
         ? {
             name: agentRef?.name ?? name,
             namespace: agentRef?.namespace ?? targetNamespace,
           }
         : undefined,
-      skills: isAgent && Array.isArray(skills) ? skills : undefined,
-      description: isAgent && description ? String(description) : undefined,
+      skills: isAgent ? skills : undefined,
+      description: isAgent && description ? description : undefined,
       upstream: isAgent
         ? undefined
         : isInference
@@ -139,20 +142,23 @@ export async function POST(request: NextRequest) {
       namespace: targetNamespace,
       type: serviceType,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error('[Sell Create] Error:', error);
 
-    if (error?.statusCode === 409 || error?.response?.statusCode === 409) {
+    if (k8sErrorStatus(error) === 409) {
       return NextResponse.json(
-        {
-          error: `ServiceOffer "${(await request.clone().json()).name}" already exists`,
-        },
+        { error: `ServiceOffer "${name}" already exists` },
         { status: 409 }
       );
     }
 
     return NextResponse.json(
-      { error: error?.message || 'Failed to create ServiceOffer' },
+      {
+        error:
+          error instanceof Error && error.message
+            ? error.message
+            : 'Failed to create ServiceOffer',
+      },
       { status: 500 }
     );
   }

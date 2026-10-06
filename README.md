@@ -21,7 +21,6 @@ If you have access to **obol-stack**, you can run `obol stack up` to spin up a l
 - Hermes agent + sub-agents, sell listings, ERC-8004 registration view
 - Marketplace: browse services, `obol buy inference` / sell flows
 - Wallet connection (RainbowKit / WalletConnect)
-- CopilotKit sidebar when an ADK agent is configured
 
 ## Documentation
 
@@ -32,7 +31,6 @@ If you have access to **obol-stack**, you can run `obol stack up` to spin up a l
 | [DEVELOPMENT.md](DEVELOPMENT.md)             | Skaffold / Kind deployment                   |
 | [CLAUDE.md](CLAUDE.md)                       | Agent / IDE conventions                      |
 | [deployment/README.md](deployment/README.md) | Production Docker / K8s                      |
-| [QUICKSTART_AGENT.md](QUICKSTART_AGENT.md)   | ADK agent hookup                             |
 
 ## Scripts
 

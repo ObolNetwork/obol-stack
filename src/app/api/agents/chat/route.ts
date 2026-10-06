@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { AgentClient } from '@/lib/services/agents';
+import { AgentClient, isDns1123Label } from '@/lib/services/agents';
 import type { AgentRuntime } from '@/types/agent';
 import { rejectCrossOrigin } from '@/lib/middleware/origin-check';
 
@@ -18,11 +18,20 @@ export async function POST(request: NextRequest) {
     const instanceId =
       body.instanceId ||
       (runtime === 'hermes' ? DEFAULT_HERMES_INSTANCE_ID : '');
-    const { messages, stream = false, sessionId, ...otherParams } = body;
+    const {
+      messages,
+      stream = false,
+      sessionId,
+      runtime: _runtime,
+      instanceId: _instanceId,
+      ...otherParams
+    } = body;
+    void _runtime;
+    void _instanceId;
 
-    if (!instanceId) {
+    if (typeof instanceId !== 'string' || !isDns1123Label(instanceId)) {
       return NextResponse.json(
-        { error: 'instanceId is required' },
+        { error: 'instanceId is required and must be a DNS-1123 label' },
         { status: 400 }
       );
     }

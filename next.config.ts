@@ -53,15 +53,6 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: process.cwd(),
   },
-  
-  webpack: (config) => {
-    config.resolve = config.resolve || {};
-    config.resolve.alias = {
-      ...(config.resolve.alias || {}),
-      "@react-native-async-storage/async-storage": false,
-    };
-    return config;
-  },
 
   async headers() {
     return [
@@ -85,9 +76,6 @@ const nextConfig: NextConfig = {
   },
 
   output: "standalone",
-
-  // Externalize server-only packages
-  serverExternalPackages: ['pino', 'thread-stream'],
 };
 
 export default nextConfig;

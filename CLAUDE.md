@@ -43,19 +43,19 @@ When you have **obol-stack** running (`obol stack up`):
 | `src/app/`             | Next.js App Router pages + `src/app/api/*` route handlers |
 | `src/components/`      | UI — atomic design (atoms / molecules / organisms)        |
 | `src/lib/services/`    | Kubernetes, Prometheus, sell, agents, catalog clients     |
-| `src/lib/marketplace/` | Browse filters, buy-command, x402 probe, ERC-8004 source  |
+| `src/lib/marketplace/` | Browse filters, buy-command, settlement, ERC-8004 source  |
 | `src/lib/sell/`        | CLI command builders, flow steps, upstream health         |
 | `src/hooks/`           | Client data hooks (React Query)                           |
 
-**Runtime**: Next.js 16, React 19, TypeScript strict, `@obolnetwork/obol-ui`, Tailwind v4.
+**Runtime**: Next.js 16.3, React 19, TypeScript strict, Node 24 LTS (`.nvmrc`). Styling is Stitches via `@obolnetwork/obol-ui` (no Tailwind) — use obol-ui components and theme tokens.
 
 **Cluster access**: Route handlers run server-side with `KUBECONFIG`. Host dev reaches Traefik at `http://obol.stack:8080`; in-cluster code uses `*.svc.cluster.local` (see `src/lib/utils/cluster-url.ts`).
 
 ## Product surfaces
 
 - **Dashboard** — `HeroBand`, networks, metrics (`NodeOverview`), agent instances, registration card
-- **Marketplace** — `/marketplace` — catalog from `/api/marketplace/services`; buy via CLI (`obol buy inference`); x402 probe via `/api/marketplace/probe`
-- **Sell** — ServiceOffer CRUD via `/api/sell/*`; `SellAgentModal`, `SellInferenceModal`, flow steps mirror `obol sell` CLI
+- **Marketplace** — `/marketplace` — catalog from `/api/marketplace/services`; buy via CLI (`obol buy inference`)
+- **Sell** — ServiceOffer CRUD via `/api/sell/*` (request bodies validated with TypeBox — see `src/lib/sell/create-request.ts`); `SellAgentModal` + marketplace `NewListingDialog`; flow steps mirror `obol sell` CLI
 - **Agents** — Hermes default + sub-agents (`obol agent new`); agent listings joined in `agent-listing.ts`
 
 ## Security

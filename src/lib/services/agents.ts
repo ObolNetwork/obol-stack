@@ -13,6 +13,12 @@ import {
 } from '@/lib/services/agent-runtime';
 import { sharedKubeConfig } from '@/lib/services/kube';
 
+const DNS1123_LABEL_RE = /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/;
+
+export function isDns1123Label(value: string): boolean {
+  return DNS1123_LABEL_RE.test(value);
+}
+
 const RUNTIME_CONFIG = {
   hermes: {
     namespacePrefix: 'hermes-',
@@ -65,6 +71,9 @@ export class AgentClient {
   }
 
   private instanceFromNamespace(namespace: string): AgentInstance | null {
+    // Namespaces end up in service hostnames/URLs — reject anything that is
+    // not a DNS-1123 label so caller-supplied ids can't redirect requests.
+    if (!isDns1123Label(namespace)) return null;
     const runtime = this.parseRuntime(namespace);
     if (!runtime) {
       return null;
@@ -106,7 +115,8 @@ export class AgentClient {
     namespace: string
   ): AgentInstance | null {
     const prefix = 'agent-';
-    if (!namespace.startsWith(prefix)) return null;
+    if (!namespace.startsWith(prefix) || !isDns1123Label(namespace))
+      return null;
     const id = namespace.slice(prefix.length);
     if (!id) return null;
 
