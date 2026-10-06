@@ -5,7 +5,10 @@
   ],
   "enabledManagers": [
     "custom.regex",
-    "github-actions"
+    "github-actions",
+    "gomod",
+    "dockerfile",
+    "helmfile"
   ],
   "customManagers": [
     {
@@ -14,8 +17,8 @@
       "matchStrings": [
         "repository:\\s*(?<depName>obolnetwork/obol-stack-front-end)\\s*\\n\\s*pullPolicy:\\s*[^\\n]+\\n(?:\\s*#.*\\n)*\\s*tag:\\s*[\"']?(?<currentValue>v?[0-9]+\\.[0-9]+\\.[0-9]+(?:-[A-Za-z0-9.]+)?)(?:@(?<currentDigest>sha256:[a-f0-9]+))?[\"']?"
       ],
-      "fileMatch": [
-        "^internal/embed/infrastructure/values/obol-frontend\\.yaml\\.gotmpl$"
+      "managerFilePatterns": [
+        "/^internal/embed/infrastructure/values/obol-frontend\\.yaml\\.gotmpl$/"
       ],
       "datasourceTemplate": "docker",
       "versioningTemplate": "semver"
@@ -26,8 +29,8 @@
       "matchStrings": [
         "gatewayApiVersion:\\s*[\"']?(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)[\"']?"
       ],
-      "fileMatch": [
-        "^internal/embed/infrastructure/helmfile\\.yaml$"
+      "managerFilePatterns": [
+        "/^internal/embed/infrastructure/helmfile\\.yaml$/"
       ],
       "datasourceTemplate": "github-releases",
       "depNameTemplate": "kubernetes-sigs/gateway-api",
@@ -37,10 +40,10 @@
       "customType": "regex",
       "description": "Update OpenClaw version from upstream GitHub releases",
       "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>.*?)\\s+depName=(?<depName>.*?)\\n(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9]+)?)"
+        "#\\s*renovate:\\s*datasource=(?<datasource>.*?)\\s+depName=(?<depName>.*?)\\n(?:#[^\\n]*\\n)*(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9]+)?)"
       ],
-      "fileMatch": [
-        "^internal/openclaw/OPENCLAW_VERSION$"
+      "managerFilePatterns": [
+        "/^internal/openclaw/OPENCLAW_VERSION$/"
       ],
       "versioningTemplate": "regex:^v?(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)(-(?<build>\\d+))?$"
     },
@@ -48,10 +51,10 @@
       "customType": "regex",
       "description": "Update Foundry version from upstream GitHub releases",
       "matchStrings": [
-        "#\\s*renovate:\\s*datasource=(?<datasource>.*?)\\s+depName=(?<depName>.*?)\\n(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+[^\\s]*)"
+        "#\\s*renovate:\\s*datasource=(?<datasource>.*?)\\s+depName=(?<depName>.*?)\\n(?:#[^\\n]*\\n)*(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+[^\\s]*)"
       ],
-      "fileMatch": [
-        "^internal/openclaw/FOUNDRY_VERSION$"
+      "managerFilePatterns": [
+        "/^internal/openclaw/FOUNDRY_VERSION$/"
       ],
       "versioningTemplate": "semver"
     },
@@ -61,8 +64,8 @@
       "matchStrings": [
         "repository:\\s*cloudflare/cloudflared\\s*\\n\\s*tag:\\s*[\"']?(?<currentValue>[\\w.-]+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?[\"']?"
       ],
-      "fileMatch": [
-        "^internal/embed/infrastructure/cloudflared/values\\.yaml$"
+      "managerFilePatterns": [
+        "/^internal/embed/infrastructure/cloudflared/values\\.yaml$/"
       ],
       "datasourceTemplate": "docker",
       "depNameTemplate": "cloudflare/cloudflared",
@@ -74,36 +77,36 @@
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>.*?)\\s+depName=(?<depName>.*?)\\nreadonly\\s+\\w+=\"(?<currentValue>[^\"]+)\""
       ],
-      "fileMatch": [
-        "^obolup\\.sh$"
+      "managerFilePatterns": [
+        "/^obolup\\.sh$/"
       ],
       "versioningTemplate": "semver",
       "extractVersionTemplate": "^v?(?<version>.+)$"
     },
     {
       "customType": "regex",
-      "description": "Update Obol Helm chart versions pinned in internal/openclaw/openclaw.go (openclaw, remote-signer)",
+      "description": "Update Helm chart versions pinned as Go constants under a `// renovate: datasource=helm ...` annotation: openclaw (internal/openclaw/openclaw.go), remote-signer (internal/agentruntime/charts.go), bedag/raw (internal/hermes/hermes.go). datasource is constrained to helm so the hermes-agent image annotation in hermes.go is left to the image manager below.",
       "matchStrings": [
-        "//\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)(?:\\s+registryUrl=(?<registryUrl>\\S+))?\\s*\\n\\s*\\w+\\s*=\\s*\"(?<currentValue>[^\"]+)\""
+        "//\\s*renovate:\\s*datasource=(?<datasource>helm)\\s+depName=(?<depName>\\S+)(?:\\s+registryUrl=(?<registryUrl>\\S+))?\\s*\\n\\s*(?:const\\s+)?\\w+\\s*=\\s*\"(?<currentValue>[^\"]+)\""
       ],
-      "fileMatch": [
-        "^internal/openclaw/openclaw\\.go$"
+      "managerFilePatterns": [
+        "/^internal/openclaw/openclaw\\.go$/",
+        "/^internal/agentruntime/charts\\.go$/",
+        "/^internal/hermes/hermes\\.go$/"
       ],
       "versioningTemplate": "semver"
     },
     {
       "customType": "regex",
-      "description": "Update k3s image tag in k3d config",
+      "description": "Update the rancher/k3s image tag in the k3d config. Uses the docker datasource (the image tag `v1.35.9-k3s1` differs from the GitHub release `v1.35.9+k3s1`, so github-releases could never round-trip); the versioning regex skips -rcN tags.",
       "matchStrings": [
-        "image:\\s*rancher/k3s:v(?<currentValue>[\\w.+-]+)"
+        "image:\\s*(?<depName>rancher/k3s):(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+-k3s[0-9]+)"
       ],
-      "fileMatch": [
-        "^internal/embed/k3d-config\\.yaml$"
+      "managerFilePatterns": [
+        "/^internal/embed/k3d-config\\.yaml$/"
       ],
-      "datasourceTemplate": "github-releases",
-      "depNameTemplate": "k3s-io/k3s",
-      "versioningTemplate": "regex:^v?(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)([+-](?<build>.+))?$",
-      "extractVersionTemplate": "^v(?<version>.+)$"
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "regex:^v(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-k3s(?<build>\\d+)$"
     },
     {
       "customType": "regex",
@@ -112,9 +115,9 @@
         "image:\\s*(?<depName>ghcr\\.io/obolnetwork/[A-Za-z0-9._-]+):(?<currentValue>[A-Za-z0-9._-]+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?",
         "image:\\s*(?<depName>ghcr\\.io/obolnetwork/[A-Za-z0-9._-]+)@(?<currentDigest>sha256:[a-f0-9]+)"
       ],
-      "fileMatch": [
-        "^internal/embed/infrastructure/.+\\.yaml$",
-        "^internal/embed/infrastructure/.+\\.yaml\\.gotmpl$"
+      "managerFilePatterns": [
+        "/^internal/embed/infrastructure/.+\\.yaml$/",
+        "/^internal/embed/infrastructure/.+\\.yaml\\.gotmpl$/"
       ],
       "datasourceTemplate": "docker",
       "versioningTemplate": "loose"
@@ -125,9 +128,9 @@
       "matchStrings": [
         "//\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*\\w+\\s*=\\s*\"[^\"]*:(?<currentValue>[^\"]+)\""
       ],
-      "fileMatch": [
-        "^internal/hermes/hermes\\.go$",
-        "^internal/serviceoffercontroller/agent_render\\.go$"
+      "managerFilePatterns": [
+        "/^internal/hermes/hermes\\.go$/",
+        "/^internal/serviceoffercontroller/agent_render\\.go$/"
       ],
       "versioningTemplate": "loose"
     },
@@ -137,8 +140,8 @@
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\n\\s*tag:\\s*[\"']?(?<currentValue>[A-Za-z0-9._+-]+)[\"']?"
       ],
-      "fileMatch": [
-        "^internal/embed/networks/.+/helmfile\\.yaml\\.gotmpl$"
+      "managerFilePatterns": [
+        "/^internal/embed/networks/.+/helmfile\\.yaml\\.gotmpl$/"
       ],
       "versioningTemplate": "loose"
     },
@@ -148,8 +151,8 @@
       "matchStrings": [
         "//\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s*\\nconst scalarBundleVersion = \"(?<currentValue>[^\"]+)\""
       ],
-      "fileMatch": [
-        "^internal/serviceoffercontroller/scalar_html\\.go$"
+      "managerFilePatterns": [
+        "/^internal/serviceoffercontroller/scalar_html\\.go$/"
       ],
       "versioningTemplate": "semver"
     },
@@ -159,8 +162,8 @@
       "matchStrings": [
         "#\\s*renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)\\s+registryUrl=(?<registryUrl>\\S+)\\s*\\n\\s*version:\\s*[\"']?(?<currentValue>[0-9][^\\s\"']*)[\"']?"
       ],
-      "fileMatch": [
-        "^internal/embed/networks/.+/helmfile\\.yaml\\.gotmpl$"
+      "managerFilePatterns": [
+        "/^internal/embed/networks/.+/helmfile\\.yaml\\.gotmpl$/"
       ],
       "versioningTemplate": "semver"
     }
@@ -417,7 +420,7 @@
     {
       "description": "Group k3s image updates",
       "matchPackageNames": [
-        "k3s-io/k3s"
+        "rancher/k3s"
       ],
       "labels": [
         "renovate/k3s"
@@ -432,9 +435,6 @@
       "matchDatasources": [
         "docker"
       ],
-      "matchPackagePrefixes": [
-        "ghcr.io/obolnetwork/"
-      ],
       "labels": [
         "renovate/obol-images"
       ],
@@ -442,7 +442,10 @@
         "before 6am on monday"
       ],
       "groupName": "Obol Network image updates",
-      "pinDigests": true
+      "pinDigests": true,
+      "matchPackageNames": [
+        "ghcr.io/obolnetwork/{/,}**"
+      ]
     },
     {
       "description": "Batch every Ethereum execution/consensus client tag and the ethereum-node chart pin into a single standing PR. The helmfile pins every supported EL+CL client (only one is selected per install via --execution-client / --consensus-client), but they all live in the same template, so it's simplest to bump them together. One PR, not ten.",
@@ -471,6 +474,151 @@
       ],
       "groupName": "Aztec node updates",
       "groupSlug": "aztec-node"
+    },
+    {
+      "description": "Never pick per-arch image tags (`-arm64`/`-amd64` suffixes). The front-end and Aztec repos publish them next to the multi-arch tag; semver/loose versioning treats the suffix as a prerelease or a newer version (see the bogus aztec `503d…-arm64` and front-end `v0.1.28-rc6-arm64` proposals).",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "obolnetwork/obol-stack-front-end",
+        "aztecprotocol/aztec"
+      ],
+      "allowedVersions": "!/-(arm64|amd64)$/"
+    },
+    {
+      "description": "Aztec image tags are plain semver releases; anything else (commit-SHA tags) is not a version.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "aztecprotocol/aztec"
+      ],
+      "versioning": "semver"
+    },
+    {
+      "description": "Group Go module minor/patch updates into one PR (go mod tidy runs via postUpdateOptions). Majors stay separate.",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch",
+        "digest"
+      ],
+      "labels": [
+        "renovate/gomod"
+      ],
+      "schedule": [
+        "before 6am on monday"
+      ],
+      "groupName": "Go module minor/patch updates",
+      "groupSlug": "gomod-minor-patch"
+    },
+    {
+      "description": "Keep k8s.io client libraries and controller-tools in lockstep.",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchPackageNames": [
+        "k8s.io/**",
+        "sigs.k8s.io/controller-tools"
+      ],
+      "groupName": "Kubernetes Go libraries",
+      "groupSlug": "k8s-go"
+    },
+    {
+      "description": "Go toolchain: the go.mod `go` directive and golang builder images move together.",
+      "matchPackageNames": [
+        "go",
+        "golang"
+      ],
+      "matchDatasources": [
+        "golang-version",
+        "docker"
+      ],
+      "labels": [
+        "renovate/go-toolchain"
+      ],
+      "groupName": "Go toolchain",
+      "groupSlug": "go-toolchain"
+    },
+    {
+      "description": "Dockerfile base images (distroless runtime).",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "labels": [
+        "renovate/dockerfile"
+      ],
+      "schedule": [
+        "before 6am on monday"
+      ],
+      "groupName": "Dockerfile base images",
+      "matchPackageNames": [
+        "!golang"
+      ]
+    },
+    {
+      "description": "Embedded infrastructure Helm charts (Traefik, kube-prometheus-stack, reloader, eRPC, obol-app). Majors need CRD + values review (Traefik 40.2+ stops bundling Gateway API CRDs; KPS majors need manual CRD applies on existing clusters), so they require dashboard approval.",
+      "matchManagers": [
+        "helmfile"
+      ],
+      "labels": [
+        "renovate/infra-charts"
+      ],
+      "schedule": [
+        "before 6am on monday"
+      ],
+      "groupName": "Infrastructure Helm charts"
+    },
+    {
+      "matchManagers": [
+        "helmfile"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "labels": [
+        "renovate/major-update",
+        "requires-review",
+        "renovate/infra-charts"
+      ],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "The built-in helmfile manager's default file pattern also matches the Go-templated network helmfiles, whose chart/image pins are already tracked by the annotated regex managers. Disable it there to avoid duplicate PRs.",
+      "matchManagers": [
+        "helmfile"
+      ],
+      "matchFileNames": [
+        "internal/embed/networks/**"
+      ],
+      "enabled": false
+    },
+    {
+      "description": "k3s minor bumps change the Kubernetes minor (and obolup's kubectl must stay within +/-1 minor of it), so minor/major k3s and kubectl updates need dashboard approval and should land together.",
+      "matchPackageNames": [
+        "rancher/k3s",
+        "kubernetes/kubernetes"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "major"
+      ],
+      "labels": [
+        "renovate/major-update",
+        "requires-review"
+      ],
+      "dependencyDashboardApproval": true
     }
+  ],
+  "helmfile": {
+    "managerFilePatterns": [
+      "/^internal/embed/infrastructure/helmfile\\.yaml$/"
+    ]
+  },
+  "postUpdateOptions": [
+    "gomodTidy"
   ]
 }

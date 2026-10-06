@@ -16,7 +16,7 @@ replicas: 1
 
 image:
   repository: ghcr.io/erpc/erpc
-  tag: 0.0.64
+  tag: 0.3.0
   pullPolicy: IfNotPresent
 
 # Config file
@@ -90,7 +90,7 @@ config: |-
             evalFunction: |
               (upstreams, method) => {
                 if (method === 'eth_sendRawTransaction') {
-                  return upstreams.filter(u => u.config.id === 'obol-rpc-mainnet');
+                  return upstreams.filter(u => u.id === 'obol-rpc-mainnet');
                 }
                 return upstreams;
               }
@@ -126,7 +126,7 @@ config: |-
             evalFunction: |
               (upstreams, method) => {
                 if (method === 'eth_sendRawTransaction') {
-                  return upstreams.filter(u => u.config.id === 'obol-rpc-base');
+                  return upstreams.filter(u => u.id === 'obol-rpc-base');
                 }
                 return upstreams;
               }

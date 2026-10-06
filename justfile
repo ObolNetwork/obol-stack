@@ -13,12 +13,13 @@ install:
 build:
     #!/usr/bin/env bash
     set -e
-    VERSION=$(cat VERSION 2>/dev/null || echo "0.0.0")
+    VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed "s/^v//" || true)
+    [ -n "$VERSION" ] || VERSION=$(cat VERSION 2>/dev/null || echo "0.0.0")
     COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     BUILD_TIME=$(date -u +%Y%m%d%H%M%S)
     DIRTY="false"
     git diff --quiet 2>/dev/null || DIRTY="true"
-    go build -ldflags "-X github.com/obol/obol-stack/internal/version.Version=${VERSION} -X github.com/obol/obol-stack/internal/version.GitCommit=${COMMIT} -X github.com/obol/obol-stack/internal/version.BuildTime=${BUILD_TIME} -X github.com/obol/obol-stack/internal/version.GitDirty=${DIRTY}" -o bin/obol ./cmd/obol
+    go build -ldflags "-X github.com/ObolNetwork/obol-stack/internal/version.Version=${VERSION} -X github.com/ObolNetwork/obol-stack/internal/version.GitCommit=${COMMIT} -X github.com/ObolNetwork/obol-stack/internal/version.BuildTime=${BUILD_TIME} -X github.com/ObolNetwork/obol-stack/internal/version.GitDirty=${DIRTY}" -o bin/obol ./cmd/obol
     echo "✓ Built obol v${VERSION} (${COMMIT})"
 
 # Clean build artifacts

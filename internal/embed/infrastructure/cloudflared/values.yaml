@@ -5,7 +5,7 @@ transport:
 
 image:
   repository: cloudflare/cloudflared
-  tag: "2026.7.3@sha256:e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf"
+  tag: "2026.10.0@sha256:9b49eed8f62806d5d45ddf59ecefb5710429598ea6d3fcccd2af938f621b2b07"
 
 metrics:
   address: "0.0.0.0:2000"

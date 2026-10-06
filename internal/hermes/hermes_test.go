@@ -334,7 +334,7 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		"type: Recreate",
 		`Hermes binary missing from image: /opt/hermes/.venv/bin/hermes`,
 		`Hermes image is missing required extras: web,messaging,mcp,pty,cli,acp,google`,
-		`import fastapi, uvicorn, telegram, mcp, ptyprocess, simple_term_menu, googleapiclient`,
+		`import fastapi, uvicorn, telegram, mcp, ptyprocess, googleapiclient`,
 		`PRAGMA quick_check`,
 		`state-db-corrupt-$ts`,
 		`- "/opt/hermes/.venv/bin/hermes"`,

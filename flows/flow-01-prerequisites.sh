@@ -30,15 +30,15 @@ fi
 # obol version should return something
 run_step_grep "obol version" "Version" "$OBOL" version
 
-# Verify obol was built with Go 1.25+ (CLAUDE.md: "Go 1.25+")
-step "obol built with Go 1.25+"
+# Verify obol was built with Go 1.27+ (CLAUDE.md: "Go 1.27+")
+step "obol built with Go 1.27+"
 go_ver=$("$OBOL" version 2>&1 | grep "Go Version" | grep -oE "go[0-9]+\.[0-9]+\.[0-9]+" | head -1)
 go_major=$(echo "${go_ver#go}" | cut -d. -f1)
 go_minor=$(echo "${go_ver#go}" | cut -d. -f2)
-if [ "${go_major:-0}" -gt 1 ] || { [ "${go_major:-0}" -eq 1 ] && [ "${go_minor:-0}" -ge 25 ]; }; then
-    pass "obol Go version: $go_ver (>= 1.25)"
+if [ "${go_major:-0}" -gt 1 ] || { [ "${go_major:-0}" -eq 1 ] && [ "${go_minor:-0}" -ge 27 ]; }; then
+    pass "obol Go version: $go_ver (>= 1.27)"
 else
-    fail "Go version too old: $go_ver (expected >= 1.25)"
+    fail "Go version too old: $go_ver (expected >= 1.27)"
 fi
 
 # obolup.sh installs: kubectl, helm, k3d, helmfile, k9s (getting-started §Install)

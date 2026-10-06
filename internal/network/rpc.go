@@ -244,7 +244,7 @@ func configureCustomWritePolicy(network map[string]any, upstreamID string, readO
 		"evalPerMethod": true,
 		"evalFunction": fmt.Sprintf(`(upstreams, method) => {
   if (method === 'eth_sendRawTransaction') {
-    return upstreams.filter(u => u.config.id === '%s');
+    return upstreams.filter(u => u.id === '%s');
   }
   return upstreams;
 }

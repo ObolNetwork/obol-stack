@@ -37,7 +37,7 @@ const (
 	rawChartVersion = "2.0.2"
 
 	// renovate: datasource=docker depName=nousresearch/hermes-agent
-	defaultImage = "nousresearch/hermes-agent:v2026.7.7.2"
+	defaultImage = "nousresearch/hermes-agent:v2026.9.24"
 	// Use the upstream image venv instead of cloning Hermes into the PVC on
 	// every cold start. The init container below validates the required extras
 	// are present so image regressions fail before the gateway starts.
@@ -897,7 +897,7 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                     echo "Hermes binary missing from image: /opt/hermes/.venv/bin/hermes" >&2
                     exit 1
                   fi
-                  if ! /opt/hermes/.venv/bin/python3 -c "import fastapi, uvicorn, telegram, mcp, ptyprocess, simple_term_menu, googleapiclient" >/dev/null 2>&1; then
+                  if ! /opt/hermes/.venv/bin/python3 -c "import fastapi, uvicorn, telegram, mcp, ptyprocess, googleapiclient" >/dev/null 2>&1; then
                     echo "Hermes image is missing required extras: web,messaging,mcp,pty,cli,acp,google" >&2
                     exit 1
                   fi

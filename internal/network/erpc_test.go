@@ -259,7 +259,7 @@ func TestUpsertCustomRPCUpstream_ReadOnlyRemovesCustomWritePolicy(t *testing.T) 
 				"alias":        "base-sepolia",
 				"evm":          map[string]any{"chainId": 84532},
 				"selectionPolicy": map[string]any{
-					"evalFunction": "return upstreams.filter(u => u.config.id === 'custom-84532-0')",
+					"evalFunction": "return upstreams.filter(u => u.id === 'custom-84532-0')",
 				},
 			},
 		},
@@ -302,7 +302,7 @@ func TestPatchERPCConfig_PreservesWriteOnlySelectionPolicy(t *testing.T) {
           evalFunction: |
             (upstreams, method) => {
               if (method === 'eth_sendRawTransaction') {
-                return upstreams.filter(u => u.config.id === 'obol-rpc-mainnet');
+                return upstreams.filter(u => u.id === 'obol-rpc-mainnet');
               }
               return upstreams;
             }
