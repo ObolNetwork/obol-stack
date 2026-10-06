@@ -164,12 +164,24 @@ func openclawCommand(cfg *config.Config) *cli.Command {
 			openclawSkillsCommand(cfg),
 			openclawWalletCommand(cfg),
 			{
-				Name:            "cli",
-				Usage:           "Run openclaw CLI commands against a deployed instance",
-				ArgsUsage:       "[instance-name] [-- <openclaw args...>]",
+				Name:      "cli",
+				Usage:     "Run openclaw CLI commands against a deployed instance",
+				ArgsUsage: "[instance-name] [-- <openclaw args...>]",
+				Description: `Forwards arguments to the openclaw CLI inside the selected instance's pod.
+Needs a running stack.
+
+To see the native openclaw commands (stack must be running):
+  obol openclaw cli -- --help
+
+Examples:
+  obol openclaw cli -- gateway health
+  obol openclaw cli default -- doctor`,
 				SkipFlagParsing: true,
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					args := cmd.Args().Slice()
+					if isHelpRequest(args) {
+						return showPassthroughHelp(cmd)
+					}
 
 					id, remaining, err := openclaw.ResolveInstance(cfg, args)
 					if err != nil {
@@ -213,8 +225,8 @@ func openclawWalletCommand(cfg *config.Config) *cli.Command {
 				ArgsUsage: "[instance-name]",
 				Flags: []cli.Flag{
 					&cli.StringFlag{
-						Name:  "output",
-						Usage: "Output file path",
+						Name:  "file",
+						Usage: "Backup file path",
 					},
 					&cli.StringFlag{
 						Name:  "passphrase",
@@ -232,7 +244,7 @@ func openclawWalletCommand(cfg *config.Config) *cli.Command {
 					}
 
 					return openclaw.BackupWalletCmd(cfg, id, openclaw.BackupWalletOptions{
-						Output:      cmd.String("output"),
+						Output:      cmd.String("file"),
 						Passphrase:  cmd.String("passphrase"),
 						HasPassFlag: cmd.IsSet("passphrase"),
 					}, getUI(cmd))
@@ -344,6 +356,9 @@ func openclawSkillsCommand(cfg *config.Config) *cli.Command {
 				SkipFlagParsing: true,
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					args := cmd.Args().Slice()
+					if isHelpRequest(args) {
+						return showPassthroughHelp(cmd)
+					}
 
 					id, remaining, err := openclaw.ResolveInstance(cfg, args)
 					if err != nil {
@@ -364,6 +379,9 @@ func openclawSkillsCommand(cfg *config.Config) *cli.Command {
 				SkipFlagParsing: true,
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					args := cmd.Args().Slice()
+					if isHelpRequest(args) {
+						return showPassthroughHelp(cmd)
+					}
 
 					id, remaining, err := openclaw.ResolveInstance(cfg, args)
 					if err != nil {

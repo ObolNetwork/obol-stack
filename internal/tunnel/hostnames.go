@@ -56,7 +56,7 @@ func ListHostnames(cfg *config.Config) (*HostnameListResult, error) {
 		return nil, fmt.Errorf("load tunnel state: %w", err)
 	}
 	if st == nil || !st.IsPersistent() {
-		return &HostnameListResult{ManagementMode: tunnelManagementQuick}, nil
+		return &HostnameListResult{ManagementMode: tunnelManagementQuick, Hostnames: []HostnameInfo{}}, nil
 	}
 	return &HostnameListResult{
 		ManagementMode: st.Management(),

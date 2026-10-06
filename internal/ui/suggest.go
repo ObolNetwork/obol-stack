@@ -2,51 +2,77 @@ package ui
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
-	"github.com/urfave/cli/v2"
+	"github.com/urfave/cli/v3"
 )
 
-// SuggestCommand prints an error for an unknown command and suggests
-// similar commands based on Levenshtein distance.
-func (u *UI) SuggestCommand(app *cli.App, command string) {
-	u.Errorf("unknown command: %s", command)
+// SuggestCommand prints an error for an unknown subcommand of parent and
+// suggests similarly named sibling commands (Levenshtein distance <= 2).
+func (u *UI) SuggestCommand(parent *cli.Command, command string) {
+	u.Errorf("unknown command: %s", strings.TrimSpace(parent.FullName()+" "+command))
 
-	suggestions := findSimilarCommands(app.Commands, command, 2)
+	suggestions := findSimilarCommands(parent.Commands, command, 2)
 	if len(suggestions) > 0 {
 		fmt.Fprintln(u.stderr)
 		fmt.Fprintln(u.stderr, "Did you mean?")
 
 		for _, s := range suggestions {
-			fmt.Fprintf(u.stderr, "  obol %s\n", boldStyle.Render(s))
+			fmt.Fprintf(u.stderr, "  %s %s\n", parent.FullName(), boldStyle.Render(s))
 		}
 	}
 
 	fmt.Fprintln(u.stderr)
-	u.Dim("Run 'obol --help' for a list of commands")
+	fmt.Fprintln(u.stderr, dimStyle.Render(fmt.Sprintf("Run '%s --help' for a list of commands", parent.FullName())))
 }
 
-// findSimilarCommands returns command names within maxDist Levenshtein
-// distance of the input, searching recursively through subcommands.
+// findSimilarCommands returns the names of visible commands whose name or
+// alias is within maxDist Levenshtein distance of the input (or that the
+// input is a prefix of), best matches first: prefix matches, then by edit
+// distance. At most three suggestions are returned.
 func findSimilarCommands(commands []*cli.Command, input string, maxDist int) []string {
-	var results []string
+	type match struct {
+		name  string
+		score int
+	}
+
+	var matches []match
 
 	for _, cmd := range commands {
 		if cmd.Hidden {
 			continue
 		}
 
-		dist := levenshtein(input, cmd.Name)
-		if dist > 0 && dist <= maxDist {
-			results = append(results, cmd.Name)
-		}
-		// Also check aliases.
-		for _, alias := range cmd.Aliases {
-			dist := levenshtein(input, alias)
-			if dist > 0 && dist <= maxDist {
-				results = append(results, cmd.Name)
+		best := -1
+		for _, name := range cmd.Names() {
+			if name == input {
+				best = -1
 				break
 			}
+			score := -1
+			if len(input) >= 2 && strings.HasPrefix(name, input) {
+				score = 0
+			} else if dist := levenshtein(input, name); dist <= maxDist {
+				score = dist
+			}
+			if score >= 0 && (best < 0 || score < best) {
+				best = score
+			}
 		}
+		if best >= 0 {
+			matches = append(matches, match{cmd.Name, best})
+		}
+	}
+
+	sort.SliceStable(matches, func(i, j int) bool { return matches[i].score < matches[j].score })
+
+	var results []string
+	for i, m := range matches {
+		if i == 3 {
+			break
+		}
+		results = append(results, m.name)
 	}
 
 	return results

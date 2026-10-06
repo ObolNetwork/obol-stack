@@ -214,7 +214,7 @@ func networkListCommand(cfg *config.Config) *cli.Command {
 			u := getUI(cmd)
 
 			if u.IsJSON() {
-				result := networkListResult{}
+				result := networkListResult{LocalNodes: []string{}, RPCs: []networkListRPCEntry{}}
 
 				// Collect local nodes (best-effort).
 				if nodes, err := embed.GetAvailableNetworks(); err == nil {

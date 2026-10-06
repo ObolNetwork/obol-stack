@@ -1336,7 +1336,7 @@ func List(cfg *config.Config, u *ui.UI) error {
 		return nil
 	}
 
-	var instances []openclawInstance
+	instances := []openclawInstance{} // never nil: JSON mode must emit [] not null
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue

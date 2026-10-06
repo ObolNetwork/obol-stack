@@ -437,8 +437,8 @@ func modelSetupCustomCommand(cfg *config.Config) *cli.Command {
 			&cli.StringFlag{Name: "endpoint", Usage: "Full base URL (e.g. http://host:8000/v1)", Required: true},
 			&cli.StringFlag{Name: "model", Usage: "Model identifier at the endpoint — this is also the LiteLLM model_name the agent will call", Required: true},
 			&cli.StringFlag{Name: "api-key", Usage: "API key (optional, some endpoints don't require it)"},
-			&cli.BoolFlag{Name: "disable-thinking", Usage: "Tells a model not to use its thinking mode to reason about turns for longer."},
-			&cli.BoolFlag{Name: "no-sync", Usage: "Skip the agent model sync (batch with other model commands, then run `obol model sync` once)"},
+			&cli.BoolFlag{Name: "disable-thinking", Usage: "Tell the model not to use its thinking mode (shorter, faster turns)"},
+			&cli.BoolFlag{Name: "no-sync", Usage: "Skip the agent model sync (batch with other model commands, then run 'obol model sync' once)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -512,6 +512,7 @@ func modelStatusCommand(cfg *config.Config) *cli.Command {
 
 			if u.IsJSON() {
 				result := modelStatusResult{
+					Providers:  []modelStatusProvider{},
 					Discovered: discoveredProvidersToJSON(discovered),
 				}
 				if driftErr != nil {
@@ -665,7 +666,7 @@ func modelListCommand(cfg *config.Config) *cli.Command {
 			u := getUI(cmd)
 
 			if u.IsJSON() {
-				result := modelListResult{}
+				result := modelListResult{Local: []modelListLocal{}}
 
 				if models, err := model.ListOllamaModels(); err == nil {
 					for _, m := range models {
@@ -758,10 +759,10 @@ func modelListCommand(cfg *config.Config) *cli.Command {
 func modelPreferCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "prefer",
-		Usage:     "Pull one or more models to the preferred choices (agents use these in order)",
+		Usage:     "Promote one or more models to the top of the preferred list (agents use these in order)",
 		ArgsUsage: "[<model-name> ...]",
 		Flags: []cli.Flag{
-			&cli.BoolFlag{Name: "no-sync", Usage: "Skip the agent model sync (batch with other model commands, then run `obol model sync` once)"},
+			&cli.BoolFlag{Name: "no-sync", Usage: "Skip the agent model sync (batch with other model commands, then run 'obol model sync' once)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -985,7 +986,7 @@ func modelRemoveCommand(cfg *config.Config) *cli.Command {
 		Usage:     "Remove a model from the LiteLLM gateway",
 		ArgsUsage: "<model-name>",
 		Flags: []cli.Flag{
-			&cli.BoolFlag{Name: "no-sync", Usage: "Skip the agent model sync (batch with other model commands, then run `obol model sync` once)"},
+			&cli.BoolFlag{Name: "no-sync", Usage: "Skip the agent model sync (batch with other model commands, then run 'obol model sync' once)"},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -1125,7 +1126,7 @@ func discoveredProvidersToJSON(discovered []model.DiscoveredProvider) []discover
 func modelDiscoverCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "discover",
-		Usage: "Detect other local inference servers (LM Studio, llama.cpp, vLLM, etc) and their models.",
+		Usage: "Detect other local inference servers (LM Studio, llama.cpp, vLLM, etc) and their models",
 		Description: "Read-only. Does not modify the existing cluster. This discovery runs every `obol stack up`.\n" +
 			"Set OBOL_DISABLE_LOCAL_MODEL_DISCOVERY=true to skip local inference server auto-detection every startup.\n" +
 			"Set OBOL_LOCAL_MODEL_DISCOVERY_PORTS=port[:label],... to manually add custom local inference servers.",
@@ -1141,7 +1142,11 @@ func modelDiscoverCommand() *cli.Command {
 			}
 
 			if u.IsJSON() {
-				return u.JSON(discoverResult{Providers: discoveredProvidersToJSON(discovered)})
+				providers := discoveredProvidersToJSON(discovered)
+				if providers == nil {
+					providers = []discoverProvider{}
+				}
+				return u.JSON(discoverResult{Providers: providers})
 			}
 
 			if len(discovered) == 0 {
