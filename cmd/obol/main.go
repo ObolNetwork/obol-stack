@@ -25,111 +25,28 @@ import (
 func main() {
 	// Load config with XDG defaults
 	cfg := config.Load()
+	cliApp := newRootCommand(cfg)
 
-	// Custom help template with branded banner and command sections.
-	cli.RootCommandHelpTemplate = "\n" + ui.Banner() + "\n\n" + `NAME:
-   {{template "helpNameTemplate" .}}
+	if err := cliApp.Run(context.Background(), os.Args); err != nil {
+		// Use the UI instance for colored error output if available.
+		u, _ := cliApp.Metadata["ui"].(*ui.UI)
+		if u == nil {
+			u = ui.New(false)
+		}
 
-USAGE:
-   {{if .UsageText}}{{wrap .UsageText 3}}{{else}}{{.FullName}} {{if .VisibleFlags}}[global options]{{end}}{{if .VisibleCommands}} [command [command options]]{{end}}{{end}}{{if .Version}}{{if not .HideVersion}}
+		// Contextual cluster-down message based on the command the user ran.
+		if msg := kubectl.FormatClusterDownError(err, os.Args); msg != "" {
+			u.Error(msg)
+		} else {
+			u.Error(err.Error())
+		}
+		os.Exit(1)
+	}
+}
 
-VERSION:
-   {{.Version}}{{end}}{{end}}
-
-COMMANDS:
-   Stack Lifecycle:
-     stack init      Initialize stack configuration
-     stack up        Start the Obol Stack
-     stack down      Stop the Obol Stack
-     stack purge     Delete stack config (use --force to also delete data)
-   Obol Agent:
-     agent init      Initialize the stack-managed Obol Agent
-     agent new       Create and deploy an agent instance
-     agent sync      Deploy or update an agent instance
-     agent auth      Retrieve or regenerate an agent API token
-     agent wallet    Manage agent wallets
-     agent list      List agent instances
-     agent delete    Remove an agent instance
-     wallet import   Import an existing wallet for the Obol Agent
-   Network Management:
-     network list    List all networks (local nodes + remote RPCs)
-     network install Install and deploy a local blockchain node
-     network add     Add remote RPC endpoints for a chain
-     network remove  Remove remote RPC endpoints for a chain
-     network status  Show eRPC gateway health and upstreams
-     network delete  Remove network deployment
-
-   Hermes (Default Agent Runtime — these commands passthrough to the hermes CLI):
-     hermes help      List every native Hermes command
-     hermes skills    Manage Hermes skills
-     hermes chat      Chat with the agent
-     hermes config    Inspect or edit Hermes config
-     hermes dashboard Dashboard controls
-                      (use --agent <id> to target a non-default instance)
-
-   OpenClaw (Alternate Agent Runtime):
-     openclaw onboard   Create and deploy an OpenClaw instance
-     openclaw setup     Reconfigure model providers for a deployed instance
-     openclaw dashboard Open the dashboard in a browser
-     openclaw cli       Run openclaw CLI against a deployed instance
-     openclaw sync      Deploy or update an instance
-     openclaw token     Retrieve gateway token
-     openclaw list      List instances
-     openclaw delete    Remove instance and cluster resources
-     openclaw skills    Manage skills
-
-   Model Providers:
-     model setup        Configure LLM provider in LiteLLM gateway
-     model status       Show LiteLLM gateway provider status
-
-   Sell Services (x402):
-     sell inference   Sell local model inference with x402 payments
-     sell http        Sell any local HTTP service with x402 payments
-     sell list        List all services for sale
-     sell status      Show the status of all services for sale
-     sell stop        Stop selling a service
-     sell delete      Delete the sale of a service entirely
-     sell pricing     Manage service pricing
-     sell register    Register on the ERC-8004 Agent Registry (multi-chain)
-
-   Buy Services (x402):
-     buy inference    Buy paid inference from an x402-gated seller via the obol-agent
-
-   App Management:
-     app install     Install a Helm chart as an application
-     app list        List installed applications
-     app sync        Deploy application to cluster
-     app delete      Remove application and cluster resources
-
-   Tunnel Management:
-     tunnel status    Show tunnel status and public URL
-     tunnel setup     Create a permanent public URL with a Cloudflare tunnel
-     tunnel restart   Restart tunnel connector (quick tunnels get new URL)
-     tunnel stop      Stop the tunnel connector
-     tunnel logs      View cloudflared logs
-
-   Domain Management:
-     domain search    Search for available Cloudflare Registrar domains
-     domain check     Check authoritative availability for one or more domains
-     domain register  Register a domain through Cloudflare Registrar
-
-   Kubernetes Tools (with auto-configured KUBECONFIG):
-     kubectl         Run kubectl with stack kubeconfig (passthrough)
-     helm            Run helm with stack kubeconfig (passthrough)
-     helmfile        Run helmfile with stack kubeconfig (passthrough)
-     k9s             Run k9s with stack kubeconfig (passthrough)
-
-   Updates:
-     update          Check for available updates
-     upgrade         Apply available helm chart upgrades
-
-   Other:
-     version         Show detailed version information
-     help, h         Shows a list of commands or help for one command
-{{if .VisibleFlagCategories}}
-GLOBAL OPTIONS:{{template "visibleFlagCategoryTemplate" .}}{{else if .VisibleFlags}}
-GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
-`
+// newRootCommand builds the full obol command tree. Help layout, completion
+// and unknown-command suggestions are wired by configureCLI (help.go).
+func newRootCommand(cfg *config.Config) *cli.Command {
 	cliApp := &cli.Command{
 		Name:    "obol",
 		Usage:   "Obol Stack Management CLI",
@@ -137,7 +54,7 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:    "verbose",
-				Usage:   "Show detailed subprocess output",
+				Usage:   "Show detailed output (subprocess logs, extra detail in list/status/info commands)",
 				Sources: cli.EnvVars("OBOL_VERBOSE"),
 			},
 			&cli.BoolFlag{
@@ -157,7 +74,9 @@ GLOBAL OPTIONS:{{template "visibleFlagTemplate" .}}{{end}}
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
 			outputMode, err := ui.ParseOutputMode(cmd.String("output"))
 			if err != nil {
-				return ctx, err
+				// Backup/export commands used to take a local --output
+				// <path>; it is now --file (global --output is the format).
+				return ctx, fmt.Errorf("%w; to write an export or backup to a path, use --file", err)
 			}
 			u := ui.NewWithAllOptions(cmd.Bool("verbose"), cmd.Bool("quiet"), outputMode)
 			cmd.Metadata = map[string]any{"ui": u}
@@ -463,17 +382,10 @@ Find charts at https://artifacthub.io`,
 					},
 					{
 						Name:  "list",
-						Usage: "List installed applications",
-						Flags: []cli.Flag{
-							&cli.BoolFlag{
-								Name:    "verbose",
-								Aliases: []string{"v"},
-								Usage:   "Show detailed information",
-							},
-						},
+						Usage: "List installed applications (global --verbose adds detail)",
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							opts := app.ListOptions{
-								Verbose: cmd.Bool("verbose"),
+								Verbose: getUI(cmd).IsVerbose(),
 							}
 
 							return app.List(cfg, getUI(cmd), opts)
@@ -504,21 +416,9 @@ Find charts at https://artifacthub.io`,
 		},
 	}
 
-	if err := cliApp.Run(context.Background(), os.Args); err != nil {
-		// Use the UI instance for colored error output if available.
-		u, _ := cliApp.Metadata["ui"].(*ui.UI)
-		if u == nil {
-			u = ui.New(false)
-		}
+	configureCLI(cliApp)
 
-		// Contextual cluster-down message based on the command the user ran.
-		if msg := kubectl.FormatClusterDownError(err, os.Args); msg != "" {
-			u.Error(msg)
-		} else {
-			u.Error(err.Error())
-		}
-		os.Exit(1)
-	}
+	return cliApp
 }
 
 // getUI extracts the *ui.UI from the CLI command's root metadata.

@@ -510,8 +510,8 @@ func agentWalletCommand(cfg *config.Config) *cli.Command {
 				Flags: []cli.Flag{
 					agentRuntimeFlag(""),
 					&cli.StringFlag{
-						Name:  "output",
-						Usage: "Output file path",
+						Name:  "file",
+						Usage: "Backup file path",
 					},
 					&cli.StringFlag{
 						Name:  "passphrase",
@@ -530,13 +530,13 @@ func agentWalletCommand(cfg *config.Config) *cli.Command {
 					switch target.Runtime {
 					case agentruntime.Hermes:
 						return hermes.BackupWalletCmd(cfg, target.ID, hermes.BackupWalletOptions{
-							Output:      cmd.String("output"),
+							Output:      cmd.String("file"),
 							Passphrase:  cmd.String("passphrase"),
 							HasPassFlag: cmd.IsSet("passphrase"),
 						}, getUI(cmd))
 					case agentruntime.OpenClaw:
 						return openclaw.BackupWalletCmd(cfg, target.ID, openclaw.BackupWalletOptions{
-							Output:      cmd.String("output"),
+							Output:      cmd.String("file"),
 							Passphrase:  cmd.String("passphrase"),
 							HasPassFlag: cmd.IsSet("passphrase"),
 						}, getUI(cmd))
@@ -804,7 +804,7 @@ func listAgentInstances(cfg *config.Config, runtimeValue string, u *ui.UI) error
 		return err
 	}
 
-	var instances []agentListItem
+	instances := []agentListItem{} // never nil: JSON mode must emit [] not null
 	for _, runtime := range runtimes {
 		ids, err := agentruntime.ListInstanceIDs(cfg, runtime)
 		if err != nil {

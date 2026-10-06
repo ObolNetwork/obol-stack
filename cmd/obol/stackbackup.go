@@ -23,7 +23,7 @@ The archive contains keystore passwords and provider API keys — store it
 like a secret. Network chain data is excluded (re-syncable).`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
-				Name:  "output",
+				Name:  "file",
 				Usage: "Archive path (default: obol-stack-backup-<id>-<timestamp>.tar.gz)",
 			},
 			&cli.StringFlag{
@@ -33,7 +33,7 @@ like a secret. Network chain data is excluded (re-syncable).`,
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			_, err := stackbackup.Export(cfg, stackbackup.ExportOptions{
-				Output:      cmd.String("output"),
+				Output:      cmd.String("file"),
 				Passphrase:  cmd.String("passphrase"),
 				HasPassFlag: cmd.IsSet("passphrase"),
 			}, getUI(cmd))

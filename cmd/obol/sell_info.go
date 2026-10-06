@@ -53,9 +53,6 @@ Manage the storefront's own branding (independent of individual services):
 
 This is the buyer's-eye view. For operator health, conditions, and offers that
 are not yet ready or are draining, use 'obol sell status'.`,
-		Flags: []cli.Flag{
-			&cli.BoolFlag{Name: "verbose", Aliases: []string{"v"}, Usage: "Show health and richer per-service detail"},
-		},
 		Commands: []*cli.Command{
 			sellInfoSetCommand(cfg),
 			sellInfoResetCommand(cfg),
@@ -69,7 +66,8 @@ are not yet ready or are draining, use 'obol sell status'.`,
 			if err != nil {
 				return err
 			}
-			verbose := cmd.Bool("verbose") || u.IsVerbose()
+			// The global --verbose flag adds health and richer per-service detail.
+			verbose := u.IsVerbose()
 
 			// Focused single-service view: obol sell info <name>.
 			if cmd.NArg() > 0 {

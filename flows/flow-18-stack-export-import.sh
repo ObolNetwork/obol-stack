@@ -96,8 +96,8 @@ if [ "${FLOW_INCLUDE_AGENT:-0}" = "1" ]; then
 fi
 
 # §3: Export.
-step "obol stack export --output $ARCHIVE"
-export_out=$("$OBOL" stack export --output "$ARCHIVE" --passphrase "" 2>&1) || true
+step "obol stack export --file $ARCHIVE"
+export_out=$("$OBOL" stack export --file "$ARCHIVE" --passphrase "" 2>&1) || true
 if [ -f "$ARCHIVE" ]; then
     pass "archive created ($(du -h "$ARCHIVE" 2>/dev/null | awk '{print $1}'))"
 else

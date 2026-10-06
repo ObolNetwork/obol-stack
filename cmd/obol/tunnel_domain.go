@@ -43,8 +43,8 @@ func tunnelCommand(cfg *config.Config) *cli.Command {
 					"paste the whole 'cloudflared tunnel run --token …' line and Obol extracts it.\n\n" +
 					"No domain yet? Register one from the CLI with 'obol domain', or buy/transfer one\n" +
 					"in the Cloudflare dashboard first — either way it must be a zone in your account.\n\n" +
-					"Advanced: '--management local' uses a browser login on this machine instead\n" +
-					"(needs cloudflared installed); 'obol tunnel login' is the same flow directly.",
+					"Advanced: 'obol tunnel setup --management local --hostname <host>' uses a\n" +
+					"browser login on this machine instead (needs cloudflared installed).",
 				Flags: tunnelSetupFlags(),
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					u := getUI(cmd)
@@ -329,10 +329,14 @@ func domainCommand(cfg *config.Config) *cli.Command {
 				},
 			},
 			{
-				Name:  "search",
-				Usage: "Search for available Cloudflare Registrar domains",
+				Name:      "search",
+				Usage:     "Search for available Cloudflare Registrar domains",
+				ArgsUsage: "<query...>",
 				Flags: append([]cli.Flag{
-					&cli.StringFlag{Name: "query", Aliases: []string{"q"}, Usage: "Keyword, phrase, or domain to search for"},
+					// The query is positional (like `domain check/register`).
+					// --query stays as a hidden alias for scripts; its old -q
+					// short form clashed with the global --quiet/-q.
+					&cli.StringFlag{Name: "query", Hidden: true, Usage: "Keyword, phrase, or domain to search for (deprecated: pass it as an argument)"},
 					&cli.StringSliceFlag{Name: "extensions", Usage: "Optional extension filter(s), e.g. --extensions com --extensions dev"},
 					&cli.IntFlag{Name: "limit", Usage: "Maximum number of suggestions to return", Value: 10},
 				}, domainAuthFlags()...),
@@ -534,6 +538,9 @@ func domainSearchOptionsFromCommand(cmd *cli.Command, u *ui.UI) (tunnel.DomainSe
 	}
 
 	query := cmd.String("query")
+	if strings.TrimSpace(query) == "" {
+		query = strings.Join(cmd.Args().Slice(), " ")
+	}
 	if strings.TrimSpace(query) == "" {
 		input, err := u.Input("Search query", "")
 		if err != nil {

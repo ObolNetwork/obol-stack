@@ -806,8 +806,9 @@ Examples:
 			},
 			// Registration flags
 			&cli.BoolFlag{
-				Name:  "register",
-				Usage: "Deprecated: registration is enabled by default",
+				Name:   "register",
+				Hidden: true, // deprecated no-op; registration is on by default
+				Usage:  "Deprecated: registration is enabled by default",
 			},
 			&cli.BoolFlag{
 				Name:  "no-register",
@@ -1809,7 +1810,7 @@ Example:
 			},
 			&cli.BoolFlag{
 				Name:  "register",
-				Usage: "Auto-register the demo on the ERC-8004 Agent Registry. Default: skip (avoid double-register reverts and ETH-for-gas requirement; run `obol sell register` later if you want on-chain discovery).",
+				Usage: "Auto-register the demo on the ERC-8004 Agent Registry. Default: skip (avoid double-register reverts and ETH-for-gas requirement; run 'obol sell register' later if you want on-chain discovery).",
 			},
 			&cli.BoolFlag{
 				Name:   "no-register",
@@ -2814,11 +2815,8 @@ func sellStopCommand(cfg *config.Config) *cli.Command {
 The ServiceOffer CR itself is preserved — use 'obol sell delete' to
 remove it entirely (which also tombstones the ERC-8004 record).
 
-Flags:
-  --grace 30m   Override the grace period (default 1h).
-  --force       Skip the drain window (equivalent to --grace 0). Use
-                this when the abrupt-teardown behavior of the old
-                pause annotation is required for behavior parity.`,
+Use --grace to shorten or extend the drain window, or --force to tear the
+route down immediately (equivalent to --grace 0).`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:     "namespace",
@@ -3274,8 +3272,9 @@ Examples:
 				Usage: "Agent image URL for registration",
 			},
 			&cli.BoolFlag{
-				Name:  "sponsored",
-				Usage: "(disabled) Sponsored zero-gas registration is currently unavailable. Re-run without --sponsored to register with the agent's own wallet (ETH for transaction fees required on the network).",
+				Name:   "sponsored",
+				Hidden: true, // disabled; kept so old invocations get an explanatory error
+				Usage:  "(disabled) Sponsored zero-gas registration is currently unavailable. Re-run without --sponsored to register with the agent's own wallet (ETH for transaction fees required on the network).",
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
