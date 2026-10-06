@@ -81,7 +81,7 @@ func waitForClusterReady(cfg *config.Config, u *ui.UI) error {
 	deadline := time.Now().Add(timeout)
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlPath := cfg.ToolPath("kubectl")
 
 	// Wait for kubeconfig to exist
 	err := u.RunWithSpinner("Waiting for kubeconfig", func() error {

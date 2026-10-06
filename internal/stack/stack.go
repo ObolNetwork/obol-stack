@@ -95,6 +95,13 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string, skipConf
 	u.Detail("Cluster ID", stackID)
 	u.Detail("Backend", backend.Name())
 
+	// Install any missing pinned tools (kubectl, helm, k3d, helmfile) into
+	// the obol bin dir — package-manager installs (brew/deb/rpm) ship only
+	// the obol binary.
+	if err := ensureRequiredTools(cfg, u, backendName); err != nil {
+		return err
+	}
+
 	// Check prerequisites
 	if err := backend.Prerequisites(cfg); err != nil {
 		return fmt.Errorf("prerequisites check failed: %w", err)
@@ -228,6 +235,10 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 	}
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, kubeconfigFile)
+
+	if err := ensureRequiredTools(cfg, u, backend.Name()); err != nil {
+		return err
+	}
 
 	u.Infof("Starting stack (id: %s, backend: %s)", stackID, backend.Name())
 
@@ -457,7 +468,7 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		u.Warnf("Failed to migrate defaults helmfile hostnames: %v", err)
 	}
 
-	helmBinary := filepath.Join(cfg.BinDir, "helm")
+	helmBinary := cfg.ToolPath("helm")
 
 	// Pre-update only the repos our helmfile depends on, tolerating per-repo
 	// failures so an unrelated dead repo in the user's global helm config
@@ -486,7 +497,7 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		helmfileArgs = append(helmfileArgs, "--skip-deps")
 	}
 	helmfileArgs = append(helmfileArgs, helmcmd.SyncFlagsForVersion(helmBinary)...)
-	helmfileCmd := exec.Command(filepath.Join(cfg.BinDir, "helmfile"), helmfileArgs...)
+	helmfileCmd := exec.Command(cfg.ToolPath("helmfile"), helmfileArgs...)
 	helmfileCmd.Env = append(os.Environ(),
 		"KUBECONFIG="+kubeconfigPath,
 		"STACK_DATA_DIR="+dataDir,
@@ -1299,7 +1310,7 @@ func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 	}
 
 	clusterName := "obol-stack-" + stackID
-	k3dBinary := filepath.Join(cfg.BinDir, "k3d")
+	k3dBinary := cfg.ToolPath("k3d")
 	shouldForceRebuild := forceRebuildSet()
 	serverCID := k3dServerContainerID(clusterName)
 	cache := loadImportedImageCache(cfg)
@@ -1603,7 +1614,7 @@ func migrateDefaultsHTTPRouteHostnames(helmfilePath string) error {
 // endpoints. The snapshot is merged back in by restoreLiteLLMConfig after
 // helmfile sync completes.
 func preserveLiteLLMConfigForHelm(cfg *config.Config, kubeconfigPath string) (string, error) {
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 
 	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
 		"get", "configmap", "litellm-config", "-n", "llm", "-o", "jsonpath={.data.config\\.yaml}")
@@ -1618,7 +1629,7 @@ func restoreLiteLLMConfig(cfg *config.Config, kubeconfigPath, raw string) (bool,
 		return false, nil
 	}
 
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 	current := ""
 	if currentRaw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
 		"get", "configmap", "litellm-config", "-n", "llm", "-o", "jsonpath={.data.config\\.yaml}"); err == nil && strings.TrimSpace(currentRaw) != "" {

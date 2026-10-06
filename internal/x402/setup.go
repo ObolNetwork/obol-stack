@@ -162,7 +162,7 @@ func restoreMutableRuntimeConfigMaps(cfg *config.Config, kubeconfigPath string, 
 		if err != nil {
 			return err
 		}
-		if err := kubectl.ApplyServerSideForceConflicts(filepath.Join(cfg.BinDir, "kubectl"), kubeconfigPath, manifest, "helm"); err != nil {
+		if err := kubectl.ApplyServerSideForceConflicts(cfg.ToolPath("kubectl"), kubeconfigPath, manifest, "helm"); err != nil {
 			return err
 		}
 	}
@@ -170,7 +170,7 @@ func restoreMutableRuntimeConfigMaps(cfg *config.Config, kubeconfigPath string, 
 }
 
 func readConfigMapData(cfg *config.Config, kubeconfigPath, namespace, name string) (map[string]string, bool, error) {
-	raw, err := kubectl.Output(filepath.Join(cfg.BinDir, "kubectl"), kubeconfigPath,
+	raw, err := kubectl.Output(cfg.ToolPath("kubectl"), kubeconfigPath,
 		"get", "configmap", name, "-n", namespace, "-o", "json")
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "NotFound") {
@@ -371,8 +371,8 @@ func helmfileSyncBaseRelease(cfg *config.Config) error {
 		return fmt.Errorf("defaults helmfile not found at %s (run 'obol stack init' first): %w", helmfilePath, err)
 	}
 
-	helmfileBin := filepath.Join(cfg.BinDir, "helmfile")
-	helmBin := filepath.Join(cfg.BinDir, "helm")
+	helmfileBin := cfg.ToolPath("helmfile")
+	helmBin := cfg.ToolPath("helm")
 
 	args := []string{
 		"--file", helmfilePath,

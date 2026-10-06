@@ -3824,7 +3824,7 @@ func startSignerPortForward(cfg *config.Config, namespace string) (*signerPortFo
 		return nil, fmt.Errorf("cluster not running. Run 'obol stack up' first")
 	}
 
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, kubectlBinary, "port-forward",

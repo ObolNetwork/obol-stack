@@ -42,7 +42,7 @@ type PurchaseSummary struct {
 // callers can render a "no paid models" message without distinguishing
 // from the "buy.py failed" case.
 func ListPurchases(cfg *config.Config, runtime agentruntime.Runtime, id string) ([]PurchaseSummary, error) {
-	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBin := cfg.ToolPath("kubectl")
 	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	argv := BuyPyCommand(runtime, "list", "--json")

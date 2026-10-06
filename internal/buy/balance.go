@@ -67,7 +67,7 @@ func FetchWalletInfo(cfg *config.Config, runtime agentruntime.Runtime, id, token
 		return nil, errors.New("chain is empty")
 	}
 
-	kubectlBin := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBin := cfg.ToolPath("kubectl")
 	kubeconfig := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	argv := BuyPyCommand(runtime, "balance", "--chain", chain)

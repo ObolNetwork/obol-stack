@@ -91,8 +91,8 @@ obol                (root help is generated: each top-level command has a Catego
 ├── tunnel          status, setup, hostname (list, add, remove), restart, stop, delete, logs (login hidden: browser-managed fallback)
 ├── domain          list, search, check, register
 ├── kubectl/helm/helmfile/k9s   Passthrough (auto KUBECONFIG)
-├── update          Helm + CLI version check (--json)
-├── upgrade         Apply chart upgrades (--defaults-only, --pinned, --major)
+├── update          Helm + pinned tools + CLI version check (--json)
+├── upgrade         Install/upgrade pinned tools, then chart upgrades (--tools-only, --defaults-only, --pinned, --major)
 ├── version
 └── completion      bash|zsh|fish|pwsh shell completion script
 ```
@@ -108,6 +108,7 @@ obol                (root help is generated: each top-level command has a Catego
 - `tunnel setup [<token>]`: the one permanent-URL command. Connector-token based (dashboard-managed) — no host binary, no account-wide API key. Accepts the bare connector token, the `--token` flag, a positional arg, or the whole `cloudflared tunnel run --token …` line (prefix stripped via `extractConnectorToken`). Reuses the remote runtime (`ProvisionWithToken` → `TUNNEL_TOKEN` secret, chart `management_mode=remote`); DNS/ingress are configured by the user in the Cloudflare dashboard (route Public Hostname → `http://traefik.traefik.svc.cluster.local:80`), not via API. The API-token provisioning path was removed (no more `tunnel provision`, no setup `--api-token/--account-id/--zone-id/--register-domain`). `--management local` (alias hidden `tunnel login`) is the browser fallback (needs `cloudflared`). `tunnel status` reads connector health from cloudflared's in-cluster `/ready`+`/metrics` (port 2000, no token) plus a public HTTP probe; concise by default, `--verbose` for replicas/pods, `--no-probe` to stay offline. Domain management lives under `obol domain` (`list`, `search`, `check`, `register`) — an optional CLI wrapper around Cloudflare Registrar; still uses a scoped Cloudflare **API token** (Account → Domain perm, via `--api-token`/`CLOUDFLARE_API_TOKEN`; on a TTY it walks you through token creation and prompts). `--api-token` deliberately has NO `-t` alias to avoid colliding with `tunnel setup -t` (connector token — a different credential). `register` is billable (needs a payment method on the CF account); on success it prints the `obol tunnel setup --hostname …` handoff.
 - `hermes` is passthrough to native hermes CLI via `hermes.CLI()` (cmd/obol/hermes.go). No Go-level subcommands registered; a leading `-h/--help` prints obol's help without a cluster (same for `openclaw cli` and `openclaw skills add/remove`).
 - `bootstrap` (cmd/obol/bootstrap.go) is a hidden command for installer use only — not user-facing.
+- **Host tools** (`internal/tools`): kubectl/helm/k3d/helmfile/k9s + helm-diff are pinned with per-platform sha256 in `internal/tools/manifest.yaml` (versions must equal obolup.sh pins — `TestManifestMatchesObolup`). NEVER `filepath.Join(cfg.BinDir, "<tool>")`; use `cfg.ToolPath("<tool>")` (order: `OBOL_<TOOL>` env → `cfg.BinDir` → compatible `$PATH`). `obol stack init/up` auto-install missing required tools; `obol upgrade` installs/upgrades obol-managed copies only (never PATH/env ones). helm-diff goes into `helm env HELM_PLUGINS`.
 
 ## Infrastructure Stack
 

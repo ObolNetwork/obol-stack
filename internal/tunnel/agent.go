@@ -47,9 +47,9 @@ func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
 		return nil
 	}
 
-	helmfileBin := filepath.Join(cfg.BinDir, "helmfile")
+	helmfileBin := cfg.ToolPath("helmfile")
 	if _, err := os.Stat(helmfileBin); os.IsNotExist(err) {
-		fmt.Printf("⚠ helmfile not found at %s; run 'obol agent sync %s' manually.\n", helmfileBin, agentDeploymentID)
+		fmt.Printf("⚠ helmfile not found at %s; run 'obol upgrade' then 'obol agent sync %s'.\n", helmfileBin, agentDeploymentID)
 		return nil
 	}
 
@@ -60,7 +60,7 @@ func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
 	// AGENT_BASE_URL env field, which InjectBaseURL previously wrote via
 	// `kubectl set env` (field manager "kubectl-set"). Without this, Helm 4's
 	// server-side apply refuses the field and the sync fails with a conflict.
-	syncArgs := append([]string{"-f", helmfilePath, "sync"}, helmcmd.SyncFlagsForVersion(filepath.Join(cfg.BinDir, "helm"))...)
+	syncArgs := append([]string{"-f", helmfilePath, "sync"}, helmcmd.SyncFlagsForVersion(cfg.ToolPath("helm"))...)
 	cmd := exec.Command(helmfileBin, syncArgs...)
 	cmd.Dir = deploymentDir
 

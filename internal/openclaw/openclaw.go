@@ -423,9 +423,9 @@ func doSync(cfg *config.Config, id string, u *ui.UI) error {
 		return errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
-	helmfileBinary := filepath.Join(cfg.BinDir, "helmfile")
+	helmfileBinary := cfg.ToolPath("helmfile")
 	if _, err := os.Stat(helmfileBinary); os.IsNotExist(err) {
-		return fmt.Errorf("helmfile not found at %s", helmfileBinary)
+		return fmt.Errorf("helmfile not found at %s; run 'obol upgrade' to install missing tools", helmfileBinary)
 	}
 
 	namespace := fmt.Sprintf("%s-%s", appName, id)
@@ -453,7 +453,7 @@ func doSync(cfg *config.Config, id string, u *ui.UI) error {
 	u.Infof("Syncing OpenClaw: %s/%s", appName, id)
 	u.Detail("Deployment directory", deploymentDir)
 
-	syncArgs := append([]string{"-f", helmfilePath, "sync"}, helmcmd.SyncFlagsForVersion(filepath.Join(cfg.BinDir, "helm"))...)
+	syncArgs := append([]string{"-f", helmfilePath, "sync"}, helmcmd.SyncFlagsForVersion(cfg.ToolPath("helm"))...)
 	cmd := exec.Command(helmfileBinary, syncArgs...)
 	cmd.Dir = deploymentDir
 
@@ -495,9 +495,9 @@ func doSync(cfg *config.Config, id string, u *ui.UI) error {
 }
 
 func refreshObolHelmRepo(cfg *config.Config) error {
-	helmBinary := filepath.Join(cfg.BinDir, "helm")
+	helmBinary := cfg.ToolPath("helm")
 	if _, err := os.Stat(helmBinary); os.IsNotExist(err) {
-		return fmt.Errorf("helm not found at %s", helmBinary)
+		return fmt.Errorf("helm not found at %s; run 'obol upgrade' to install missing tools", helmBinary)
 	}
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
@@ -571,7 +571,7 @@ func applyUserSecretsIfPresent(cfg *config.Config, namespace, deploymentDir stri
 	}
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 
 	if err := ensureNamespaceExists(kubectlBinary, kubeconfigPath, namespace); err != nil {
 		return err
@@ -925,7 +925,7 @@ func getToken(cfg *config.Config, id string) (string, error) {
 		return "", errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 
 	cmd := exec.Command(kubectlBinary, "get", "secret", "-n", namespace,
 		"-l", "app.kubernetes.io/name="+appName,
@@ -991,7 +991,7 @@ func RegenerateToken(cfg *config.Config, id string, u *ui.UI) (string, error) {
 		return "", errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 
 	// Delete the existing secret so a fresh token is generated on restart.
 	u.Info("Deleting existing gateway token...")
@@ -1073,7 +1073,7 @@ func startPortForward(cfg *config.Config, namespace string, localPort int) (*por
 		return nil, errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 
 	portArg := fmt.Sprintf("%d:18789", localPort)
 	if localPort == 0 {
@@ -1225,7 +1225,7 @@ func Setup(cfg *config.Config, id string, _ SetupOptions, u *ui.UI) error {
 	}
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 
 	u.Blank()
 	u.Info("Waiting for the OpenClaw gateway to be ready...")
@@ -1387,7 +1387,7 @@ func Delete(cfg *config.Config, id string, force bool, u *ui.UI) error {
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); err == nil {
-		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+		kubectlBinary := cfg.ToolPath("kubectl")
 		cmd := exec.Command(kubectlBinary, "get", "namespace", namespace)
 
 		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
@@ -1425,7 +1425,7 @@ func Delete(cfg *config.Config, id string, force bool, u *ui.UI) error {
 		// This ensures StatefulSet PVCs are properly cleaned up before namespace deletion.
 		helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml")
 
-		helmfileBinary := filepath.Join(cfg.BinDir, "helmfile")
+		helmfileBinary := cfg.ToolPath("helmfile")
 		if _, err := os.Stat(helmfilePath); err == nil {
 			if _, err := os.Stat(helmfileBinary); err == nil {
 				destroyCmd := exec.Command(helmfileBinary, "-f", helmfilePath, "destroy")
@@ -1442,7 +1442,7 @@ func Delete(cfg *config.Config, id string, force bool, u *ui.UI) error {
 			}
 		}
 
-		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+		kubectlBinary := cfg.ToolPath("kubectl")
 		deleteCmd := exec.Command(kubectlBinary, "delete", "namespace", namespace,
 			"--force", "--grace-period=0")
 
@@ -1645,7 +1645,7 @@ func cliViaKubectlExec(cfg *config.Config, namespace string, args []string) erro
 		return errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 
 	// Build: kubectl exec -it -c openclaw -n <ns> deploy/openclaw -- node openclaw.mjs <args>
 	// The pod runs `node openclaw.mjs` (no standalone binary in PATH).
@@ -1754,7 +1754,7 @@ func rankModels(models []string) (primary string, fallbacks []string) {
 func patchModelHierarchy(cfg *config.Config, id, primary string, fallbacks []string, u *ui.UI) {
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 
 	// Read current ConfigMap
 	getCmd := exec.Command(kubectlBinary, "get", "configmap", "openclaw-config",
@@ -2200,7 +2200,7 @@ func patchHeartbeatConfig(cfg *config.Config, id, deploymentDir string) {
 
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 
 	// Read current ConfigMap.
 	getCmd := exec.Command(kubectlBinary, "get", "configmap", "openclaw-config",

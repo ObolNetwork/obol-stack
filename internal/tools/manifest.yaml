@@ -1,0 +1,172 @@
+# Host tools managed by the obol CLI.
+#
+# `obol upgrade` / `obol stack up` download these into the obol bin dir
+# (OBOL_BIN_DIR, default ~/.local/bin), verify the sha256 below (fail closed)
+# and install atomically. `obol update` reports drift against these pins.
+#
+# Every `version` MUST equal the matching pin in obolup.sh (`obolupVar`);
+# TestManifestMatchesObolup enforces it. When bumping a version, update ALL
+# four platform sha256 values from the upstream release checksum files:
+#   kubectl  https://dl.k8s.io/release/v<V>/bin/<os>/<arch>/kubectl.sha256
+#   helm     https://get.helm.sh/helm-v<V>-<os>-<arch>.tar.gz.sha256sum
+#   k3d      https://github.com/k3d-io/k3d/releases/download/v<V>/checksums.txt
+#   helmfile https://github.com/helmfile/helmfile/releases/download/v<V>/helmfile_<V>_checksums.txt
+#   k9s      https://github.com/derailed/k9s/releases/download/v<V>/checksums.sha256
+#   helm-diff https://github.com/databus23/helm-diff/releases/download/v<V>/helm-diff_<V>_checksums.txt
+#
+# Fields:
+#   compat   how a binary found on $PATH is judged usable instead of a managed copy:
+#              skew1 = same major, minor within ±1 of the pin (kubectl version-skew policy)
+#              minor = same major, minor >= pin's minor
+#              any   = any version
+#   required installed automatically by `obol stack init/up` when missing.
+#   format   raw | tar.gz | zip
+#   member   path inside the archive ({version} expands); for helm plugins a
+#            directory prefix that becomes the plugin directory.
+#   url      {version} expands to the pinned version.
+tools:
+  - name: kubectl
+    version: "1.36.5"
+    obolupVar: KUBECTL_VERSION
+    required: true
+    compat: skew1
+    versionArgs: ["version", "--client", "--output=json"]
+    versionRegex: '"gitVersion":\s*"v?([0-9]+\.[0-9]+\.[0-9]+)'
+    format: raw
+    assets:
+      linux/amd64:
+        url: https://dl.k8s.io/release/v{version}/bin/linux/amd64/kubectl
+        sha256: 33bc88a24c3b09cf55bfd59e6ca977881b61fc3f25ab65bc80c65b430248648e
+      linux/arm64:
+        url: https://dl.k8s.io/release/v{version}/bin/linux/arm64/kubectl
+        sha256: 88fc1aca8fd0c1b44fe379f67c39bd6858bdfc50241dc55775f84d0f5b31da3a
+      darwin/amd64:
+        url: https://dl.k8s.io/release/v{version}/bin/darwin/amd64/kubectl
+        sha256: 03338828c3ba74c37bf5964573fbfbab132eb5bb15da2f821c25a4043d6eb3f0
+      darwin/arm64:
+        url: https://dl.k8s.io/release/v{version}/bin/darwin/arm64/kubectl
+        sha256: c5850a4a6b9469b26cce47c1ab456285f58e308283dcdf72b4ddda3db49b0ec0
+
+  - name: helm
+    version: "3.22.0"
+    obolupVar: HELM_VERSION
+    required: true
+    compat: minor
+    versionArgs: ["version", "--short"]
+    format: tar.gz
+    assets:
+      linux/amd64:
+        url: https://get.helm.sh/helm-v{version}-linux-amd64.tar.gz
+        member: linux-amd64/helm
+        sha256: 1e4ab49e429626cf6c6958d914248b78c9730803c2751b87627e171dc800e7bb
+      linux/arm64:
+        url: https://get.helm.sh/helm-v{version}-linux-arm64.tar.gz
+        member: linux-arm64/helm
+        sha256: f14e804dfee240f55525b667488fe9adca349e63e00c9af634c0beb1421ac310
+      darwin/amd64:
+        url: https://get.helm.sh/helm-v{version}-darwin-amd64.tar.gz
+        member: darwin-amd64/helm
+        sha256: bd1d09f316558dda23698527859600936fed1371021ce0f2272d66b2fdcfa69c
+      darwin/arm64:
+        url: https://get.helm.sh/helm-v{version}-darwin-arm64.tar.gz
+        member: darwin-arm64/helm
+        sha256: 4c9982a6cdeb458b60258df66b55398ca5b19293f6877faffe2909ad6f23dfe0
+
+  - name: k3d
+    version: "5.9.0"
+    obolupVar: K3D_VERSION
+    required: true
+    compat: minor
+    versionArgs: ["version"]
+    versionRegex: 'k3d version v?([0-9]+\.[0-9]+\.[0-9]+)'
+    format: raw
+    assets:
+      linux/amd64:
+        url: https://github.com/k3d-io/k3d/releases/download/v{version}/k3d-linux-amd64
+        sha256: 06d8f25bc3a971c4eb29e0ff08429b180402db0f4dec838c9eac427e296800a0
+      linux/arm64:
+        url: https://github.com/k3d-io/k3d/releases/download/v{version}/k3d-linux-arm64
+        sha256: 03cde5cf23e6e8e67de5a039ecf26e5b85aca82fba3e5d13dadf904cd218a250
+      darwin/amd64:
+        url: https://github.com/k3d-io/k3d/releases/download/v{version}/k3d-darwin-amd64
+        sha256: b4aabc37534f95b9c764e7823f2df923f50d57600837aa60a06266cce47db732
+      darwin/arm64:
+        url: https://github.com/k3d-io/k3d/releases/download/v{version}/k3d-darwin-arm64
+        sha256: fe106541d5d0a3f18debcd4d432a16f8c0ce3e6ddc06f8fbb6f696a122313e00
+
+  - name: helmfile
+    version: "1.8.1"
+    obolupVar: HELMFILE_VERSION
+    required: true
+    compat: minor
+    versionArgs: ["--version"]
+    format: tar.gz
+    assets:
+      linux/amd64:
+        url: https://github.com/helmfile/helmfile/releases/download/v{version}/helmfile_{version}_linux_amd64.tar.gz
+        member: helmfile
+        sha256: ccabbe75dddbc25008d055fe92a44f95a184342211e7244d32b870409239c7a3
+      linux/arm64:
+        url: https://github.com/helmfile/helmfile/releases/download/v{version}/helmfile_{version}_linux_arm64.tar.gz
+        member: helmfile
+        sha256: 2217788de9fb42cd0b3d84f1ee99c63617e19dea7af4995a59e45e4952c86ec4
+      darwin/amd64:
+        url: https://github.com/helmfile/helmfile/releases/download/v{version}/helmfile_{version}_darwin_amd64.tar.gz
+        member: helmfile
+        sha256: b7a44505f1cf09e8e42db4e5914d46bd6f3abae95d226d16ea182d56954eb3bd
+      darwin/arm64:
+        url: https://github.com/helmfile/helmfile/releases/download/v{version}/helmfile_{version}_darwin_arm64.tar.gz
+        member: helmfile
+        sha256: 62a6b086bdd7a934ff4a36d4974446d7271566b88db200b3956053a9b388fed8
+
+  - name: k9s
+    version: "0.51.0"
+    obolupVar: K9S_VERSION
+    required: false
+    compat: any
+    versionArgs: ["version", "--short"]
+    format: tar.gz
+    assets:
+      linux/amd64:
+        url: https://github.com/derailed/k9s/releases/download/v{version}/k9s_Linux_amd64.tar.gz
+        member: k9s
+        sha256: c3752ad51a5a4015a113819c4eeb6e55a4d0e4b8e652494797532f6fc8161dd7
+      linux/arm64:
+        url: https://github.com/derailed/k9s/releases/download/v{version}/k9s_Linux_arm64.tar.gz
+        member: k9s
+        sha256: 3ee05c82e5f9198928a4e86133608ba6a2c10a2244d6a7789e820f78319d640c
+      darwin/amd64:
+        url: https://github.com/derailed/k9s/releases/download/v{version}/k9s_Darwin_amd64.tar.gz
+        member: k9s
+        sha256: 7e8802c57c45a0cd389e8fc38472243fe4cf48d8ad5957e189ce370e19e5eda0
+      darwin/arm64:
+        url: https://github.com/derailed/k9s/releases/download/v{version}/k9s_Darwin_arm64.tar.gz
+        member: k9s
+        sha256: 9b8c0e8f461e5d33aeee43a67f5ef4aff646a008a786887b8266cbb153c610cc
+
+  # helm plugin: installed into `helm env HELM_PLUGINS` (helm's default
+  # plugin dir, same place obolup.sh's `helm plugin install` puts it).
+  - name: helm-diff
+    version: "3.15.15"
+    obolupVar: HELM_DIFF_VERSION
+    required: false
+    kind: helm-plugin
+    pluginName: diff
+    format: tar.gz
+    assets:
+      linux/amd64:
+        url: https://github.com/databus23/helm-diff/releases/download/v{version}/helm-diff-linux-amd64.tgz
+        member: diff
+        sha256: 504e99410611daa70702362e1b10dc74929df8a912cb3f6b5d21d1ee9d0cb7d9
+      linux/arm64:
+        url: https://github.com/databus23/helm-diff/releases/download/v{version}/helm-diff-linux-arm64.tgz
+        member: diff
+        sha256: fc046bf3c3f63a435741fe8c37a9d740dfa17ea7f5f0c2a9da2c0222bb4384e6
+      darwin/amd64:
+        url: https://github.com/databus23/helm-diff/releases/download/v{version}/helm-diff-macos-amd64.tgz
+        member: diff
+        sha256: 214d890745b45679400442552ad4554fb4df622b92d031931536eff85bdb46c2
+      darwin/arm64:
+        url: https://github.com/databus23/helm-diff/releases/download/v{version}/helm-diff-macos-arm64.tgz
+        member: diff
+        sha256: af2834052ba32fe8006a44a31db16cad30baf1c46f6b59160b092974578d7798

@@ -143,11 +143,11 @@ stringData:
 }
 
 func helmUpgradeCloudflared(cfg *config.Config, u *ui.UI, kubeconfigPath string) error {
-	helmPath := filepath.Join(cfg.BinDir, "helm")
+	helmPath := cfg.ToolPath("helm")
 	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
 
 	if _, err := os.Stat(helmPath); os.IsNotExist(err) {
-		return fmt.Errorf("helm not found at %s", helmPath)
+		return fmt.Errorf("helm not found at %s; run 'obol upgrade' to install missing tools", helmPath)
 	}
 	if _, err := os.Stat(filepath.Join(defaultsDir, "cloudflared", "Chart.yaml")); os.IsNotExist(err) {
 		return fmt.Errorf("cloudflared chart not found in %s (re-run 'obol stack init --force' to refresh defaults)", defaultsDir)

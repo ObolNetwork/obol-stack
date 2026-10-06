@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+
+	"github.com/ObolNetwork/obol-stack/internal/tools"
 )
 
 // Config holds all obol configuration paths
@@ -121,4 +123,13 @@ func getStateDir() string {
 	}
 
 	return filepath.Join(xdgStateHome, "obol")
+}
+
+// ToolPath resolves the binary to exec for a host tool (kubectl, helm, k3d,
+// helmfile, k9s): OBOL_<TOOL> env override → obol-managed BinDir copy →
+// version-compatible copy on $PATH. When nothing usable exists it returns
+// <BinDir>/<name>, so callers' existing not-found handling still applies.
+// See internal/tools for the policy and installer.
+func (c *Config) ToolPath(name string) string {
+	return tools.Path(c.BinDir, name)
 }

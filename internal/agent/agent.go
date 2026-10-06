@@ -77,7 +77,7 @@ func removeHeartbeatFileInPod(cfg *config.Config, runtime agentruntime.Runtime) 
 	desc := agentruntime.Describe(runtime)
 	containerPath := filepath.Join("/data", desc.HomeDir, "workspace", "HEARTBEAT.md")
 	cmd := exec.Command(
-		filepath.Join(cfg.BinDir, "kubectl"),
+		cfg.ToolPath("kubectl"),
 		"exec",
 		"-n", agentruntime.Namespace(runtime, DefaultInstanceID),
 		"-c", desc.ServiceName,

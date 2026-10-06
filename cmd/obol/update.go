@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/tools"
 	"github.com/ObolNetwork/obol-stack/internal/update"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/urfave/cli/v3"
@@ -16,7 +17,7 @@ import (
 func updateCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "update",
-		Usage: "Check for available updates to helm charts and the obol CLI",
+		Usage: "Check for available updates to helm charts, pinned tools and the obol CLI",
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  "json",
@@ -64,6 +65,11 @@ func updateCommand(cfg *config.Config) *cli.Command {
 				u.Dim("Helm check skipped (cluster not running)")
 			}
 
+			// Print pinned tool status (kubectl, helm, k3d, ...)
+			u.Blank()
+			u.Info("Checking tools...")
+			update.PrintToolTable(u, result.Tools)
+
 			// Print CLI status
 			u.Blank()
 			u.Info("Checking CLI version...")
@@ -85,12 +91,15 @@ func updateCommand(cfg *config.Config) *cli.Command {
 func upgradeCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "upgrade",
-		Usage:     "Apply available helm chart upgrades to the running stack",
+		Usage:     "Install missing/outdated pinned tools, then apply helm chart upgrades to the running stack",
 		ArgsUsage: "[chart-name]",
-		Description: `Upgrade all charts, or a single chart by name.
+		Description: `Install or upgrade the pinned tools (kubectl, helm, k3d, helmfile, k9s,
+helm-diff) in the obol bin dir, then upgrade all charts, or a single chart
+by name. Tools found via OBOL_<TOOL> or on $PATH are never modified.
 
 Examples:
   obol upgrade                       Upgrade everything
+  obol upgrade --tools-only          Only install/upgrade tools (no cluster needed)
   obol upgrade obol/remote-signer    Upgrade only obol/remote-signer
   obol upgrade traefik/traefik       Upgrade only traefik`,
 		Flags: []cli.Flag{
@@ -103,22 +112,41 @@ Examples:
 				Usage: "Deploy only the versions embedded in the binary, without bumping to latest",
 			},
 			&cli.BoolFlag{
+				Name:  "tools-only",
+				Usage: "Only install/upgrade pinned tools; skip chart upgrades",
+			},
+			&cli.BoolFlag{
 				Name:  "major",
 				Usage: "Allow upgrading across major version boundaries (may include breaking changes)",
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+
+			// Tools first: chart upgrades shell out to helm/helmfile.
+			if err := tools.EnsureUI(ctx, u, cfg.BinDir, tools.EnsureOptions{Upgrade: true}); err != nil {
+				return err
+			}
+
+			u.Success("Tools up to date")
+
+			if cmd.Bool("tools-only") {
+				return nil
+			}
+
 			kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 			if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-				return errors.New("stack not running, use 'obol stack up' first")
+				return errors.New("stack not running, use 'obol stack up' first (tools were updated; pass --tools-only to skip chart upgrades)")
 			}
+
+			u.Blank()
 
 			chartFilter := ""
 			if cmd.NArg() > 0 {
 				chartFilter = cmd.Args().First()
 			}
 
-			return update.ApplyUpgrades(cfg, getUI(cmd), update.UpgradeOptions{
+			return update.ApplyUpgrades(cfg, u, update.UpgradeOptions{
 				DefaultsOnly: cmd.Bool("defaults-only"),
 				Pinned:       cmd.Bool("pinned"),
 				Major:        cmd.Bool("major"),
@@ -130,8 +158,9 @@ Examples:
 
 // jsonOutput is the structured JSON output for `obol update --json`
 type jsonOutput struct {
-	Charts []jsonChart `json:"charts,omitempty"`
-	CLI    *jsonCLI    `json:"cli,omitempty"`
+	Charts []jsonChart    `json:"charts,omitempty"`
+	CLI    *jsonCLI       `json:"cli,omitempty"`
+	Tools  []tools.Status `json:"tools,omitempty"`
 }
 
 type jsonChart struct {
@@ -142,9 +171,11 @@ type jsonChart struct {
 }
 
 type jsonCLI struct {
-	Current string `json:"current"`
-	Latest  string `json:"latest"`
-	Status  string `json:"status"`
+	Current        string `json:"current"`
+	Latest         string `json:"latest"`
+	Status         string `json:"status"`
+	InstallMethod  string `json:"installMethod,omitempty"`
+	UpgradeCommand string `json:"upgradeCommand,omitempty"`
 }
 
 func printUpdateJSON(result *update.UpdateResult) error {
@@ -168,11 +199,17 @@ func printUpdateJSON(result *update.UpdateResult) error {
 		}
 
 		out.CLI = &jsonCLI{
-			Current: version.Short(),
-			Latest:  result.CLIRelease.Version,
-			Status:  status,
+			Current:       version.Short(),
+			Latest:        result.CLIRelease.Version,
+			Status:        status,
+			InstallMethod: string(result.InstallMethod),
+		}
+		if result.CLIUpdateAvail {
+			out.CLI.UpgradeCommand = update.CLIUpgradeCommand(result.InstallMethod, result.CLIRelease.TagName)
 		}
 	}
+
+	out.Tools = result.Tools
 
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")

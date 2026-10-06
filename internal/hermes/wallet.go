@@ -288,7 +288,7 @@ func applyWalletMetadataConfigMap(cfg *config.Config, id, deploymentDir string) 
 
 	namespace := agentruntime.Namespace(agentruntime.Hermes, id)
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 
 	addressesJSON := map[string]any{
 		"instanceId": id,

@@ -52,7 +52,7 @@ func ensureDevRegistries(cfg *config.Config, u *ui.UI) (*devRegistrySetup, error
 	}
 
 	if err := u.RunWithSpinner("Ensuring dev registry caches", func() error {
-		k3dBinary := filepath.Join(cfg.BinDir, "k3d")
+		k3dBinary := cfg.ToolPath("k3d")
 
 		for _, mirror := range devRegistryMirrors {
 			if err := ensureDevRegistry(cfg, k3dBinary, mirror); err != nil {

@@ -270,8 +270,8 @@ func Sync(cfg *config.Config, id string, u *ui.UI) error {
 	// setup/prefer/sync silently fails to reach the running agent.
 	migrateDeploymentStrategy(cfg, agentruntime.Namespace(agentruntime.Hermes, id), u)
 
-	helmfileBinary := filepath.Join(cfg.BinDir, "helmfile")
-	syncArgs := append([]string{"-f", helmfilePath, "sync"}, helmcmd.SyncFlagsForVersion(filepath.Join(cfg.BinDir, "helm"))...)
+	helmfileBinary := cfg.ToolPath("helmfile")
+	syncArgs := append([]string{"-f", helmfilePath, "sync"}, helmcmd.SyncFlagsForVersion(cfg.ToolPath("helm"))...)
 	cmd := exec.Command(helmfileBinary, syncArgs...)
 	cmd.Dir = deploymentDir
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
@@ -326,7 +326,7 @@ func Delete(cfg *config.Config, id string, force bool, u *ui.UI) error {
 	namespaceExists := false
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); err == nil {
-		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+		kubectlBinary := cfg.ToolPath("kubectl")
 		cmd := exec.Command(kubectlBinary, "get", "namespace", namespace)
 		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 		if err := cmd.Run(); err == nil {
@@ -356,7 +356,7 @@ func Delete(cfg *config.Config, id string, force bool, u *ui.UI) error {
 
 	if namespaceExists {
 		helmfilePath := filepath.Join(deploymentDir, helmfileFileName)
-		helmfileBinary := filepath.Join(cfg.BinDir, "helmfile")
+		helmfileBinary := cfg.ToolPath("helmfile")
 		if _, err := os.Stat(helmfilePath); err == nil {
 			if _, err := os.Stat(helmfileBinary); err == nil {
 				destroyCmd := exec.Command(helmfileBinary, "-f", helmfilePath, "destroy")
@@ -371,7 +371,7 @@ func Delete(cfg *config.Config, id string, force bool, u *ui.UI) error {
 			}
 		}
 
-		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+		kubectlBinary := cfg.ToolPath("kubectl")
 		deleteCmd := exec.Command(kubectlBinary, "delete", "namespace", namespace, "--force", "--grace-period=0")
 		deleteCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 		if err := u.Exec(ui.ExecConfig{
@@ -431,7 +431,7 @@ func RegenerateToken(cfg *config.Config, id string, u *ui.UI) (string, error) {
 		return "", errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 	manifest := map[string]any{
 		"apiVersion": "v1",
 		"kind":       "Secret",
@@ -488,7 +488,7 @@ func RegenerateToken(cfg *config.Config, id string, u *ui.UI) (string, error) {
 // Best-effort: a missing deployment (fresh install) or already-Recreate
 // strategy makes this a harmless no-op, so failures are warned, not fatal.
 func migrateDeploymentStrategy(cfg *config.Config, namespace string, u *ui.UI) {
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	cmd := exec.Command(kubectlBinary, strategyMigrationPatchArgs(namespace)...)
@@ -537,7 +537,7 @@ func hermesDeploymentInstalled(cfg *config.Config, id string) (bool, error) {
 		return false, nil
 	}
 
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 	cmd := exec.Command(kubectlBinary, "get", "deployment/hermes", "-n", agentruntime.Namespace(agentruntime.Hermes, id))
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 	if err := cmd.Run(); err != nil {
@@ -645,7 +645,7 @@ func getToken(cfg *config.Config, id string) (string, error) {
 		return "", errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 	cmd := exec.Command(kubectlBinary, "get", "secret", "hermes-api-server", "-n", namespace, "-o", "json")
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 
@@ -1429,7 +1429,7 @@ func indentBlock(value, prefix string) string {
 }
 
 func refreshHelmRepos(cfg *config.Config) error {
-	helmBinary := filepath.Join(cfg.BinDir, "helm")
+	helmBinary := cfg.ToolPath("helm")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	env := append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
 

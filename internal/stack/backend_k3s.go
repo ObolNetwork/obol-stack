@@ -189,7 +189,7 @@ func (b *K3sBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 
 	// Wait for API server
 	err = u.RunWithSpinner("Waiting for API server", func() error {
-		kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+		kubectlPath := cfg.ToolPath("kubectl")
 
 		deadline := time.Now().Add(90 * time.Second)
 		for time.Now().Before(deadline) {

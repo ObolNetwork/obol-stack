@@ -369,7 +369,7 @@ func normalizeHostnames(in []string) []string {
 }
 
 func kubectlApply(cfg *config.Config, u *ui.UI, kubeconfigPath string, manifest []byte) error {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlPath := cfg.ToolPath("kubectl")
 
 	// Server-side apply: the server performs the merge, so kubectl skips the
 	// client-side OpenAPI schema download (`/openapi/v2`). That endpoint is flaky

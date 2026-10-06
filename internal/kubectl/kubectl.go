@@ -130,7 +130,7 @@ func refreshK3dKubeconfig(cfg *config.Config) bool {
 		return false
 	}
 
-	k3dBin := filepath.Join(cfg.BinDir, "k3d")
+	k3dBin := cfg.ToolPath("k3d")
 	if _, err := os.Stat(k3dBin); err != nil {
 		return false
 	}
@@ -250,7 +250,7 @@ func FormatClusterDownError(err error, args []string) string {
 
 // Paths returns the absolute paths to the kubectl binary and kubeconfig.
 func Paths(cfg *config.Config) (binary, kubeconfig string) {
-	return filepath.Join(cfg.BinDir, "kubectl"),
+	return cfg.ToolPath("kubectl"),
 		filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 }
 

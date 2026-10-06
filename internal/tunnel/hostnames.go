@@ -297,7 +297,7 @@ func RemoveHostname(cfg *config.Config, u *ui.UI, opts RemoveHostnameOptions) (*
 // 404s at the connector (its rule isn't loaded) and a removed hostname keeps
 // serving. Rolling the Deployment forces the new config to load.
 func restartCloudflaredConnector(cfg *config.Config, u *ui.UI, kubeconfigPath string) error {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlPath := cfg.ToolPath("kubectl")
 	u.Dim("Reloading tunnel connector...")
 	if out, err := exec.Command(kubectlPath, "--kubeconfig", kubeconfigPath,
 		"rollout", "restart", "deployment/cloudflared", "-n", tunnelNamespace).CombinedOutput(); err != nil {

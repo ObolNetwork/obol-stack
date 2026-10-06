@@ -48,7 +48,7 @@ func ExecInPod(cfg *config.Config, runtime Runtime, id string, argv []string) er
 		return errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 
 	cmd := exec.Command(kubectlBinary, BuildExecArgs(runtime, id, argv, shouldRequestTTY())...)
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)

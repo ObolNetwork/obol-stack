@@ -321,9 +321,9 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 		return errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
-	helmfileBinary := filepath.Join(cfg.BinDir, "helmfile")
+	helmfileBinary := cfg.ToolPath("helmfile")
 	if _, err := os.Stat(helmfileBinary); os.IsNotExist(err) {
-		return fmt.Errorf("helmfile not found at %s", helmfileBinary)
+		return fmt.Errorf("helmfile not found at %s; run 'obol upgrade' to install missing tools", helmfileBinary)
 	}
 
 	// Execute helmfile sync
@@ -397,7 +397,7 @@ func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); err == nil {
-		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+		kubectlBinary := cfg.ToolPath("kubectl")
 		cmd := exec.Command(kubectlBinary, "get", "namespace", namespaceName)
 
 		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
@@ -419,7 +419,7 @@ func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 
 	// Delete Kubernetes namespace
 	if namespaceExists {
-		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+		kubectlBinary := cfg.ToolPath("kubectl")
 		cmd := exec.Command(kubectlBinary, "delete", "namespace", namespaceName, "--force", "--grace-period=0")
 
 		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)

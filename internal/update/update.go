@@ -12,6 +12,7 @@ import (
 	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
 	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"github.com/ObolNetwork/obol-stack/internal/network"
+	"github.com/ObolNetwork/obol-stack/internal/tools"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 )
@@ -32,13 +33,28 @@ type UpdateResult struct {
 	IsDev                  bool
 	HelmError              string
 	CLIError               string
+	// Tools is the status of each pinned host tool (kubectl, helm, ...).
+	Tools []tools.Status
+	// ToolUpdatesAvail is true when `obol upgrade` would install or upgrade
+	// at least one obol-managed tool.
+	ToolUpdatesAvail bool
+	// InstallMethod is how this obol binary was installed (homebrew, system,
+	// script, dev); it selects the CLI upgrade command.
+	InstallMethod InstallMethod
 }
 
 // CheckForUpdates runs all update checks and returns a unified result.
 // If clusterRunning is false, skips helm-related checks and only checks CLI version.
 // If quiet is true, suppresses helm stdout (useful for JSON output mode).
 func CheckForUpdates(cfg *config.Config, clusterRunning bool, quiet bool) (*UpdateResult, error) {
-	result := &UpdateResult{}
+	result := &UpdateResult{InstallMethod: CurrentInstallMethod(cfg.BinDir)}
+
+	result.Tools = tools.NewInstaller(cfg.BinDir).Status()
+	for _, t := range result.Tools {
+		if t.NeedsAction() {
+			result.ToolUpdatesAvail = true
+		}
+	}
 
 	// Check if this is a development build
 	if version.Short() == "dev" {
@@ -190,9 +206,9 @@ func ApplyUpgrades(cfg *config.Config, u *ui.UI, opts UpgradeOptions) error {
 	}
 
 	helmfileArgs = append(helmfileArgs, "sync")
-	helmfileArgs = append(helmfileArgs, helmcmd.SyncFlagsForVersion(filepath.Join(cfg.BinDir, "helm"))...)
+	helmfileArgs = append(helmfileArgs, helmcmd.SyncFlagsForVersion(cfg.ToolPath("helm"))...)
 	helmfileCmd := exec.Command(
-		filepath.Join(cfg.BinDir, "helmfile"),
+		cfg.ToolPath("helmfile"),
 		helmfileArgs...,
 	)
 
@@ -241,9 +257,9 @@ func ApplyUpgrades(cfg *config.Config, u *ui.UI, opts UpgradeOptions) error {
 		if CompareVersions(version.Short(), release.Version) < 0 {
 			u.Blank()
 			u.Infof("A newer version of the obol CLI is available (v%s → %s).", version.Short(), release.TagName)
-			u.Print("To update the CLI binary and dependencies, run:")
+			u.Print("To update the CLI binary, run:")
 			u.Blank()
-			u.Print("  bash <(curl -s https://stack.obol.org)")
+			u.Print("  " + CLIUpgradeCommand(CurrentInstallMethod(cfg.BinDir), release.TagName))
 		}
 	}
 
@@ -405,6 +421,67 @@ func PrintUpdateTable(u *ui.UI, statuses []ChartStatus) {
 }
 
 // PrintCLIStatus prints the CLI version status line.
+// PrintToolTable prints the pinned host tool status table.
+func PrintToolTable(u *ui.UI, statuses []tools.Status) {
+	if len(statuses) == 0 {
+		return
+	}
+
+	nameW, wantW, haveW, srcW := len("Tool"), len("Pinned"), len("Installed"), len("Source")
+	for _, s := range statuses {
+		nameW = max(nameW, len(s.Name))
+		wantW = max(wantW, len(s.Wanted))
+		haveW = max(haveW, len(installedLabel(s)))
+		srcW = max(srcW, len(s.Source))
+	}
+
+	u.Printf("  %-*s  %-*s  %-*s  %-*s  %s", nameW, "Tool", wantW, "Pinned", haveW, "Installed", srcW, "Source", "Status")
+
+	for _, s := range statuses {
+		line := fmt.Sprintf("  %-*s  %-*s  %-*s  %-*s  %s", nameW, s.Name, wantW, s.Wanted, haveW, installedLabel(s), srcW, s.Source, toolStateLabel(s))
+		if s.Path != "" && s.State != tools.StateMissing {
+			line += "  (" + s.Path + ")"
+		}
+
+		if s.Note != "" {
+			line += "  [" + s.Note + "]"
+		}
+
+		u.Print(line)
+	}
+}
+
+func installedLabel(s tools.Status) string {
+	if s.Installed == "" {
+		return "-"
+	}
+
+	return s.Installed
+}
+
+func toolStateLabel(s tools.Status) string {
+	switch s.State {
+	case tools.StateOK:
+		return "Up to date"
+	case tools.StateNewer:
+		return "Newer than pinned"
+	case tools.StateOutdated:
+		if s.Source == tools.SourceManaged {
+			return statusUpdateAvailable
+		}
+
+		return "Older than pinned"
+	case tools.StateMissing:
+		if s.Required {
+			return "Missing (required)"
+		}
+
+		return "Missing"
+	default:
+		return "Unknown version"
+	}
+}
+
 func PrintCLIStatus(u *ui.UI, current string, release *LatestRelease, isDev bool) {
 	if release == nil {
 		return
@@ -427,7 +504,7 @@ func PrintCLIStatus(u *ui.UI, current string, release *LatestRelease, isDev bool
 
 // PrintUpdateSummary prints the actionable summary at the end of `obol update`.
 func PrintUpdateSummary(u *ui.UI, result *UpdateResult) {
-	if !result.ChartUpdatesAvail && !result.ChartMajorUpdatesAvail && !result.CLIUpdateAvail {
+	if !result.ChartUpdatesAvail && !result.ChartMajorUpdatesAvail && !result.CLIUpdateAvail && !result.ToolUpdatesAvail {
 		u.Blank()
 		u.Success("Everything is up to date.")
 
@@ -461,8 +538,20 @@ func PrintUpdateSummary(u *ui.UI, result *UpdateResult) {
 		u.Printf("  %d major chart update(s) available. Run 'obol upgrade --major' to apply.", count)
 	}
 
+	if result.ToolUpdatesAvail {
+		count := 0
+
+		for _, t := range result.Tools {
+			if t.NeedsAction() {
+				count++
+			}
+		}
+
+		u.Printf("  %d tool(s) missing or outdated. Run 'obol upgrade --tools-only' to install.", count)
+	}
+
 	if result.CLIUpdateAvail && result.CLIRelease != nil {
 		u.Printf("  CLI update available (v%s → %s). Run:", version.Short(), result.CLIRelease.TagName)
-		u.Print("    bash <(curl -s https://stack.obol.org)")
+		u.Print("    " + CLIUpgradeCommand(result.InstallMethod, result.CLIRelease.TagName))
 	}
 }

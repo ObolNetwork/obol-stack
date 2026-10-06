@@ -1211,7 +1211,7 @@ func getPurchaseRequest(cfg *config.Config, target agentTarget, name string) (st
 }
 
 func deletePurchaseRequest(cfg *config.Config, target agentTarget, name string) error {
-	bin := filepath.Join(cfg.BinDir, "kubectl")
+	bin := cfg.ToolPath("kubectl")
 	kc := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	ns := agentruntime.Namespace(target.Runtime, target.ID)
 	return kubectl.Run(bin, kc, "delete", monetizeapi.PurchaseRequestResource, name, "-n", ns, "--ignore-not-found", "--wait=true")
