@@ -15,7 +15,7 @@ This guide walks you through installing the Obol Stack, starting a local Kuberne
   - **Ollama** (local) — install from [ollama.com](https://ollama.com), start `ollama serve`, pull a chat model (e.g. `ollama pull qwen3.5:4b`), **or**
   - **Cloud / custom** — after `stack up`, run `obol model setup` (OpenRouter, Anthropic, OpenAI, Venice, custom vLLM, …).
 - **Foundry** (optional) -- For on-chain payment testing. Install from [getfoundry.sh](https://getfoundry.sh).
-- **Go 1.25+** (development mode only) -- For building from source.
+- **Go 1.27+** (development mode only) -- For building from source.
 
 > [!IMPORTANT]
 > Declining the installer’s Ollama prompt **without** later configuring a model means **no LiteLLM models**, so `stack up` **skips the default Hermes agent**. Fix with:

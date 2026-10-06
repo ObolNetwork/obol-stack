@@ -30,8 +30,8 @@ fi
 # another few seconds to register in `kubectl get nodes`. Poll briefly to
 # absorb that race instead of one-shotting.
 poll_step_grep "Nodes ready" " Ready " 12 5 "$OBOL" kubectl get nodes
-# Verify the k3s cluster version matches the documented version (CLAUDE.md: v1.35.1-k3s1)
-step "k3s server version is v1.35.1+k3s1"
+# Verify the k3s cluster version matches the documented version (CLAUDE.md: v1.35.9-k3s1)
+step "k3s server version is v1.35.9+k3s1"
 kube_ver=$("$OBOL" kubectl version 2>&1) || true
 if echo "$kube_ver" | grep -q "v1.35\|k3s1"; then
     k3s_ver=$(echo "$kube_ver" | grep "Server Version" | grep -oE "v[0-9]+\.[0-9]+\.[0-9]+\+k3s[0-9]+" | head -1)

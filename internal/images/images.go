@@ -68,7 +68,7 @@ func Resolve(repo string) string {
 	if useLatest() {
 		return repo + ":latest"
 	}
-	return resolvePinned(repo, version.GitCommit)
+	return resolvePinned(repo, pinCommit())
 }
 
 // ResolveDev returns repo:devTag with no digest — local builds are imported
@@ -87,7 +87,7 @@ func StampIdentity() string {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("OBOL_DEVELOPMENT")), "true") {
 		return "dev"
 	}
-	commit := strings.TrimSpace(version.GitCommit)
+	commit := pinCommit()
 	if commit == "" || commit == "unknown" || commit == "dev" {
 		return "latest"
 	}
@@ -195,11 +195,21 @@ func resolvePinned(repo, tag string) string {
 	return ref + "@" + digest
 }
 
+// pinCommit returns the release commit used for image tags. Commits recovered
+// from VCS build info (plain `go build`, no ldflags) have no published images,
+// so they pin like an unknown commit (":latest").
+func pinCommit() string {
+	if version.CommitFromVCS {
+		return ""
+	}
+	return strings.TrimSpace(version.GitCommit)
+}
+
 func useLatest() bool {
 	if strings.EqualFold(strings.TrimSpace(os.Getenv("OBOL_DEVELOPMENT")), "true") {
 		return true
 	}
-	commit := strings.TrimSpace(version.GitCommit)
+	commit := pinCommit()
 	if commit == "" || commit == "unknown" || commit == "dev" {
 		return true
 	}

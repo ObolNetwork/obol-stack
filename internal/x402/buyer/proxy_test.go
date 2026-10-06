@@ -14,6 +14,7 @@ import (
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 )
 
 func TestProxy_HealthAndStatus(t *testing.T) {
@@ -1615,7 +1616,7 @@ func scrapeMetricFamilies(t *testing.T, proxy *Proxy) map[string]*dto.MetricFami
 		t.Fatalf("metrics status = %d, want 200", rec.Code)
 	}
 
-	var parser expfmt.TextParser
+	parser := expfmt.NewTextParser(model.LegacyValidation)
 
 	families, err := parser.TextToMetricFamilies(strings.NewReader(rec.Body.String()))
 	if err != nil {

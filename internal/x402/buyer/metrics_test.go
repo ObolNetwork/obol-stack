@@ -8,6 +8,7 @@ import (
 
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 )
 
 // TestPrometheusLabels_ChainPropagation asserts that prometheusLabels surfaces
@@ -161,7 +162,7 @@ func scrapeBuyerMetrics(t *testing.T, m *metrics) map[string]*dto.MetricFamily {
 		t.Fatalf("metrics status = %d, want 200", rec.Code)
 	}
 
-	var parser expfmt.TextParser
+	parser := expfmt.NewTextParser(model.LegacyValidation)
 	families, err := parser.TextToMetricFamilies(strings.NewReader(rec.Body.String()))
 	if err != nil {
 		t.Fatalf("parse metrics: %v", err)

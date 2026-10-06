@@ -17,7 +17,7 @@ repositories:
 # Single source of truth: change this to switch networks
 values:
   - network: mainnet
-  - gatewayApiVersion: v1.6.1
+  - gatewayApiVersion: v1.6.2
   # Default the cloudflared release to enabled. `obol stack up` overrides via
   # `--state-values-set cloudflared.enabled=false` when it detects a running
   # quick tunnel that should be preserved across the sync.
@@ -32,7 +32,7 @@ releases:
     namespace: monitoring
     createNamespace: true
     chart: prometheus-community/kube-prometheus-stack
-    version: 82.2.1
+    version: 91.9.0
     values:
       - ./values/monitoring.yaml.gotmpl
 
@@ -45,7 +45,9 @@ releases:
 
 
   # Traefik ingress controller with Gateway API support
-  # Traefik v38+ bundles Gateway API CRDs in its crds/ directory.
+  # Traefik chart <= 40.1.x bundles Gateway API CRDs (39.x: v1.4.0) in its
+  # crds/ directory. Chart 40.2.0+ drops them, so bumping past 40.1 needs a
+  # separate Gateway API CRD install (see gatewayApiVersion above).
   # Declared before `base` so the Traefik CRDs (Middleware,
   # IngressRoute, …) and Gateway API CRDs are available when base
   # templates that depend on them (erpc.yaml, obol-frontend.yaml)
@@ -54,7 +56,7 @@ releases:
     namespace: traefik
     createNamespace: true
     chart: traefik/traefik
-    version: 38.0.2
+    version: 39.0.9
     values:
       # Gateway API provider configuration
       - providers:
@@ -94,8 +96,11 @@ releases:
               default: true
             exposedPort: 443
             protocol: TCP
-            tls:
-              enabled: false  # TLS termination disabled for local dev
+            # Chart 39+ nests HTTP entrypoint options under `http` (values
+            # schema now rejects ports.<name>.tls).
+            http:
+              tls:
+                enabled: false  # TLS termination disabled for local dev
       # Service configuration
       - service:
           type: LoadBalancer
@@ -149,7 +154,7 @@ releases:
     namespace: reloader
     createNamespace: true
     chart: stakater/reloader
-    version: 2.2.7
+    version: 2.2.18
     values:
       - reloader:
           deployment:

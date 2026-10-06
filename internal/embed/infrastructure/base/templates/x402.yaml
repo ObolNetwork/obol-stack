@@ -363,7 +363,7 @@ spec:
     spec:
       serviceAccountName: serviceoffer-controller
       # PSS Restricted: pod-level identity. Paired with Dockerfile
-      # FROM gcr.io/distroless/static-debian12:nonroot which default-runs
+      # FROM gcr.io/distroless/static-debian13:nonroot which default-runs
       # as UID/GID 65532. Container escape via a Go-runtime CVE on a
       # UID-0 / no-seccomp / no-cap-drop / RW-rootfs container was the
       # easiest path to host pivot on k3s single-node; this closes it.

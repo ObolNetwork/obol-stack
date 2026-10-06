@@ -249,7 +249,7 @@ Two-stage templating: `values.yaml.gotmpl` annotated with `@enum`/`@default`/`@d
 | `obol stack export` | Full backup archive: config dir (minus kubeconfig/defaults), agent data dirs (brains + keystores, deployments quiesced for consistency), encrypted wallet backups, etcd-drift resources (Agent CRs, ServiceOffers, LiteLLM/eRPC CMs). `internal/stackbackup/` |
 | `obol stack import <archive>` | Restore: host state first (then `stack up` mounts restored brains/keystores), `--cluster-only` re-applies CRs/CMs + re-syncs agents after up. PurchaseRequests/buyer auths intentionally not restored (auths expire) |
 
-k3d: 1 server, ports `80:80` + `8080:80` + `443:443` + `8443:443`, image `rancher/k3s:v1.35.1-k3s1`.
+k3d: 1 server, ports `80:80` + `8080:80` + `443:443` + `8443:443`, image `rancher/k3s:v1.35.9-k3s1`.
 
 **Local access**: macOS port 80 privileged — may not bind without root. Always use `http://obol.stack:8080/` (not `http://obol.stack/`). Port 8080 maps to same Traefik load balancer as port 80.
 
@@ -509,7 +509,7 @@ The Cloudflare tunnel exposes the cluster to the public internet. Only x402-gate
 
 **Docs**: `docs/guides/monetize-inference.md` (E2E monetize walkthrough), `README.md`.
 
-**Deps**: Docker 20.10.0+, Go 1.25+. Installed by obolup.sh: kubectl 1.36.1, helm 3.21.0, k3d 5.8.3, helmfile 1.5.2, k9s 0.50.18, helm-diff 3.15.7, ollama 0.24.0. Key Go: `urfave/cli/v3`, `dustinkirkland/golang-petname`, `coinbase/x402/go` (v2 SDK, v1 wire format).
+**Deps**: Docker 20.10.0+, Go 1.27+. Installed by obolup.sh: kubectl 1.36.5, helm 3.22.0, k3d 5.9.0, helmfile 1.8.1, k9s 0.51.0, helm-diff 3.15.15, ollama 0.35.1. Key Go: `urfave/cli/v3`, `dustinkirkland/golang-petname`, `coinbase/x402/go` (v2 SDK, v1 wire format).
 
 ## Related Codebases
 

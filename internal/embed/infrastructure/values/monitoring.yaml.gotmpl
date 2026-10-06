@@ -53,15 +53,19 @@ nodeExporter:
   enabled: true
 
 prometheus-node-exporter:
-  # Pin to v1.11.0 — upstream v1.10.2 ships a multi-arch manifest that fails the
+  # Pinned — upstream v1.10.2 shipped a multi-arch manifest that fails the
   # containerd image-integrity check on Apple Silicon (digest mismatch →
-  # ImagePullBackOff). v1.11.0 pulls cleanly on both arm64 and amd64. Digest
+  # ImagePullBackOff). v1.11.0+ pull cleanly on both arm64 and amd64. Digest
   # pin defends against a re-tag landing a bad arm64 layer again.
   image:
     registry: quay.io
     repository: prometheus/node-exporter
-    tag: v1.11.0
-    digest: sha256:2f0cc335ef9ea15d6c96e1c0d693d8b57c0b794d0244b22313a6c162bd1cb1b8
+    tag: v1.12.1
+    digest: sha256:1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0
+    # kube-prometheus-stack 85+ defaults the subchart to the -distroless tag
+    # suffix; the digest above is the plain (non-distroless) multi-arch index,
+    # so keep the tag honest.
+    distroless: false
   resources:
     requests:
       cpu: 10m
