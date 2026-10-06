@@ -3,7 +3,7 @@ module github.com/ObolNetwork/obol-stack
 go 1.27.1
 
 require (
-	github.com/charmbracelet/lipgloss v1.1.0
+	github.com/charmbracelet/lipgloss/v2 v2.0.6
 	github.com/cucumber/godog v0.16.0
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1
 	github.com/dustinkirkland/golang-petname v0.0.0-20260929120758-6e3915f1a6a8
