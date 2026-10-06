@@ -96,7 +96,7 @@ func DiffRouterModels(configured, live []string) RouterDrift {
 // be read (cluster down, pod not running) — callers should treat that as
 // "check unavailable", not as drift.
 func CheckRouterDrift(cfg *config.Config) (RouterDrift, error) {
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {

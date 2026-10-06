@@ -85,12 +85,22 @@ homebrew_casks:
     commit_author:
       name: obol-release-bot
       email: platform@obol.tech
-    commit_msg_template: "chore: bump {{ .ProjectName }} to {{ .Tag }}"
+    # The tap requires sign-off on web/API commits (web_commit_signoff_required),
+    # which is how goreleaser pushes; the trailer must match commit_author.
+    commit_msg_template: "chore: bump {{ .ProjectName }} to {{ .Tag }}\n\nSigned-off-by: obol-release-bot <platform@obol.tech>"
     caveats: |-
-      The obol CLI manages its own Kubernetes toolchain. To finish setup:
+      Docker Desktop (or another Docker engine) must be installed and running.
+
+      The obol CLI manages its own Kubernetes toolchain. On first use,
+      `obol stack init` / `obol stack up` download pinned, sha256-verified
+      kubectl, helm, k3d and helmfile into ~/.local/bin (override with
+      OBOL_BIN_DIR). Compatible copies already on your PATH are reused.
+      To finish setup:
         obol stack init
         obol stack up
-      Docker must be installed and running.
+      `obol update` reports tool/CLI versions; `obol upgrade --tools-only`
+      installs k9s and helm-diff too. Upgrade the CLI with:
+        brew upgrade --cask obol
     # Release binaries are not signed/notarized; strip the Gatekeeper
     # quarantine bit on install (the goreleaser-documented pattern for
     # unsigned cask binaries).

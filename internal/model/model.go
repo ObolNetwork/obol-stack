@@ -285,7 +285,7 @@ func anthropicCacheControlPoints() []CacheControlInjection {
 // HasConfiguredModels returns true if LiteLLM has at least one non-catch-all
 // model configured (i.e., something other than the "paid/*" route).
 func HasConfiguredModels(cfg *config.Config) bool {
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
@@ -376,7 +376,7 @@ func ConfigureLiteLLM(cfg *config.Config, u *ui.UI, provider, apiKey string, mod
 // (model_list) for a provider without restarting the deployment. Call
 // RestartLiteLLM afterwards (once, after batching multiple providers).
 func PatchLiteLLMProvider(cfg *config.Config, u *ui.UI, provider, apiKey string, models []string) error {
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
@@ -415,7 +415,7 @@ func PatchLiteLLMEntries(cfg *config.Config, u *ui.UI, entries []ModelEntry) err
 		return nil
 	}
 
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
@@ -436,7 +436,7 @@ func PatchLiteLLMEntries(cfg *config.Config, u *ui.UI, entries []ModelEntry) err
 // (issue #321: the old warn-and-succeed behavior silently left LiteLLM
 // broken after failed rollouts).
 func RestartLiteLLM(cfg *config.Config, u *ui.UI, provider string) error {
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	u.Info("Restarting LiteLLM")
@@ -665,7 +665,7 @@ func hotAddModels(cfg *config.Config, u *ui.UI, entries []ModelEntry) error {
 		return fmt.Errorf("get master key: %w", err)
 	}
 
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	for _, entry := range entries {
@@ -704,7 +704,7 @@ func hotDeleteModel(cfg *config.Config, u *ui.UI, modelName string) error {
 		return fmt.Errorf("get master key: %w", err)
 	}
 
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	// Query /model/info on one pod to get model IDs (via port-forward; the
@@ -814,7 +814,7 @@ func PreferModels(cfg *config.Config, u *ui.UI, names []string) error {
 		return errors.New("at least one model name is required")
 	}
 
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
@@ -872,7 +872,7 @@ func PreferModels(cfg *config.Config, u *ui.UI, names []string) error {
 // and hot-deletes it from the running router via the API (immediate effect).
 // No pod restart is required.
 func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
@@ -958,7 +958,7 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 // model" behavior an operator running `obol model setup custom` wants when
 // they re-run the command.
 func AddCustomEndpointWithOptions(cfg *config.Config, u *ui.UI, endpoint, modelName, apiKey string, options CustomEndpointOptions) error {
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
@@ -1143,7 +1143,7 @@ func GetAvailableProviders(_ *config.Config) ([]ProviderInfo, error) {
 
 // GetProviderStatus reads LiteLLM config and returns provider status.
 func GetProviderStatus(cfg *config.Config) (map[string]ProviderStatus, error) {
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
@@ -1222,7 +1222,7 @@ func buildProviderStatus(configYAML, secretJSON []byte) (map[string]ProviderStat
 
 // GetMasterKey reads the LiteLLM master key from the cluster Secret.
 func GetMasterKey(cfg *config.Config) (string, error) {
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
@@ -1249,7 +1249,7 @@ func GetMasterKey(cfg *config.Config) (string, error) {
 // the running LiteLLM pod's /v1/models endpoint, falling back to the
 // baked-in WellKnownModels list if the cluster is unreachable.
 func GetConfiguredModels(cfg *config.Config) ([]string, error) {
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {

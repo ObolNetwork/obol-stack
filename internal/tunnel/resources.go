@@ -3,7 +3,6 @@ package tunnel
 import (
 	"fmt"
 	"os/exec"
-	"path/filepath"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
@@ -41,7 +40,7 @@ func deleteLocalManagedK8sResources(cfg *config.Config, u *ui.UI, kubeconfigPath
 }
 
 func kubectlDelete(cfg *config.Config, u *ui.UI, kubeconfigPath, kind, name string) error {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlPath := cfg.ToolPath("kubectl")
 	cmd := exec.Command(kubectlPath,
 		"--kubeconfig", kubeconfigPath,
 		"delete", kind, name,

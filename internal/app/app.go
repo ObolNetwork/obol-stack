@@ -150,7 +150,7 @@ func Install(cfg *config.Config, u *ui.UI, chartRef string, opts InstallOptions)
 
 // fetchChartValues retrieves default values from a chart using helm show values
 func fetchChartValues(cfg *config.Config, chart *ChartReference) ([]byte, error) {
-	helmPath := filepath.Join(cfg.BinDir, "helm")
+	helmPath := cfg.ToolPath("helm")
 
 	var args []string
 
@@ -303,16 +303,16 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	}
 
 	// Get helmfile binary path
-	helmfileBinary := filepath.Join(cfg.BinDir, "helmfile")
+	helmfileBinary := cfg.ToolPath("helmfile")
 	if _, err := os.Stat(helmfileBinary); os.IsNotExist(err) {
-		return fmt.Errorf("helmfile not found at %s", helmfileBinary)
+		return fmt.Errorf("helmfile not found at %s; run 'obol upgrade' to install missing tools", helmfileBinary)
 	}
 
 	u.Detail("Deployment directory", deploymentDir)
 	u.Detail("Deployment ID", id)
 
 	// Execute helmfile sync
-	syncArgs := append([]string{"-f", helmfilePath, "sync"}, helmcmd.SyncFlagsForVersion(filepath.Join(cfg.BinDir, "helm"))...)
+	syncArgs := append([]string{"-f", helmfilePath, "sync"}, helmcmd.SyncFlagsForVersion(cfg.ToolPath("helm"))...)
 	cmd := exec.Command(helmfileBinary, syncArgs...)
 	cmd.Dir = deploymentDir
 
@@ -468,7 +468,7 @@ func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string, force boo
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); err == nil {
-		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+		kubectlBinary := cfg.ToolPath("kubectl")
 		cmd := exec.Command(kubectlBinary, "get", "namespace", namespaceName)
 
 		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
@@ -510,7 +510,7 @@ func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string, force boo
 
 	// Delete Kubernetes namespace
 	if namespaceExists {
-		kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+		kubectlBinary := cfg.ToolPath("kubectl")
 		cmd := exec.Command(kubectlBinary, "delete", "namespace", namespaceName,
 			"--force", "--grace-period=0")
 

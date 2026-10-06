@@ -121,7 +121,7 @@ type RestartOptions struct {
 
 // Status displays the current tunnel status and URL.
 func Status(cfg *config.Config, u *ui.UI, opts StatusOptions) error {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlPath := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 		return errors.New("stack not running, use 'obol stack up' first")
@@ -286,7 +286,7 @@ func defaultPersistentConnectorStatus(st *tunnelState) string {
 // InjectBaseURL sets AGENT_BASE_URL on the default Hermes deployment so that
 // monetize.py uses the tunnel URL in registration JSON.
 func InjectBaseURL(cfg *config.Config, tunnelURL string) error {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlPath := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	desc := agentruntime.Describe(agentruntime.Hermes)
 
@@ -302,7 +302,7 @@ func InjectBaseURL(cfg *config.Config, tunnelURL string) error {
 
 // GetTunnelURL parses cloudflared logs to extract the quick tunnel URL.
 func GetTunnelURL(cfg *config.Config) (string, error) {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlPath := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	cmd := exec.Command(kubectlPath,
@@ -362,7 +362,7 @@ func waitReadyTimeout() time.Duration {
 // writes the tunnel URL to the obol-frontend ConfigMap, and refreshes the
 // storefront landing page for the public tunnel hostname.
 func WaitReady(cfg *config.Config, u *ui.UI) (string, error) {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlPath := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 		return "", errors.New("stack not running")
@@ -507,7 +507,7 @@ func IsQuickTunnelHealthy(cfg *config.Config) bool {
 		return false // persistent tunnel — chart already keeps it alive
 	}
 
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlPath := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 		return false
@@ -569,7 +569,7 @@ func ConfirmQuickTunnelLoss(cfg *config.Config, u *ui.UI, currentURL, action str
 //     at the old tunnel hostname and traffic to the new hostname's `/` falls
 //     through to the frontend catch-all
 func Restart(cfg *config.Config, u *ui.UI, opts RestartOptions) error {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlPath := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	// Check if kubeconfig exists.
@@ -673,7 +673,7 @@ func Restart(cfg *config.Config, u *ui.UI, opts RestartOptions) error {
 
 // Logs displays cloudflared logs.
 func Logs(cfg *config.Config, follow bool) error {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlPath := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	// Check if kubeconfig exists.
@@ -871,7 +871,7 @@ func printStatusReport(u *ui.UI, result tunnelStatusResult, lastUpdated time.Tim
 // caller degrades gracefully. Works in every tunnel mode without a Cloudflare
 // API token.
 func probeCloudflaredMetrics(cfg *config.Config) connectorProbe {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlPath := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	localPort, err := freeLocalPort()
@@ -995,7 +995,7 @@ func freeLocalPort() (int, error) {
 // footer version display. Server-side apply merges fields; call after
 // obol-frontend exists (helmfile).
 func SyncTunnelConfigMap(cfg *config.Config, tunnelURL string) error {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlPath := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	manifest := fmt.Sprintf(`apiVersion: v1
@@ -1051,7 +1051,7 @@ func stackConfigVersionApplyArgs(kubeconfigPath string) []string {
 // obol-frontend/obol-stack-config, leaving tunnelURL untouched. Used on stack
 // up when no tunnel sync runs yet (after infra deploy creates the namespace).
 func SyncStackConfigVersion(cfg *config.Config) error {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlPath := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	manifest := fmt.Sprintf(`apiVersion: v1
@@ -1115,7 +1115,7 @@ func RefreshStorefront(cfg *config.Config) error {
 
 // Stop scales the cloudflared deployment to 0 replicas.
 func Stop(cfg *config.Config, u *ui.UI) error {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlPath := cfg.ToolPath("kubectl")
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
@@ -1402,7 +1402,7 @@ func CreateStorefront(cfg *config.Config, hostnames ...string) error {
 		return errors.New("CreateStorefront requires at least one hostname")
 	}
 
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlPath := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	// Hostnames claimed by a ServiceOffer (spec.hostname) belong to that
@@ -1460,7 +1460,7 @@ func EnsureLocalStorefrontPreview(cfg *config.Config) error {
 // and the local-only preview HTTPRoute. When publicHosts is non-empty it also
 // publishes the tunnel catch-all HTTPRoute for those hostnames.
 func ensureStorefrontRenderer(cfg *config.Config, publicHosts []string) error {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlPath := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	labels := map[string]string{"app": "tunnel-storefront"}
 
@@ -1611,7 +1611,7 @@ func ensureStorefrontRenderer(cfg *config.Config, publicHosts []string) error {
 // storefront-preview.obol.stack). The operator branding editor must keep
 // working when the tunnel is dormant or the last offer is deleted.
 func DeleteStorefront(cfg *config.Config) error {
-	kubectlPath := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlPath := cfg.ToolPath("kubectl")
 
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {

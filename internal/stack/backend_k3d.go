@@ -15,6 +15,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/tools"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
@@ -44,9 +45,8 @@ func (b *K3dBackend) Prerequisites(cfg *config.Config) error {
 	}
 
 	// Check k3d binary exists
-	k3dPath := filepath.Join(cfg.BinDir, "k3d")
-	if _, err := os.Stat(k3dPath); os.IsNotExist(err) {
-		return fmt.Errorf("k3d not found at %s\nRun obolup.sh to install dependencies", k3dPath)
+	if _, err := os.Stat(cfg.ToolPath("k3d")); os.IsNotExist(err) {
+		return tools.MissingError("k3d")
 	}
 
 	return nil
@@ -86,7 +86,7 @@ func (b *K3dBackend) Init(cfg *config.Config, u *ui.UI, stackID string, force bo
 
 func (b *K3dBackend) IsRunning(cfg *config.Config, stackID string) (bool, error) {
 	stackName := "obol-stack-" + stackID
-	listCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "list", "--no-headers")
+	listCmd := exec.Command(cfg.ToolPath("k3d"), "cluster", "list", "--no-headers")
 
 	output, err := listCmd.Output()
 	if err != nil {
@@ -126,7 +126,7 @@ func (b *K3dBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 	if running {
 		u.Warn("Cluster already exists, starting it")
 
-		startCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "start", stackName)
+		startCmd := exec.Command(cfg.ToolPath("k3d"), "cluster", "start", stackName)
 		if err := u.Exec(ui.ExecConfig{
 			Name: "Starting existing k3d cluster",
 			Cmd:  startCmd,
@@ -149,7 +149,7 @@ func (b *K3dBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 		ensureK3dPortsAvailable(k3dConfigPath, u)
 
 		createCmd := exec.Command(
-			filepath.Join(cfg.BinDir, "k3d"),
+			cfg.ToolPath("k3d"),
 			k3dCreateArgs(stackName, k3dConfigPath, registrySetup)...,
 		)
 		if err := u.Exec(ui.ExecConfig{
@@ -161,7 +161,7 @@ func (b *K3dBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 	}
 
 	// Export kubeconfig
-	kubeconfigCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "kubeconfig", "get", stackName)
+	kubeconfigCmd := exec.Command(cfg.ToolPath("k3d"), "kubeconfig", "get", stackName)
 
 	kubeconfigData, err := kubeconfigCmd.Output()
 	if err != nil {
@@ -230,14 +230,14 @@ func (b *K3dBackend) Down(cfg *config.Config, u *ui.UI, stackID string) error {
 
 	u.Infof("Stopping stack: %s", stackName)
 
-	stopCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "stop", stackName)
+	stopCmd := exec.Command(cfg.ToolPath("k3d"), "cluster", "stop", stackName)
 	if err := u.Exec(ui.ExecConfig{
 		Name: "Stopping k3d cluster",
 		Cmd:  stopCmd,
 	}); err != nil {
 		u.Warn("Graceful stop failed, forcing cluster deletion")
 
-		deleteCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "delete", stackName)
+		deleteCmd := exec.Command(cfg.ToolPath("k3d"), "cluster", "delete", stackName)
 		if err := u.Exec(ui.ExecConfig{
 			Name: "Deleting k3d cluster",
 			Cmd:  deleteCmd,
@@ -252,7 +252,7 @@ func (b *K3dBackend) Down(cfg *config.Config, u *ui.UI, stackID string) error {
 func (b *K3dBackend) Destroy(cfg *config.Config, u *ui.UI, stackID string) error {
 	stackName := "obol-stack-" + stackID
 
-	deleteCmd := exec.Command(filepath.Join(cfg.BinDir, "k3d"), "cluster", "delete", stackName)
+	deleteCmd := exec.Command(cfg.ToolPath("k3d"), "cluster", "delete", stackName)
 	if err := u.Exec(ui.ExecConfig{
 		Name: "Deleting cluster containers",
 		Cmd:  deleteCmd,

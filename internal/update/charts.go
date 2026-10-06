@@ -42,7 +42,7 @@ type helmSearchResult struct {
 // UpdateHelmRepos runs `helm repo update` to refresh all repo indexes.
 // If quiet is true, stdout is suppressed (useful for JSON output mode).
 func UpdateHelmRepos(cfg *config.Config, quiet bool) error {
-	helmBinary := filepath.Join(cfg.BinDir, "helm")
+	helmBinary := cfg.ToolPath("helm")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	cmd := exec.Command(helmBinary, "repo", "update")
@@ -75,7 +75,7 @@ func CheckChartVersions(cfg *config.Config) ([]ChartStatus, error) {
 		releases = append(releases, rels...)
 	}
 
-	helmBinary := filepath.Join(cfg.BinDir, "helm")
+	helmBinary := cfg.ToolPath("helm")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	// Deduplicate releases by chart name (e.g., bedag/raw appears multiple times)
@@ -167,7 +167,7 @@ type VersionBump struct {
 // If chartFilter is non-empty, only the matching chart is bumped.
 // Returns the list of charts that were bumped.
 func UpgradeHelmfileVersions(cfg *config.Config, major bool, chartFilter string) ([]VersionBump, error) {
-	helmBinary := filepath.Join(cfg.BinDir, "helm")
+	helmBinary := cfg.ToolPath("helm")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
 	// Track which charts we've already reported (dedup across helmfiles).

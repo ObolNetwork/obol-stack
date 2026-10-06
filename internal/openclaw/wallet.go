@@ -562,7 +562,7 @@ func applyWalletMetadataConfigMap(cfg *config.Config, id, deploymentDir string) 
 
 	namespace := fmt.Sprintf("%s-%s", appName, id)
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 
 	// Build addresses.json matching the frontend's WalletMetadata type.
 	addressesJSON := map[string]any{

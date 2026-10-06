@@ -33,7 +33,7 @@ func PrintSellHint(cfg *config.Config, u *ui.UI, deploymentIdentifier string) {
 		return
 	}
 
-	kubectlBinary := filepath.Join(cfg.BinDir, "kubectl")
+	kubectlBinary := cfg.ToolPath("kubectl")
 	if _, err := os.Stat(kubectlBinary); err != nil {
 		return
 	}

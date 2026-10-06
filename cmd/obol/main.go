@@ -17,6 +17,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/network"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/storefront"
+	"github.com/ObolNetwork/obol-stack/internal/tools"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/urfave/cli/v3"
@@ -454,9 +455,9 @@ func passthroughCommand(cfg *config.Config, tool string, extraEnv func(*config.C
 			if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
 				return errors.New("stack not running, use 'obol stack up' first")
 			}
-			toolPath := filepath.Join(cfg.BinDir, tool)
+			toolPath := cfg.ToolPath(tool)
 			if _, err := os.Stat(toolPath); os.IsNotExist(err) {
-				return fmt.Errorf("%s not found at %s", tool, cfg.BinDir)
+				return tools.MissingError(tool)
 			}
 
 			proc := exec.Command(toolPath, cmd.Args().Slice()...)
