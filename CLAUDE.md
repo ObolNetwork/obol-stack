@@ -252,7 +252,7 @@ Two-stage templating: `values.yaml.gotmpl` annotated with `@enum`/`@default`/`@d
 | `obol stack down` | `k3d cluster stop` (delete fallback; preserves config + data) |
 | `obol stack purge [-f]` | Delete config; `-f` also deletes root-owned PVCs; `-f` offers a full `stack export` first (fallback: OpenClaw wallet prompt) |
 | `obol stack export` | Full backup archive: config dir (minus kubeconfig/defaults), agent data dirs (brains + keystores, deployments quiesced for consistency), encrypted wallet backups, etcd-drift resources (Agent CRs, ServiceOffers, LiteLLM/eRPC CMs). `internal/stackbackup/` |
-| `obol stack import <archive>` | Restore: host state first (then `stack up` mounts restored brains/keystores), `--cluster-only` re-applies CRs/CMs + re-syncs agents after up. PurchaseRequests/buyer auths intentionally not restored (auths expire) |
+| `obol stack import <archive>` | One command: restore host state (absolute paths re-pointed to this host) → `stack up` via the shared `runStackUp` path when the cluster isn't running → re-apply CRs/CMs + re-sync agents. Over a fresh `init`/`up` pass `--force`; an EMPTY pre-import cluster of the replaced stack is deleted (frees ingress ports), a populated one never is; another stack's cluster behind a stale kubeconfig is left untouched (`internal/stackbackup/identity.go`). `--cluster-only` re-applies only. PurchaseRequests/buyer auths intentionally not restored (auths expire) |
 
 k3d: 1 server, ports `80:80` + `8080:80` + `443:443` + `8443:443`, image `rancher/k3s:v1.35.9-k3s1`.
 

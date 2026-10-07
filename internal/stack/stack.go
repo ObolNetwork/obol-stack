@@ -360,6 +360,13 @@ func Purge(cfg *config.Config, u *ui.UI, force, skipConfirm bool) error {
 
 	// Destroy cluster if we have a stack ID
 	if stackID != "" {
+		// Resolve k3d/kubectl first, as init/up do. Without this a missing or
+		// version-incompatible k3d (e.g. after `just clean`) made Destroy fail,
+		// and purge still removed the config — orphaning a running cluster
+		// that no obol command could address any more.
+		if err := ensureRequiredTools(cfg, u, backend.Name()); err != nil {
+			return fmt.Errorf("cannot purge without the cluster tools (nothing was removed): %w", err)
+		}
 		u.Infof("Destroying cluster (id: %s)", stackID)
 
 		if err := backend.Destroy(cfg, u, stackID); err != nil {
