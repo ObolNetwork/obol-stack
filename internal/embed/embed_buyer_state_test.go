@@ -1,6 +1,9 @@
 package embed
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestBuyerStatePVC asserts that x402-buyer's /state is backed by a PVC
 // (not an emptyDir), that the buyer runs as its own Recreate Deployment so
@@ -148,5 +151,24 @@ func TestBuyerStatePVC(t *testing.T) {
 	}
 	if ms := nested(dep, "spec", "strategy", "rollingUpdate", "maxSurge"); ms != 1 {
 		t.Errorf("litellm Deployment rollingUpdate.maxSurge = %v, want 1", ms)
+	}
+}
+
+// TestLiteLLMConfigCarriedOverOnSync pins the lookup that keeps a base sync
+// from resetting litellm-config. Helm 4 applies server-side with
+// --force-conflicts, so rendering the chart default would wipe the operator's
+// model_list on every `obol stack up` and force LiteLLM restarts.
+func TestLiteLLMConfigCarriedOverOnSync(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/llm.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+	for _, want := range []string{
+		`lookup "v1" "ConfigMap" "llm" "litellm-config"`,
+		`config.yaml: {{ $liveLiteLLMConfig | quote }}`,
+	} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("llm.yaml missing %q", want)
+		}
 	}
 }

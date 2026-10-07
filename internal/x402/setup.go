@@ -534,6 +534,16 @@ func populateCABundle(bin, kc string) {
 		return // no CA bundle found — skip silently
 	}
 
+	// Unchanged bundle: skip the replace and, more importantly, the verifier
+	// restart, so a steady-state `obol stack up` doesn't roll the verifier.
+	if want, err := os.ReadFile(caPath); err == nil {
+		have, err := kubectl.Output(bin, kc, "get", "configmap", "ca-certificates", "-n", x402Namespace,
+			"-o", `jsonpath={.data.ca-certificates\.crt}`)
+		if err == nil && strings.TrimSpace(have) == strings.TrimSpace(string(want)) {
+			return
+		}
+	}
+
 	// Pipe through kubectl create --dry-run to generate the ConfigMap YAML,
 	// then kubectl replace to apply it without the annotation size limit.
 	if err := kubectl.PipeCommands(bin, kc,
