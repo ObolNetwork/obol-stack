@@ -210,11 +210,10 @@ func setupCloudProvider(cfg *config.Config, u *ui.UI, prof model.ProviderInfo, a
 		if onboardURL == "" {
 			onboardURL = prof.KeyURL
 		}
-		if onboardURL != "" && u.IsTTY() && !u.IsJSON() {
-			u.Infof("Opening %s to sign up / create an API key …", onboardURL)
-			if err := openBrowser(onboardURL); err != nil {
-				u.Dim(fmt.Sprintf("(couldn't open a browser — visit %s)", onboardURL))
-			}
+		// ui.OpenBrowser only opens when interactive, local and with a
+		// display; the URLs below are printed either way.
+		if onboardURL != "" && u.OpenBrowser(onboardURL) {
+			u.Infof("Opened %s to sign up / create an API key …", onboardURL)
 		}
 		if prof.JoinURL != "" {
 			u.Dim(fmt.Sprintf("New to %s? Sign up: %s", prof.Name, prof.JoinURL))

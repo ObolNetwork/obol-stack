@@ -154,7 +154,7 @@ func New(cfg *rest.Config) (*Controller, error) {
 		httpClient:                &http.Client{Timeout: 3 * time.Second},
 		registrationRPCBase:       getenvDefault("ERC8004_RPC_BASE", erc8004.DefaultRPCBase),
 		baseURLOverride:           strings.TrimRight(os.Getenv("AGENT_BASE_URL"), "/"),
-		defaultBaseURL:            "http://obol.stack:8080",
+		defaultBaseURL:            fallbackLocalBaseURL,
 	}
 
 	offerInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
@@ -1351,7 +1351,7 @@ func (c *Controller) reconcileStaticSite(ctx context.Context, override *monetize
 	// use as their public-facing prefix, so the three surfaces stay in sync
 	// on tunnel restarts (the configMap informer re-enqueues every offer
 	// when tunnelURL changes — see enqueueDiscoveryRefresh).
-	openAPIJSON := buildOpenAPIDocument(offers, baseURL, resolvedProfile)
+	openAPIJSON := buildOpenAPIDocument(offers, baseURL, c.localBaseURL(ctx), resolvedProfile)
 	wellKnownX402JSON := buildAggregateWellKnownX402(offers, baseURL)
 	apiDocsHTML := scalarHTML(resolvedProfile)
 	bundles := buildOfferBundles(offers, resolvedProfile, c.upstreamOpenAPICache.getSettled, c.publishedStaticSiteData(ctx))
@@ -1597,20 +1597,54 @@ func (c *Controller) removeFinalizer(ctx context.Context, raw *unstructured.Unst
 	return err
 }
 
+// registrationBaseURL is the origin the controller publishes in /skill.md,
+// services.json, the ERC-8004 registration doc and /openapi.json: the
+// AGENT_BASE_URL override, else the public tunnel URL, else the host-side
+// local ingress URL the CLI recorded (localURL), else defaultBaseURL.
 func (c *Controller) registrationBaseURL(ctx context.Context) (string, error) {
 	if c.baseURLOverride != "" {
 		return c.baseURLOverride, nil
 	}
-	configMap, err := c.configMaps.Namespace("obol-frontend").Get(ctx, "obol-stack-config", metav1.GetOptions{})
-	if err == nil {
-		if value, found, err := unstructured.NestedString(configMap.Object, "data", "tunnelURL"); err == nil && found && strings.TrimSpace(value) != "" {
-			return strings.TrimRight(value, "/"), nil
-		}
-	}
-	if err != nil && !apierrors.IsNotFound(err) {
+	tunnelURL, localURL, err := c.stackConfigURLs(ctx)
+	if err != nil {
 		return "", err
 	}
+	if tunnelURL != "" {
+		return tunnelURL, nil
+	}
+	if localURL != "" {
+		return localURL, nil
+	}
 	return c.defaultBaseURL, nil
+}
+
+// localBaseURL is the host-side local ingress origin recorded by `obol stack
+// up` (obol-stack-config `localURL`), falling back to defaultBaseURL.
+func (c *Controller) localBaseURL(ctx context.Context) string {
+	if _, localURL, err := c.stackConfigURLs(ctx); err == nil && localURL != "" {
+		return localURL
+	}
+	return c.defaultBaseURL
+}
+
+// stackConfigURLs reads tunnelURL and localURL from
+// obol-frontend/obol-stack-config. A missing ConfigMap is not an error.
+func (c *Controller) stackConfigURLs(ctx context.Context) (tunnelURL, localURL string, err error) {
+	configMap, err := c.configMaps.Namespace("obol-frontend").Get(ctx, "obol-stack-config", metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", "", nil
+		}
+		return "", "", err
+	}
+	read := func(key string) string {
+		value, found, err := unstructured.NestedString(configMap.Object, "data", key)
+		if err != nil || !found {
+			return ""
+		}
+		return strings.TrimRight(strings.TrimSpace(value), "/")
+	}
+	return read("tunnelURL"), read("localURL"), nil
 }
 
 func decodeServiceOffer(raw *unstructured.Unstructured) (*monetizeapi.ServiceOffer, error) {

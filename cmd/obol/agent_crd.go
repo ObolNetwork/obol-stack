@@ -8,6 +8,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/model"
+	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/urfave/cli/v3"
 )
@@ -18,14 +19,19 @@ func agentNewCRD(cfg *config.Config, cmd *cli.Command, u *ui.UI) error {
 	if cmd.NArg() != 1 {
 		return fmt.Errorf("CRD-path agent creation requires exactly one positional name (got %d)", cmd.NArg())
 	}
-	return createCRDAgent(cfg, u, createCRDAgentOptions{
+	if err := createCRDAgent(cfg, u, createCRDAgentOptions{
 		Name:         strings.TrimSpace(cmd.Args().First()),
 		Model:        cmd.String("model"),
 		SkillsCSV:    cmd.String("skills"),
 		Objective:    cmd.String("objective"),
 		CreateWallet: cmd.Bool("create-wallet"),
 		Interactive:  u.IsTTY() && !u.IsJSON() && !cmd.IsSet("model") && !cmd.IsSet("skills") && !cmd.IsSet("objective") && !cmd.IsSet("create-wallet"),
-	})
+	}); err != nil {
+		return err
+	}
+	name := strings.TrimSpace(cmd.Args().First())
+	u.OpenURL("Dashboard", dashboardURL(cfg, stack.LinkAgent, agentcrd.Namespace(name), name), false)
+	return nil
 }
 
 // createCRDAgentOptions captures everything agentNewCRD needs without

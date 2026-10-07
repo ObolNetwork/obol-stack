@@ -340,6 +340,7 @@ Examples:
 					Namespace:   offerNs,
 				})
 			}
+			printOfferLinks(cfg, u, offerNs, name, action == "created")
 			return nil
 		},
 	}
@@ -529,6 +530,7 @@ func runAgentBackedDemo(
 
 	u.Blank()
 	printDemoTryIt(u, name, typeName, price, symbol, chain, tunnelURL, ready)
+	printOfferLinks(cfg, u, offerNs, name, action == "created")
 
 	return nil
 }

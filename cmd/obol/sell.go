@@ -542,6 +542,7 @@ Examples:
 							// consequence + completion path instead of failing silently.
 							noticeInferenceRegistrationSkipped(u, cfg, soSpec, cmd.String("chain"), wallet, name, svcNs)
 						}
+						printOfferLinks(cfg, u, svcNs, name, true)
 					}
 				}
 			}
@@ -897,6 +898,7 @@ Examples:
 					u.Warnf("could not persist offer for stack-up resume: %v", persistErr)
 				}
 				u.Successf("ServiceOffer %s/%s created from JSON", ns, name)
+				printOfferLinks(cfg, u, ns, name, true)
 				return nil
 			}
 
@@ -1154,6 +1156,7 @@ Examples:
 				} else {
 					u.Successf("Tunnel active: %s", url)
 				}
+				printOfferLinks(cfg, u, ns, name, action == "created")
 				return nil
 			}
 
@@ -1183,6 +1186,7 @@ Examples:
 				}
 			}
 
+			printOfferLinks(cfg, u, ns, name, action == "created")
 			return nil
 		},
 	}
@@ -1979,6 +1983,7 @@ Example:
 			// 6. Print try-it instructions.
 			u.Blank()
 			printDemoTryIt(u, name, typeName, price, symbol, chain, tunnelURL, ready)
+			printOfferLinks(cfg, u, demoNamespace, name, action == "created")
 
 			return nil
 		},
@@ -2713,8 +2718,7 @@ Examples:
 			},
 			&cli.StringFlag{
 				Name:  "host",
-				Usage: "Traefik host:port",
-				Value: "obol.stack:8080",
+				Usage: "Traefik host:port (default: this stack's local ingress, e.g. obol.stack or obol.stack:8080)",
 			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -2748,7 +2752,11 @@ Examples:
 			if strings.Contains(endpoint, "..") {
 				return fmt.Errorf("invalid endpoint %q: path traversal not allowed", endpoint)
 			}
-			probeURL := "http://" + cmd.String("host") + endpoint + subpath
+			host := strings.TrimSpace(cmd.String("host"))
+			if host == "" {
+				host = strings.TrimPrefix(stack.LocalIngressURL(cfg), "http://")
+			}
+			probeURL := "http://" + host + endpoint + subpath
 			u.Infof("Probing %s ...", probeURL)
 
 			req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)

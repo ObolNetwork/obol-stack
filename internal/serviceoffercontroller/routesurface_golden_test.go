@@ -68,7 +68,7 @@ func TestRouteSurface_Golden_VerifierAndOpenAPIAgree(t *testing.T) {
 	paths := buildOpenAPIPaths([]*monetizeapi.ServiceOffer{offer})
 
 	// The siwx securityScheme must exist exactly when an auth route does.
-	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, "https://example.com", schemas.StorefrontProfile{}))
+	doc := parseOpenAPI(t, buildOpenAPIDocument([]*monetizeapi.ServiceOffer{offer}, "https://example.com", "", schemas.StorefrontProfile{}))
 	if dig(t, doc, "components", "securitySchemes", "siwx") == nil {
 		t.Error("offer has an auth route but the document lacks securitySchemes.siwx")
 	}

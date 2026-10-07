@@ -17,21 +17,24 @@ import (
 // both render 3.1 natively.
 const openAPISpecVersion = "3.1.0"
 
-// localBaseURL is the well-known local-cluster origin published as a
-// secondary entry in the OpenAPI `servers` block. The tunnel URL (when
-// known) is listed first because the spec is most useful for external
-// buyers; the local entry keeps the doc usable on `obol stack up` without
-// a tunnel.
-const localBaseURL = "http://obol.stack:8080"
+// fallbackLocalBaseURL is the local-cluster origin used when the CLI has not
+// published one. The controller runs in-cluster and cannot see which host
+// port k3d bound (80, 8080, 18080, ...), so `obol stack up` writes the real
+// value (stack.LocalIngressURL) to obol-frontend/obol-stack-config `localURL`;
+// this constant only covers stacks brought up by an older CLI. 8080 is the
+// historical default and is mapped by the stock k3d config.
+const fallbackLocalBaseURL = "http://obol.stack:8080"
 
 // buildOpenAPIDocument produces the aggregate OpenAPI 3.1 JSON for every
 // operationally-ready ServiceOffer. tunnelURL is the public origin sourced
 // from the obol-frontend/obol-stack-config ConfigMap; when empty (no
-// tunnel) only the local-cluster server entry is emitted.
+// tunnel) only the local-cluster server entry is emitted. localURL is the
+// host-side local ingress origin (same ConfigMap, `localURL`); empty falls
+// back to fallbackLocalBaseURL.
 //
 // The output is JSON, deterministically ordered, indented with two spaces
 // so manual `curl /openapi.json` is readable.
-func buildOpenAPIDocument(offers []*monetizeapi.ServiceOffer, tunnelURL string, profile schemas.StorefrontProfile) string {
+func buildOpenAPIDocument(offers []*monetizeapi.ServiceOffer, tunnelURL, localURL string, profile schemas.StorefrontProfile) string {
 	tunnelURL = strings.TrimRight(tunnelURL, "/")
 
 	now := time.Now()
@@ -76,7 +79,7 @@ func buildOpenAPIDocument(offers []*monetizeapi.ServiceOffer, tunnelURL string, 
 	doc := map[string]any{
 		"openapi":    openAPISpecVersion,
 		"info":       buildOpenAPIInfo(profile, len(ready)),
-		"servers":    buildOpenAPIServers(tunnelURL),
+		"servers":    buildOpenAPIServers(tunnelURL, localURL),
 		"tags":       buildOpenAPITags(ready),
 		"paths":      buildOpenAPIPaths(ready),
 		"components": components,
@@ -145,16 +148,22 @@ func buildOpenAPIInfo(profile schemas.StorefrontProfile, readyCount int) map[str
 	}
 }
 
-func buildOpenAPIServers(tunnelURL string) []any {
+func buildOpenAPIServers(tunnelURL, localURL string) []any {
+	localURL = strings.TrimRight(strings.TrimSpace(localURL), "/")
+	if localURL == "" {
+		localURL = fallbackLocalBaseURL
+	}
 	servers := []any{}
-	if tunnelURL != "" {
+	// With no tunnel the controller's base URL IS the local origin; don't
+	// list it twice (once mislabelled as the public tunnel).
+	if tunnelURL != "" && tunnelURL != localURL {
 		servers = append(servers, map[string]any{
 			"url":         tunnelURL,
 			"description": "Public tunnel",
 		})
 	}
 	servers = append(servers, map[string]any{
-		"url":         localBaseURL,
+		"url":         localURL,
 		"description": "Local cluster (obol stack up host)",
 	})
 	return servers

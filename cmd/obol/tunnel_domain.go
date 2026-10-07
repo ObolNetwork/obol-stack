@@ -9,6 +9,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
+	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/urfave/cli/v3"
@@ -61,6 +62,7 @@ func tunnelCommand(cfg *config.Config) *cli.Command {
 					}
 					u.Blank()
 					u.Successf("Tunnel ready: %s", result.URL)
+					u.OpenURL("Storefront", dashboardURL(cfg, stack.LinkStorefront, "", ""), false)
 					return nil
 				},
 			},
