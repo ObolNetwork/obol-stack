@@ -88,6 +88,31 @@ func Import(cfg *config.Config, opts ImportOptions, u *ui.UI) error {
 		printNextSteps(u, opts.Input, true)
 		return nil
 	}
+	if err := verifyClusterIdentity(cfg); err != nil {
+		// Typical cause: `stack init` + `stack up` on a fresh host, then
+		// `import --force`. The restored config carries the archive's stack
+		// ID, but the kubeconfig still reaches the cluster created before the
+		// import. Applying the archive there would mix two stacks.
+		var mismatch *clusterMismatchError
+		if errors.As(err, &mismatch) && mismatch.OtherCluster != "" {
+			u.Warnf("Not applying cluster resources: the running cluster %s is not stack %q restored from this archive.", mismatch.OtherCluster, mismatch.StackID)
+			u.Blank()
+			u.Bold("Next steps:")
+			u.Printf("  1. k3d cluster delete %s   (the pre-import cluster; it holds the ingress ports. Export it first if it has anything you need)", mismatch.OtherCluster)
+			u.Print("  2. obol stack up")
+			u.Printf("  3. obol stack import %s --cluster-only", opts.Input)
+			if opts.ClusterOnly {
+				return errors.New("refusing to apply cluster resources to a different stack's cluster")
+			}
+			return nil
+		}
+		if opts.ClusterOnly {
+			return fmt.Errorf("refusing to apply cluster resources: %w", err)
+		}
+		u.Warnf("Not applying cluster resources: %v", err)
+		printNextSteps(u, opts.Input, true)
+		return nil
+	}
 
 	u.Info("Re-applying cluster resources...")
 	applyCluster(cfg, clusterDir, u)
