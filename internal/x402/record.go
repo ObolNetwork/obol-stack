@@ -62,6 +62,30 @@ func SaveRecordedPricing(cfg *config.Config, rec *RecordedPricing) error {
 	return os.Rename(tmp, path)
 }
 
+// BackfillRecordedPricing records the live x402-pricing settings when no
+// record exists yet. Stacks from before v0.15 set pricing by patching the
+// ConfigMap only, so the base sync in `obol upgrade`/`stack up` would reset
+// it with nothing to replay. Call it before that sync. Returns true when it
+// wrote a record.
+func BackfillRecordedPricing(cfg *config.Config) (bool, error) {
+	if rec, err := LoadRecordedPricing(cfg); err != nil || rec != nil {
+		return false, err
+	}
+
+	live, err := GetPricingConfig(cfg)
+	if err != nil || live == nil || live.Wallet == "" {
+		return false, err
+	}
+
+	return true, SaveRecordedPricing(cfg, &RecordedPricing{
+		Version:        recordedPricingVersion,
+		Wallet:         live.Wallet,
+		Chain:          live.Chain,
+		FacilitatorURL: live.FacilitatorURL,
+		VerifyOnly:     live.VerifyOnly,
+	})
+}
+
 // LoadRecordedPricing reads the record. (nil, nil) when none exists.
 func LoadRecordedPricing(cfg *config.Config) (*RecordedPricing, error) {
 	path := RecordedPricingPath(cfg)

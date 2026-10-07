@@ -16,6 +16,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/tools"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
+	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
 )
 
 const (
@@ -216,6 +217,10 @@ func ApplyUpgrades(cfg *config.Config, u *ui.UI, opts UpgradeOptions) error {
 		kubectl.PrepareLocalPathStorageClass(cfg, u)
 	}
 
+	if syncsBaseRelease(selectors) {
+		backfillPricingRecord(cfg, u)
+	}
+
 	// Helm never upgrades crds/, so bring CRDs up to the target chart
 	// versions before syncing.
 	if err := applyChartCRDs(cfg, u, helmfilePath, kubeconfigPath, selectors); err != nil {
@@ -365,51 +370,27 @@ func upgradeNetworks(cfg *config.Config, u *ui.UI) error {
 	return nil
 }
 
-// upgradeApps iterates over installed applications and syncs each.
+// upgradeApps syncs each installed app. Agent runtimes (Hermes, OpenClaw)
+// share applications/ but aren't apps; stack up and agent sync own them.
 func upgradeApps(cfg *config.Config, u *ui.UI) error {
-	appsDir := filepath.Join(cfg.ConfigDir, "applications")
-	if _, err := os.Stat(appsDir); os.IsNotExist(err) {
+	ids, err := app.ListInstanceIDs(cfg)
+	if err != nil {
+		return err
+	}
+
+	if len(ids) == 0 {
 		u.Dim("  No apps installed.")
 		return nil
 	}
 
-	appDirs, err := os.ReadDir(appsDir)
-	if err != nil {
-		return fmt.Errorf("failed to read applications directory: %w", err)
-	}
+	for _, identifier := range ids {
+		u.Printf("  Syncing %s...", identifier)
 
-	found := false
-
-	for _, appDir := range appDirs {
-		if !appDir.IsDir() {
-			continue
+		if err := app.Sync(cfg, u, identifier); err != nil {
+			u.Warnf("Failed to sync %s: %v", identifier, err)
+		} else {
+			u.Successf("%s upgraded", identifier)
 		}
-
-		deployments, err := os.ReadDir(filepath.Join(appsDir, appDir.Name()))
-		if err != nil {
-			continue
-		}
-
-		for _, dep := range deployments {
-			if !dep.IsDir() {
-				continue
-			}
-
-			identifier := fmt.Sprintf("%s/%s", appDir.Name(), dep.Name())
-			u.Printf("  Syncing %s...", identifier)
-
-			if err := app.Sync(cfg, u, identifier); err != nil {
-				u.Warnf("Failed to sync %s: %v", identifier, err)
-			} else {
-				u.Successf("%s upgraded", identifier)
-			}
-
-			found = true
-		}
-	}
-
-	if !found {
-		u.Dim("  No apps installed.")
 	}
 
 	return nil
@@ -579,5 +560,17 @@ func PrintUpdateSummary(u *ui.UI, result *UpdateResult) {
 	if result.CLIUpdateAvail && result.CLIRelease != nil {
 		u.Printf("  CLI update available (v%s → %s). Run:", version.Short(), result.CLIRelease.TagName)
 		u.Print("    " + CLIUpgradeCommand(result.InstallMethod, result.CLIRelease.TagName))
+	}
+}
+
+// backfillPricingRecord saves pre-v0.15 x402 pricing (ConfigMap-only) to
+// $CFG/x402/pricing.yaml before the base sync resets the ConfigMap, so the
+// recorded-state replay can restore it.
+func backfillPricingRecord(cfg *config.Config, u *ui.UI) {
+	wrote, err := x402verifier.BackfillRecordedPricing(cfg)
+	if err != nil {
+		u.Warnf("Could not record existing x402 pricing (re-run 'obol sell pricing' after the upgrade if it was reset): %v", err)
+	} else if wrote {
+		u.Infof("Recorded existing x402 pricing to %s", x402verifier.RecordedPricingPath(cfg))
 	}
 }
