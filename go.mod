@@ -23,7 +23,8 @@ require (
 	github.com/shopspring/decimal v1.5.0
 	github.com/urfave/cli/v3 v3.14.0
 	github.com/x402-foundation/x402/go/v2 v2.28.0
-	github.com/yuin/goldmark v1.8.6
+	github.com/yuin/goldmark v1.4.13
+	github.com/yuin/goldmark/v2 v2.1.6
 	golang.org/x/crypto v0.57.0
 	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.46.0
