@@ -63,7 +63,7 @@ For monetizing any HTTP service running in the cluster:
 
 For selling GPU compute time (fine-tuning, training):
 
-- **Upstream**: Worker API (e.g., autoresearch worker at port 8080)
+- **Upstream**: Worker API (e.g., a GPU job worker at port 8080)
 - **Pricing model**: `--per-hour`
 - **Registration skills**: `devops_mlops/model_versioning`
 - **Registration domains**: `research_and_development/scientific_research`

@@ -363,9 +363,8 @@ Flow scripts (`flows/lib.sh:route_llm_via_obol_cli`) wrap this behind `OBOL_LLM_
 
 ## Standalone Inference Gateway
 
-`obol sell inference` — standalone OpenAI-compatible HTTP gateway with x402 payment gating, for bare metal / Secure Enclave.
-`--vm` runs Ollama in Apple Containerization Linux micro-VM (plus `--vm-image`, `--vm-cpus`, `--vm-memory`, `--vm-host-port`).
-Key code: `internal/inference/{gateway,container,store}.go`, `internal/enclave/{enclave,enclave_darwin,enclave_stub}.go` (Secure Enclave signing via CGo/Security.framework on Darwin, stub fallback elsewhere).
+`obol sell inference` — standalone OpenAI-compatible HTTP gateway with x402 payment gating in front of a host inference server (Ollama, vLLM, ...), for bare metal.
+Key code: `internal/inference/{gateway,store,detect}.go`. Descriptors persist under `<config>/inference/<name>/config.json`; ones written by the removed `--vm`/`--tee` modes are skipped on resume (`RemovedIsolationMode`).
 
 ## Agent Runtimes & Skills
 
@@ -521,11 +520,10 @@ Enforced by `.claude/settings.json` (Read/Edit/Write deny) + `.claude/hooks/secr
 | `internal/agent` | `agent.go` | obol-agent singleton |
 | `internal/model` | `model.go` | LiteLLM gateway configuration |
 | `internal/openclaw` | `openclaw.go`, `wallet.go`, `resolve.go` | OpenClaw setup, wallet, instance resolution |
-| `internal/inference` | `gateway.go`, `container.go`, `store.go` | Standalone x402 gateway |
-| `internal/enclave` | `enclave.go`, `enclave_darwin.go`, `enclave_stub.go` | Secure Enclave keys |
+| `internal/inference` | `gateway.go`, `store.go`, `detect.go` | Standalone x402 gateway |
 | `internal/embed` | `embed.go` | Embedded assets (skills, infrastructure, networks) |
 
-**Embedded assets**: `internal/embed/infrastructure/` (K8s templates), `internal/embed/networks/` (ethereum, aztec), `internal/embed/skills/` (25 skills).
+**Embedded assets**: `internal/embed/infrastructure/` (K8s templates), `internal/embed/networks/` (ethereum, aztec), `internal/embed/skills/` (22 skills; the autoresearch trio lives in the ObolNetwork/skills plugin).
 
 **Tests**: `cmd/obol/sell_test.go` (CLI flags), `internal/x402/*_test.go` (verifier, config, matcher, E2E), `internal/erc8004/*_test.go` (ABI, client), `internal/embed/embed_crd_test.go` (CRD+RBAC validation), `internal/openclaw/integration_test.go` (full-cluster inference), `internal/openclaw/overlay_test.go`, `internal/inference/gateway_test.go`, `internal/serviceoffercontroller/*_test.go` (controller, render).
 

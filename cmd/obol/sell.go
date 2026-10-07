@@ -31,7 +31,6 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/replay"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
-	"github.com/ObolNetwork/obol-stack/internal/tee"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/validate"
@@ -165,48 +164,8 @@ Examples:
 				Value:   "http://localhost:11434",
 			},
 			&cli.StringFlag{
-				Name:    "enclave-tag",
-				Aliases: []string{"e"},
-				Usage:   "Keychain Secure Enclave tag (default: com.obol.inference.<name>)",
-				Sources: cli.EnvVars("OBOL_ENCLAVE_TAG"),
-			},
-			&cli.BoolFlag{
-				Name:  "vm",
-				Usage: "Run Ollama inside an Apple Containerization Linux micro-VM",
-			},
-			&cli.StringFlag{
-				Name:  "vm-image",
-				Usage: "OCI image for the VM container",
-				Value: "ollama/ollama:latest",
-			},
-			&cli.IntFlag{
-				Name:  "vm-cpus",
-				Usage: "vCPUs for the VM",
-				Value: 4,
-			},
-			&cli.IntFlag{
-				Name:  "vm-memory",
-				Usage: "RAM for the VM in MiB",
-				Value: 8192,
-			},
-			&cli.IntFlag{
-				Name:  "vm-host-port",
-				Usage: "Host port mapped from the VM's Ollama port 11434",
-				Value: 11435,
-			},
-			&cli.StringFlag{
-				Name:    "tee",
-				Usage:   "Linux TEE backend: tdx, snp, nitro, or stub",
-				Sources: cli.EnvVars("OBOL_TEE_TYPE"),
-			},
-			&cli.StringFlag{
-				Name:    "model-hash",
-				Usage:   "SHA-256 of model weights for TEE attestation (required with --tee)",
-				Sources: cli.EnvVars("OBOL_MODEL_HASH"),
-			},
-			&cli.StringFlag{
 				Name:  "provenance-file",
-				Usage: "Path to JSON file with provenance metadata (e.g. autoresearch experiment results)",
+				Usage: "Path to JSON file with provenance metadata (e.g. training or benchmark results)",
 			},
 			&cli.BoolFlag{
 				Name:  "no-register",
@@ -333,19 +292,6 @@ Examples:
 				u.Warnf("%s", warn)
 			}
 
-			teeType := cmd.String("tee")
-			modelHash := cmd.String("model-hash")
-
-			if teeType != "" {
-				if _, err := tee.ParseTEEType(teeType); err != nil {
-					return err
-				}
-
-				if modelHash == "" {
-					return errors.New("--model-hash is required when --tee is set")
-				}
-			}
-
 			chainName := cmd.String("chain")
 			assetTerms, err := resolveAssetTerms(cmd, &chainName)
 			if err != nil {
@@ -393,7 +339,6 @@ Examples:
 
 			d := &inference.Deployment{
 				Name:             name,
-				EnclaveTag:       cmd.String("enclave-tag"),
 				ListenAddr:       cmd.String("listen"),
 				UpstreamURL:      upstreamFlag,
 				WalletAddress:    wallet,
@@ -402,13 +347,6 @@ Examples:
 				AssetSymbol:      assetSymbol,
 				Chain:            chainName,
 				FacilitatorURL:   cmd.String("facilitator"),
-				VMMode:           cmd.Bool("vm"),
-				VMImage:          cmd.String("vm-image"),
-				VMCPUs:           cmd.Int("vm-cpus"),
-				VMMemoryMB:       cmd.Int("vm-memory"),
-				VMHostPort:       cmd.Int("vm-host-port"),
-				TEEType:          teeType,
-				ModelHash:        modelHash,
 				ModelName:        modelFlag,
 				ServiceNamespace: "llm",
 				Registration:     persistedRegistration,
@@ -840,7 +778,7 @@ Examples:
 			},
 			&cli.StringFlag{
 				Name:  "provenance-file",
-				Usage: "Path to JSON file with provenance metadata (e.g. autoresearch experiment results)",
+				Usage: "Path to JSON file with provenance metadata (e.g. training or benchmark results)",
 			},
 			&cli.StringFlag{
 				Name:  "from-json",
@@ -3795,14 +3733,6 @@ func runInferenceGateway(u *ui.UI, d *inference.Deployment, chain x402verifier.C
 		AssetSymbol:     d.AssetSymbol,
 		Chain:           chain,
 		FacilitatorURL:  d.FacilitatorURL,
-		EnclaveTag:      d.EnclaveTag,
-		VMMode:          d.VMMode,
-		VMImage:         d.VMImage,
-		VMCPUs:          d.VMCPUs,
-		VMMemoryMB:      d.VMMemoryMB,
-		VMHostPort:      d.VMHostPort,
-		TEEType:         d.TEEType,
-		ModelHash:       d.ModelHash,
 		NoPaymentGate:   d.NoPaymentGate,
 	})
 	if err != nil {
@@ -4525,6 +4455,20 @@ func activeInferenceDeployments(ds []*inference.Deployment) []*inference.Deploym
 func resumeOneInferenceOffer(cfg *config.Config, u *ui.UI, d *inference.Deployment) error {
 	if d == nil || d.Name == "" {
 		return errors.New("nil or unnamed deployment descriptor")
+	}
+	// Offers created with the removed --vm / --tee modes are skipped rather
+	// than replayed as a plain host gateway: the operator asked for an
+	// isolated (VM) or attested (TEE) upstream, and silently serving the
+	// same offer without it would downgrade what buyers were promised.
+	if mode := d.RemovedIsolationMode(); mode != "" {
+		ns := d.ServiceNamespace
+		if ns == "" {
+			ns = "llm"
+		}
+
+		return fmt.Errorf("offer %q was created with `sell inference --%s`, which has been removed; not resuming it as a plain gateway. "+
+			"Recreate it without isolation (`obol sell inference %s --model <id> ...`) or delete it (`obol sell delete %s -n %s`)",
+			d.Name, strings.SplitN(mode, " ", 2)[0], d.Name, d.Name, ns)
 	}
 	if d.ModelName == "" {
 		return fmt.Errorf("deployment %q is missing model_name on disk — recreate the offer with `obol sell inference %s --model <id> ...`", d.Name, d.Name)

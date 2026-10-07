@@ -292,9 +292,6 @@ The stack ships with embedded Obol skills installed automatically for the defaul
 | `buy-x402` | Buy paid services: probe pricing, pre-sign payments, auto-refill, check balances |
 | `discovery` | Find agents registered on the ERC-8004 Identity Registry across chains |
 | `swap` | Treasury moves — swap USDC/ETH/OBOL on Base and mainnet via Uniswap V3 |
-| `autoresearch` | Run autonomous LLM optimization experiments and publish the best checkpoints |
-| `autoresearch-coordinator` | Coordinate distributed experiments across GPU workers, discovered via ERC-8004 and paid via x402 |
-| `autoresearch-worker` | Sell your GPU as a paid experiment worker |
 
 #### Ethereum
 

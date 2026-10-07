@@ -5,8 +5,8 @@
 #     (obolup.sh download_release fetches them by that exact name).
 #   - The checksum file is named SHA256SUMS in `sha256sum` format
 #     ("<hash>  <filename>") — obolup.sh verify_release_checksum parses it.
-#   - CGO stays disabled: release binaries use the Secure-Enclave stub on
-#     darwin, same as the previous inline CI build.
+#   - CGO stays disabled (pure-Go static binaries), same as the previous
+#     inline CI build.
 #
 # Publishing shape:
 #   - GitHub release: draft, GitHub-native generated notes. Rewrite the

@@ -35,7 +35,7 @@ into CLI commands plus `obol kubectl` evidence.
 | Live OBOL smoke, flow choice, Bob derivation, success criteria | `references/paid-flows.md` |
 | LiteLLM model setup, paid/* route, port-forward | `references/llm-routing.md` |
 | Remote QA worktrees, tmux, scoped cleanup | `references/remote-qa.md` |
-| Integration tests (BDD + tunnel + sell/buy roundtrip) | `references/integration-testing.md` |
+| Integration tests (tunnel + sell/buy roundtrip) | `references/integration-testing.md` |
 | Catch-all gotchas (ca-certs, RBAC race, port drift) | `references/troubleshooting.md` |
 
 ## First Actions on Any Task

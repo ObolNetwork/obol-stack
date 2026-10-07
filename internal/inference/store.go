@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"time"
 
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
@@ -22,17 +21,12 @@ var ErrDeploymentNotFound = errors.New("inference: deployment not found")
 var ErrDeploymentExists = errors.New("inference: deployment already exists")
 
 // Deployment is a named, persisted inference gateway configuration.
-// A long-lived entity with a stable identity (SE public key) and configurable
-// parameters.
+// Unknown JSON fields are ignored on load, so descriptors written by older
+// releases (e.g. with the removed "enclave_tag" or "vm_*" fields) still load.
 type Deployment struct {
 	// Name is the human-readable identifier for this deployment.
-	// Used as the keychain tag suffix and directory name.
+	// Used as the directory name.
 	Name string `json:"name"`
-
-	// EnclaveTag is the macOS keychain application tag for the SE key.
-	// Derived from Name if not explicitly set:
-	//   "com.obol.inference.<name>"
-	EnclaveTag string `json:"enclave_tag"`
 
 	// ListenAddr is the gateway listen address (default ":8402").
 	ListenAddr string `json:"listen_addr"`
@@ -65,40 +59,20 @@ type Deployment struct {
 	// FacilitatorURL is the x402 facilitator URL.
 	FacilitatorURL string `json:"facilitator_url"`
 
-	// VMMode enables running the upstream inference engine inside an Apple
-	// Containerization Linux micro-VM instead of pointing at an existing
-	// Ollama process.  Requires the apple/container CLI to be installed.
-	// See: https://github.com/apple/container
-	VMMode bool `json:"vm_mode,omitempty"`
-
-	// VMImage is the OCI image to run (default "ollama/ollama:latest").
-	VMImage string `json:"vm_image,omitempty"`
-
-	// VMCPUs is the number of vCPUs to allocate to the VM (default 4).
-	VMCPUs int `json:"vm_cpus,omitempty"`
-
-	// VMMemoryMB is the RAM to allocate to the VM in MiB (default 8192).
-	VMMemoryMB int `json:"vm_memory_mb,omitempty"`
-
-	// VMHostPort is the host-local port mapped to Ollama's 11434 inside the
-	// container (default 11435).  Must not conflict with other deployments.
-	VMHostPort int `json:"vm_host_port,omitempty"`
-
-	// TEEType is the Linux TEE backend ("tdx", "snp", "nitro", "stub").
-	// Empty means macOS Secure Enclave mode.
-	// Mutually exclusive with EnclaveTag-based SE mode on macOS.
-	TEEType string `json:"tee_type,omitempty"`
-
-	// ModelHash is the hex-encoded SHA-256 of the model being served.
-	// Required when TEEType is set. Bound into the TEE attestation user_data.
-	ModelHash string `json:"model_hash,omitempty"`
+	// LegacyVMMode and LegacyTEEType are read-only remnants of the removed
+	// `--vm` (Apple Containerization) and `--tee` (TDX/SNP/Nitro attestation)
+	// modes. The CLI never sets them; they are decoded only so resume can
+	// refuse to silently downgrade such an offer to a plain gateway. See
+	// RemovedIsolationMode.
+	LegacyVMMode  bool   `json:"vm_mode,omitempty"`
+	LegacyTEEType string `json:"tee_type,omitempty"`
 
 	// NoPaymentGate disables the built-in x402 payment middleware when the
 	// gateway runs behind the cluster's x402 verifier to avoid double-gating.
 	NoPaymentGate bool `json:"no_payment_gate,omitempty"`
 
 	// Provenance holds optional metadata about how the model was produced
-	// (e.g. autoresearch experiment results). Stored alongside the deployment
+	// (e.g. training or benchmark results). Stored alongside the deployment
 	// config and passed to the registration document when selling.
 	Provenance *Provenance `json:"provenance,omitempty"`
 
@@ -149,6 +123,21 @@ type Provenance struct {
 	ParamCount   string `json:"paramCount,omitempty"`   // e.g. "50000000"
 }
 
+// RemovedIsolationMode reports which removed isolation mode (if any) the
+// persisted descriptor was created with: "vm", "tee (<backend>)", or "" for a
+// plain gateway. Callers that replay descriptors use it to skip offers whose
+// operator explicitly asked for isolation the CLI can no longer provide.
+func (d *Deployment) RemovedIsolationMode() string {
+	switch {
+	case d.LegacyTEEType != "":
+		return "tee (" + d.LegacyTEEType + ")"
+	case d.LegacyVMMode:
+		return "vm"
+	}
+
+	return ""
+}
+
 // validDeploymentName matches safe deployment names: alphanumeric, hyphens,
 // underscores, 1-63 chars. No path separators, dots, or shell metacharacters.
 var validDeploymentName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,62}$`)
@@ -196,14 +185,6 @@ func (s *Store) Create(d *Deployment, force bool) error {
 	}
 
 	// Apply defaults.
-	// Auto-assign an enclave tag only on macOS where the Secure Enclave is
-	// available. On Linux, the gateway runs without transit encryption unless
-	// an explicit --tee flag is provided. The payment gate still protects the
-	// endpoint; encryption is an additional layer, not a requirement.
-	if d.EnclaveTag == "" && runtime.GOOS == "darwin" {
-		d.EnclaveTag = "com.obol.inference." + d.Name
-	}
-
 	if d.ListenAddr == "" {
 		d.ListenAddr = ":8402"
 	}
@@ -300,8 +281,6 @@ func (s *Store) List() ([]*Deployment, error) {
 }
 
 // Delete removes a deployment's config directory from disk.
-// The SE key in the keychain is NOT deleted by this method — call
-// enclave.DeleteKey(d.EnclaveTag) separately if desired.
 func (s *Store) Delete(name string) error {
 	if err := ValidateName(name); err != nil {
 		return err
