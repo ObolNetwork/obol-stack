@@ -70,7 +70,7 @@ func ConfirmRunningServicesLoss(cfg *config.Config, u *ui.UI, action string, ski
 		return true, nil
 	}
 
-	if !u.IsTTY() {
+	if !u.CanPrompt() {
 		return false, fmt.Errorf("refusing to run %q non-interactively while %d live offer(s) and %d host gateway(s) are serving traffic: pass --yes to confirm",
 			action, len(services.Offers), len(services.Gateways))
 	}

@@ -35,6 +35,9 @@ func (b *K3sBackend) Prerequisites(cfg *config.Config) error {
 
 	// Check sudo access: try non-interactive first (NOPASSWD), fall back to interactive prompt
 	if err := exec.Command("sudo", "-n", "true").Run(); err != nil {
+		if !ui.StdinPromptable() {
+			return errors.New("k3s backend requires sudo: no cached credentials and no terminal to ask for a password; run 'sudo -v' first")
+		}
 		cmd := exec.Command("sudo", "-v")
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout

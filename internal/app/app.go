@@ -502,7 +502,12 @@ func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string, force boo
 	if !force {
 		u.Blank()
 
-		if !u.Confirm("Proceed with deletion?", false) {
+		ok, err := u.ConfirmOrFlag("Proceed with deletion?", "--force")
+		if err != nil {
+			return err
+		}
+
+		if !ok {
 			u.Print("Deletion cancelled")
 			return nil
 		}

@@ -16,6 +16,28 @@ func (u *UI) isInteractive() bool {
 	return !u.IsJSON() && u.IsTTY() && os.Getenv("OBOL_NONINTERACTIVE") != "true"
 }
 
+// StdinPromptable reports whether a raw prompt on stdin (sudo -v, legacy
+// readers that don't go through UI) can be answered: stdin is a terminal and
+// OBOL_NONINTERACTIVE is unset.
+func StdinPromptable() bool {
+	return os.Getenv("OBOL_NONINTERACTIVE") != "true" && term.IsTerminal(int(os.Stdin.Fd()))
+}
+
+// CanPrompt reports whether prompts reach a person: a TTY, not JSON mode,
+// and OBOL_NONINTERACTIVE unset.
+func (u *UI) CanPrompt() bool { return u.isInteractive() }
+
+// ConfirmOrFlag asks a destructive yes/no question (default No). When no one
+// can answer it, it returns an error naming the flag that skips it, rather
+// than silently declining and exiting 0 as if the action had run.
+func (u *UI) ConfirmOrFlag(msg, flag string) (bool, error) {
+	if !u.isInteractive() {
+		return false, fmt.Errorf("confirmation required and no terminal to ask on: pass %s to proceed non-interactively", flag)
+	}
+
+	return u.Confirm(msg, false), nil
+}
+
 // Confirm asks a yes/no question, returns true for "y"/"yes".
 // In non-interactive mode, returns the default without prompting.
 func (u *UI) Confirm(msg string, defaultYes bool) bool {

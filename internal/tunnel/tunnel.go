@@ -1191,7 +1191,10 @@ func Delete(cfg *config.Config, u *ui.UI, opts DeleteOptions) (*DeleteResult, er
 	management := st.Management()
 	hostnames := st.HostnameSet()
 
-	if !opts.Force && u.IsTTY() {
+	if !opts.Force {
+		if !u.CanPrompt() {
+			return nil, errors.New("deleting the persistent tunnel needs confirmation and there is no terminal to ask on: pass --force to proceed non-interactively")
+		}
 		u.Blank()
 		u.Bold("This permanently tears down the persistent tunnel serving:")
 		for _, h := range hostnames {
