@@ -284,3 +284,12 @@ func TestSyncFlagsForVersion_ProbesBinary(t *testing.T) {
 		t.Errorf("missing helm: got %v, want nil", got)
 	}
 }
+
+func TestListAllArgs(t *testing.T) {
+	if got := strings.Join(listAllArgs(3, "ns"), " "); got != "list -n ns -a -o json" {
+		t.Fatalf("helm 3 args = %q", got)
+	}
+	if got := strings.Join(listAllArgs(4, "ns"), " "); got != "list -n ns -o json" {
+		t.Fatalf("helm 4 args = %q (Helm 4 has no -a)", got)
+	}
+}
