@@ -21,7 +21,7 @@ const LocalPathStorageClass = "local-path"
 // immutable, so a helm upgrade cannot patch a class created by an older
 // release: the update is rejected and new PVCs stay Pending forever.
 // Deleting a StorageClass does not touch existing PVs/PVCs (the provisioner
-// only reads the class when provisioning new volumes), and Helm 3's upgrade
+// only reads the class when provisioning new volumes), and helm's upgrade
 // recreates a release resource that is missing from the cluster
 // (kube.Client.Update creates on NotFound), so the caller MUST run the base
 // release sync right after this.

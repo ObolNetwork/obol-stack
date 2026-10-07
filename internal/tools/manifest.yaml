@@ -48,7 +48,7 @@ tools:
         sha256: c5850a4a6b9469b26cce47c1ab456285f58e308283dcdf72b4ddda3db49b0ec0
 
   - name: helm
-    version: "3.22.0"
+    version: "4.3.0"
     obolupVar: HELM_VERSION
     required: true
     compat: minor
@@ -58,19 +58,19 @@ tools:
       linux/amd64:
         url: https://get.helm.sh/helm-v{version}-linux-amd64.tar.gz
         member: linux-amd64/helm
-        sha256: 1e4ab49e429626cf6c6958d914248b78c9730803c2751b87627e171dc800e7bb
+        sha256: 86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb
       linux/arm64:
         url: https://get.helm.sh/helm-v{version}-linux-arm64.tar.gz
         member: linux-arm64/helm
-        sha256: f14e804dfee240f55525b667488fe9adca349e63e00c9af634c0beb1421ac310
+        sha256: 31c5794dd55c66a51e6b7d2e2ac7a114ae8b1de41ff1d9ba51748ac973b06a08
       darwin/amd64:
         url: https://get.helm.sh/helm-v{version}-darwin-amd64.tar.gz
         member: darwin-amd64/helm
-        sha256: bd1d09f316558dda23698527859600936fed1371021ce0f2272d66b2fdcfa69c
+        sha256: 347a784877e0e20eac865e8d1c36a80f6bb0861d6f29abd34defb6570ef95d92
       darwin/arm64:
         url: https://get.helm.sh/helm-v{version}-darwin-arm64.tar.gz
         member: darwin-arm64/helm
-        sha256: 4c9982a6cdeb458b60258df66b55398ca5b19293f6877faffe2909ad6f23dfe0
+        sha256: d3870437e1e95b67f8edbde964156c84a26503f560821d40c542441658934fba
 
   - name: k3d
     version: "5.9.0"

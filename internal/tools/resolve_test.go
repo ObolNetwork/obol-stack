@@ -220,3 +220,20 @@ func TestParseVersionFromRealOutputs(t *testing.T) {
 		}
 	}
 }
+
+// A Helm 3 on $PATH must not satisfy the Helm 4 pin: obol then installs its
+// managed Helm 4 and the status note says why the PATH copy was skipped.
+func TestCompatible_Helm3RejectedForHelm4Pin(t *testing.T) {
+	if Compatible(CompatMinor, "4.3.0", "3.22.0") {
+		t.Fatal("helm 3.22.0 accepted for a 4.3.0 pin")
+	}
+	if !Compatible(CompatMinor, "4.3.0", "4.4.1") {
+		t.Fatal("helm 4.4.1 rejected for a 4.3.0 pin")
+	}
+	if got, want := CompatRange(CompatMinor, "4.3.0"), "v4.x >= 4.3"; got != want {
+		t.Fatalf("CompatRange(minor) = %q, want %q", got, want)
+	}
+	if got := CompatRange(CompatAny, "4.3.0"); got != "" {
+		t.Fatalf("CompatRange(any) = %q, want empty", got)
+	}
+}

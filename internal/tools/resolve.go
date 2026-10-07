@@ -260,7 +260,7 @@ func CompareVersions(a, b string) int {
 // Compatible reports whether version `have` satisfies policy for pin `want`.
 //
 //	skew1: same major, |minor(have) - minor(want)| <= 1   (kubectl skew policy)
-//	minor: same major, minor(have) >= minor(want)          (helm 3.x, k3d 5.x, helmfile 1.x)
+//	minor: same major, minor(have) >= minor(want)          (helm 4.x, k3d 5.x, helmfile 1.x)
 //	any:   always
 func Compatible(policy, want, have string) bool {
 	if policy == CompatAny {
@@ -282,5 +282,24 @@ func Compatible(policy, want, have string) bool {
 		return h[1] >= w[1]
 	default:
 		return false
+	}
+}
+
+// CompatRange describes the versions policy accepts for pin want, for
+// user-facing notes (e.g. "v4.x >= 4.3" when a $PATH helm 3 is skipped).
+// Returns "" for CompatAny or an unparseable pin.
+func CompatRange(policy, want string) string {
+	w, ok := semver(want)
+	if !ok {
+		return ""
+	}
+
+	switch policy {
+	case CompatSkew1:
+		return fmt.Sprintf("v%d.%d (±1 minor)", w[0], w[1])
+	case CompatMinor:
+		return fmt.Sprintf("v%d.x >= %d.%d", w[0], w[0], w[1])
+	default:
+		return ""
 	}
 }

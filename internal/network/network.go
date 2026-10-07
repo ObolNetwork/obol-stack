@@ -328,9 +328,11 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	}
 
 	// Execute helmfile sync
-	cmd := helmcmd.Helmfile(helmfileBinary, cfg.ToolPath("helm"), "-f", helmfilePath, "sync",
+	syncArgs := append([]string{"-f", helmfilePath, "sync",
 		"--state-values-file", valuesPath,
-		"--state-values-set", "id="+deploymentID)
+		"--state-values-set", "id=" + deploymentID},
+		helmcmd.SyncFlagsForVersion(cfg.ToolPath("helm"))...)
+	cmd := helmcmd.Helmfile(helmfileBinary, cfg.ToolPath("helm"), syncArgs...)
 	cmd.Dir = deploymentDir
 
 	cmd.Env = append(os.Environ(),
