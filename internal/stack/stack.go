@@ -354,14 +354,13 @@ func Purge(cfg *config.Config, u *ui.UI, force, skipConfirm bool) error {
 		return nil
 	}
 
-	// When --force is set, data dir will be deleted — offer a full stack
-	// export (agents, wallets, config). Falls back to the narrower
-	// OpenClaw wallet prompt when the user declines, preserving the old
-	// behavior as a second chance for keys specifically.
-	if force {
-		if !stackbackup.PromptExportBeforePurge(cfg, u) {
-			openclaw.PromptBackupBeforePurge(cfg, u)
-		}
+	// Offer a full stack export (agents, wallets, config) in both modes:
+	// --force deletes the data dir, and even a plain purge deletes the config
+	// dir holding the keystore passwords, stranding the kept keystores. Falls
+	// back to the narrower OpenClaw wallet prompt when the user declines, as a
+	// second chance for keys specifically.
+	if !stackbackup.PromptExportBeforePurge(cfg, u, force) {
+		openclaw.PromptBackupBeforePurge(cfg, u)
 	}
 
 	stackID := getStackID(cfg)

@@ -498,7 +498,7 @@ Where it lives: host-side Hermes keystore under `$DATA_DIR/hermes-obol-agent/rem
 - Save key material, passwords, or secret file contents to memory, plans, gists, artifacts, PRs, issues, or shared session links.
 - Commit, `git add -f`, or `git stash --all` wallet files; never `git clean -x/-X` (deletes the gitignored backups in the repo root).
 - Run `obol stack purge`, `k3d cluster delete`, or `rm` on config/data dirs without first confirming every wallet has a verified backup (host keystore + password via `obol agent wallet backup`; sub-agents via `obol stack export` with the cluster RUNNING).
-- Trust `obol stack export` "cluster: included" when multiple stacks exist — a stale kubeconfig can point at a different stack's API port and export the wrong cluster. Check `manifest.json` `stackId` vs the agents captured.
+- Ignore a `Skipping cluster resources: kubeconfig reaches a different cluster` warning from `obol stack export`/`import` — with several stacks on one host a stale kubeconfig can reach another stack's k3d cluster (reused API port). Refresh the kubeconfig as the warning says and re-export; until then sub-agent wallets are NOT in the archive (`internal/stackbackup/identity.go`).
 
 Enforced by `.claude/settings.json` (Read/Edit/Write deny) + `.claude/hooks/secret_guard.py` (Bash PreToolUse: deny readers/exfil/`git clean -x`, ask on purge/delete/secret dumps). `.gitignore` covers backups/exports/keystores. Recommended local `.git/hooks/pre-commit` blocks staged keystore/password content.
 
