@@ -605,9 +605,10 @@ func agentWalletCommand(cfg *config.Config) *cli.Command {
 
 func agentRuntimeFlag(value string) cli.Flag {
 	return &cli.StringFlag{
-		Name:  "runtime",
-		Usage: "Agent runtime: hermes, openclaw, or all",
-		Value: value,
+		Name:   "runtime",
+		Usage:  "Agent runtime: hermes, openclaw (deprecated), or all",
+		Value:  value,
+		Action: warnIfOpenClawRuntime,
 	}
 }
 

@@ -1055,7 +1055,7 @@ func findOpenClawBinary(cfg *config.Config) (string, error) {
 		return candidate, nil
 	}
 
-	return "", errors.New("openclaw CLI not found.\n\nInstall with one of:\n  obolup.sh                                    (re-run bootstrap installer)\n  curl -fsSL https://openclaw.ai/install.sh | bash\n  npm install -g openclaw                      (requires Node.js 22+)")
+	return "", errors.New("openclaw CLI not found.\n\nInstall with one of:\n  OBOL_INSTALL_OPENCLAW=true obolup.sh         (re-run bootstrap installer; OpenClaw is deprecated)\n  curl -fsSL https://openclaw.ai/install.sh | bash\n  npm install -g openclaw                      (requires Node.js 22+)")
 }
 
 // portForwarder manages a background kubectl port-forward process.
@@ -2091,6 +2091,10 @@ erpc:
 extraEnv:
   - name: REMOTE_SIGNER_URL
     value: http://remote-signer:9000
+  # Embedded skills default OBOL_SKILLS_DIR to the Hermes path; OpenClaw
+  # mounts them under /data/.openclaw/skills.
+  - name: OBOL_SKILLS_DIR
+    value: /data/.openclaw/skills
 `)
 
 	if agentBaseURL != "" {

@@ -280,7 +280,7 @@ func payAgentHint(endpoint string) string {
 		"For type=agent offers use the buy-x402 skill's `pay-agent` command instead — it streams the response\n"+
 			"directly to the calling agent (memory, tool-call traces, partial results) without pushing it behind\n"+
 			"LiteLLM as a paid alias:\n"+
-			"  python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py pay-agent %s --model <model> --message '<prompt>'",
+			"  python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py pay-agent %s --model <model> --message '<prompt>'",
 		endpoint,
 	)
 }

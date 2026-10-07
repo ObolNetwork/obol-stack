@@ -260,6 +260,35 @@ func TestGenerateOverlayValues_AgentBaseURL(t *testing.T) {
 	}
 }
 
+// Embedded skills default OBOL_SKILLS_DIR to the Hermes path, so OpenClaw
+// pods must set it explicitly to where their skills are mounted.
+func TestGenerateOverlayValues_SetsOpenClawSkillsDir(t *testing.T) {
+	out := generateOverlayValues(testConfig(t), "openclaw-default.obol.stack", nil, false, nil, "https://mystack.example.com")
+
+	var values struct {
+		ExtraEnv []struct {
+			Name  string `yaml:"name"`
+			Value string `yaml:"value"`
+		} `yaml:"extraEnv"`
+	}
+	if err := yaml.Unmarshal([]byte(out), &values); err != nil {
+		t.Fatalf("overlay is not valid YAML: %v", err)
+	}
+
+	env := map[string]string{}
+	for _, e := range values.ExtraEnv {
+		env[e.Name] = e.Value
+	}
+
+	if env["OBOL_SKILLS_DIR"] != "/data/.openclaw/skills" {
+		t.Errorf("OBOL_SKILLS_DIR = %q, want /data/.openclaw/skills (env: %v)", env["OBOL_SKILLS_DIR"], env)
+	}
+
+	if env["REMOTE_SIGNER_URL"] == "" || env["AGENT_BASE_URL"] == "" {
+		t.Errorf("extraEnv lost entries: %v", env)
+	}
+}
+
 func TestGenerateOverlayValues_NoAgentBaseURL(t *testing.T) {
 	// When agentBaseURL is empty, AGENT_BASE_URL should NOT appear.
 	yaml := generateOverlayValues(testConfig(t), "openclaw-default.obol.stack", nil, false, nil, "")

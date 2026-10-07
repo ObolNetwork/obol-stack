@@ -55,7 +55,7 @@ addresses skill references before attempting swaps there.
 Environment (same defaults as `ethereum-local-wallet`):
 
 ```bash
-SKILLS="${OBOL_SKILLS_DIR:-/data/.openclaw/skills}"
+SKILLS="${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}"
 RPC="$SKILLS/ethereum-networks/scripts/rpc.sh"
 WALLET="$SKILLS/ethereum-local-wallet/scripts/signer.py"
 NET=base

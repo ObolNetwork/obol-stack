@@ -144,7 +144,7 @@ obol tunnel setup --hostname stack.example.com <connector-token>
 obol tunnel status
 ```
 
-This uses a least-privilege, single-tunnel connector token — no account-wide API key required. Need a domain? `obol domain search`, `obol domain check`, and `obol domain register` wrap Cloudflare Registrar. (Advanced: `obol tunnel setup --management local` uses a browser login instead, which needs `cloudflared` installed.)
+This uses a least-privilege, single-tunnel connector token — no account-wide API key required. Need a domain? Buy or transfer one in the Cloudflare dashboard so it is a zone in your account. (`obol domain` and the browser-login `obol tunnel login` / `tunnel setup --management local` paths are deprecated and will be removed in v0.16.)
 
 ### 3. Get discovered
 
@@ -254,7 +254,9 @@ The CLI probes the seller's 402 pricing, prompts for how many requests to pre-au
 
 ## Agents
 
-Hermes is the default runtime, deployed by the stack as `obol-agent`. [OpenClaw](https://github.com/ObolNetwork/openclaw) remains available as an optional runtime. Multiple instances run side-by-side, each in its own namespace with its own wallet.
+Hermes is the default runtime, deployed by the stack as `obol-agent`. Multiple instances run side-by-side, each in its own namespace with its own wallet.
+
+> **OpenClaw is deprecated** (v0.15) and will be removed in v0.16. `obol openclaw …` and `--runtime openclaw` still work but print a warning, and `obolup.sh` no longer installs the `openclaw` CLI unless `OBOL_INSTALL_OPENCLAW=true`. Move an OpenClaw wallet to Hermes with `obol agent wallet backup --runtime openclaw <id> --file openclaw-wallet.json`, then `obol agent wallet restore --runtime hermes --input openclaw-wallet.json --force` (this replaces the Hermes agent's wallet — back that up first).
 
 ```bash
 # Default stack-managed Hermes agent
@@ -269,17 +271,13 @@ obol agent new research --model qwen3:8b --skills ethereum-networks,buy-x402 \
 # Wallet management
 obol agent wallet address
 obol agent wallet backup
-
-# Optional OpenClaw instance
-obol agent new --runtime openclaw
-obol openclaw dashboard
 ```
 
 Use `obol agent` for Obol-managed lifecycle and auth flows. Use `obol hermes` for native Hermes CLI commands against the default instance, or pass `--agent <id>` for a non-default instance. An agent created with `agent new` can itself be put on sale with `obol sell agent <name>`.
 
 ### Skills
 
-The stack ships with embedded Obol skills installed automatically for the default Hermes agent and OpenClaw instances. Skills give agents domain-specific capabilities — from querying blockchains to buying and selling services.
+The stack ships with embedded Obol skills installed automatically for the default Hermes agent and its sub-agents. Skills give agents domain-specific capabilities — from querying blockchains to buying and selling services.
 
 #### Commerce & Agents
 
@@ -319,11 +317,8 @@ The stack ships with embedded Obol skills installed automatically for the defaul
 Manage skills at runtime:
 
 ```bash
-obol openclaw skills list                     # list installed skills
-obol openclaw skills sync                     # re-inject embedded defaults
-obol openclaw skills sync --from ./my-skills  # push custom skills from local dir
-obol openclaw skills add <package>            # add via openclaw CLI in pod
-obol openclaw skills remove <name>            # remove via openclaw CLI in pod
+obol hermes skills list                       # native Hermes skills CLI (default agent)
+obol agent sync                               # re-render the agent and re-inject embedded Obol skills
 ```
 
 Skills are delivered via host-path PVC injection — no ConfigMap size limits, works before pod readiness, and survives pod restarts.

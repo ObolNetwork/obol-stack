@@ -50,7 +50,7 @@ make the objective sharp, the skills list short, and the eval honest.
 See who already sells nearby, and at what price:
 
 ```bash
-SKILLS="${OBOL_SKILLS_DIR:-/data/.openclaw/skills}"
+SKILLS="${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}"
 
 # Who is registered on-chain?
 python3 "$SKILLS/discovery/scripts/discovery.py" search --chain base --limit 20

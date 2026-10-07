@@ -95,7 +95,7 @@ Robinhood Chain *and* expects it back next week, the honest answer is
 ## Setup common to all runbooks
 
 ```bash
-SKILLS="${OBOL_SKILLS_DIR:-/data/.openclaw/skills}"
+SKILLS="${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}"
 RPC="$SKILLS/ethereum-networks/scripts/rpc.sh"
 WALLET="$SKILLS/ethereum-local-wallet/scripts/signer.py"
 ME=$(python3 "$WALLET" accounts | grep -o '0x[0-9a-fA-F]*' | head -1)

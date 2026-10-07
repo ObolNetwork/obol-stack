@@ -273,6 +273,10 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 		}
 	}
 
+	// OpenClaw is deprecated (v0.15) — nudge users still running instances
+	// towards the Hermes wallet migration. Best effort, never fails up.
+	warnLegacyOpenClawNamespaces(cfg, u)
+
 	u.Blank()
 	u.Bold("Stack started successfully.")
 	ingressURL := LocalIngressURL(cfg)
