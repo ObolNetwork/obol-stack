@@ -222,6 +222,9 @@ func bigIntToFloat(x *big.Int) float64 {
 // economically-sensitive field so a client cannot redirect the fee, underpay,
 // or swap the authorizer. Returns nil when the signed requirement is safe to
 // settle.
+// deadlineSkewSecs tolerates clock skew between offer issuance and verify.
+const deadlineSkewSecs = 60
+
 func validateSignedUnlockRequirement(signed, expected x402types.PaymentRequirements, uc AuthCaptureUnlockConfig, asset AssetInfo, now int64) error {
 	if signed.Scheme != "auth-capture" {
 		return fmt.Errorf("scheme %q, want auth-capture", signed.Scheme)
@@ -260,12 +263,26 @@ func validateSignedUnlockRequirement(signed, expected x402types.PaymentRequireme
 	if exStr(ex, "assetTransferMethod") != asset.TransferMethod {
 		return fmt.Errorf("assetTransferMethod %q, want %q", exStr(ex, "assetTransferMethod"), asset.TransferMethod)
 	}
+	// The EIP-712 domain decides which token contract the signature binds to.
+	if exStr(ex, "name") != asset.EIP712Name || exStr(ex, "version") != asset.EIP712Version {
+		return fmt.Errorf("EIP-712 domain %q/%q, want %q/%q",
+			exStr(ex, "name"), exStr(ex, "version"), asset.EIP712Name, asset.EIP712Version)
+	}
 	cd, rd := exI64(ex, "captureDeadline"), exI64(ex, "refundDeadline")
 	if cd <= now+6 {
 		return fmt.Errorf("captureDeadline %d not > now+6 (%d)", cd, now+6)
 	}
+	// Deadlines are issued as offer-time + configured window, so a signed one
+	// can't legitimately exceed now + window (plus clock skew). Without this a
+	// client could hold escrowed funds hostage far longer than configured.
+	if maxCD := now + int64(uc.CaptureDeadlineSecs) + deadlineSkewSecs; cd > maxCD {
+		return fmt.Errorf("captureDeadline %d beyond now+%ds (%d)", cd, uc.CaptureDeadlineSecs, maxCD)
+	}
 	if rd < cd {
 		return fmt.Errorf("refundDeadline %d < captureDeadline %d", rd, cd)
+	}
+	if maxRD := now + int64(uc.RefundDeadlineSecs) + deadlineSkewSecs; rd > maxRD {
+		return fmt.Errorf("refundDeadline %d beyond now+%ds (%d)", rd, uc.RefundDeadlineSecs, maxRD)
 	}
 	return nil
 }
