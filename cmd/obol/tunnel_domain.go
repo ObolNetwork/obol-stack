@@ -42,10 +42,10 @@ func tunnelCommand(cfg *config.Config) *cli.Command {
 					"Cloudflare dashboard, route its Public Hostname to\n" +
 					"http://traefik.traefik.svc.cluster.local:80, then paste the token here — you can\n" +
 					"paste the whole 'cloudflared tunnel run --token …' line and Obol extracts it.\n\n" +
-					"No domain yet? Register one from the CLI with 'obol domain', or buy/transfer one\n" +
-					"in the Cloudflare dashboard first — either way it must be a zone in your account.\n\n" +
-					"Advanced: 'obol tunnel setup --management local --hostname <host>' uses a\n" +
-					"browser login on this machine instead (needs cloudflared installed).",
+					"No domain yet? Buy or transfer one in the Cloudflare dashboard first — it must\n" +
+					"be a zone in your account.\n\n" +
+					"Deprecated (removed in " + deprecationRemovalVersion + "): 'obol tunnel setup --management local --hostname <host>'\n" +
+					"uses a browser login on this machine instead (needs cloudflared installed).",
 				Flags: tunnelSetupFlags(),
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					u := getUI(cmd)
@@ -53,6 +53,7 @@ func tunnelCommand(cfg *config.Config) *cli.Command {
 					if err != nil {
 						return err
 					}
+					warnIfLocalTunnelManagement(cmd, opts.Management)
 					result, err := tunnel.Setup(cfg, u, opts)
 					if err != nil {
 						return err
@@ -69,7 +70,8 @@ func tunnelCommand(cfg *config.Config) *cli.Command {
 			{
 				Name:   "login",
 				Hidden: true,
-				Usage:  "Advanced: create a locally-managed tunnel via browser login (no token)",
+				Usage:  "Advanced: create a locally-managed tunnel via browser login (no token)" + deprecatedUsageSuffix,
+				Before: deprecatedBefore(deprecationTunnelLocal),
 				Flags: []cli.Flag{
 					&cli.StringFlag{
 						Name:     "hostname",
@@ -298,9 +300,12 @@ func printHostnameList(u *ui.UI, result *tunnel.HostnameListResult) {
 
 func domainCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
-		Name:  "domain",
-		Usage: "Search, check, and register Cloudflare Registrar domains (optional)",
-		Description: "Buying a domain through Obol is entirely optional — it's a convenience wrapper\n" +
+		Name:   "domain",
+		Usage:  "Search, check, and register Cloudflare Registrar domains" + deprecatedUsageSuffix,
+		Before: deprecatedBefore(deprecationDomain),
+		Description: "Deprecated: 'obol domain' will be removed in " + deprecationRemovalVersion + ". Register or transfer\n" +
+			"your domain in the Cloudflare dashboard instead, then run 'obol tunnel setup'.\n\n" +
+			"Buying a domain through Obol is entirely optional — it's a convenience wrapper\n" +
 			"around Cloudflare Registrar so you can get a domain without leaving the CLI.\n" +
 			"If you'd rather, buy or transfer a domain in the Cloudflare dashboard before\n" +
 			"setting up a tunnel; anything that lands as a zone in your account works.\n\n" +
@@ -468,7 +473,7 @@ func tunnelSetupFlags() []cli.Flag {
 	return []cli.Flag{
 		&cli.StringFlag{Name: "hostname", Aliases: []string{"H"}, Usage: "Public hostname to route (e.g. stack.example.com)"},
 		&cli.StringFlag{Name: "token", Aliases: []string{"t"}, Usage: "Cloudflare tunnel connector token (or pass it as a positional argument)"},
-		&cli.StringFlag{Name: "management", Usage: "Tunnel management: connector (default) or local (browser fallback)", Value: "connector"},
+		&cli.StringFlag{Name: "management", Usage: "Tunnel management: connector (default) or local (deprecated browser fallback)", Value: "connector"},
 		tunnelTransportProtocolFlag(),
 		&cli.BoolFlag{Name: "overwrite-dns", Usage: "Local-managed only: replace any existing A/AAAA/CNAME at the hostname"},
 		&cli.StringFlag{Name: "from-json", Usage: "Read setup options from JSON file (or - for stdin)"},

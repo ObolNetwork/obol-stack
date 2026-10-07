@@ -36,7 +36,7 @@ right before money or authority leaves the wallet:
 
 ```bash
 # What am I about to sign? (ERC-20 selectors decode fully offline)
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/inspect/scripts/decode.py calldata \
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/inspect/scripts/decode.py calldata \
     0xa9059cbb000000000000000000000000ab5801a7d398351b8be11c439e05c5b3259aec9b00000000000000000000000000000000000000000000000000000000000f4240
 # selector: 0xa9059cbb
 # function: transfer(address,uint256)
@@ -44,12 +44,12 @@ python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/inspect/scripts/decode.py cal
 #   uint256: 1000000 [1e6]
 
 # Who am I about to pay? Composite due-diligence on the payTo address.
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/inspect/scripts/contract.py check \
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/inspect/scripts/contract.py check \
     0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 --network mainnet
 # -> code / proxy / verified source / labels / ENS+Basename sections
 
 # What did this transaction do?
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/inspect/scripts/decode.py tx \
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/inspect/scripts/decode.py tx \
     0xa2b4273e... --network mainnet
 ```
 

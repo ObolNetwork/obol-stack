@@ -178,7 +178,7 @@ func resolveX402scanOrigin(cfg *config.Config, explicit string) (string, error) 
 	case host == "obol.stack" || host == "localhost" || host == "127.0.0.1":
 		return "", errors.New("no public hostname configured — x402scan must be able to reach the storefront from the internet.\n\n  Set up a permanent tunnel hostname first: obol tunnel setup\n  Then re-run, or pass --origin https://<your-hostname>")
 	case strings.HasSuffix(host, ".trycloudflare.com"):
-		return "", errors.New("the current tunnel is an ephemeral quick-tunnel (*.trycloudflare.com), which x402scan rejects.\n\n  Register a permanent hostname on your own domain (obol tunnel setup, see also obol domain), then re-run")
+		return "", errors.New("the current tunnel is an ephemeral quick-tunnel (*.trycloudflare.com), which x402scan rejects.\n\n  Register a permanent hostname on your own domain (obol tunnel setup), then re-run")
 	}
 	if parsed.Scheme != "https" {
 		return "", fmt.Errorf("origin %s must be https:// — x402scan only indexes TLS origins", origin)

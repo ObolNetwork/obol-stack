@@ -961,7 +961,7 @@ def _ensure_permit2_allowance(signer_address, asset, chain, transfer_method, ext
     print(f"  Chain:    {chain}", file=sys.stderr)
     print("\nFix this with one transaction (one-time per token+wallet, ~46k gas):\n", file=sys.stderr)
     print(
-        "  python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/ethereum-local-wallet/scripts/signer.py send-tx \\\n"
+        "  python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/ethereum-local-wallet/scripts/signer.py send-tx \\\n"
         f"    --from {signer_address} --to {asset} \\\n"
         f"    --data {approve_data} --network {chain}",
         file=sys.stderr,
@@ -2895,7 +2895,7 @@ def _print_paid_request_failure(status, body, settle_header, signer_address, ass
         print("\nHint: this looks like a missing Permit2 allowance.", file=sys.stderr)
         print("Approve once (one-time per token+wallet, ~46k gas):\n", file=sys.stderr)
         print(
-            "  python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/ethereum-local-wallet/scripts/signer.py send-tx \\\n"
+            "  python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/ethereum-local-wallet/scripts/signer.py send-tx \\\n"
             f"    --from {signer_address} --to {asset} \\\n"
             f"    --data {approve_data} --network {chain}",
             file=sys.stderr,

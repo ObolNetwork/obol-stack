@@ -1234,7 +1234,7 @@ func TestIntegration_Monetize_ListEmpty(t *testing.T) {
 	requireAgent(t, cfg)
 
 	// Run monetize.py list inside the agent pod — should not error
-	out := execInAgent(t, cfg, "python3", "/data/.openclaw/skills/monetize/scripts/monetize.py", "list")
+	out := execInAgent(t, cfg, "python3", "/data/.openclaw/skills/sell/scripts/monetize.py", "list")
 	// Should produce output (even if empty table) without crashing
 	t.Logf("monetize list output:\n%s", out)
 }
@@ -1244,7 +1244,7 @@ func TestIntegration_Monetize_ProcessAllEmpty(t *testing.T) {
 	requireAgent(t, cfg)
 
 	// When no ServiceOffers exist, process --all should return HEARTBEAT_OK
-	out := execInAgent(t, cfg, "python3", "/data/.openclaw/skills/monetize/scripts/monetize.py", "process", "--all")
+	out := execInAgent(t, cfg, "python3", "/data/.openclaw/skills/sell/scripts/monetize.py", "process", "--all")
 	if !strings.Contains(out, "HEARTBEAT_OK") {
 		t.Errorf("expected HEARTBEAT_OK in output, got:\n%s", out)
 	}
@@ -1282,7 +1282,7 @@ spec:
 
 	// Run process for this specific offer
 	out, _ := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 	t.Logf("process output:\n%s", out)
 
@@ -1322,12 +1322,12 @@ func TestIntegration_Monetize_Idempotent(t *testing.T) {
 
 	// First process run
 	out1, _ := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 
 	// Second process run (should be idempotent)
 	out2, _ := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 
 	// Both runs should complete without error
@@ -1549,7 +1549,7 @@ func TestIntegration_Route_FullReconcile(t *testing.T) {
 
 	// Trigger reconciliation
 	out, _ := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 	t.Logf("process output:\n%s", out)
 
@@ -1580,7 +1580,7 @@ func TestIntegration_Route_MiddlewareCreated(t *testing.T) {
 
 	// Trigger reconciliation
 	execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 
 	// Check for ForwardAuth Middleware
@@ -1610,7 +1610,7 @@ func TestIntegration_Route_HTTPRouteCreated(t *testing.T) {
 
 	// Trigger reconciliation
 	execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 
 	// Check for HTTPRoute
@@ -1640,7 +1640,7 @@ func TestIntegration_Route_TrafficRoutes(t *testing.T) {
 
 	// Trigger reconciliation
 	processOut, processErr := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 	t.Logf("monetize.py output:\n%s", processOut)
 	if processErr != nil {
@@ -1704,7 +1704,7 @@ func TestIntegration_Route_DeleteCascades(t *testing.T) {
 
 	// Trigger reconciliation to create Middleware + HTTPRoute
 	execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 
 	// Delete the ServiceOffer
@@ -1817,7 +1817,7 @@ func TestIntegration_PaymentGate_402WithoutPayment(t *testing.T) {
 
 	// Trigger reconciliation to create Middleware + HTTPRoute.
 	execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 
 	// Add a pricing route for this service path.
@@ -1860,7 +1860,7 @@ func TestIntegration_PaymentGate_RequirementsFormat(t *testing.T) {
 	t.Cleanup(func() { deleteServiceOffer(t, cfg, name, ns) })
 
 	execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 
 	addPricingRoute(t, cfg, fmt.Sprintf("/services/%s/*", name), "0.001",
@@ -1926,7 +1926,7 @@ func TestIntegration_PaymentGate_200WithPayment(t *testing.T) {
 	t.Cleanup(func() { deleteServiceOffer(t, cfg, name, ns) })
 
 	execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 
 	addPricingRoute(t, cfg, fmt.Sprintf("/services/%s/*", name), "0.001",
@@ -2015,7 +2015,7 @@ func TestIntegration_E2E_OfferLifecycle(t *testing.T) {
 
 	// Step 3: Trigger reconciliation via monetize.py.
 	execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 
 	// Step 4: Verify offer-status shows conditions.
@@ -2323,7 +2323,7 @@ func TestIntegration_Tunnel_OllamaMonetized(t *testing.T) {
 
 	// Step 2: Trigger reconciliation (monetize.py process).
 	out, _ := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 	t.Logf("reconciliation output:\n%s", out)
 
@@ -2462,7 +2462,7 @@ func TestIntegration_Tunnel_AgentAutonomousMonetize(t *testing.T) {
 
 	// Step 1: Agent creates the ServiceOffer via monetize.py create (x402-aligned flags).
 	out := execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"create", name,
 		"--model", "qwen2.5:3b",
 		"--upstream", "ollama",
@@ -2477,19 +2477,19 @@ func TestIntegration_Tunnel_AgentAutonomousMonetize(t *testing.T) {
 	t.Cleanup(func() {
 		// Delete via the skill.
 		execInAgentErr(cfg, "python3",
-			"/data/.openclaw/skills/monetize/scripts/monetize.py",
+			"/data/.openclaw/skills/sell/scripts/monetize.py",
 			"delete", name, "--namespace", ns)
 	})
 
 	// Step 2: Agent reconciles the offer.
 	out, _ = execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 	t.Logf("process output:\n%s", out)
 
 	// Step 3: Agent checks status.
 	statusOut := execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"status", name, "--namespace", ns)
 	t.Logf("status output:\n%s", statusOut)
 
@@ -2509,7 +2509,7 @@ func TestIntegration_Tunnel_AgentAutonomousMonetize(t *testing.T) {
 
 	// Step 6: Agent lists offers — should see the one we created.
 	listOut := execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"list")
 	if !strings.Contains(listOut, name) {
 		t.Errorf("agent list does not contain %q:\n%s", name, listOut)
@@ -2517,7 +2517,7 @@ func TestIntegration_Tunnel_AgentAutonomousMonetize(t *testing.T) {
 
 	// Step 7: Agent deletes the offer.
 	delOut := execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"delete", name, "--namespace", ns)
 	t.Logf("delete output:\n%s", delOut)
 
@@ -2573,7 +2573,7 @@ func TestIntegration_Fork_FullPaymentFlow(t *testing.T) {
 
 	// Agent reconciles the offer.
 	out, _ := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 	t.Logf("reconciliation output:\n%s", out)
 
@@ -2650,7 +2650,7 @@ func TestIntegration_Fork_FullPaymentFlow(t *testing.T) {
 
 	// Delete via the agent skill.
 	delOut := execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"delete", name, "--namespace", ns)
 	t.Logf("delete output:\n%s", delOut)
 
@@ -2708,7 +2708,7 @@ spec:
 
 	// Step 2: Agent tries to reconcile → should fail at UpstreamHealthy.
 	out1, _ := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 	t.Logf("first process (expected failure):\n%s", out1)
 
@@ -2736,7 +2736,7 @@ spec:
 		"--type=merge", "--subresource=status", "-p", statusPatch)
 
 	out2, _ := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 	t.Logf("second process (after fix):\n%s", out2)
 
@@ -2810,7 +2810,7 @@ func TestIntegration_Fork_RealFacilitatorPayment(t *testing.T) {
 
 	// ── Agent reconciles the offer ─────────────────────────────────────
 	out, _ := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 	t.Logf("reconciliation output:\n%s", out)
 
@@ -2887,7 +2887,7 @@ func TestIntegration_Fork_RealFacilitatorPayment(t *testing.T) {
 
 	// ── Cleanup: delete ServiceOffer ───────────────────────────────────
 	delOut := execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"delete", name, "--namespace", ns)
 	t.Logf("delete output:\n%s", delOut)
 
@@ -2958,7 +2958,7 @@ func TestIntegration_Tunnel_RealFacilitatorOllama(t *testing.T) {
 
 	// ── Agent reconciles ───────────────────────────────────────────────
 	out, _ := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", name, "--namespace", ns)
 	t.Logf("reconciliation output:\n%s", out)
 
@@ -3060,7 +3060,7 @@ func TestIntegration_Tunnel_RealFacilitatorOllama(t *testing.T) {
 
 	// ── Cleanup ────────────────────────────────────────────────────────
 	delOut := execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"delete", name, "--namespace", ns)
 	t.Logf("delete output:\n%s", delOut)
 
@@ -3145,7 +3145,7 @@ func TestIntegration_AgentCoordination_FullReconcileOrder(t *testing.T) {
 	// ────────────────────────────────────────────────────────────────────
 	t.Log("Step 1: Triggering agent reconciliation (process --all)")
 	processOut, _ := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", "--all")
 	t.Logf("process --all output:\n%s", processOut)
 
@@ -3301,7 +3301,7 @@ func TestIntegration_AgentCoordination_FullReconcileOrder(t *testing.T) {
 	// ────────────────────────────────────────────────────────────────────
 	t.Log("Step 6: Verifying idempotency (second process --all)")
 	processOut2, _ := execInAgentErr(cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"process", "--all")
 
 	// Second run should see everything as Ready and not re-process.
@@ -3347,7 +3347,7 @@ func TestIntegration_AgentCoordination_FullReconcileOrder(t *testing.T) {
 	// ────────────────────────────────────────────────────────────────────
 	t.Log("Step 8: Agent deletes offer (route resources + CR)")
 	delOut := execInAgent(t, cfg, "python3",
-		"/data/.openclaw/skills/monetize/scripts/monetize.py",
+		"/data/.openclaw/skills/sell/scripts/monetize.py",
 		"delete", name, "--namespace", ns)
 	t.Logf("delete output:\n%s", delOut)
 

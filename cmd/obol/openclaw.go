@@ -14,7 +14,9 @@ import (
 func openclawCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "openclaw",
-		Usage: "Manage OpenClaw AI agent instances",
+		Usage: "Manage OpenClaw AI agent instances" + deprecatedUsageSuffix,
+		// OpenClaw is deprecated in v0.15 and removed in v0.16.
+		Before: deprecatedBefore(deprecationOpenClaw),
 		Commands: []*cli.Command{
 			{
 				Name:  "onboard",

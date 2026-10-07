@@ -70,7 +70,15 @@ readonly HELM_DIFF_VERSION="3.15.15"
 readonly OLLAMA_VERSION="0.35.1"
 # Must match internal/openclaw/OPENCLAW_VERSION (without "v" prefix).
 # Tested by TestOpenClawVersionConsistency.
+# OpenClaw is deprecated (removed in v0.16): its CLI is only installed when
+# OBOL_INSTALL_OPENCLAW=true.
 readonly OPENCLAW_VERSION="2026.4.21"
+
+# openclaw_install_requested reports whether the deprecated OpenClaw CLI
+# should be installed (opt-in for v0.15; dropped entirely in v0.16).
+openclaw_install_requested() {
+	[[ "${OBOL_INSTALL_OPENCLAW:-false}" == "true" ]]
+}
 
 # Repository URL for building from source
 readonly OBOL_REPO_URL="git@github.com:ObolNetwork/obol-stack.git"
@@ -124,11 +132,15 @@ command_exists() {
 check_prerequisites() {
 	local missing=()
 
-	# Node.js 22+ / npm — preferred for openclaw CLI install.
-	# If missing, install_openclaw() will fall back to Docker image extraction.
-	# Only block here if neither npm NOR docker is available.
-	local need_npm=true
-	if command_exists openclaw; then
+	# Node.js 22+ / npm — preferred for the (deprecated, opt-in) openclaw CLI
+	# install. If missing, install_openclaw() will fall back to Docker image
+	# extraction. Only block here if OBOL_INSTALL_OPENCLAW=true and neither
+	# npm NOR docker is available.
+	local need_npm=false
+	if openclaw_install_requested; then
+		need_npm=true
+	fi
+	if [[ "$need_npm" == "true" ]] && command_exists openclaw; then
 		local oc_version
 		oc_version=$(openclaw --version 2>/dev/null | tr -d '[:space:]' || echo "")
 		if [[ -n "$oc_version" ]] && version_ge "$oc_version" "$OPENCLAW_VERSION"; then
@@ -1671,7 +1683,10 @@ install_dependencies() {
 	install_helmfile || log_warn "helmfile installation failed (continuing...)"
 	install_k9s || log_warn "k9s installation failed (continuing...)"
 	install_helm_diff || log_warn "helm-diff plugin installation failed (continuing...)"
-	install_openclaw || log_warn "openclaw CLI installation failed (continuing...)"
+	if openclaw_install_requested; then
+		log_warn "OpenClaw is deprecated and will be removed in v0.16 (installing its CLI because OBOL_INSTALL_OPENCLAW=true)"
+		install_openclaw || log_warn "openclaw CLI installation failed (continuing...)"
+	fi
 	install_ollama || log_warn "Ollama installation skipped (continuing...)"
 
 	echo ""

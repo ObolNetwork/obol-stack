@@ -195,7 +195,7 @@ func agentBlock(in Input) Block {
 				in.URL, GuideRef(in.SiteURL), ChatCompletionsURL(in.URL), task(in),
 			),
 			PromptCLI: fmt.Sprintf(
-				"python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py go %s --message %q",
+				"python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py go %s --message %q",
 				in.URL, task(in),
 			),
 			PromptAgentCash: fmt.Sprintf(
@@ -315,7 +315,7 @@ func httpBlock(in Input) Block {
 				in.URL, GuideRef(in.SiteURL), priceClause, netClause,
 			),
 			PromptCLI: fmt.Sprintf(
-				"python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py go %s",
+				"python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py go %s",
 				in.URL,
 			),
 			PromptAgentCash: fmt.Sprintf(

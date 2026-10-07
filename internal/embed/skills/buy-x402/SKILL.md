@@ -12,10 +12,10 @@ Purchase access to remote x402-gated services.
 
 ```bash
 # Agent or chat-inference offer — one paid round of work, streamed:
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py go <url> --message 'your task'
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py go <url> --message 'your task'
 
 # Plain HTTP offer — one paid request:
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py go <url>
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py go <url>
 ```
 
 `go` never creates persistent state; for a pre-authorized inference pool it points you at `buy`. The expert flows underneath, picked by usage shape:
@@ -59,7 +59,7 @@ Permit2-based x402 payments (e.g. OBOL, USDC on chains where the seller selects 
 `buy.py` now pre-flights this check and aborts with the exact remediation command. If you see the error, run:
 
 ```bash
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/ethereum-local-wallet/scripts/signer.py send-tx \
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/ethereum-local-wallet/scripts/signer.py send-tx \
     --from <agent-wallet> --to <token-address> \
     --data <approve-calldata-printed-by-buy.py> --network <chain>
 ```
@@ -159,42 +159,42 @@ Permit2 approval above).
 ```bash
 # One command for any one-off purchase: probe, classify, pay.
 # Agent / chat offers stream the paid response; HTTP offers do a single paid request.
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py go https://seller.example.com/services/demo-quant --message 'summarize the latest research on staking'
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py go https://seller.example.com/services/demo-hello
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py go https://seller.example.com/services/demo-quant --message 'summarize the latest research on staking'
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py go https://seller.example.com/services/demo-hello
 
 # Probe an inference endpoint to see its pricing (default --type inference)
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions
 
 # Probe an HTTP service (no /v1/chat/completions append, GET by default)
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py probe https://seller.example.com/services/demo-hello --type http
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py probe https://seller.example.com/services/demo-hello --type http
 
 # One-shot paid HTTP request (sign 1 auth, attach X-PAYMENT, send GET, print response)
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py pay https://seller.example.com/services/demo-hello
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py pay https://seller.example.com/services/demo-hello
 
 # One-shot paid POST with a JSON body
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py pay https://seller.example.com/services/echo --method POST --data '{"hello":"world"}'
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py pay https://seller.example.com/services/echo --method POST --data '{"hello":"world"}'
 
 # One-shot paid STREAMING agent call (SSE events flushed to stdout as they arrive)
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py pay-agent \
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py pay-agent \
     https://seller.example.com/services/demo-quant \
     --message 'summarize the latest research on staking'
 
 # Pay-agent with a full OpenAI-compatible body (stream:true is forced on)
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py pay-agent \
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py pay-agent \
     https://seller.example.com/services/demo-quant \
     --model qwen3.5:9b \
     --data '{"messages":[{"role":"user","content":"hello"}]}'
 
 # Probe with the concrete remote model when the seller validates model IDs
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions --model qwen3.5:35b
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py probe https://seller.example.com/services/my-model/v1/chat/completions --model qwen3.5:35b
 
 # Buy access (probes, pre-signs auths, creates/updates a PurchaseRequest)
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py buy remote-qwen \
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py buy remote-qwen \
   --endpoint https://seller.example.com/services/my-model \
   --model qwen3.5:35b
 
 # Buy with agent-managed auto-refill intent
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py buy remote-qwen \
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py buy remote-qwen \
   --endpoint https://seller.example.com/services/my-model \
   --model qwen3.5:35b \
   --count 100 \
@@ -203,25 +203,25 @@ python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py buy r
   --refill-count 50
 
 # Manual top-up on the same purchase name
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py buy remote-qwen \
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py buy remote-qwen \
   --endpoint https://seller.example.com/services/my-model \
   --model qwen3.5:35b \
   --count 25
 
 # List purchased providers + remaining auths
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py list
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py list
 
 # Check sidecar health + remaining auths
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py status remote-qwen
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py status remote-qwen
 
 # Reconcile auto-refill policies (heartbeat / cron entrypoint)
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py process --all
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py process --all
 
 # Check your USDC balance
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py balance
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py balance
 
 # Compatibility alias for the same reconcile loop
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py maintain
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py maintain
 ```
 
 ## Commands
@@ -251,7 +251,7 @@ of the usual `402`.
 ```bash
 # Print a ready-to-use Authorization header (signed via the remote-signer;
 # single-use, valid ~10 minutes):
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py siwx \
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py siwx \
   https://seller.example/services/audit/reports/42
 
 # Or perform the authenticated request directly:
@@ -304,7 +304,7 @@ Use the absolute script path inside the pod. Do not rely on `cd ... && ...`
 shell wrapping.
 
 ```bash
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py process --all
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py process --all
 ```
 
 Tell the agent to schedule that as its maintenance loop only when at least one
@@ -319,7 +319,7 @@ CLI example:
 
 ```bash
 hermes cron create "every 5m" \
-  "Reconcile existing x402 PurchaseRequests. Use the buy-x402 skill and run python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py process --all. Report only errors or state changes." \
+  "Reconcile existing x402 PurchaseRequests. Use the buy-x402 skill and run python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py process --all. Report only errors or state changes." \
   --name "x402 buy reconcile" \
   --skill buy-x402
 ```
@@ -330,7 +330,7 @@ Python API example:
 from cron.jobs import create_job
 
 create_job(
-    prompt="Reconcile existing x402 PurchaseRequests. Use the buy-x402 skill and run python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py process --all. Report only errors or state changes.",
+    prompt="Reconcile existing x402 PurchaseRequests. Use the buy-x402 skill and run python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py process --all. Report only errors or state changes.",
     schedule="every 5m",
     name="x402 buy reconcile",
     skills=["buy-x402"],
@@ -485,10 +485,10 @@ This is the complete journey from discovering a seller to using purchased infere
 
 ```bash
 # Search the ERC-8004 registry for recently registered agents
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/discovery/scripts/discovery.py search --chain base-sepolia
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/discovery/scripts/discovery.py search --chain base-sepolia
 
 # Fetch a candidate's registration JSON to check x402Support and services
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/discovery/scripts/discovery.py uri <agent-id> --chain base-sepolia
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/discovery/scripts/discovery.py uri <agent-id> --chain base-sepolia
 ```
 
 Look for agents with `"x402Support": true` and a `"web"` service endpoint.
@@ -497,7 +497,7 @@ Look for agents with `"x402Support": true` and a `"web"` service endpoint.
 
 ```bash
 # Send an unauthenticated request to get 402 pricing
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py probe <service-endpoint> --model <model-name>
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py probe <service-endpoint> --model <model-name>
 ```
 
 This returns the seller's pricing: `payTo`, `network`, `price`, and `asset` (USDC contract).
@@ -506,10 +506,10 @@ This returns the seller's pricing: `payTo`, `network`, `price`, and `asset` (USD
 
 ```bash
 # Check USDC balance
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py balance --chain base-sepolia
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py balance --chain base-sepolia
 
 # Buy access (pre-sign auths, create PurchaseRequest, wait for controller reconciliation)
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py buy <friendly-name> \
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py buy <friendly-name> \
   --endpoint <service-endpoint> \
   --model <model-name> \
   --count 20
@@ -532,13 +532,13 @@ The `paid/` prefix routes through the x402-buyer sidecar, which transparently at
 
 ```bash
 # Check remaining auths
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py list
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py list
 
 # Check one purchased upstream in detail
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py status <friendly-name>
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py status <friendly-name>
 
 # Reconcile auto-refill intent (what the heartbeat should run)
-python3 ${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py process --all
+python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py process --all
 ```
 
 Manual `refill` and `remove` commands are still not available in the current
