@@ -339,6 +339,16 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 // incoming path to a ServiceOffer-derived route rule, verifies the payment,
 // proxies to the real upstream, and settles only after the upstream succeeds.
 func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
+	// HandleProxy streams the request body to the upstream while streaming
+	// the response back. Without full duplex, net/http's HTTP/1.x server
+	// discards and closes the unread request body as soon as the response
+	// header is written (e.g. the first SSE flush), so a ReverseProxy still
+	// copying that body upstream gets a read error, its transport tears down
+	// the upstream connection, and the client sees a truncated stream.
+	// Unsupported writers (HTTP/2 is natively full duplex) return an error
+	// that is safe to ignore.
+	_ = http.NewResponseController(w).EnableFullDuplex()
+
 	cfg := v.config.Load()
 
 	// The identity headers are verifier-set facts; client-supplied values

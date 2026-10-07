@@ -690,13 +690,20 @@ func TestWriteUpstreamProxyError_Generic(t *testing.T) {
 // httptest.NewRecorder buffers writes, so it cannot catch a regression where
 // the settlementInterceptor swallows flushes or where httputil.ReverseProxy
 // fails to detect text/event-stream. We therefore stand up a real httptest
-// server, time when each SSE chunk reaches the client, and assert that
-// chunks arrive with the same pacing the upstream emitted them (which can
-// only happen if every layer in the chain flushes per write).
+// server and run the stream in lockstep: the upstream withholds chunk N+1
+// until the client has received chunk N. That can only complete if every
+// layer in the chain flushes per write — a buffering layer deadlocks the
+// handshake and trips streamStallTimeout — with no wall-clock assertions.
+//
+// The upstream also answers without reading the request body, which pins
+// HandleProxy's full-duplex mode: without it net/http discards the unread
+// body at the first SSE flush, the proxy's upstream connection is torn down
+// mid-body, and the client sees `unexpected EOF`.
 func TestVerifier_HandleProxy_StreamsSSEChunks(t *testing.T) {
 	fac := newMockFacilitator(t, mockFacilitatorOpts{})
 
-	const chunkGap = 80 * time.Millisecond
+	const streamStallTimeout = 10 * time.Second
+	delivered := make(chan struct{}, 4)
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -718,9 +725,16 @@ func TestVerifier_HandleProxy_StreamsSSEChunks(t *testing.T) {
 		}
 		for i, c := range chunks {
 			if i > 0 {
-				// Pace the chunks so we can assert the client sees them
-				// arrive progressively rather than all at once.
-				time.Sleep(chunkGap)
+				// Hold the next chunk until the client has the previous
+				// one: proves chunks arrive progressively, not all at once.
+				select {
+				case <-delivered:
+				case <-r.Context().Done():
+					return
+				case <-time.After(streamStallTimeout):
+					t.Errorf("chunk %d never reached the client: SSE stream is being buffered", i-1)
+					return
+				}
 			}
 			if _, err := w.Write([]byte(c)); err != nil {
 				return
@@ -750,8 +764,7 @@ func TestVerifier_HandleProxy_StreamsSSEChunks(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
 
-	client := &http.Client{Timeout: 15 * time.Second}
-	start := time.Now()
+	client := &http.Client{Timeout: 3 * streamStallTimeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		t.Fatalf("client.Do: %v", err)
@@ -765,19 +778,15 @@ func TestVerifier_HandleProxy_StreamsSSEChunks(t *testing.T) {
 		t.Fatalf("Content-Type = %q, want text/event-stream*", ct)
 	}
 
-	// Read each SSE event ("data: ...\n\n") and capture the elapsed time
-	// since the request started. If anything in the chain buffers the
-	// response, all four events will land in a single tight cluster at
-	// the end instead of being spread across the upstream's pacing.
+	// Read each SSE event ("data: ...\n\n") and release the upstream's
+	// next chunk once it is fully received.
 	reader := bufio.NewReader(resp.Body)
 	var got []string
-	var arrivals []time.Duration
 	for i := 0; i < 4; i++ {
 		dataLine, err := reader.ReadString('\n')
 		if err != nil {
 			t.Fatalf("read chunk %d data line: %v", i, err)
 		}
-		arrivals = append(arrivals, time.Since(start))
 		blank, err := reader.ReadString('\n')
 		if err != nil {
 			t.Fatalf("read chunk %d blank line: %v", i, err)
@@ -786,6 +795,7 @@ func TestVerifier_HandleProxy_StreamsSSEChunks(t *testing.T) {
 			t.Fatalf("chunk %d separator was %q, want empty line", i, blank)
 		}
 		got = append(got, strings.TrimRight(dataLine, "\n"))
+		delivered <- struct{}{}
 	}
 
 	want := []string{
@@ -801,17 +811,6 @@ func TestVerifier_HandleProxy_StreamsSSEChunks(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("chunk %d = %q, want %q", i, got[i], want[i])
 		}
-	}
-
-	// Streaming assertion: the last chunk must arrive at least
-	// 2 × chunkGap after the first. If the chain buffers, all chunks
-	// land together at the upstream's End-of-Body, and arrivals[3] -
-	// arrivals[0] is ≈ 0. Use 2× as the floor (out of 3 gaps) for
-	// scheduler jitter slack.
-	spread := arrivals[3] - arrivals[0]
-	if spread < 2*chunkGap {
-		t.Errorf("SSE chunks were buffered: arrivals[0]=%v arrivals[3]=%v spread=%v (want ≥ %v)\nfull timings=%v",
-			arrivals[0], arrivals[3], spread, 2*chunkGap, arrivals)
 	}
 
 	// Deferred settlement puts the receipt in HTTP trailers after the SSE
