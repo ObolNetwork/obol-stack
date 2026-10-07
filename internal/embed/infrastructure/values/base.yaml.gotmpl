@@ -1,0 +1,9 @@
+# Values for the `base` release, rendered by helmfile with the state values
+# declared at the top of helmfile.yaml (only .gotmpl values files are
+# templated under helmfile v1 — see the note on the base release).
+dataDir: /data
+network: {{ .Values.network | quote }}
+# Passed through so the paid unlock gate is declarative and survives a
+# re-sync. Off unless the stack sets it — see base/values.yaml.
+x402:
+  {{- toYaml .Values.x402 | nindent 2 }}

@@ -152,13 +152,12 @@ releases:
     needs:
       - traefik/traefik
       - monitoring/monitoring
+    # Templated values live in a .gotmpl values file: helmfile v1 does NOT
+    # render a plain helmfile.yaml, so inline `{{ }}` here is either passed
+    # through literally (network used to arrive as "{{ .Values.network }}")
+    # or breaks the YAML parse outright (an unquoted toYaml block).
     values:
-      - dataDir: /data
-      - network: "{{ .Values.network }}"
-      # Passed through so the paid unlock gate is declarative and survives a
-      # re-sync. Off unless the stack sets it — see base/values.yaml.
-      - x402:
-          {{- toYaml .Values.x402 | nindent 10 }}
+      - ./values/base.yaml.gotmpl
 
   # Cloudflare Tunnel (dormant until configured via obol tunnel login/provision).
   # `condition: cloudflared.enabled` lets `obol stack up` flip this off when an
