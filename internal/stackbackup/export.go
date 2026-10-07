@@ -63,6 +63,15 @@ func Export(cfg *config.Config, opts ExportOptions, u *ui.UI) (string, error) {
 	defer os.RemoveAll(staging)
 
 	clusterUp := kubectl.EnsureCluster(cfg) == nil
+	clusterSkipNote := "cluster not running — etcd-resident resources not captured"
+	if clusterUp {
+		if err := verifyClusterIdentity(cfg); err != nil {
+			// Never pause or harvest another stack's cluster under this stack's ID.
+			u.Warnf("Skipping cluster resources: %v", err)
+			clusterUp = false
+			clusterSkipNote = "kubeconfig reaches a different stack's cluster — etcd-resident resources not captured"
+		}
+	}
 	dataNamespaces := selectDataNamespaces(cfg.DataDir)
 
 	// Quiesce agent workloads so data dirs (SQLite state.db and friends) are
@@ -91,7 +100,7 @@ func Export(cfg *config.Config, opts ExportOptions, u *ui.UI) (string, error) {
 		clusterComponent.Included = true
 		clusterComponent.Notes = notes
 	} else {
-		clusterComponent.Notes = []string{"cluster not running — etcd-resident resources not captured"}
+		clusterComponent.Notes = []string{clusterSkipNote}
 	}
 	manifest.Components = append(manifest.Components, clusterComponent)
 

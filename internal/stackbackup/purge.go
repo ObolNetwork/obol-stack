@@ -3,6 +3,7 @@ package stackbackup
 import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
@@ -12,10 +13,12 @@ import (
 // narrower wallet-only prompts). Non-interactive shells get a warning but
 // are never blocked, mirroring openclaw.PromptBackupBeforePurge.
 //
-// This closes the gap that cost real agent state: the pre-existing purge
-// prompt covered OpenClaw wallets only — Hermes wallets and every agent's
-// brain (sessions, memory, workspace) were destroyed silently.
-func PromptExportBeforePurge(cfg *config.Config, u *ui.UI) bool {
+// Offered for BOTH purge modes: a plain purge keeps the data dir but deletes
+// the config dir, which holds every agent's keystore password
+// (values-remote-signer.yaml) — the surviving keystores can't be unlocked
+// without it. Either mode deletes the cluster, and with it the sub-agent
+// wallets that exist only as in-cluster Secrets.
+func PromptExportBeforePurge(cfg *config.Config, u *ui.UI, force bool) bool {
 	hermesWallets := hermes.FindInstancesWithWallets(cfg)
 	openclawWallets := openclaw.FindInstancesWithWallets(cfg)
 	dataNamespaces := selectDataNamespaces(cfg.DataDir)
@@ -23,7 +26,15 @@ func PromptExportBeforePurge(cfg *config.Config, u *ui.UI) bool {
 		return false
 	}
 
-	u.Warn("Purging will destroy agent data (memory, sessions, wallets) and stack config.")
+	if force {
+		u.Warn("Purging will destroy agent data (memory, sessions, wallets) and stack config.")
+	} else {
+		u.Warn("Purging deletes stack config, including the keystore passwords that unlock agent wallets.")
+		u.Warnf("Keystores left in %s cannot be used without a backup; sub-agent wallets are destroyed with the cluster.", cfg.DataDir)
+	}
+	if kubectl.EnsureCluster(cfg) != nil || verifyClusterIdentity(cfg) != nil {
+		u.Warn("Cluster is not running: a backup now cannot capture sub-agent wallets (obol agent new --create-wallet). Run 'obol stack up' first if you have any.")
+	}
 	if !u.IsTTY() {
 		u.Warn("Run 'obol stack export' first to save a full backup")
 		return false
