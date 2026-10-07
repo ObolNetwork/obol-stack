@@ -24,6 +24,12 @@ export default {
         release = url.searchParams.get('release');
     }
 
+    // release lands in the fetch URL and in a shell `export` line of the served
+    // script, so only accept main or a release tag.
+    if (!/^(main|v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?)$/.test(release)) {
+        return new Response('Invalid release\n', { status: 400 });
+    }
+
     const githubUrl = `https://raw.githubusercontent.com/ObolNetwork/obol-stack/${release}/obolup.sh`;
 
     const response = await fetch(githubUrl);
