@@ -1,16 +1,21 @@
 name: Build and Publish Public Storefront
 
 on:
+  # Every main commit gets :<short-sha> (built, or retagged from an ancestor
+  # when the storefront's inputs didn't change). v* tags only add semver tags
+  # to the commit's existing image — never a rebuild, which would overwrite
+  # the published short-SHA tag with a new digest.
   push:
     branches:
       - main
     tags:
       - 'v*'
-    paths:
-      - 'web/public-storefront/**'
-      - 'Dockerfile.public-storefront'
-      - '.github/workflows/docker-publish-storefront.yml'
   workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Rebuild even if the image can be reused (overwrites the existing short-SHA tag)'
+        type: boolean
+        default: false
 
 concurrency:
   group: storefront-${{ github.ref }}
@@ -20,7 +25,73 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
+  plan:
+    if: github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      source: ${{ steps.plan.outputs.source }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 50
+
+      - name: Build, retag or skip
+        id: plan
+        env:
+          IMAGE_GROUP: storefront
+          FORCE_BUILD: ${{ inputs.force_build }}
+        run: .github/scripts/image-plan.sh
+
+  retag:
+    needs: plan
+    if: needs.plan.outputs.mode == 'retag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Copy manifest to this commit's tags
+        env:
+          IMAGE_GROUP: storefront
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tags=("${GITHUB_SHA::7}" "${GITHUB_SHA}")
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then tags+=(latest); fi
+          .github/scripts/image-retag.sh "${{ needs.plan.outputs.source }}" "${tags[@]}"
+
+  release-tags:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Add semver tags to the commit's image
+        env:
+          IMAGE_GROUP: storefront
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          tags=("${version}")
+          # major.minor only for stable releases, as metadata-action did.
+          if [[ "${version}" != *-* ]]; then tags+=("${version%.*}"); fi
+          .github/scripts/image-retag.sh "${GITHUB_SHA::7}" "${tags[@]}"
+
   build:
+    needs: plan
+    if: needs.plan.outputs.mode == 'build'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -49,8 +120,6 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/obolnetwork/obol-stack-public-storefront
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
             # Long SHA: needed by the security-scan step which references
             # ${{ github.sha }} (40-char). Without it Trivy fails with
             # MANIFEST_UNKNOWN. Same bug the x402 workflow used to have.

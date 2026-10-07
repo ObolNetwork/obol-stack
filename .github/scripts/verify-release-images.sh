@@ -30,7 +30,7 @@ if [[ "${VERIFY_RELEASE_IMAGES_OFFLINE:-}" == "true" ]]; then
 fi
 
 failed=0
-for image in "${X402_IMAGES[@]}"; do
+for image in $(for g in "${IMAGE_GROUPS[@]}"; do group_images "$g"; done); do
     if digest="$(fetch_index_digest "${image}" "${SHORT_SHA}")"; then
         echo "ok  ghcr.io/obolnetwork/${image}:${SHORT_SHA}  ${digest}"
     else
@@ -42,9 +42,10 @@ done
 if [[ "${failed}" -ne 0 ]]; then
     echo "" >&2
     echo "Release gate failed: images for commit ${SHORT_SHA} are not published." >&2
-    echo "  docker-publish-x402.yml publishes (or retags) images for every main" >&2
-    echo "  commit; it may still be running, or the commit is not on main. Fix:" >&2
-    echo "    gh workflow run docker-publish-x402.yml --ref ${SHORT_SHA}" >&2
+    echo "  docker-publish-x402.yml and docker-publish-storefront.yml publish (or" >&2
+    echo "  retag) images for every main commit; one may still be running, or the" >&2
+    echo "  commit is not on main. Fix:" >&2
+    echo "    gh workflow run <workflow> --ref ${SHORT_SHA}" >&2
     echo "  Wait for the build, then re-tag / re-run the release." >&2
     exit 1
 fi

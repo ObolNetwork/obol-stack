@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# Copy each X402_IMAGES manifest from one tag to new tags in the same GHCR
+# Copy each manifest of an image group (IMAGE_GROUP=x402|storefront, default
+# x402) from one tag to new tags in the same GHCR
 # repository. The manifest bytes are re-PUT unchanged, so every new tag has
 # exactly the source digest (provenance/SBOM attestations included) — no
 # rebuild, no drift.
 #
-#   .github/scripts/x402-image-retag.sh <source-tag> <new-tag>...
+#   .github/scripts/image-retag.sh <source-tag> <new-tag>...
 #
 # Env: GHCR_USER + GHCR_TOKEN (packages:write). REGISTRY_URL overrides
 # https://ghcr.io for tests; set GHCR_TOKEN=none to skip auth there.
@@ -23,7 +24,7 @@ ACCEPT="application/vnd.oci.image.index.v1+json, application/vnd.docker.distribu
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
-for image in "${X402_IMAGES[@]}"; do
+for image in $(group_images "${IMAGE_GROUP:-x402}"); do
     repo="obolnetwork/${image}"
     auth=()
     if [[ "${GHCR_TOKEN:-}" != "none" ]]; then
