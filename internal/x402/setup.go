@@ -454,6 +454,17 @@ func Setup(cfg *config.Config, wallet, chain, facilitatorURL string) error {
 		return fmt.Errorf("failed to patch x402 pricing: %w", err)
 	}
 
+	// Record-on-write: replayed by `obol stack up` / `obol sell resume`
+	// (internal/replay) because both objects live only in etcd.
+	if err := SaveRecordedPricing(cfg, &RecordedPricing{
+		Wallet:         wallet,
+		Chain:          chain,
+		FacilitatorURL: facilitatorURL,
+		VerifyOnly:     pricingCfg.VerifyOnly,
+	}); err != nil {
+		fmt.Printf("Warning: could not record pricing to %s (it will not survive cluster recreation): %v\n", RecordedPricingPath(cfg), err)
+	}
+
 	fmt.Printf("x402 configured: wallet=%s chain=%s facilitator=%s\n", wallet, chain, facilitatorURL)
 	return nil
 }
@@ -544,22 +555,11 @@ func populateCABundle(bin, kc string) {
 }
 
 func patchPricingConfig(bin, kc string, pcfg *PricingConfig) error {
-	pricingBytes, err := yaml.Marshal(pcfg)
+	patch, err := pricingConfigMapPatch(pcfg)
 	if err != nil {
-		return fmt.Errorf("marshal pricing config: %w", err)
+		return err
 	}
-
-	cmPatch := map[string]any{
-		"data": map[string]string{
-			"pricing.yaml": string(pricingBytes),
-		},
-	}
-	cmPatchJSON, err := json.Marshal(cmPatch)
-	if err != nil {
-		return fmt.Errorf("marshal pricing patch: %w", err)
-	}
-
 	return kubectl.Run(bin, kc,
 		"patch", "configmap", pricingConfigMap, "-n", x402Namespace,
-		"-p", string(cmPatchJSON), "--type=merge")
+		"-p", patch, "--type=merge")
 }

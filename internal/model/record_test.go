@@ -3,6 +3,7 @@ package model
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"testing"
 
@@ -136,5 +137,42 @@ func TestMapKeys(t *testing.T) {
 	want := []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("mapKeys = %v, want %v", got, want)
+	}
+}
+
+func TestToEnvRefs_RecordsReferenceWhenKeyCameFromEnv(t *testing.T) {
+	env := map[string]string{
+		"OPENAI_API_KEY":          "sk-openai",
+		"CLAUDE_CODE_OAUTH_TOKEN": "oauth-tok",
+	}
+	getenv := func(k string) string { return env[k] }
+	got := toEnvRefs(map[string]string{
+		"OPENAI_API_KEY":     "sk-openai",    // from env → ref
+		"ANTHROPIC_API_KEY":  "oauth-tok",    // from provider AltEnvVar → ref to it
+		"OPENROUTER_API_KEY": "typed-in-key", // not in env → plaintext kept
+	}, getenv)
+	want := map[string]string{
+		"OPENAI_API_KEY":     "env:OPENAI_API_KEY",
+		"ANTHROPIC_API_KEY":  "env:CLAUDE_CODE_OAUTH_TOKEN",
+		"OPENROUTER_API_KEY": "typed-in-key",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("toEnvRefs = %v, want %v", got, want)
+	}
+}
+
+func TestResolveSecretRefs(t *testing.T) {
+	env := map[string]string{"OPENAI_API_KEY": "sk-live"}
+	got, unresolved := resolveSecretRefs(map[string]string{
+		"OPENAI_API_KEY":    "env:OPENAI_API_KEY",
+		"ANTHROPIC_API_KEY": "env:CLAUDE_CODE_OAUTH_TOKEN", // unset → skipped
+		"VENICE_API_KEY":    "legacy-plaintext",            // old records keep working
+	}, func(k string) string { return env[k] })
+	want := map[string]string{"OPENAI_API_KEY": "sk-live", "VENICE_API_KEY": "legacy-plaintext"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("resolved = %v, want %v", got, want)
+	}
+	if len(unresolved) != 1 || unresolved[0] != [2]string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"} {
+		t.Fatalf("unresolved = %v", unresolved)
 	}
 }

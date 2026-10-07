@@ -16,7 +16,10 @@ import (
 // state inventory in plans/stack-export-import.md). PurchaseRequests and
 // buyer-auth ConfigMaps are deliberately absent: pre-signed payment auths
 // expire via validBefore, so restoring them restores garbage — re-buy after
-// import instead.
+// import instead. AgentIdentity CRs are also absent on purpose: their
+// status (the per-chain ERC-8004 agentId) is recorded host-side under
+// config/identity/ (internal/agentidentity, refreshed by Export) and
+// re-applied by record replay on `obol stack up`.
 type clusterDump struct {
 	file string
 	args []string

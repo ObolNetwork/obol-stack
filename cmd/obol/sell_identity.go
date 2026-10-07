@@ -11,9 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ObolNetwork/obol-stack/internal/agentidentity"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ethereum/go-ethereum/common"
@@ -40,30 +42,15 @@ func removeTempFile(path string) {
 }
 
 // agentIdentityRecord is the JSON-shaped view of AgentIdentity used by the
-// CLI to read / write the CR via kubectl. Mirrors monetizeapi.AgentIdentity
-// but only carries the fields the CLI cares about.
-type agentIdentityRecord struct {
-	APIVersion string                          `json:"apiVersion"`
-	Kind       string                          `json:"kind"`
-	Metadata   agentIdentityMetadata           `json:"metadata"`
-	Spec       monetizeapi.AgentIdentitySpec   `json:"spec"`
-	Status     monetizeapi.AgentIdentityStatus `json:"status,omitempty"`
-}
+// CLI to read / write the CR via kubectl. Shared with internal/agentidentity,
+// which also persists it host-side so the registration survives cluster
+// recreation.
+type agentIdentityRecord = agentidentity.Record
 
-type agentIdentityMetadata struct {
-	Name      string `json:"name"`
-	Namespace string `json:"namespace"`
-}
+type agentIdentityMetadata = agentidentity.Metadata
 
 func newAgentIdentityRecord(ns, name string) *agentIdentityRecord {
-	return &agentIdentityRecord{
-		APIVersion: monetizeapi.Group + "/" + monetizeapi.Version,
-		Kind:       monetizeapi.AgentIdentityKind,
-		Metadata: agentIdentityMetadata{
-			Namespace: ns,
-			Name:      name,
-		},
-	}
+	return agentidentity.New(ns, name)
 }
 
 // loadAgentIdentity reads the AgentIdentity CR at ns/name. Returns (nil,
@@ -101,8 +88,12 @@ func applyAgentIdentity(cfg *config.Config, rec *agentIdentityRecord) error {
 	}{
 		APIVersion: rec.APIVersion,
 		Kind:       rec.Kind,
-		Metadata:   rec.Metadata,
-		Spec:       rec.Spec,
+		Metadata: agentIdentityMetadata{
+			Name:      rec.Metadata.Name,
+			Namespace: rec.Metadata.Namespace,
+			Labels:    map[string]string{kubectl.ManagedByLabel: kubectl.ManagedByObol},
+		},
+		Spec: rec.Spec,
 	}
 	data, err := json.Marshal(specRecord)
 	if err != nil {
@@ -116,10 +107,26 @@ func applyAgentIdentity(cfg *config.Config, rec *agentIdentityRecord) error {
 	if err := kubectlRun(cfg, "apply", "-f", tmp); err != nil {
 		return err
 	}
-	if !hasAgentIdentityStatus(rec.Status) {
-		return nil
+	if hasAgentIdentityStatus(rec.Status) {
+		if err := patchAgentIdentityStatus(cfg, rec); err != nil {
+			return err
+		}
 	}
-	return patchAgentIdentityStatus(cfg, rec)
+	recordAgentIdentity(cfg, rec)
+	return nil
+}
+
+// recordAgentIdentity mirrors a just-written AgentIdentity to the host-side
+// record replayed by `obol stack up` / `obol sell resume`. Best-effort: the
+// cluster write already succeeded, so a record failure only warns.
+func recordAgentIdentity(cfg *config.Config, rec *agentIdentityRecord) {
+	if cfg == nil || cfg.ConfigDir == "" {
+		return
+	}
+	if err := agentidentity.Save(cfg, rec); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not record AgentIdentity %s/%s to disk (it will not survive cluster recreation): %v\n",
+			rec.Metadata.Namespace, rec.Metadata.Name, err)
+	}
 }
 
 func patchAgentIdentityStatus(cfg *config.Config, rec *agentIdentityRecord) error {
@@ -353,6 +360,7 @@ controller re-derives the id from scratch on the next reconcile.`,
 			); err != nil {
 				return err
 			}
+			recordAgentIdentity(cfg, rec)
 			getUI(cmd).Successf("Removed agent %s on %s from AgentIdentity %s/%s.", existing, chain, ns, name)
 			return nil
 		},

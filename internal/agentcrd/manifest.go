@@ -31,6 +31,7 @@ func ManifestPath(cfg *config.Config, name string) string {
 
 // PersistManifest writes the applied Agent CR manifest to the host store.
 func PersistManifest(cfg *config.Config, name string, manifest map[string]any) error {
+	kubectl.SetManagedBy(manifest)
 	data, err := yaml.Marshal(manifest)
 	if err != nil {
 		return fmt.Errorf("marshal agent manifest: %w", err)
@@ -99,6 +100,7 @@ func ResumeAll(cfg *config.Config, u *ui.UI) {
 			continue
 		}
 		stackbackup.StripServerManagedMetadata(doc)
+		kubectl.SetManagedBy(doc)
 		stripped, err := yaml.Marshal(doc)
 		if err != nil {
 			u.Warnf("Could not re-marshal recorded agent %s: %v", name, err)

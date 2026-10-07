@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 )
 
@@ -313,8 +314,8 @@ func ConfigMapManifest(p schemas.StorefrontProfile) (map[string]any, error) {
 			"name":      ProfileConfigMap,
 			"namespace": ProfileNamespace,
 			"labels": map[string]any{
-				"app":                 ProfileConfigMap,
-				"obol.org/managed-by": "obol-cli",
+				"app":                  ProfileConfigMap,
+				kubectl.ManagedByLabel: kubectl.ManagedByObol,
 			},
 		},
 		"data": map[string]any{

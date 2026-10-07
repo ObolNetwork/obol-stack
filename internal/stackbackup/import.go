@@ -12,10 +12,9 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ObolNetwork/obol-stack/internal/agentsync"
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
-	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
@@ -113,7 +112,10 @@ func Import(cfg *config.Config, opts ImportOptions, u *ui.UI) error {
 		u.Info("Re-applying cluster resources...")
 		applyCluster(cfg, clusterDir, u)
 		if !opts.SkipSync {
-			syncAgents(cfg, u)
+			// Unconditional: restored deployment dirs must re-render
+			// their remote-signer Secrets and tokens even when a
+			// release exists.
+			_ = agentsync.SyncInstances(cfg, u, agentsync.Options{})
 		}
 	}
 
@@ -307,38 +309,6 @@ func walkArchive(input string, fn func(*tar.Reader, *tar.Header, string) error) 
 			return fmt.Errorf("extract %s: %w", hdr.Name, err)
 		}
 	}
-}
-
-// syncAgents re-deploys every restored hermes/openclaw instance from its
-// on-disk helmfile so deployments, remote-signer Secrets, and tokens line up
-// with the restored state. Best-effort per instance.
-func syncAgents(cfg *config.Config, u *ui.UI) {
-	for _, id := range listInstances(cfg, "hermes") {
-		u.Infof("Syncing hermes instance %s...", id)
-		if err := hermes.Sync(cfg, id, u); err != nil {
-			u.Warnf("hermes sync %s failed (run 'obol agent sync %s' manually): %v", id, id, err)
-		}
-	}
-	for _, id := range listInstances(cfg, "openclaw") {
-		u.Infof("Syncing openclaw instance %s...", id)
-		if err := openclaw.Sync(cfg, id, u); err != nil {
-			u.Warnf("openclaw sync %s failed (run 'obol openclaw sync %s' manually): %v", id, id, err)
-		}
-	}
-}
-
-func listInstances(cfg *config.Config, runtime string) []string {
-	entries, err := os.ReadDir(filepath.Join(cfg.ConfigDir, "applications", runtime))
-	if err != nil {
-		return nil
-	}
-	var ids []string
-	for _, e := range entries {
-		if e.IsDir() {
-			ids = append(ids, e.Name())
-		}
-	}
-	return ids
 }
 
 func printNextSteps(u *ui.UI, input string, clusterComponentPresent bool) {

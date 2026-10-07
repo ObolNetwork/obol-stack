@@ -21,8 +21,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ObolNetwork/obol-stack/internal/agentcrd"
-	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
@@ -30,6 +28,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/inference"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
+	"github.com/ObolNetwork/obol-stack/internal/replay"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/tee"
@@ -884,6 +883,7 @@ Examples:
 					"metadata": map[string]interface{}{
 						"name":      name,
 						"namespace": ns,
+						"labels":    map[string]any{kubectl.ManagedByLabel: kubectl.ManagedByObol},
 					},
 					"spec": spec,
 				}
@@ -1105,6 +1105,7 @@ Examples:
 				"metadata": map[string]any{
 					"name":      name,
 					"namespace": ns,
+					"labels":    map[string]any{kubectl.ManagedByLabel: kubectl.ManagedByObol},
 				},
 				"spec": spec,
 			}
@@ -4207,9 +4208,11 @@ offers survive in etcd with UpstreamHealthy=False, so the public catalog
 directly so a reboot does not require a full stack-up to recover.
 
 Idempotent: offers whose gateway is still running are skipped, and the
-kubectl applies re-assert existing objects. Recorded Agent CRs
-($OBOL_CONFIG_DIR/agents/) are re-applied BEFORE offers so agent-backed
-offers resolve their agent.ref even after a full stack recreation.
+kubectl applies re-assert existing objects. Runs the same ordered record
+replay as 'obol stack up' (models, missing networks, RPC upstreams, x402
+pricing, AgentIdentity, missing agent instances, Agent CRs, storefront,
+apps, then offers), so agent-backed offers resolve their agent.ref even
+after a full stack recreation.
 'sell mcp' servers are foreground processes with no ServiceOffer and are
 not resumed.
 
@@ -4233,14 +4236,12 @@ Examples:
 				u.Warnf("cluster API not ready: %v (continuing — per-offer applies may fail)", err)
 			}
 			warnOnClockSkew(ctx, u, "")
-			// Recorded Agent CRs first: agent-backed offers resolve
-			// agent.ref and would dangle on a freshly-recreated cluster.
-			agentcrd.ResumeAll(cfg, u)
-			// Installed apps next: http offers can gate an app's Service
-			// as their upstream, so the Service must exist before the
-			// offer republishes. Best-effort.
-			app.ResumeAll(cfg, u)
-			if err := resumeSellOffers(ctx, cfg, u); err != nil {
+			// Same ordered record replay as `obol stack up`
+			// (internal/replay.Order): Agent CRs, apps, identity and
+			// pricing all precede the offers that depend on them. Only
+			// a failed offer replay fails the command (as before).
+			sum := replay.ReplayRecorded(ctx, cfg, u, replayOptions())
+			if err := sum.Errors[replay.StepSellOffers]; err != nil {
 				return err
 			}
 			if cmd.Bool("install-boot-unit") {
@@ -4249,6 +4250,12 @@ Examples:
 			return nil
 		},
 	}
+}
+
+// replayOptions wires the package-main replay steps into internal/replay.
+// Shared by `obol stack up` and `obol sell resume` so both run one list.
+func replayOptions() replay.Options {
+	return replay.Options{ResumeSellOffers: resumeSellOffers}
 }
 
 // waitForClusterAPI blocks until the cluster API server answers a
@@ -5170,6 +5177,7 @@ func persistServiceOffer(cfg *config.Config, namespace, name string, manifest ma
 	if err := os.MkdirAll(sellOfferStoreDir(cfg), 0o755); err != nil {
 		return fmt.Errorf("create store dir: %w", err)
 	}
+	kubectl.SetManagedBy(manifest)
 	data, err := yaml.Marshal(manifest)
 	if err != nil {
 		return fmt.Errorf("marshal manifest: %w", err)
@@ -5321,6 +5329,8 @@ func resumePersistedServiceOffers(cfg *config.Config, u *ui.UI) (failed []string
 	u.Blank()
 	u.Infof("Resuming %d locally-persisted sell offer(s)...", len(manifests))
 	for _, m := range manifests {
+		// Legacy ledger entries predate the managed-by label.
+		kubectl.SetManagedBy(m.Manifest)
 		if err := kubectlApply(cfg, m.Manifest); err != nil {
 			u.Warnf("resume %s %s/%s: %v", m.label(), m.Namespace, m.Name, err)
 			failed = append(failed, fmt.Sprintf("%s/%s", m.Namespace, m.Name))

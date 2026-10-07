@@ -1531,30 +1531,28 @@ func TestResumeOneInferenceOffer_NilDescriptor(t *testing.T) {
 }
 
 // TestStackUpAction_CallsResumeSellOffers is a source-level guard against
-// silently regressing the stack-up → sell-resume wiring. The whole feature
-// hinges on the `stack up` action handler calling resumeSellOffers after
-// stack.Up succeeds; without that call, persisted sell-inference offers
-// stay on disk forever and never reach the freshly-recreated cluster.
-// A future refactor that splits the handler or moves the call must update
-// this test, which forces a moment of "why is this here" attention.
+// silently regressing the stack-up → sell-resume wiring. `stack up` reaches
+// resumeSellOffers through the shared record replay (internal/replay, last
+// step), wired by replayOptions(); without it persisted sell-inference
+// offers stay on disk forever and never reach a freshly-recreated cluster.
+// See also stackup_resume_guard_test.go.
 func TestStackUpAction_CallsResumeSellOffers(t *testing.T) {
-	src, err := os.ReadFile("main.go")
+	src, err := os.ReadFile("sell.go")
+	if err != nil {
+		t.Fatalf("read sell.go: %v", err)
+	}
+	if !strings.Contains(string(src), "replay.Options{ResumeSellOffers: resumeSellOffers}") {
+		t.Fatal("replayOptions() must wire resumeSellOffers into the shared replay — without it persisted sell offers never reach a freshly-stacked cluster")
+	}
+	main, err := os.ReadFile("main.go")
 	if err != nil {
 		t.Fatalf("read main.go: %v", err)
 	}
-	body := string(src)
-	if !strings.Contains(body, "resumeSellOffers(") {
-		t.Fatal("cmd/obol/main.go must call resumeSellOffers — without it persisted sell-inference offers never reach a freshly-stacked cluster")
-	}
-	// Belt-and-suspenders: assert the call lives after stack.Up so the
-	// kubeconfig + infrastructure are ready when resume runs.
+	body := string(main)
 	upIdx := strings.Index(body, "stack.Up(cfg")
-	resumeIdx := strings.Index(body, "resumeSellOffers(")
-	if upIdx < 0 || resumeIdx < 0 {
-		t.Fatalf("expected both stack.Up and resumeSellOffers in main.go; upIdx=%d resumeIdx=%d", upIdx, resumeIdx)
-	}
-	if resumeIdx < upIdx {
-		t.Error("resumeSellOffers must be invoked AFTER stack.Up — running it before the cluster is up will see no kubeconfig and skip every offer")
+	replayIdx := strings.Index(body, "replay.ReplayRecorded(ctx, cfg, u, replayOptions())")
+	if upIdx < 0 || replayIdx < 0 || replayIdx < upIdx {
+		t.Fatalf("stack up must run the shared replay AFTER stack.Up; upIdx=%d replayIdx=%d", upIdx, replayIdx)
 	}
 }
 

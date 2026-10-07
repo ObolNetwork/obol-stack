@@ -48,6 +48,7 @@ func (u *UI) Successf(format string, args ...any) {
 // Warn prints: ! message (yellow bang, matching obolup.sh log_warn).
 // Not suppressed by quiet mode.
 func (u *UI) Warn(msg string) {
+	u.countWarning()
 	fmt.Fprintf(u.stderr, "  %s %s\n", warnStyle.Render("!"), msg)
 }
 
