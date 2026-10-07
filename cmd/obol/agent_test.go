@@ -424,3 +424,10 @@ func TestIsModelConfigured(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateAgentNewModeForcePointsToUpdate(t *testing.T) {
+	err := validateAgentNewMode(true, false, false, true, false)
+	if err == nil || !strings.Contains(err.Error(), "obol agent update") {
+		t.Fatalf("--force error should point to `obol agent update`, got %v", err)
+	}
+}

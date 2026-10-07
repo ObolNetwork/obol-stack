@@ -101,7 +101,7 @@ func createCRDAgent(cfg *config.Config, u *ui.UI, opts createCRDAgentOptions) er
 
 	if opts.Interactive {
 		if model == "" {
-			model = strings.TrimSpace(promptOrDefault(u, "Model (LiteLLM name; empty = controller auto-pins)", model))
+			model = strings.TrimSpace(promptOrDefault(u, "Model (LiteLLM name; empty = cluster's top-ranked)", model))
 		}
 		if skillsCSV == "" {
 			skillsCSV = strings.TrimSpace(promptOrDefault(u, "Skills (comma-separated)",
@@ -117,6 +117,18 @@ func createCRDAgent(cfg *config.Config, u *ui.UI, opts createCRDAgentOptions) er
 		// Opt in only when the sub-agent genuinely needs to hold/sign funds.
 		ans := strings.TrimSpace(promptOrDefault(u, "Provision a dedicated wallet for this agent? [y/N]", "N"))
 		createWallet = strings.EqualFold(ans, "y") || strings.EqualFold(ans, "yes")
+	}
+
+	// Pin a model now when none was given: the controller parks an unpinned
+	// Agent at ModelUnpinned, and pinning here records the choice on disk so
+	// replay reproduces the same agent.
+	if model == "" {
+		picked, err := resolveDefaultAgentModel(cfg)
+		if err != nil {
+			return fmt.Errorf("pick a default model (or pass --model): %w", err)
+		}
+		u.Infof("Pinning model %q (cluster's top-ranked; override with --model)", picked)
+		model = picked
 	}
 
 	// Fail fast on a pinned model LiteLLM doesn't serve. Without this the Agent

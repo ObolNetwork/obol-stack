@@ -84,7 +84,7 @@ Hermes/OpenClaw onboard flow used by the master agent.`,
 					// name argument) routes to the new sub-agent flow.
 					&cli.StringFlag{
 						Name:  "model",
-						Usage: "Pin a LiteLLM model name for this agent (CRD path; defaults to cluster top-of-rank at first reconcile)",
+						Usage: "Pin a LiteLLM model name for this agent (CRD path; default: the cluster's top-ranked model, pinned at creation)",
 					},
 					&cli.StringFlag{
 						Name:  "skills",
@@ -1155,7 +1155,11 @@ func validateAgentNewMode(useCRDPath, runtimeSet, idSet, forceSet, noSyncSet boo
 	if len(legacy) == 0 {
 		return nil
 	}
-	return fmt.Errorf("CRD agent creation does not support legacy flags %s; use `obol agent new <name> --model/--skills/--objective/--create-wallet` or drop the positional name for legacy runtime onboarding", strings.Join(legacy, ", "))
+	hint := "drop the positional name for legacy runtime onboarding"
+	if forceSet {
+		hint = "to change an existing agent use `obol agent update <name> --model/--skills/--objective`"
+	}
+	return fmt.Errorf("CRD agent creation does not support legacy flags %s; %s", strings.Join(legacy, ", "), hint)
 }
 
 func containsString(values []string, needle string) bool {

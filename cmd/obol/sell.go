@@ -1855,6 +1855,7 @@ Example:
 			// when they actually want on-chain discovery.
 			register := cmd.Bool("register")
 			soManifest := buildDemoServiceOffer(name, demoNamespace, chain, wallet, price, register, spec, assetTerms)
+			kubectl.SetManagedBy(soManifest)
 			applyOut, err := kubectlApplyOutput(cfg, soManifest)
 			if err != nil {
 				return fmt.Errorf("apply ServiceOffer: %w", err)
