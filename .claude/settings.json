@@ -1,5 +1,52 @@
 {
+  "permissions": {
+    "deny": [
+      "Read(**/obol-wallet-backup-*)",
+      "Read(**/.private_keys/**)",
+      "Read(**/remote-signer-keystores/**)",
+      "Read(**/values-remote-signer.yaml)",
+      "Read(**/obol-stack-export-*)",
+      "Read(**/obol-stack-backup-*)",
+      "Read(**/tunnel/cloudflared-token)",
+      "Read(**/.gateway-token)",
+      "Read(**/.env)",
+      "Read(**/.envrc.local)",
+      "Read(~/.obol-wallet-vault/**)",
+      "Edit(**/obol-wallet-backup-*)",
+      "Edit(**/.private_keys/**)",
+      "Edit(**/remote-signer-keystores/**)",
+      "Edit(**/values-remote-signer.yaml)",
+      "Edit(~/.obol-wallet-vault/**)",
+      "Write(**/obol-wallet-backup-*)",
+      "Write(**/.private_keys/**)",
+      "Write(**/remote-signer-keystores/**)",
+      "Write(**/values-remote-signer.yaml)",
+      "Write(~/.obol-wallet-vault/**)",
+      "Bash(git clean -fdx*)",
+      "Bash(git clean -xfd*)",
+      "Bash(git clean -fx*)",
+      "Bash(git clean -fX*)"
+    ],
+    "ask": [
+      "Bash(obol stack purge*)",
+      "Bash(k3d cluster delete*)",
+      "Bash(gh gist*)"
+    ]
+  },
   "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR/.claude/hooks/secret_guard.py\"",
+            "timeout": 10,
+            "statusMessage": "Checking command against wallet/secret guard..."
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "Write|Edit",

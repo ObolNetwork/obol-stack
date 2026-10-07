@@ -487,6 +487,21 @@ The Cloudflare tunnel exposes the cluster to the public internet. Only x402-gate
 - `/.well-known/x402` — aggregate x402 discovery fallback (AgentCash/x402scan-style discovery convention; no secret material)
 - `/` on tunnel hostname — public storefront landing page (Next.js)
 
+### Security: Secrets & wallet keys
+
+Wallet material = V3 keystores (`remote-signer-keystores/*.json`, `.private_keys/`), keystore passwords (`values-remote-signer.yaml`, `keystorePassword` in `obol-wallet-backup-*.json`), sub-agent `remote-signer-keystore` Secrets (in-cluster ONLY — no host copy), `obol stack export` archives (unencrypted unless `--passphrase`), tunnel connector tokens, `litellm-secrets`, `.env*`.
+
+Where it lives: host-side Hermes keystore under `$DATA_DIR/hermes-obol-agent/remote-signer-keystores/`, its password under `$CONFIG_DIR/applications/hermes/obol-agent/values-remote-signer.yaml` (prod = `~/.config/obol` + `~/.local/share/obol`; dev = `.workspace/config` + `.workspace/data`). Sub-agent wallets (`obol agent new --create-wallet`) exist only as k8s Secrets — deleting the cluster destroys them unless exported first.
+
+**NEVER**:
+- Print key material or passwords into the transcript (no `cat`/`jq .`/`head` on keystores, backups, or `kubectl get secret -o yaml` to stdout). Use metadata (`ls`, `stat`, `shasum`), `cp` to move, and for public fields (address) a program that prints only the address. Verify a backup by decrypting in-process and printing the derived address.
+- Save key material, passwords, or secret file contents to memory, plans, gists, artifacts, PRs, issues, or shared session links.
+- Commit, `git add -f`, or `git stash --all` wallet files; never `git clean -x/-X` (deletes the gitignored backups in the repo root).
+- Run `obol stack purge`, `k3d cluster delete`, or `rm` on config/data dirs without first confirming every wallet has a verified backup (host keystore + password via `obol agent wallet backup`; sub-agents via `obol stack export` with the cluster RUNNING).
+- Trust `obol stack export` "cluster: included" when multiple stacks exist — a stale kubeconfig can point at a different stack's API port and export the wrong cluster. Check `manifest.json` `stackId` vs the agents captured.
+
+Enforced by `.claude/settings.json` (Read/Edit/Write deny) + `.claude/hooks/secret_guard.py` (Bash PreToolUse: deny readers/exfil/`git clean -x`, ask on purge/delete/secret dumps). `.gitignore` covers backups/exports/keystores. Recommended local `.git/hooks/pre-commit` blocks staged keystore/password content.
+
 ## Dependencies
 
 | Package | Key Files | Role |
