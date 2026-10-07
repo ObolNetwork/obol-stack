@@ -220,6 +220,8 @@ releases:
     needs:
       - traefik/traefik
       - erpc/erpc
+      # base renders Secret obol-frontend-secrets (secretKeyRef env).
+      - kube-system/base
     values:
       - ./values/obol-frontend.yaml.gotmpl
 

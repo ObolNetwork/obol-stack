@@ -504,6 +504,11 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		"KUBECONFIG="+kubeconfigPath,
 		"STACK_DATA_DIR="+dataDir,
 		"OBOL_STACK_VERSION="+version.Version,
+		// stack up is authoritative for the frontend's secret env
+		// (BETTER_AUTH_SECRET, OBOL_GOOGLE_CLIENT_SECRET): the base chart
+		// renders Secret obol-frontend-secrets from the host env. Other
+		// base syncs leave it unset and keep the live Secret.
+		"OBOL_FRONTEND_SECRETS_FROM_ENV=true",
 	)
 
 	// In development mode, build and import local repo images that aren't on a

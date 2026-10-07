@@ -7,3 +7,13 @@ network: {{ .Values.network | quote }}
 # re-sync. Off unless the stack sets it — see base/values.yaml.
 x402:
   {{- toYaml .Values.x402 | nindent 2 }}
+# obol-frontend sensitive env -> Secret obol-frontend-secrets (base chart),
+# referenced by the frontend Deployment via secretKeyRef. Read from the host
+# env at `obol stack up` (which sets OBOL_FRONTEND_SECRETS_FROM_ENV=true),
+# exactly as the frontend values used to. Other base syncs keep the live
+# Secret rather than blanking it from a shell that lacks these vars.
+frontend:
+  secrets:
+    fromEnv: {{ eq (env "OBOL_FRONTEND_SECRETS_FROM_ENV") "true" }}
+    betterAuthSecret: {{ env "BETTER_AUTH_SECRET" | default "" | quote }}
+    googleClientSecret: {{ env "OBOL_GOOGLE_CLIENT_SECRET" | default "" | quote }}
