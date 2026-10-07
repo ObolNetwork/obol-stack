@@ -53,7 +53,7 @@ BUYER (curl / blockrun-llm SDK)
 ## Prerequisites
 
 - **Docker** -- [Docker Engine](https://docs.docker.com/engine/install/) (Linux) or [Docker Desktop](https://docs.docker.com/desktop/) (macOS)
-- **Obol Stack** -- installed via `bash <(curl -s https://stack.obol.org)`
+- **Obol Stack** -- installed via `curl -fsSL https://stack.obol.org | bash`
 - **Ollama** -- running on the host (`ollama serve`)
 - **Base Sepolia wallet** -- with ETH for gas and USDC for testing payments
   - USDC (Base Sepolia): `0x036CbD53842c5426634e7929541eC2318f3dCF7e`

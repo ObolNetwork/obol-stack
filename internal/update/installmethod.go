@@ -94,8 +94,13 @@ func CLIUpgradeCommand(m InstallMethod, tag string) string {
 
 		return fmt.Sprintf("curl -fsSLO %s.deb && sudo apt install ./obol_%s_linux_%s.deb", base, ver, runtime.GOARCH)
 	case InstallScript:
-		return "bash <(curl -fsSL https://stack.obol.org)"
+		// stack.obol.org/<tag> serves that tag's own installer, pinned.
+		if tag != "" {
+			return "curl -fsSL https://stack.obol.org/" + tag + " | bash"
+		}
+
+		return "curl -fsSL https://stack.obol.org | bash"
 	default:
-		return "git pull && just build   (development build; or install a release: bash <(curl -fsSL https://stack.obol.org))"
+		return "git pull && just build   (development build; or install a release: curl -fsSL https://stack.obol.org | bash)"
 	}
 }

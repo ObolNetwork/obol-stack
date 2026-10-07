@@ -41,7 +41,7 @@ func TestCLIUpgradeCommand(t *testing.T) {
 		t.Errorf("homebrew: %q", got)
 	}
 
-	if got := CLIUpgradeCommand(InstallScript, "v0.15.0"); !strings.Contains(got, "https://stack.obol.org") {
+	if got := CLIUpgradeCommand(InstallScript, "v0.15.0"); got != "curl -fsSL https://stack.obol.org/v0.15.0 | bash" {
 		t.Errorf("script: %q", got)
 	}
 
