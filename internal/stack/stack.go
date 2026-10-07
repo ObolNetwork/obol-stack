@@ -509,6 +509,10 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		buildAndImportLocalImages(cfg, u)
 	}
 
+	// StorageClass parameters are immutable: drop a local-path class that
+	// predates allowUnsafePathPattern so the base release below recreates it.
+	kubectl.PrepareLocalPathStorageClass(cfg, u)
+
 	if err := u.Exec(ui.ExecConfig{
 		Name: "Deploying default infrastructure",
 		Cmd:  helmfileCmd,

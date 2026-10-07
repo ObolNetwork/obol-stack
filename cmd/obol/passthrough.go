@@ -33,8 +33,8 @@ func stackKubeconfig(cfg *config.Config) string {
 // passthroughCommand builds `obol <tool> …`: the obol-resolved tool runs with
 // the user's argv verbatim (minus one leading "--") and KUBECONFIG pinned to
 // the stack kubeconfig (an ambient KUBECONFIG is overridden; only an explicit
-// --kubeconfig argument opts out). extraEnv, if non-nil, applies further
-// tool-specific env defaults.
+// --kubeconfig argument opts out). prepare, if non-nil, applies further
+// tool-specific argv/env defaults.
 //
 // Process model (internal/passthrough): when the stack kubeconfig exists, or
 // --kubeconfig was passed, obol execs the tool (unix: process replaced, so
@@ -43,7 +43,7 @@ func stackKubeconfig(cfg *config.Config) string {
 // child instead so obol can add an "is the stack up?" hint if it fails —
 // cluster-free commands (version --client, helm template, completion) still
 // just work.
-func passthroughCommand(cfg *config.Config, tool string, extraEnv func(cfg *config.Config, args, env []string) []string) *cli.Command {
+func passthroughCommand(cfg *config.Config, tool string, prepare passthroughPrepare) *cli.Command {
 	return &cli.Command{
 		Name:  tool,
 		Usage: "Run " + tool + " with stack kubeconfig (passthrough)",
@@ -68,8 +68,8 @@ To use plain %[1]s (with its own completion and plugins) against the stack:
 
 			kubeconfig := stackKubeconfig(cfg)
 			env, usesStack := passthrough.KubeEnv(os.Environ(), args, kubeconfig)
-			if extraEnv != nil {
-				env = extraEnv(cfg, args, env)
+			if prepare != nil {
+				args, env = prepare(cfg, args, env)
 			}
 
 			return passthrough.Handoff(toolPath, args, env, passthrough.StackHint(usesStack, kubeconfig))
@@ -77,12 +77,52 @@ To use plain %[1]s (with its own completion and plugins) against the stack:
 	}
 }
 
-// helmfileEnv points helmfile at the stack helmfile unless the user set
-// HELMFILE_FILE_PATH or passed -f/--file.
-func helmfileEnv(cfg *config.Config, args, env []string) []string {
+// passthroughPrepare adjusts a passthrough's argv and env after the
+// kubeconfig policy has been applied.
+type passthroughPrepare func(cfg *config.Config, args, env []string) ([]string, []string)
+
+// helmfilePrepare points helmfile at the stack helmfile unless the user set
+// HELMFILE_FILE_PATH or passed -f/--file, and pins helmfile to the helm obol
+// resolves (same rule as internal helmfile runs, see helmcmd.Helmfile) unless
+// the user chose one via -b/--helm-binary or HELMFILE_HELM_BINARY. Without
+// the pin helmfile runs whatever "helm" is first on $PATH, which may be
+// missing or a version obol's charts don't support.
+func helmfilePrepare(cfg *config.Config, args, env []string) ([]string, []string) {
 	env, _ = passthrough.DefaultEnv(env, args, "HELMFILE_FILE_PATH",
 		filepath.Join(cfg.ConfigDir, "helmfile.yaml"), "-f", "--file")
-	return env
+
+	if hasHelmBinaryFlag(args) {
+		return args, env
+	}
+	if v, ok := passthrough.LookupEnv(env, "HELMFILE_HELM_BINARY"); ok && v != "" {
+		return args, env
+	}
+	helm, err := passthrough.ResolveTool(cfg.BinDir, "helm", os.Stderr)
+	if err != nil {
+		// No helm anywhere: let helmfile report it the way it always has.
+		return args, env
+	}
+	// --helm-binary is a helmfile global flag, so it goes before the
+	// subcommand.
+	return append([]string{"--helm-binary", helm}, args...), env
+}
+
+// hasHelmBinaryFlag reports whether the user already picked a helm binary
+// with helmfile's --helm-binary / -b flag (bare, "=value" or the pflag
+// shorthand form "-b/path").
+func hasHelmBinaryFlag(args []string) bool {
+	if passthrough.HasFlag(args, "--helm-binary", "-b") {
+		return true
+	}
+	for _, a := range args {
+		if a == "--" {
+			return false
+		}
+		if strings.HasPrefix(a, "-b") && len(a) > 2 {
+			return true
+		}
+	}
+	return false
 }
 
 // checkGlobalFlagsBeforePassthrough rejects `obol -o json kubectl …`: the

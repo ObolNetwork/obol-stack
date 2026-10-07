@@ -1021,11 +1021,16 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                 # bypasses it (closes the hermes-0day unauthenticated-dashboard
                 # hole). Register the bundled basic-auth provider using the agent's
                 # existing API token as the password (already surfaced to the
-                # operator). Probe path /api/status stays auth-exempt.
+                # operator). Probe path /api/status stays auth-exempt. The
+                # password is read from the same Secret as API_SERVER_KEY so it
+                # never appears as a literal in the Deployment spec.
                 - name: HERMES_DASHBOARD_BASIC_AUTH_USERNAME
                   value: %s
                 - name: HERMES_DASHBOARD_BASIC_AUTH_PASSWORD
-                  value: %s
+                  valueFrom:
+                    secretKeyRef:
+                      name: hermes-api-server
+                      key: API_SERVER_KEY
               readinessProbe:
                 httpGet:
                   path: /api/status
@@ -1121,7 +1126,7 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
               port: %d
 `, desc.DefaultPort, desc.DefaultPort, desc.DefaultPort,
 		quoteYAML(image()), quoteYAML(hermesBinary), dashboardPort, dashboardPort, desc.DefaultPort,
-		quoteYAML(DashboardBasicAuthUsername), quoteYAML(token),
+		quoteYAML(DashboardBasicAuthUsername),
 		dashboardPort, dashboardPort, dashboardPort,
 		desc.DataPVCName,
 		desc.ServiceName, namespace, desc.ServiceName, desc.ServiceName, desc.DefaultPort, dashboardPort,

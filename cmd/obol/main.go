@@ -199,7 +199,7 @@ func newRootCommand(cfg *config.Config) *cli.Command {
 			// ============================================================
 			passthroughCommand(cfg, "kubectl", nil),
 			passthroughCommand(cfg, "helm", nil),
-			passthroughCommand(cfg, "helmfile", helmfileEnv),
+			passthroughCommand(cfg, "helmfile", helmfilePrepare),
 			passthroughCommand(cfg, "k9s", nil),
 			envCommand(cfg),
 			// ============================================================

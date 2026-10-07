@@ -1528,3 +1528,27 @@ func TestSyncDefaults_DoesNotCallDownOnHelmfileFailure(t *testing.T) {
 			"See fix/tolerant-helm-repo-update.")
 	}
 }
+
+// The stale local-path StorageClass must be dropped BEFORE the base release
+// sync, which recreates it with the current (immutable) parameters.
+func TestSyncDefaults_PreparesLocalPathStorageClassBeforeSync_SourceGuard(t *testing.T) {
+	src, err := os.ReadFile("stack.go")
+	if err != nil {
+		t.Fatalf("read stack.go: %v", err)
+	}
+	body := string(src)
+	start := strings.Index(body, "func syncDefaults(")
+	if start < 0 {
+		t.Fatal("syncDefaults not found")
+	}
+	end := strings.Index(body[start+1:], "\nfunc ")
+	if end < 0 {
+		t.Fatal("could not delimit syncDefaults body")
+	}
+	fn := body[start : start+1+end]
+	prep := strings.Index(fn, "kubectl.PrepareLocalPathStorageClass(cfg, u)")
+	sync := strings.Index(fn, `Name: "Deploying default infrastructure"`)
+	if prep < 0 || sync < 0 || prep > sync {
+		t.Fatalf("syncDefaults must prepare local-path StorageClass before the helmfile sync: prep=%d sync=%d", prep, sync)
+	}
+}
