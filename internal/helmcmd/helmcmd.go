@@ -1,12 +1,13 @@
 // Package helmcmd contains small helpers for invoking the pinned helm binary.
 //
 // The main job here is keeping `helmfile sync` working across helm major
-// versions. Helm 4 turned server-side apply on by default; SSA introduces
-// field-ownership conflicts (the apiserver synthesises a "before-first-apply"
-// manager for any field that pre-existed the first SSA call) that helm 4
-// only takes over when --force-conflicts is passed. Helm 3 used client-side
-// apply, has no SSA and rejects --force-conflicts as an unknown flag, so the
-// flag must only be appended on helm 4+.
+// versions. obol pins Helm 4, which server-side applies fresh installs but
+// keeps upgrades on the previous release's method (--server-side=auto), and
+// SSA introduces field-ownership conflicts (the apiserver synthesises a
+// "before-first-apply" manager for any field that pre-existed the first SSA
+// call) that helm only takes over when --force-conflicts is passed. Helm 3
+// (an older obol-managed copy, or OBOL_HELM) used client-side apply and rejects both
+// flags, so they are only appended on helm 4+.
 package helmcmd
 
 import (
@@ -49,22 +50,66 @@ func parseMajor(short string) (int, error) {
 	return major, nil
 }
 
-// SyncFlagsForVersion returns the extra `helmfile sync` flags needed for the
-// detected helm version. On helm 4+ this is --sync-args=--force-conflicts so
-// helm's SSA upgrade can take ownership of fields previously written by other
-// managers (e.g. `kubectl apply`, the `obol model setup` patch on
-// litellm-config.data.config.yaml, or fields recorded under the synthetic
-// "before-first-apply" manager). On helm 3 this returns nil — helm 3 uses
-// client-side apply and rejects --force-conflicts.
+// UpgradeFlagsForVersion returns the extra `helm upgrade --install` flags
+// for the detected helm version: on helm 4+ `--server-side=true
+// --force-conflicts`, on helm 3 (or when detection fails) nil.
 //
-// Detection failures degrade silently to nil so a missing/old helm binary
-// doesn't block the user; the helmfile sync will still surface the real error.
-func SyncFlagsForVersion(helmBinary string) []string {
+// Why both flags:
+//   - --server-side=true: helm 4 upgrades default to --server-side=auto, i.e.
+//     whatever method the previous release revision used. Releases first
+//     installed by helm 3 were client-side applied, so under auto they would
+//     stay client-side forever while fresh installs are SSA. Forcing true
+//     converges every existing release on SSA (one-time switch; afterwards
+//     auto would pick SSA anyway, so passing it on every sync is a no-op).
+//   - --force-conflicts: SSA refuses to overwrite fields owned by another
+//     field manager. After the CSA→SSA switch the apiserver attributes
+//     pre-existing fields to managers like `kubectl-client-side-apply`,
+//     `before-first-apply`, or obol's own `kubectl apply --server-side`
+//     paths (e.g. the `obol model` patch on litellm-config, the hermes
+//     remote-signer password Secret). helm is the source of truth for what it
+//     renders, so it takes ownership — the same last-writer-wins outcome as
+//     helm 3's three-way merge.
+//
+// Helm 3 has no SSA and rejects both flags. Detection failures degrade
+// silently to nil so a missing/odd helm binary doesn't block the user; the
+// helm call itself surfaces the real error.
+func UpgradeFlagsForVersion(helmBinary string) []string {
 	major, err := MajorVersion(helmBinary)
-	if err != nil || major < 4 {
+	if err != nil {
 		return nil
 	}
-	return []string{"--sync-args=--force-conflicts"}
+
+	return upgradeFlagsForMajor(major)
+}
+
+func upgradeFlagsForMajor(major int) []string {
+	if major < 4 {
+		return nil
+	}
+
+	return []string{"--server-side=true", "--force-conflicts"}
+}
+
+// SyncFlagsForVersion returns the extra `helmfile sync` flags for the
+// detected helm version: UpgradeFlagsForVersion's flags wrapped in a single
+// `--sync-args=...` (helmfile splits it on whitespace and appends each word
+// to its `helm upgrade --install` call). nil on helm 3.
+func SyncFlagsForVersion(helmBinary string) []string {
+	major, err := MajorVersion(helmBinary)
+	if err != nil {
+		return nil
+	}
+
+	return syncFlagsForMajor(major)
+}
+
+func syncFlagsForMajor(major int) []string {
+	flags := upgradeFlagsForMajor(major)
+	if len(flags) == 0 {
+		return nil
+	}
+
+	return []string{"--sync-args=" + strings.Join(flags, " ")}
 }
 
 // helmfileRepo mirrors the shape of each entry under the top-level
@@ -174,7 +219,7 @@ func UpdateRepos(helmBinary string, names []string) ([]byte, error) {
 // Helmfile builds a helmfile command that is pinned to helmBinary via
 // --helm-binary. Without it helmfile runs whatever `helm` is first on PATH,
 // while SyncFlagsForVersion probes the obol-resolved binary: with a Helm 4
-// on PATH and the pinned Helm 3 in the bin dir, sync ran Helm 4's
+// on PATH and a Helm 3 in the bin dir, sync ran Helm 4's
 // server-side apply WITHOUT --force-conflicts and failed on field-manager
 // conflicts (e.g. a Secret previously written by `kubectl apply`). Use this
 // for every helmfile invocation so the probed and executed helm match.

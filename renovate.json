@@ -411,13 +411,6 @@
       "groupName": "obolup.sh dependency updates"
     },
     {
-      "description": "Limit Helm to 3.x (Helm 4 is a breaking major)",
-      "matchPackageNames": [
-        "helm/helm"
-      ],
-      "allowedVersions": "<4.0.0"
-    },
-    {
       "description": "Group k3s image updates",
       "matchPackageNames": [
         "rancher/k3s"

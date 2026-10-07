@@ -237,3 +237,50 @@ func TestHelmfile_PinsHelmBinary(t *testing.T) {
 		t.Fatalf("args = %q, want %q", cmd.Args, want)
 	}
 }
+
+func TestSyncAndUpgradeFlagsForMajor(t *testing.T) {
+	if got := upgradeFlagsForMajor(3); got != nil {
+		t.Errorf("helm 3 upgrade flags = %v, want nil (helm 3 rejects --server-side/--force-conflicts)", got)
+	}
+	if got := syncFlagsForMajor(3); got != nil {
+		t.Errorf("helm 3 sync flags = %v, want nil", got)
+	}
+
+	wantUpgrade := []string{"--server-side=true", "--force-conflicts"}
+	wantSync := []string{"--sync-args=--server-side=true --force-conflicts"}
+	for _, major := range []int{4, 5} {
+		if got := upgradeFlagsForMajor(major); !reflect.DeepEqual(got, wantUpgrade) {
+			t.Errorf("helm %d upgrade flags = %v, want %v", major, got, wantUpgrade)
+		}
+		if got := syncFlagsForMajor(major); !reflect.DeepEqual(got, wantSync) {
+			t.Errorf("helm %d sync flags = %v, want %v", major, got, wantSync)
+		}
+	}
+}
+
+func TestSyncFlagsForVersion_ProbesBinary(t *testing.T) {
+	if os.Getenv("GOOS") == "windows" {
+		t.Skip("shell-script fake binary not supported on windows")
+	}
+
+	for _, tc := range []struct {
+		short string
+		want  []string
+	}{
+		{"v4.3.0+gbec5b06", []string{"--sync-args=--server-side=true --force-conflicts"}},
+		{"v3.22.0+g1234567", nil},
+		{"garbage", nil},
+	} {
+		helm := filepath.Join(t.TempDir(), "helm")
+		script := "#!/bin/sh\necho '" + tc.short + "'\n"
+		if err := os.WriteFile(helm, []byte(script), 0o755); err != nil { //nolint:gosec // test binary
+			t.Fatalf("write fake helm: %v", err)
+		}
+		if got := SyncFlagsForVersion(helm); !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("SyncFlagsForVersion(%s) = %v, want %v", tc.short, got, tc.want)
+		}
+	}
+	if got := SyncFlagsForVersion(filepath.Join(t.TempDir(), "missing")); got != nil {
+		t.Errorf("missing helm: got %v, want nil", got)
+	}
+}

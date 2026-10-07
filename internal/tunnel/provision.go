@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
@@ -153,7 +154,7 @@ func helmUpgradeCloudflared(cfg *config.Config, u *ui.UI, kubeconfigPath string)
 		return fmt.Errorf("cloudflared chart not found in %s (re-run 'obol stack init --force' to refresh defaults)", defaultsDir)
 	}
 
-	cmd := exec.Command(helmPath,
+	args := []string{
 		"--kubeconfig", kubeconfigPath,
 		"upgrade",
 		"--install",
@@ -162,7 +163,11 @@ func helmUpgradeCloudflared(cfg *config.Config, u *ui.UI, kubeconfigPath string)
 		"--namespace", tunnelNamespace,
 		"--wait",
 		"--timeout", "2m",
-	)
+	}
+	// Same SSA convergence as every helmfile sync (the release is normally
+	// owned by the defaults helmfile).
+	args = append(args, helmcmd.UpgradeFlagsForVersion(helmPath)...)
+	cmd := exec.Command(helmPath, args...)
 
 	cmd.Dir = defaultsDir
 	if err := u.Exec(ui.ExecConfig{

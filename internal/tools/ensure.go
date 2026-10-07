@@ -80,6 +80,9 @@ func (in *Installer) status(t Tool) Status {
 		s.State = StateMissing
 		if r.Rejected != "" {
 			s.Note = fmt.Sprintf("ignored incompatible %s (v%s)", r.Rejected, r.RejectedVersion)
+			if want := CompatRange(t.Compat, t.Version); want != "" {
+				s.Note += "; obol needs " + want
+			}
 		}
 
 		return s

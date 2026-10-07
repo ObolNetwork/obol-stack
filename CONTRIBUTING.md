@@ -38,7 +38,7 @@ charts/<blockchain-client>/
 
 ### Requirements
 
-- Charts must be compatible with Helm 3
+- Charts must be compatible with Helm 4 (the version obol pins)
 - Include comprehensive documentation
 - Provide sensible defaults in values.yaml
 - Include proper Kubernetes resource requests and limits

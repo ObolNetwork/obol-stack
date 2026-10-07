@@ -57,7 +57,7 @@ fi
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
 readonly KUBECTL_VERSION="1.36.5"
 # renovate: datasource=github-releases depName=helm/helm
-readonly HELM_VERSION="3.22.0"
+readonly HELM_VERSION="4.3.0"
 # renovate: datasource=github-releases depName=k3d-io/k3d
 readonly K3D_VERSION="5.9.0"
 # renovate: datasource=github-releases depName=helmfile/helmfile
@@ -989,6 +989,9 @@ install_helm() {
 			fi
 			return 0
 		fi
+		if [[ -n "$global_version" ]]; then
+			log_info "Ignoring helm v$global_version at $global_helm (obol needs v$HELM_VERSION or newer); installing a managed copy into $OBOL_BIN_DIR"
+		fi
 	fi
 
 	# Check current version in OBOL_BIN_DIR
@@ -1199,8 +1202,19 @@ install_helm_diff() {
 
 	log_info "Installing helm-diff plugin v${HELM_DIFF_VERSION}..."
 
+	# Helm 4 verifies plugin signatures by default and refuses VCS sources
+	# ("plugin source does not support verification"); helm-diff ships no
+	# provenance, so opt out explicitly. Helm 3 has no --verify flag.
+	# (${arr[@]+...} expansion: empty arrays trip set -u on macOS bash 3.2.)
+	local verify_args=()
+	local helm_major
+	helm_major=$("$helm_bin" version --short 2>/dev/null | sed -n 's/^v\([0-9]*\)\..*/\1/p')
+	if [[ -n "$helm_major" ]] && [[ "$helm_major" -ge 4 ]]; then
+		verify_args=(--verify=false)
+	fi
+
 	# Install the plugin with pinned version
-	if "$helm_bin" plugin install https://github.com/databus23/helm-diff --version "v${HELM_DIFF_VERSION}" 2>&1 | grep -q "Installed plugin"; then
+	if "$helm_bin" plugin install https://github.com/databus23/helm-diff --version "v${HELM_DIFF_VERSION}" ${verify_args[@]+"${verify_args[@]}"} 2>&1 | grep -q "Installed plugin"; then
 		log_success "helm-diff plugin v${HELM_DIFF_VERSION} installed"
 		return 0
 	else
