@@ -429,5 +429,6 @@ func runStackUp(ctx context.Context, cfg *config.Config, u *ui.UI, wildcardDNS b
 	// before offers) are documented and test-pinned on internal/replay.Order.
 	// Best-effort per step: a replay failure never fails stack-up.
 	replay.ReplayRecorded(ctx, cfg, u, replayOptions())
+	stack.PrintReady(cfg, u)
 	return nil
 }

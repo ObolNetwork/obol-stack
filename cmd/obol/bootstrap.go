@@ -47,6 +47,7 @@ func bootstrapCommand(cfg *config.Config) *cli.Command {
 			if err := waitForClusterReady(cfg, u); err != nil {
 				return fmt.Errorf("cluster readiness check failed: %w", err)
 			}
+			stack.PrintReady(cfg, u)
 
 			// Step 4: Open browser (only when interactive, local, with a
 			// display — see ui.PlanBrowserOpen). The link is always printed.

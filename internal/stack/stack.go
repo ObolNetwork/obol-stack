@@ -277,6 +277,12 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 	// towards the Hermes wallet migration. Best effort, never fails up.
 	warnLegacyOpenClawNamespaces(cfg, u)
 
+	return nil
+}
+
+// PrintReady prints the "stack is up" banner. Callers print it after any
+// post-Up work (recorded-state replay) so it is the last thing the user sees.
+func PrintReady(cfg *config.Config, u *ui.UI) {
 	u.Blank()
 	u.Bold("Stack started successfully.")
 	ingressURL := LocalIngressURL(cfg)
@@ -285,8 +291,6 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 	}
 	u.Printf("Visit %s in your browser to get started.", DashboardURL(ingressURL, LinkRoot, "", ""))
 	update.HintIfStale(cfg)
-
-	return nil
 }
 
 // Down stops the cluster and the DNS resolver container.
