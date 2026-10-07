@@ -53,6 +53,13 @@ on:
 permissions:
   contents: write
 
+# A tag push delivered twice (seen on v0.15.0-rc3) started two goreleaser runs
+# racing to create the same release. Queue instead of racing; never cancel a
+# release mid-upload.
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # Gate: the released CLI embeds version.GitCommit (short SHA) and Resolve
   # pins deployments to ghcr.io/obolnetwork/<component>:<short-sha>. Those
