@@ -17,6 +17,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/openclaw"
+	"github.com/ObolNetwork/obol-stack/internal/stackbackup"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/urfave/cli/v3"
 )
@@ -350,10 +351,21 @@ Examples:
 				}
 			}
 
-			// Strip status before re-applying so we don't fight the controller.
-			delete(doc, "status")
+			// doc was fetched from the cluster: drop status and server-managed
+			// metadata (resourceVersion, uid, …) before re-applying. Applying
+			// them client-side records them in last-applied-configuration, after
+			// which every clean apply (incl. the stack-up replay) fails with
+			// "resourceVersion: Invalid value: 0". Server-side apply also
+			// recovers objects already carrying that polluted annotation.
+			stackbackup.StripServerManagedMetadata(doc)
+			kubectl.SetManagedBy(doc)
 
-			if _, err := kubectlApplyOutput(cfg, doc); err != nil {
+			raw, err := json.Marshal(doc)
+			if err != nil {
+				return fmt.Errorf("marshal Agent: %w", err)
+			}
+			applyBin, applyKC := kubectl.Paths(cfg)
+			if err := kubectl.ApplyServerSideForceConflicts(applyBin, applyKC, raw, kubectl.FieldManagerObol); err != nil {
 				return fmt.Errorf("apply Agent: %w", err)
 			}
 			// Refresh the host-side record so `obol stack up` replays the

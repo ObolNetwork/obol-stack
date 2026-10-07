@@ -113,7 +113,9 @@ func ResumeAll(cfg *config.Config, u *ui.UI) {
 		if nsErr != nil {
 			u.Warnf("Could not ensure namespace for agent %s: %v", name, nsErr)
 		}
-		if err := kubectl.Apply(bin, kubeconfig, stripped); err != nil {
+		// Server-side apply: unaffected by a stale last-applied-configuration
+		// annotation left by older client-side applies.
+		if err := kubectl.ApplyServerSideForceConflicts(bin, kubeconfig, stripped, kubectl.FieldManagerObol); err != nil {
 			u.Warnf("Could not re-apply agent %s (run 'obol agent new %s' to recreate): %v", name, name, err)
 			continue
 		}
