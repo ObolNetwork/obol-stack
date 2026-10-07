@@ -12,14 +12,25 @@ image:
       value: "https://{{ $publicDomain }}/rpc"
     - name: NEXT_PUBLIC_AZTEC_SEQUENCER_URL
       value: "http://l2-sequencer-node-mainnet-node.aztec.svc.cluster.local:8080"
+    # Sensitive values live in Secret obol-frontend-secrets (base chart,
+    # base/templates/obol-frontend-secrets.yaml), never as literal values:
+    # Deployment specs are readable by the `view` role.
     - name: BETTER_AUTH_SECRET
-      value: {{ env "BETTER_AUTH_SECRET" | default "" | quote }}
+      valueFrom:
+        secretKeyRef:
+          name: obol-frontend-secrets
+          key: BETTER_AUTH_SECRET
+          optional: true
     - name: BETTER_AUTH_URL
       value: "https://{{ $publicDomain }}"
     - name: OBOL_GOOGLE_CLIENT_ID
       value: {{ env "OBOL_GOOGLE_CLIENT_ID" | default "" | quote }}
     - name: OBOL_GOOGLE_CLIENT_SECRET
-      value: {{ env "OBOL_GOOGLE_CLIENT_SECRET" | default "" | quote }}
+      valueFrom:
+        secretKeyRef:
+          name: obol-frontend-secrets
+          key: OBOL_GOOGLE_CLIENT_SECRET
+          optional: true
     - name: OBOL_AUTH_DB_PATH
       value: "/data/auth.sqlite"
 
@@ -54,6 +65,12 @@ image:
   # the mutable-tag attack surface called out by the v0.10.0-rc2 supply-chain
   # review. Multi-arch index digest for v0.1.29-rc0 (linux/amd64 + linux/arm64).
   tag: "v0.1.29-rc0@sha256:b3385e11eee35d982ee54a2e538c49c6a0f6ecfcf7d1aa895e123a25ae0bccde"
+
+# Roll the pod when obol-frontend-secrets changes (secretKeyRef env is only
+# resolved at container start). obol-app only exposes pod-template
+# annotations; Reloader honours those.
+podAnnotations:
+  secret.reloader.stakater.com/reload: "obol-frontend-secrets"
 
 service:
   type: ClusterIP
