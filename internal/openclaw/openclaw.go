@@ -2362,6 +2362,12 @@ func ollamaModelDisplayName(name string) string {
 // Returns the ImportResult for overlay generation, and optionally a CloudProviderInfo
 // when a cloud provider was selected (so the caller can configure LiteLLM).
 func interactiveSetup(cfg *config.Config, imported *ImportResult) (*ImportResult, *CloudProviderInfo, error) {
+	// Raw stdin reads below: without a terminal they would block on an open
+	// pipe (or silently take defaults on EOF).
+	if !ui.StdinPromptable() {
+		return nil, nil, errors.New("provider setup is interactive and there is no terminal; configure models with 'obol model setup --provider <id> --api-key <key>' instead")
+	}
+
 	reader := bufio.NewReader(os.Stdin)
 
 	if imported != nil {

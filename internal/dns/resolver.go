@@ -14,6 +14,7 @@
 package dns
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -22,6 +23,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 const (
@@ -237,8 +240,9 @@ func ensureSudoCached() error {
 	if exec.Command("sudo", "-n", "true").Run() == nil {
 		return nil
 	}
-	if os.Getenv("OBOL_NONINTERACTIVE") == "true" {
-		return fmt.Errorf("sudo credentials not cached")
+
+	if !ui.StdinPromptable() {
+		return errors.New("sudo credentials not cached and no terminal to ask for a password: run 'sudo -v' first")
 	}
 	// Credentials not cached — prompt the user interactively.
 	cmd := exec.Command("sudo", "-v")

@@ -3027,7 +3027,13 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 					ns,
 					name,
 				)
-				if !u.Confirm(msg, false) {
+
+				ok, err := u.ConfirmOrFlag(msg, "--force")
+				if err != nil {
+					return err
+				}
+
+				if !ok {
 					u.Info("Aborted.")
 					return nil
 				}

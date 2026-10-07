@@ -363,9 +363,16 @@ func Delete(cfg *config.Config, id string, force bool, u *ui.UI) error {
 		u.Printf("  [x] Configuration: %s", deploymentDir)
 	}
 
-	if !force && !u.Confirm("\nProceed with deletion?", false) {
-		u.Print("Deletion cancelled")
-		return nil
+	if !force {
+		ok, err := u.ConfirmOrFlag("\nProceed with deletion?", "--force")
+		if err != nil {
+			return err
+		}
+
+		if !ok {
+			u.Print("Deletion cancelled")
+			return nil
+		}
 	}
 
 	if namespaceExists {
