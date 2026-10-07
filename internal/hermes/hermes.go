@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -138,23 +139,36 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 			})); err != nil {
 				u.Warnf("Could not update /etc/hosts for Hermes hostnames: %v", err)
 			}
-			if opts.Sync {
-				installed, err := hermesDeploymentInstalledForOnboard(cfg, id)
-				if err != nil {
-					u.Warnf("Could not check existing Hermes deployment, re-syncing: %v", err)
-				} else if installed {
-					u.Success("Default Hermes instance already installed.")
+			// Always re-render: template/image-pin changes in a newer CLI must
+			// reach an existing install. Only sync when the rendered files
+			// changed or the release is missing, so a warm `stack up` stays fast.
+			before := renderedFilesDigest(deploymentDir)
+			renderErr := writeDeploymentFiles(cfg, id, deploymentDir, currentAgentBaseURL(deploymentDir), u)
+			if !opts.Sync {
+				return renderErr
+			}
+			installed, err := hermesDeploymentInstalledForOnboard(cfg, id)
+			if renderErr != nil {
+				// e.g. no LiteLLM models yet: keep the running deployment
+				// rather than failing `stack up` over a refresh.
+				if err == nil && installed {
+					u.Warnf("Could not refresh the default Hermes deployment (keeping the installed one): %v", renderErr)
 					return nil
 				}
+				return renderErr
+			}
+			switch {
+			case err != nil:
+				u.Warnf("Could not check existing Hermes deployment, re-syncing: %v", err)
+			case !installed:
 				u.Info("Default Hermes deployment not found, re-syncing...")
+			case renderedFilesDigest(deploymentDir) == before:
+				u.Success("Default Hermes instance already installed.")
+				return nil
+			default:
+				u.Info("Default Hermes deployment files changed, re-syncing...")
 			}
-			if err := writeDeploymentFiles(cfg, id, deploymentDir, currentAgentBaseURL(deploymentDir), u); err != nil {
-				return err
-			}
-			if opts.Sync {
-				return Sync(cfg, id, u)
-			}
-			return nil
+			return Sync(cfg, id, u)
 		}
 	}
 
@@ -1546,4 +1560,19 @@ func fixRuntimeVolumeOwnership(cfg *config.Config, hostPath string, u *ui.UI) {
 	default:
 		_ = os.Chown(hostPath, containerUID, containerGID)
 	}
+}
+
+// renderedFilesDigest hashes the files writeDeploymentFiles renders, so callers
+// can tell whether a re-render changed anything. Missing files hash as empty.
+func renderedFilesDigest(deploymentDir string) string {
+	h := sha256.New()
+	for _, name := range []string{valuesFileName, helmfileFileName} {
+		data, _ := os.ReadFile(filepath.Join(deploymentDir, name))
+		h.Write([]byte(name))
+		h.Write([]byte{0})
+		h.Write(data)
+		h.Write([]byte{0})
+	}
+
+	return hex.EncodeToString(h.Sum(nil))
 }
