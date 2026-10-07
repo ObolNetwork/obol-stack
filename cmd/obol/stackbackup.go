@@ -48,15 +48,17 @@ func stackImportCommand(cfg *config.Config) *cli.Command {
 		Name:      "import",
 		Usage:     "Restore a stack from an 'obol stack export' archive",
 		ArgsUsage: "<archive.tar.gz>",
-		Description: `Restores host config and agent data first, so the next 'obol stack up'
-mounts the right agent brains and wallet keystores. When the cluster is
-already running, etcd-resident resources (Agent CRs, ServiceOffers, LiteLLM
-and eRPC config) are re-applied and agent instances re-synced.
+		Description: `Restores host config and agent data (re-pointing absolute paths to this
+host), brings the restored stack up with 'obol stack up' when its cluster is
+not running, then re-applies etcd-resident resources (Agent CRs,
+ServiceOffers, LiteLLM and eRPC config) and re-syncs agent instances.
 
-Typical flow on a clean host:
-  obol stack import backup.tar.gz   # restores host state
-  obol stack up                     # cluster comes up with restored data
-  obol stack import backup.tar.gz --cluster-only`,
+On a clean host this is one command:
+  obol stack import backup.tar.gz
+
+Over a fresh 'obol stack init' (and 'up'), pass --force. A pre-import
+cluster that holds no agents or offers is removed so the restored stack can
+claim the ingress ports; one that does is never deleted.`,
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  "force",
@@ -68,7 +70,7 @@ Typical flow on a clean host:
 			},
 			&cli.BoolFlag{
 				Name:  "cluster-only",
-				Usage: "Re-apply cluster resources only (after 'obol stack up')",
+				Usage: "Re-apply cluster resources only (host state already restored)",
 			},
 			&cli.BoolFlag{
 				Name:  "skip-sync",
@@ -79,13 +81,15 @@ Typical flow on a clean host:
 			if cmd.Args().Len() != 1 {
 				return cli.Exit("usage: obol stack import <archive.tar.gz>", 1)
 			}
+			u := getUI(cmd)
 			return stackbackup.Import(cfg, stackbackup.ImportOptions{
 				Input:       cmd.Args().First(),
 				Force:       cmd.Bool("force"),
 				SkipCluster: cmd.Bool("skip-cluster"),
 				ClusterOnly: cmd.Bool("cluster-only"),
 				SkipSync:    cmd.Bool("skip-sync"),
-			}, getUI(cmd))
+				StackUp:     func() error { return runStackUp(ctx, cfg, u, false) },
+			}, u)
 		},
 	}
 }
