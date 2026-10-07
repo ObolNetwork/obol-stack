@@ -1,0 +1,4 @@
+$env:KUBECONFIG = '/home/o b/.config/obol/kubeconfig.yaml'
+if (-not (($env:PATH -split [IO.Path]::PathSeparator) -contains '/home/o b/.local/bin')) { $env:PATH = '/home/o b/.local/bin' + [IO.Path]::PathSeparator + $env:PATH }
+# Run this command to configure your shell:
+# obol env --shell pwsh | Invoke-Expression

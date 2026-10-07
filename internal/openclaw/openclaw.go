@@ -26,6 +26,7 @@ import (
 	obolembed "github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"github.com/ObolNetwork/obol-stack/internal/model"
+	"github.com/ObolNetwork/obol-stack/internal/passthrough"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/validate"
@@ -1526,27 +1527,24 @@ func SkillsSync(cfg *config.Config, id, skillsDir string, u *ui.UI) error {
 // openclaw CLI inside the pod via kubectl exec.
 func SkillAdd(cfg *config.Config, id string, args []string, u *ui.UI) error {
 	_ = u // interactive passthrough — subprocess owns stdout/stderr
-	namespace := fmt.Sprintf("%s-%s", appName, id)
 
-	return cliViaKubectlExec(cfg, namespace, append([]string{"skills", "add"}, args...))
+	return cliViaKubectlExec(cfg, id, append([]string{"skills", "add"}, args...))
 }
 
 // SkillRemove removes a skill from a deployed OpenClaw instance by running the
 // native openclaw CLI inside the pod via kubectl exec.
 func SkillRemove(cfg *config.Config, id string, args []string, u *ui.UI) error {
 	_ = u // interactive passthrough — subprocess owns stdout/stderr
-	namespace := fmt.Sprintf("%s-%s", appName, id)
 
-	return cliViaKubectlExec(cfg, namespace, append([]string{"skills", "remove"}, args...))
+	return cliViaKubectlExec(cfg, id, append([]string{"skills", "remove"}, args...))
 }
 
 // SkillList lists skills installed on a deployed OpenClaw instance by running
 // the native openclaw CLI inside the pod via kubectl exec.
 func SkillList(cfg *config.Config, id string, u *ui.UI) error {
 	_ = u // interactive passthrough — subprocess owns stdout/stderr
-	namespace := fmt.Sprintf("%s-%s", appName, id)
 
-	return cliViaKubectlExec(cfg, namespace, []string{"skills", "list"})
+	return cliViaKubectlExec(cfg, id, []string{"skills", "list"})
 }
 
 // remoteCapableCommands lists openclaw subcommands that support --url and --token flags.
@@ -1583,10 +1581,15 @@ func CLI(cfg *config.Config, id string, args []string, u *ui.UI) error {
 		return cliViaPortForward(cfg, id, namespace, args)
 	}
 
-	return cliViaKubectlExec(cfg, namespace, args)
+	return cliViaKubectlExec(cfg, id, args)
 }
 
-// cliViaPortForward runs an openclaw command locally with port-forward + --url/--token.
+// cliViaPortForward runs an openclaw command locally with port-forward +
+// --url/--token. The openclaw binary runs as a child (not exec) so the
+// port-forward is always stopped afterwards — on success, failure, or a
+// signal (SIGTERM/SIGHUP are forwarded to the child; Ctrl-C reaches it via
+// the terminal). A non-zero exit is returned as *passthrough.ExitError so obol
+// exits with the same status after the deferred cleanup.
 func cliViaPortForward(cfg *config.Config, id, namespace string, args []string) error {
 	openclawBinary, err := findOpenClawBinary(cfg)
 	if err != nil {
@@ -1608,77 +1611,36 @@ func cliViaPortForward(cfg *config.Config, id, namespace string, args []string) 
 	wsURL := fmt.Sprintf("ws://localhost:%d", pf.localPort)
 	fullArgs := append(append([]string{}, args...), "--url", wsURL, "--token", token)
 
-	cmd := exec.Command(openclawBinary, fullArgs...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	// Handle signals to clean up port-forward
-	sigCh := make(chan os.Signal, 1)
-
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigCh)
-
-	go func() {
-		<-sigCh
-		pf.Stop()
-	}()
-
-	if err := cmd.Run(); err != nil {
-		exitErr := &exec.ExitError{}
-		if errors.As(err, &exitErr) {
-			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-				os.Exit(status.ExitStatus()) //nolint:gocritic // intentional exit to propagate child exit code; defers handle cleanup
-			}
-		}
-
+	code, err := passthrough.Run(openclawBinary, fullArgs, os.Environ())
+	if err != nil {
 		return err
 	}
-
+	if code != 0 {
+		return &passthrough.ExitError{Code: code}
+	}
 	return nil
 }
 
-// cliViaKubectlExec runs an openclaw command inside the pod via kubectl exec.
-func cliViaKubectlExec(cfg *config.Config, namespace string, args []string) error {
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return errors.New("cluster not running. Run 'obol stack up' first")
+// cliViaKubectlExec runs `node openclaw.mjs <args>` inside the instance's pod
+// via the shared agentruntime.ExecInPod (container openclaw — the pod also has
+// an init container; -t only when stdin and stdout are terminals).
+func cliViaKubectlExec(cfg *config.Config, id string, args []string) error {
+	return agentruntime.ExecInPod(cfg, agentruntime.OpenClaw, id, append([]string{"node", "openclaw.mjs"}, args...))
+}
+
+// CLIArgs returns the openclaw argv for `obol openclaw cli [instance] [--] <args…>`
+// given what ResolveInstance left over: a leading instance name equal to id
+// is dropped (ResolveInstance keeps it when only one instance exists), then
+// one "--" separator; everything else is forwarded verbatim, including
+// arguments before a later "--".
+func CLIArgs(id string, remaining []string) []string {
+	if len(remaining) > 0 && remaining[0] == id {
+		remaining = remaining[1:]
 	}
-
-	kubectlBinary := cfg.ToolPath("kubectl")
-
-	// Build: kubectl exec -it -c openclaw -n <ns> deploy/openclaw -- node openclaw.mjs <args>
-	// The pod runs `node openclaw.mjs` (no standalone binary in PATH).
-	// -c openclaw is required because the pod has an init container (extract-skills).
-	execArgs := []string{
-		"exec", "-it",
-		"-c", "openclaw",
-		"-n", namespace,
-		"deploy/openclaw",
-		"--",
-		"node", "openclaw.mjs",
+	if len(remaining) > 0 && remaining[0] == "--" {
+		remaining = remaining[1:]
 	}
-	execArgs = append(execArgs, args...)
-
-	cmd := exec.Command(kubectlBinary, execArgs...)
-
-	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		exitErr := &exec.ExitError{}
-		if errors.As(err, &exitErr) {
-			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-				os.Exit(status.ExitStatus())
-			}
-		}
-
-		return err
-	}
-
-	return nil
+	return append([]string{}, remaining...)
 }
 
 // SyncOverlayModels updates all deployed OpenClaw instances to match the

@@ -433,12 +433,22 @@ obol upgrade         # Apply chart upgrades
 obol k9s             # Interactive cluster UI
 ```
 
-The `obol` CLI wraps `kubectl`, `helm`, `helmfile`, and `k9s` with the correct KUBECONFIG:
+The `obol` CLI wraps `kubectl`, `helm`, `helmfile`, and `k9s` pointed at the stack's kubeconfig — an exported `KUBECONFIG` in your shell is ignored; only an explicit `--kubeconfig` argument overrides it. Arguments go to the tool unchanged, so put tool flags after the tool name:
 
 ```bash
-obol kubectl get pods --all-namespaces
+obol kubectl get pods --all-namespaces -o wide
 obol helm list --all-namespaces
 ```
+
+To use the plain tools (with their own completion and plugins such as krew) against the stack, load the stack environment into your shell:
+
+```bash
+eval "$(obol env)"                  # bash/zsh; fish: obol env --shell fish | source
+kubectl get pods -A
+eval "$(obol env --unset)"          # undo
+```
+
+For direnv, add `eval "$(obol env --shell bash)"` to `.envrc`.
 
 ## Troubleshooting
 

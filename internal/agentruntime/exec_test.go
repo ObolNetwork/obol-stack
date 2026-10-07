@@ -169,8 +169,10 @@ func TestExecInPod_EmptyArgvRejected(t *testing.T) {
 
 func TestExecInPod_ClusterDownErrorMessage(t *testing.T) {
 	// Empty ConfigDir means kubeconfig.yaml does not exist → human-readable error,
-	// not a kubectl crash. Lets `obol buy inference` produce a usable message
-	// when the cluster isn't running.
+	// not a kubectl crash.
+	// An ambient KUBECONFIG must not bypass the gate (ExecInPod is pinned to
+	// the stack kubeconfig).
+	t.Setenv("KUBECONFIG", "/some/other/kubeconfig")
 	cfg := &config.Config{ConfigDir: t.TempDir(), BinDir: t.TempDir()}
 	err := ExecInPod(cfg, Hermes, DefaultInstanceID, []string{"true"})
 	if err == nil {

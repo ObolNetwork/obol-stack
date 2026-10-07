@@ -174,9 +174,14 @@ Needs a running stack.
 To see the native openclaw commands (stack must be running):
   obol openclaw cli -- --help
 
+The instance name is optional when only one instance exists. A single '--'
+after it is dropped; every other argument (including a later '--') is passed
+to openclaw verbatim.
+
 Examples:
   obol openclaw cli -- gateway health
-  obol openclaw cli default -- doctor`,
+  obol openclaw cli default -- doctor
+  obol openclaw cli default gateway call config.get`,
 				SkipFlagParsing: true,
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					args := cmd.Args().Slice()
@@ -193,19 +198,7 @@ Examples:
 							"  obol openclaw cli default -- doctor", err)
 					}
 
-					// Strip the "--" separator if present
-					var openclawArgs []string
-
-					for i, arg := range remaining {
-						if arg == "--" {
-							openclawArgs = remaining[i+1:]
-							break
-						}
-					}
-
-					if len(openclawArgs) == 0 && len(remaining) > 0 {
-						openclawArgs = remaining
-					}
+					openclawArgs := openclaw.CLIArgs(id, remaining)
 
 					return openclaw.CLI(cfg, id, openclawArgs, getUI(cmd))
 				},

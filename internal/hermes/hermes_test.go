@@ -590,6 +590,7 @@ func TestResolveCLIInvocation(t *testing.T) {
 		name      string
 		instances []string
 		input     []string
+		envAgent  string
 		wantID    string
 		wantArgs  []string
 		wantErr   string
@@ -627,16 +628,54 @@ func TestResolveCLIInvocation(t *testing.T) {
 			wantArgs:  []string{"--help"},
 		},
 		{
+			name:      "leading separator without selector",
+			instances: []string{agentruntime.DefaultInstanceID},
+			input:     []string{"--", "--help"},
+			wantID:    agentruntime.DefaultInstanceID,
+			wantArgs:  []string{"--help"},
+		},
+		{
+			name:      "later --agent belongs to hermes",
+			instances: []string{agentruntime.DefaultInstanceID, "research"},
+			input:     []string{"chat", "-q", "--agent=x", "--", "--agent", "y"},
+			wantID:    agentruntime.DefaultInstanceID,
+			wantArgs:  []string{"chat", "-q", "--agent=x", "--", "--agent", "y"},
+		},
+		{
+			name:      "separator escapes a hermes --agent",
+			instances: []string{agentruntime.DefaultInstanceID},
+			input:     []string{"--", "--agent", "x", "chat"},
+			wantID:    agentruntime.DefaultInstanceID,
+			wantArgs:  []string{"--agent", "x", "chat"},
+		},
+		{
+			name:      "OBOL_AGENT selects instance",
+			instances: []string{agentruntime.DefaultInstanceID, "research"},
+			envAgent:  "research",
+			input:     []string{"chat"},
+			wantID:    "research",
+			wantArgs:  []string{"chat"},
+		},
+		{
+			name:      "leading --agent beats OBOL_AGENT",
+			instances: []string{agentruntime.DefaultInstanceID, "research"},
+			envAgent:  "research",
+			input:     []string{"--agent", agentruntime.DefaultInstanceID, "chat"},
+			wantID:    agentruntime.DefaultInstanceID,
+			wantArgs:  []string{"chat"},
+		},
+		{
 			name:      "missing agent value",
 			instances: []string{agentruntime.DefaultInstanceID},
 			input:     []string{"--agent"},
 			wantErr:   "--agent requires an instance name",
 		},
 		{
-			name:      "duplicate agent selector",
+			name:      "second --agent is passed to hermes",
 			instances: []string{agentruntime.DefaultInstanceID, "research"},
 			input:     []string{"--agent", agentruntime.DefaultInstanceID, "--agent=research", "version"},
-			wantErr:   "--agent specified multiple times",
+			wantID:    agentruntime.DefaultInstanceID,
+			wantArgs:  []string{"--agent=research", "version"},
 		},
 		{
 			name:      "unknown explicit agent",
@@ -652,6 +691,7 @@ func TestResolveCLIInvocation(t *testing.T) {
 			for _, id := range tt.instances {
 				mkdirInstance(t, cfg, id)
 			}
+			t.Setenv(AgentEnvVar, tt.envAgent)
 
 			gotID, gotArgs, err := ResolveCLIInvocation(cfg, tt.input)
 			if tt.wantErr != "" {
