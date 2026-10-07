@@ -71,6 +71,12 @@ func newRootCommand(cfg *config.Config) *cli.Command {
 				Value:   "human",
 				Sources: cli.EnvVars("OBOL_OUTPUT"),
 			},
+			&cli.BoolFlag{
+				// OBOL_NO_BROWSER is read by ui.PlanBrowserOpen directly
+				// (any non-empty value except 0/false/no), not bound here.
+				Name:  "no-open",
+				Usage: "Never open a browser (or set OBOL_NO_BROWSER=1); links are still printed",
+			},
 		},
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
 			outputMode, err := ui.ParseOutputMode(cmd.String("output"))
@@ -80,6 +86,7 @@ func newRootCommand(cfg *config.Config) *cli.Command {
 				return ctx, fmt.Errorf("%w; to write an export or backup to a path, use --file", err)
 			}
 			u := ui.NewWithAllOptions(cmd.Bool("verbose"), cmd.Bool("quiet"), outputMode)
+			u.SetNoBrowser(cmd.Bool("no-open"))
 			cmd.Metadata = map[string]any{"ui": u}
 
 			return ctx, nil
@@ -172,6 +179,7 @@ func newRootCommand(cfg *config.Config) *cli.Command {
 							if err := resumeSellOffers(ctx, cfg, u); err != nil {
 								u.Warnf("Could not resume sell offers: %v", err)
 							}
+							printStackUpLinks(cfg, u)
 							return nil
 						},
 					},

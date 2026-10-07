@@ -15,6 +15,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/validate"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
@@ -404,6 +405,8 @@ func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) 
 		u.Dim("  Other agents are unchanged. To make this the default for every agent in the stack:")
 		u.Dim(fmt.Sprintf("    obol model prefer paid/%s", chosenModel))
 	}
+	u.Blank()
+	u.OpenURL("Purchases", dashboardURL(cfg, stack.LinkPurchases, "", ""), false)
 	return nil
 }
 

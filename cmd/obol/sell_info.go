@@ -14,6 +14,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/storefront"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
@@ -166,6 +167,7 @@ storefront identity on that origin only — fields you don't set inherit:
 					break
 				}
 			}
+			prompted := false
 			if anyFlag {
 				// Flag mode: patch only the fields the operator passed.
 				if cmd.IsSet("logo-url") && cmd.IsSet("logo-file") {
@@ -234,6 +236,7 @@ storefront identity on that origin only — fields you don't set inherit:
 				}
 			} else {
 				// No flags: prompt interactively (pre-filled with effective values).
+				prompted = true
 				if !u.IsTTY() {
 					return errors.New("no flags given and not a TTY: pass --display-name, --tagline, --logo-url, --logo-file, and/or --contact-email")
 				}
@@ -305,6 +308,9 @@ storefront identity on that origin only — fields you don't set inherit:
 			printSellerProfile(u, published)
 			u.Blank()
 			u.Dim("Preview: obol sell info")
+			// Auto-open the storefront editor only when the operator just
+			// walked through the interactive prompts.
+			u.OpenURL("Storefront", dashboardURL(cfg, stack.LinkStorefront, "", ""), prompted)
 			return nil
 		},
 	}
@@ -914,13 +920,13 @@ func sellerBaseURL(cfg *config.Config) (string, error) {
 	if url, err := tunnel.GetTunnelURL(cfg); err == nil && strings.TrimSpace(url) != "" {
 		return strings.TrimRight(strings.TrimSpace(url), "/"), nil
 	}
-	return "http://obol.stack:8080", nil
+	return stack.LocalIngressURL(cfg), nil
 }
 
 func mustSellerBaseURL(cfg *config.Config) string {
 	baseURL, err := sellerBaseURL(cfg)
 	if err != nil || baseURL == "" {
-		return "http://obol.stack:8080"
+		return stack.LocalIngressURL(cfg)
 	}
 	return baseURL
 }

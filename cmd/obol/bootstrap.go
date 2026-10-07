@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -49,13 +48,13 @@ func bootstrapCommand(cfg *config.Config) *cli.Command {
 				return fmt.Errorf("cluster readiness check failed: %w", err)
 			}
 
-			// Step 4: Open browser
-			url := stack.LocalIngressURL(cfg)
-			u.Infof("Opening browser to %s", url)
-
-			if err := openBrowser(url); err != nil {
-				u.Warnf("Failed to open browser: %v", err)
-				u.Printf("  Please open manually: %s", url)
+			// Step 4: Open browser (only when interactive, local, with a
+			// display — see ui.PlanBrowserOpen). The link is always printed.
+			url := stack.DashboardURL(stack.LocalIngressURL(cfg), stack.LinkRoot, "", "")
+			if u.OpenURL("Dashboard", url, true) {
+				// The installer already showed the UI; `stack up` must not
+				// open it again as a "first run".
+				_ = stack.WriteMarker(cfg, stack.MarkerUIOpened)
 			}
 
 			u.Blank()
@@ -157,22 +156,4 @@ func waitForClusterReady(cfg *config.Config, u *ui.UI) error {
 	})
 
 	return err
-}
-
-// openBrowser opens the default browser to the specified URL
-func openBrowser(url string) error {
-	var cmd *exec.Cmd
-
-	switch runtime.GOOS {
-	case "linux":
-		cmd = exec.Command("xdg-open", url)
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", url)
-	default:
-		return fmt.Errorf("unsupported platform: %s", runtime.GOOS)
-	}
-
-	return cmd.Start()
 }

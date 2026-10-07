@@ -42,3 +42,16 @@ func TestStackConfigVersionApplyArgs_ServerSideApply(t *testing.T) {
 		}
 	}
 }
+
+func TestStackConfigVersionManifest(t *testing.T) {
+	m := stackConfigVersionManifest("v1.2.3", "http://obol.stack:8080/")
+	if !strings.Contains(m, `obolVersion: "v1.2.3"`) || !strings.Contains(m, `localURL: "http://obol.stack:8080"`) {
+		t.Fatalf("manifest missing keys:\n%s", m)
+	}
+	if strings.Contains(m, "tunnelURL") {
+		t.Fatalf("manifest must not carry tunnelURL (owned by another field manager):\n%s", m)
+	}
+	if strings.Contains(stackConfigVersionManifest("v1", ""), "localURL") {
+		t.Fatal("empty localURL should be omitted")
+	}
+}

@@ -47,9 +47,11 @@ type UI struct {
 	quiet   bool
 	isTTY   bool
 	output  OutputMode
-	stdout  io.Writer
-	stderr  io.Writer
-	mu      sync.Mutex
+	// noBrowser disables automatic browser opens (global --no-open).
+	noBrowser bool
+	stdout    io.Writer
+	stderr    io.Writer
+	mu        sync.Mutex
 }
 
 // New creates a UI instance. When verbose is true, subprocess output is

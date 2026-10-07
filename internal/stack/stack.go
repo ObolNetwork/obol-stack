@@ -291,7 +291,7 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 	if ingressURL != "http://obol.stack" {
 		u.Warnf("Default ingress ports are in use by another process — use %s instead", ingressURL)
 	}
-	u.Printf("Visit %s in your browser to get started.", ingressURL)
+	u.Printf("Visit %s in your browser to get started.", DashboardURL(ingressURL, LinkRoot, "", ""))
 	update.HintIfStale(cfg)
 
 	return nil
@@ -535,8 +535,9 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 
 	u.Success("Default infrastructure deployed")
 
-	// Publish the running CLI version for the local frontend footer.
-	if err := tunnel.SyncStackConfigVersion(cfg); err != nil {
+	// Publish the running CLI version (frontend footer) and the host-side
+	// local ingress URL (serviceoffer-controller's local origin).
+	if err := tunnel.SyncStackConfigVersion(cfg, LocalIngressURL(cfg)); err != nil {
 		u.Warnf("Could not publish Obol version to frontend config: %v", err)
 	}
 

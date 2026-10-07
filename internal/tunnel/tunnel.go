@@ -1046,13 +1046,32 @@ func stackConfigVersionApplyArgs(kubeconfigPath string) []string {
 	}
 }
 
-// SyncStackConfigVersion SSA-merges only obolVersion into
+// SyncStackConfigVersion SSA-merges obolVersion and localURL into
 // obol-frontend/obol-stack-config, leaving tunnelURL untouched. Used on stack
 // up when no tunnel sync runs yet (after infra deploy creates the namespace).
-func SyncStackConfigVersion(cfg *config.Config) error {
+//
+// localURL is the host-side base URL of the local ingress (stack.LocalIngressURL,
+// e.g. http://obol.stack or http://obol.stack:8080). The in-cluster
+// serviceoffer-controller cannot probe host ports, so it reads this key to
+// publish the right local origin in /openapi.json `servers` and as its
+// no-tunnel base URL. Both keys are owned by the same dedicated field
+// manager, so they must always be sent together.
+func SyncStackConfigVersion(cfg *config.Config, localURL string) error {
 	kubectlPath := cfg.ToolPath("kubectl")
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 
+	cmd := exec.Command(kubectlPath, stackConfigVersionApplyArgs(kubeconfigPath)...)
+	cmd.Stdin = strings.NewReader(stackConfigVersionManifest(version.Version, localURL))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("kubectl apply obol-stack-config failed: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// stackConfigVersionManifest renders the obolVersion(+localURL) ConfigMap
+// applied by SyncStackConfigVersion. tunnelURL is deliberately absent (see
+// stackConfigVersionFieldManager).
+func stackConfigVersionManifest(obolVersion, localURL string) string {
 	manifest := fmt.Sprintf(`apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -1060,14 +1079,11 @@ metadata:
   namespace: obol-frontend
 data:
   obolVersion: %q
-`, version.Version)
-
-	cmd := exec.Command(kubectlPath, stackConfigVersionApplyArgs(kubeconfigPath)...)
-	cmd.Stdin = strings.NewReader(manifest)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("kubectl apply obol-stack-config failed: %w: %s", err, strings.TrimSpace(string(out)))
+`, obolVersion)
+	if localURL = strings.TrimRight(strings.TrimSpace(localURL), "/"); localURL != "" {
+		manifest += fmt.Sprintf("  localURL: %q\n", localURL)
 	}
-	return nil
+	return manifest
 }
 
 // EnsureTunnelForSell ensures the tunnel is running and propagates the URL to
