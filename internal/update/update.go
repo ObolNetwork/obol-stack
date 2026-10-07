@@ -4,12 +4,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
 	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/network"
 	"github.com/ObolNetwork/obol-stack/internal/tools"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
@@ -207,6 +209,13 @@ func ApplyUpgrades(cfg *config.Config, u *ui.UI, opts UpgradeOptions) error {
 		}
 	}
 
+	// StorageClass parameters are immutable: drop a local-path class that
+	// predates allowUnsafePathPattern so the base release sync recreates it.
+	// Only when base is part of this sync, or nothing would recreate it.
+	if syncsBaseRelease(selectors) {
+		kubectl.PrepareLocalPathStorageClass(cfg, u)
+	}
+
 	// Helm never upgrades crds/, so bring CRDs up to the target chart
 	// versions before syncing.
 	if err := applyChartCRDs(cfg, u, helmfilePath, kubeconfigPath, selectors); err != nil {
@@ -271,6 +280,16 @@ func ApplyUpgrades(cfg *config.Config, u *ui.UI, opts UpgradeOptions) error {
 	}
 
 	return nil
+}
+
+// syncsBaseRelease reports whether a helmfile sync with these --selector
+// values (empty = every release) includes the base release, which owns the
+// local-path StorageClass.
+func syncsBaseRelease(selectors []string) bool {
+	if len(selectors) == 0 {
+		return true
+	}
+	return slices.Contains(selectors, "name=base")
 }
 
 // checkSkippedMajorUpdates checks the on-disk helmfile for charts where a major

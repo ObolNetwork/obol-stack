@@ -21,10 +21,13 @@ import (
 // obolHarness runs this test binary as `obol` with stub tools.
 type obolHarness struct {
 	configDir string
+	stubsDir  string
 	env       []string
 }
 
 const stackKC = "<stack>" // placeholder for the harness' stack kubeconfig
+
+const stubHelm = "<helm>" // placeholder (in wantArgv) for the harness' stub helm path
 
 func newObolHarness(t *testing.T, kubeconfigExists bool) *obolHarness {
 	t.Helper()
@@ -54,7 +57,7 @@ func newObolHarness(t *testing.T, kubeconfigExists bool) *obolHarness {
 	var env []string
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
-		if k == "KUBECONFIG" || k == "HELMFILE_FILE_PATH" || strings.HasPrefix(k, "OBOL_") || strings.HasPrefix(k, "STUB_") {
+		if k == "KUBECONFIG" || k == "HELMFILE_FILE_PATH" || k == "HELMFILE_HELM_BINARY" || strings.HasPrefix(k, "OBOL_") || strings.HasPrefix(k, "STUB_") {
 			continue
 		}
 		env = append(env, kv)
@@ -69,7 +72,7 @@ func newObolHarness(t *testing.T, kubeconfigExists bool) *obolHarness {
 		"OBOL_HELM="+filepath.Join(stubs, "helm"),
 		"OBOL_HELMFILE="+filepath.Join(stubs, "helmfile"),
 	)
-	return &obolHarness{configDir: cfgDir, env: env}
+	return &obolHarness{configDir: cfgDir, stubsDir: stubs, env: env}
 }
 
 func (h *obolHarness) command(extraEnv []string, args ...string) *exec.Cmd {
@@ -187,12 +190,37 @@ func TestPassthrough_Golden(t *testing.T) {
 			args:         []string{"helm", "template", "x"}, wantArgv: []string{"template", "x"}, wantKC: stackKC, wantExit: 143,
 		},
 		{
-			name: "helmfile gets stack helmfile path",
-			args: []string{"helmfile", "list"}, wantArgv: []string{"list"}, wantKC: stackKC, wantHelmfile: "<helmfile>",
+			name: "helmfile gets stack helmfile path and obol's helm",
+			args: []string{"helmfile", "list"}, wantArgv: []string{"--helm-binary", stubHelm, "list"}, wantKC: stackKC, wantHelmfile: "<helmfile>",
 		},
 		{
 			name: "helmfile -f wins",
-			args: []string{"helmfile", "-f", "my.yaml", "list"}, wantArgv: []string{"-f", "my.yaml", "list"}, wantKC: stackKC,
+			args: []string{"helmfile", "-f", "my.yaml", "list"}, wantArgv: []string{"--helm-binary", stubHelm, "-f", "my.yaml", "list"}, wantKC: stackKC,
+		},
+		{
+			name: "helmfile --helm-binary from user wins",
+			args: []string{"helmfile", "--helm-binary", "/my/helm", "sync"}, wantArgv: []string{"--helm-binary", "/my/helm", "sync"}, wantKC: stackKC, wantHelmfile: "<helmfile>",
+		},
+		{
+			name: "helmfile --helm-binary= from user wins",
+			args: []string{"helmfile", "list", "--helm-binary=/my/helm"}, wantArgv: []string{"list", "--helm-binary=/my/helm"}, wantKC: stackKC, wantHelmfile: "<helmfile>",
+		},
+		{
+			name: "helmfile -b from user wins",
+			args: []string{"helmfile", "-b", "/my/helm", "list"}, wantArgv: []string{"-b", "/my/helm", "list"}, wantKC: stackKC, wantHelmfile: "<helmfile>",
+		},
+		{
+			name: "helmfile -b<path> shorthand from user wins",
+			args: []string{"helmfile", "-b/my/helm", "list"}, wantArgv: []string{"-b/my/helm", "list"}, wantKC: stackKC, wantHelmfile: "<helmfile>",
+		},
+		{
+			name: "helmfile HELMFILE_HELM_BINARY from user wins",
+			env:  []string{"HELMFILE_HELM_BINARY=/my/helm"},
+			args: []string{"helmfile", "list"}, wantArgv: []string{"list"}, wantKC: stackKC, wantHelmfile: "<helmfile>",
+		},
+		{
+			name: "helm passthrough is not given --helm-binary",
+			args: []string{"helm", "list"}, wantArgv: []string{"list"}, wantKC: stackKC,
 		},
 		{
 			name: "global flag via env is not an error",
@@ -207,8 +235,14 @@ func TestPassthrough_Golden(t *testing.T) {
 			if rep.Argv == nil {
 				t.Fatalf("stub did not run; stdout=%q stderr=%q", stdout, stderr)
 			}
-			if !reflect.DeepEqual(rep.Argv, tc.wantArgv) {
-				t.Errorf("argv = %q, want %q", rep.Argv, tc.wantArgv)
+			wantArgv := append([]string(nil), tc.wantArgv...)
+			for i, a := range wantArgv {
+				if a == stubHelm {
+					wantArgv[i] = filepath.Join(h.stubsDir, "helm")
+				}
+			}
+			if !reflect.DeepEqual(rep.Argv, wantArgv) {
+				t.Errorf("argv = %q, want %q", rep.Argv, wantArgv)
 			}
 			wantKC := tc.wantKC
 			if wantKC == stackKC {

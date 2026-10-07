@@ -344,9 +344,9 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		"name: GATEWAY_HEALTH_URL",
 		"HERMES_DASHBOARD_BASIC_AUTH_USERNAME",
 		"HERMES_DASHBOARD_BASIC_AUTH_PASSWORD",
-		// Username is fixed; password is the agent API token (API_SERVER_KEY).
+		// Username is fixed; password is the agent API token (API_SERVER_KEY),
+		// read from the hermes-api-server Secret.
 		`value: "obol"`,
-		`value: "secret-token"`,
 		// Must track HERMES_HOME: v2026.7.x images bake
 		// HERMES_WRITE_SAFE_ROOT=/opt/data and deny all file-tool
 		// writes outside the safe root.
@@ -364,18 +364,13 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		!strings.Contains(values, "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD") {
 		t.Fatalf("generateValues() missing dashboard basic-auth env wiring:\n%s", values)
 	}
-	// Password env must carry the same token as API_SERVER_KEY (secret-token in this fixture).
-	if idx := strings.Index(values, "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD"); idx < 0 {
-		t.Fatal("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD missing")
-	} else {
-		window := values[idx:]
-		if len(window) > 120 {
-			window = window[:120]
-		}
-		if !strings.Contains(window, `value: "secret-token"`) {
-			t.Fatalf("HERMES_DASHBOARD_BASIC_AUTH_PASSWORD must use agent API token; nearby:\n%s", window)
-		}
+	// The token may appear only once: in the Secret's stringData. Every
+	// container env must reference the Secret, never carry a literal.
+	if n := strings.Count(values, "secret-token"); n != 1 {
+		t.Fatalf("API token rendered %d times, want exactly 1 (Secret stringData only):\n%s", n, values)
 	}
+	assertEnvFromAPISecret(t, values, "hermes", "API_SERVER_KEY")
+	assertEnvFromAPISecret(t, values, "hermes-dashboard", "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD")
 
 	// Dashboard HTTPRoute must edge-redirect Exact "/" → password-login so
 	// operators can open the pretty host without hitting Hermes's broken
@@ -776,4 +771,64 @@ func TestMergePreservedHermesConfigKeys_UnionsAllowlist(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("command_allowlist = %#v, want %#v", got, want)
 	}
+}
+
+// assertEnvFromAPISecret parses the rendered values and asserts that env var
+// envName on container containerName is sourced from
+// secretKeyRef{hermes-api-server, API_SERVER_KEY} with no literal value.
+func assertEnvFromAPISecret(t *testing.T, values, containerName, envName string) {
+	t.Helper()
+	var doc struct {
+		Resources []struct {
+			Kind string `yaml:"kind"`
+			Spec struct {
+				Template struct {
+					Spec struct {
+						Containers []struct {
+							Name string `yaml:"name"`
+							Env  []struct {
+								Name      string  `yaml:"name"`
+								Value     *string `yaml:"value"`
+								ValueFrom *struct {
+									SecretKeyRef *struct {
+										Name string `yaml:"name"`
+										Key  string `yaml:"key"`
+									} `yaml:"secretKeyRef"`
+								} `yaml:"valueFrom"`
+							} `yaml:"env"`
+						} `yaml:"containers"`
+					} `yaml:"spec"`
+				} `yaml:"template"`
+			} `yaml:"spec"`
+		} `yaml:"resources"`
+	}
+	if err := yaml.Unmarshal([]byte(values), &doc); err != nil {
+		t.Fatalf("parse values: %v", err)
+	}
+	for _, r := range doc.Resources {
+		if r.Kind != "Deployment" {
+			continue
+		}
+		for _, c := range r.Spec.Template.Spec.Containers {
+			if c.Name != containerName {
+				continue
+			}
+			for _, e := range c.Env {
+				if e.Name != envName {
+					continue
+				}
+				if e.Value != nil {
+					t.Fatalf("%s/%s must not be a literal value", containerName, envName)
+				}
+				if e.ValueFrom == nil || e.ValueFrom.SecretKeyRef == nil ||
+					e.ValueFrom.SecretKeyRef.Name != "hermes-api-server" ||
+					e.ValueFrom.SecretKeyRef.Key != "API_SERVER_KEY" {
+					t.Fatalf("%s/%s must use secretKeyRef hermes-api-server/API_SERVER_KEY", containerName, envName)
+				}
+				return
+			}
+			t.Fatalf("container %s missing env %s", containerName, envName)
+		}
+	}
+	t.Fatalf("Deployment container %s not found", containerName)
 }
