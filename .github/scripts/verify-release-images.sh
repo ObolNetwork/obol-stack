@@ -23,14 +23,6 @@ FULL_SHA="$(git rev-parse --verify "${RELEASE_REF}^{commit}")"
 # docker/metadata-action type=sha,format=short always emits the first 7 chars.
 SHORT_SHA="${FULL_SHA:0:7}"
 
-IMAGES=(
-    x402-verifier
-    serviceoffer-controller
-    x402-buyer
-    job-broker
-    demo-server
-)
-
 if [[ "${VERIFY_RELEASE_IMAGES_OFFLINE:-}" == "true" ]]; then
     echo "VERIFY_RELEASE_IMAGES_OFFLINE=true: short-SHA for ${RELEASE_REF} is ${SHORT_SHA} (${FULL_SHA})"
     echo "Skipping GHCR existence checks."
@@ -38,7 +30,7 @@ if [[ "${VERIFY_RELEASE_IMAGES_OFFLINE:-}" == "true" ]]; then
 fi
 
 failed=0
-for image in "${IMAGES[@]}"; do
+for image in "${X402_IMAGES[@]}"; do
     if digest="$(fetch_index_digest "${image}" "${SHORT_SHA}")"; then
         echo "ok  ghcr.io/obolnetwork/${image}:${SHORT_SHA}  ${digest}"
     else
@@ -50,8 +42,8 @@ done
 if [[ "${failed}" -ne 0 ]]; then
     echo "" >&2
     echo "Release gate failed: images for commit ${SHORT_SHA} are not published." >&2
-    echo "  Usually this means the commit never hit main with a path that" >&2
-    echo "  triggers docker-publish-x402.yml. Fix:" >&2
+    echo "  docker-publish-x402.yml publishes (or retags) images for every main" >&2
+    echo "  commit; it may still be running, or the commit is not on main. Fix:" >&2
     echo "    gh workflow run docker-publish-x402.yml --ref ${SHORT_SHA}" >&2
     echo "  Wait for the build, then re-tag / re-run the release." >&2
     exit 1

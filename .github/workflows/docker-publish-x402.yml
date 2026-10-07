@@ -6,52 +6,19 @@ name: Build and Publish x402 Images
 # Release gate: .github/scripts/verify-release-images.sh
 
 on:
+  # Every main commit gets images at :<short-sha> (built, or retagged from an
+  # ancestor when no image input changed). Not on v* tags: the tag commit's
+  # images already exist, and rebuilding would overwrite published short-SHA
+  # tags with new digests (builds are not byte-reproducible).
   push:
     branches:
       - main
-    paths:
-      - 'internal/agentruntime/**'
-      - 'internal/config/**'
-      - 'internal/defaults/**'
-      - 'internal/dns/**'
-      - 'internal/embed/**'
-      - 'internal/enclave/**'
-      - 'internal/erc8004/**'
-      - 'internal/helmcmd/**'
-      - 'internal/images/**'
-      - 'internal/inference/**'
-      - 'internal/jobbroker/**'
-      - 'internal/kubectl/**'
-      - 'internal/model/**'
-      - 'internal/monetizeapi/**'
-      - 'internal/openclaw/**'
-      - 'internal/schemas/**'
-      - 'internal/serviceoffercontroller/**'
-      - 'internal/tee/**'
-      - 'internal/tunnel/**'
-      - 'internal/ui/**'
-      - 'internal/version/**'
-      - 'internal/walletbackup/**'
-      - 'internal/x402/**'
-      - 'internal/demo/**'
-      - 'cmd/x402-verifier/**'
-      - 'cmd/x402-buyer/**'
-      - 'cmd/serviceoffer-controller/**'
-      - 'cmd/demo-server/**'
-      - 'cmd/job-broker/**'
-      - 'Dockerfile.x402'
-      - 'Dockerfile.x402-*'
-      - 'Dockerfile.serviceoffer-controller'
-      - 'Dockerfile.demo-server'
-      - 'Dockerfile.job-broker'
-      - 'docker-bake.hcl'
-      - 'go.mod'
-      - 'go.sum'
-      - '.dockerignore'
-      - '.github/workflows/docker-publish-x402.yml'
-      - '.github/scripts/lib-ghcr.sh'
-      - '.github/scripts/verify-release-images.sh'
   workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Rebuild even if images can be reused (overwrites existing short-SHA tags)'
+        type: boolean
+        default: false
 
 concurrency:
   group: x402-${{ github.ref }}
@@ -61,11 +28,67 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      source: ${{ steps.plan.outputs.source }}
+      short_sha: ${{ steps.sha.outputs.short }}
+      long_sha: ${{ steps.sha.outputs.long }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 50
+
+      - name: Resolve SHAs
+        id: sha
+        run: |
+          {
+            echo "long=$(git rev-parse HEAD)"
+            echo "short=$(git rev-parse --short=7 HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build, retag or skip
+        id: plan
+        env:
+          FORCE_BUILD: ${{ inputs.force_build }}
+        run: .github/scripts/x402-image-plan.sh
+
+  retag:
+    needs: plan
+    if: needs.plan.outputs.mode == 'retag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Copy manifests to this commit's tags
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tags=("${{ needs.plan.outputs.short_sha }}" "${{ needs.plan.outputs.long_sha }}")
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then tags+=(latest); fi
+          .github/scripts/x402-image-retag.sh "${{ needs.plan.outputs.source }}" "${tags[@]}"
+
   # ---------------------------------------------------------------------------
   # One bake job builds all five images for amd64+arm64. Pure-Go cross-compile
   # from BUILDPLATFORM means we do NOT need QEMU (the old multi-arch tax).
   # ---------------------------------------------------------------------------
   build:
+    needs: plan
+    if: needs.plan.outputs.mode == 'build'
     runs-on: ubuntu-latest
     permissions:
       contents: read

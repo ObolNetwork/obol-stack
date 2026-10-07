@@ -81,7 +81,7 @@ Treat bot comments as review input, not noise:
 ### Stack-owned images (no repin)
 
 ```text
-merge to main → docker-publish-x402 tags :shortsha → tag when green
+merge to main → docker-publish-x402 builds or retags :shortsha (every main commit) → tag when green
 ```
 
 ```bash

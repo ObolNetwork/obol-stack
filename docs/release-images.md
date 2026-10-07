@@ -12,8 +12,14 @@ in git.
 | `OBOL_DEVELOPMENT=true` | `repo:dev-<sha>` (local k3d import tag) |
 | Unknown / dirty build | `repo:latest` |
 
-- Short-SHA tags are published by `docker-publish-x402.yml` on every relevant
-  `main` push and on `v*` tags (bake → `docker-bake.hcl` / `Dockerfile.x402`).
+- Short-SHA tags are published by `docker-publish-x402.yml` for **every** `main`
+  push. `.github/scripts/x402-image-plan.sh` decides per commit: **skip** if
+  the commit already has images, **retag** (copy manifests byte-for-byte, same
+  digests) when no image input changed since the nearest published ancestor,
+  otherwise **build** (bake → `docker-bake.hcl` / `Dockerfile.x402`). Image
+  inputs = in-module packages the five binaries compile (`go list -deps`, no
+  tests) + `go.mod`/`go.sum` + Dockerfile/bake/`.dockerignore`. Not run on `v*`
+  tags, so a release never overwrites its commit's short-SHA tags.
 - CI builds all five pure-Go images in **one bake job**: shared builder stage,
   native cross-compile (`BUILDPLATFORM` + `GOARCH`, no QEMU), shared GHA cache.
 - The CLI embeds the same short SHA via goreleaser ldflags
@@ -32,7 +38,7 @@ in git.
 
 | Risk | Mitigation |
 |------|------------|
-| Short-SHA tag on GHCR is overwritten | First-bind-then-persist digests; subsequent `stack up` reuses the pin. Operator policy: never retag published short SHAs. |
+| Short-SHA tag on GHCR is overwritten | First-bind-then-persist digests; subsequent `stack up` reuses the pin. CI never rebuilds a commit that already has images (plan → `skip`); only `workflow_dispatch` with `force_build` does. |
 | Package write ACL on `ghcr.io/obolnetwork/*` | Restrict who can push; short SHA is only as trustworthy as that ACL. |
 | Cross-host / fresh install | First resolve on a new host re-fetches GHCR (same short SHA should resolve to the same digest if tags were not retagged). |
 | Digests-in-git (old model) | Stronger “same manifest everywhere forever”, but forced the repin PR train. We traded that for install-local durability. |
@@ -40,7 +46,7 @@ in git.
 ## Release train
 
 ```text
-merge to main → docker-publish-x402 builds :shortsha → smoke → tag on main
+merge to main → docker-publish-x402 builds or retags :shortsha (retag ≈ 1 min) → smoke → tag on main
 ```
 
 No repin PR. No `release-prep` workflow.
@@ -55,8 +61,8 @@ Before tagging:
 VERIFY_RELEASE_IMAGES_OFFLINE=true .github/scripts/verify-release-images.sh HEAD
 ```
 
-If the gate fails, the commit never published images (path filter skipped the
-push). Force a build:
+If the gate fails, the publish run for that commit is still in progress or
+failed, or the commit is not on main. Re-run it (reuses/retags when possible):
 
 ```bash
 gh workflow run docker-publish-x402.yml --ref <commit-or-main>

@@ -14,7 +14,7 @@
 # How to use:
 #
 #   0. Confirm stack-owned images for the tag commit's short SHA are on GHCR
-#      (built by docker-publish-x402 on the main merge, or workflow_dispatch).
+#      (built or retagged by docker-publish-x402 for every main commit).
 #      Tag on main after that commit is green — no repin PR.
 #
 #   1. Create and push a release tag ON MAIN:
