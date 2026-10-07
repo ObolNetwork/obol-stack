@@ -254,6 +254,16 @@ func (b *K3sBackend) Down(cfg *config.Config, u *ui.UI, stackID string) error {
 		}
 	}
 
+	if _, err := b.killallPath(cfg); err != nil {
+		// The process is already stopped; only the containerd/CNI/mount/
+		// iptables cleanup needs the helper, so don't fail `stack down`.
+		u.Warnf("%v", err)
+		u.Warn("k3s stopped, but its containers, CNI interfaces and iptables rules may remain")
+		b.removePidFile(cfg)
+
+		return nil
+	}
+
 	if err := b.cleanupRuntime(cfg, u); err != nil {
 		return err
 	}
@@ -307,10 +317,18 @@ func (b *K3sBackend) killallPath(cfg *config.Config) (string, error) {
 	)
 }
 
+// firstExecutableFile returns the first candidate that is an executable
+// regular file. The helper re-runs itself under sudo, so like sudo we refuse
+// group- or world-writable files.
 func firstExecutableFile(candidates []string) (string, bool) {
 	for _, candidate := range candidates {
 		info, err := os.Stat(candidate)
-		if err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0 {
+		if err != nil || info.IsDir() {
+			continue
+		}
+
+		perm := info.Mode().Perm()
+		if perm&0o111 != 0 && perm&0o022 == 0 {
 			return candidate, true
 		}
 	}

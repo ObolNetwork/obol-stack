@@ -182,6 +182,57 @@ func TestK3sKillallPath(t *testing.T) {
 			t.Fatalf("firstExecutableFile() = %q, true; want false", got)
 		}
 	})
+
+	t.Run("group or world writable helper is refused", func(t *testing.T) {
+		binDir := t.TempDir()
+		path := filepath.Join(binDir, k3sKillall)
+		writeK3sTestExecutable(t, path, "#!/bin/sh\nexit 0\n")
+
+		for _, mode := range []os.FileMode{0o775, 0o757} {
+			if err := os.Chmod(path, mode); err != nil {
+				t.Fatal(err)
+			}
+
+			if got, ok := firstExecutableFile([]string{path}); ok {
+				t.Fatalf("mode %o: firstExecutableFile() = %q, true; want false", mode, got)
+			}
+		}
+	})
+}
+
+func TestK3sDownWithoutKillallWarnsAndSucceeds(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("K3s backend is Linux-only")
+	}
+
+	root := t.TempDir()
+	cfg := &config.Config{
+		BinDir:    filepath.Join(root, "bin"),
+		ConfigDir: filepath.Join(root, "config"),
+		DataDir:   filepath.Join(root, "data"),
+	}
+
+	if err := os.MkdirAll(cfg.ConfigDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	pidPath := filepath.Join(cfg.ConfigDir, k3sPidFile)
+	if err := os.WriteFile(pidPath, []byte("999999999\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := (&K3sBackend{}).Down(cfg, ui.NewForTest(&stdout, &stderr), "test-stack"); err != nil {
+		t.Fatalf("Down() error: %v", err)
+	}
+
+	if _, err := os.Stat(pidPath); !os.IsNotExist(err) {
+		t.Fatalf("PID file not removed: %v", err)
+	}
+
+	if out := stdout.String() + stderr.String(); !strings.Contains(out, "may remain") {
+		t.Fatalf("missing cleanup warning in output:\n%s", out)
+	}
 }
 
 func TestK3sCleanupRuntimeUsesConfiguredDataDir(t *testing.T) {
