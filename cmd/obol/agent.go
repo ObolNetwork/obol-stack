@@ -363,8 +363,12 @@ Examples:
 			record := map[string]any{
 				"apiVersion": doc["apiVersion"],
 				"kind":       doc["kind"],
-				"metadata":   map[string]any{"name": name, "namespace": ns},
-				"spec":       spec,
+				"metadata": map[string]any{
+					"name":      name,
+					"namespace": ns,
+					"labels":    map[string]any{kubectl.ManagedByLabel: kubectl.ManagedByObol},
+				},
+				"spec": spec,
 			}
 			if err := agentcrd.PersistManifest(cfg, name, record); err != nil {
 				u.Warnf("Agent updated, but refreshing the host-side record failed: %v", err)

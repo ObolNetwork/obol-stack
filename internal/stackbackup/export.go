@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ObolNetwork/obol-stack/internal/agentidentity"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
@@ -99,6 +100,16 @@ func Export(cfg *config.Config, opts ExportOptions, u *ui.UI) (string, error) {
 		}
 		clusterComponent.Included = true
 		clusterComponent.Notes = notes
+		// AgentIdentity's source of truth across recreation is the host
+		// record ($OBOL_CONFIG_DIR/identity/, archived with config/), not a
+		// cluster dump: refresh it now so registrations the controller made
+		// since the last CLI write ride along. A dump would also lose status
+		// (StripK8sJSON drops it), which is the only part that matters.
+		if n, err := agentidentity.MirrorAll(cfg, agentidentity.NewKube(cfg)); err != nil {
+			u.Warnf("Could not refresh AgentIdentity records: %v", err)
+		} else if n > 0 {
+			clusterComponent.Notes = append(clusterComponent.Notes, fmt.Sprintf("agentidentities: %d recorded under config/identity/", n))
+		}
 	} else {
 		clusterComponent.Notes = []string{clusterSkipNote}
 	}

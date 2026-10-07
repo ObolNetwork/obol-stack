@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -34,8 +35,12 @@ import (
 const recordVersion = 1
 
 // RecordedModelState is the host-side record of operator-applied LiteLLM
-// configuration. Secrets hold provider API keys in plaintext, matching the
-// existing convention for values-remote-signer.yaml (0600 in ConfigDir).
+// configuration. Secrets maps the litellm-secrets key (e.g.
+// ANTHROPIC_API_KEY) to either an env reference "env:<VAR>" — written when
+// the live key equals the value of a provider env var on the host at record
+// time, so the key never touches disk — or, for keys typed in explicitly,
+// the plaintext value (0600 in ConfigDir, matching values-remote-signer.yaml).
+// Older records hold only plaintext values and keep working unchanged.
 type RecordedModelState struct {
 	Version   int               `yaml:"version"`
 	ModelList []ModelEntry      `yaml:"model_list"`
@@ -69,7 +74,7 @@ func RecordState(cfg *config.Config, u *ui.UI) {
 		Version:   recordVersion,
 		ModelList: filterRecordableEntries(litellmConfig.ModelList),
 	}
-	state.Secrets = readReferencedSecrets(cfg, secretEnvVarsFromEntries(state.ModelList))
+	state.Secrets = toEnvRefs(readReferencedSecrets(cfg, secretEnvVarsFromEntries(state.ModelList)), os.Getenv)
 
 	if err := writeRecordedModelState(cfg, state); err != nil {
 		u.Warnf("Could not record model config to disk: %v", err)
@@ -116,7 +121,11 @@ func ReconcileRecorded(cfg *config.Config, u *ui.UI) {
 		}
 	}
 
-	secretsChanged, err := applyRecordedSecrets(cfg, state.Secrets)
+	resolved, unresolved := resolveSecretRefs(state.Secrets, os.Getenv)
+	for _, ref := range unresolved {
+		u.Warnf("Recorded provider key %s references %s, which is not set — skipping it (export it and re-run 'obol stack up')", ref[0], ref[1])
+	}
+	secretsChanged, err := applyRecordedSecrets(cfg, resolved)
 	if err != nil {
 		u.Warnf("Could not reconcile recorded provider keys: %v", err)
 	}
@@ -259,6 +268,75 @@ func applyRecordedSecrets(cfg *config.Config, secrets map[string]string) (bool, 
 		return false, err
 	}
 	return true, nil
+}
+
+// envRefPrefix marks a recorded secret value as a reference to a host env
+// var rather than the key itself.
+const envRefPrefix = "env:"
+
+// envCandidates returns the host env vars that may legitimately supply the
+// litellm-secrets key name: the key itself plus, for a known provider whose
+// primary EnvVar is that key, its AltEnvVars (e.g. CLAUDE_CODE_OAUTH_TOKEN).
+func envCandidates(secretKey string) []string {
+	out := []string{secretKey}
+	for _, p := range knownProviders {
+		if p.EnvVar == secretKey {
+			out = append(out, p.AltEnvVars...)
+		}
+	}
+	return out
+}
+
+// toEnvRefs replaces each secret whose value equals a candidate host env
+// var with "env:<VAR>", so keys that came from the environment are recorded
+// as references instead of plaintext.
+func toEnvRefs(secrets map[string]string, getenv func(string) string) map[string]string {
+	if len(secrets) == 0 {
+		return secrets
+	}
+	out := make(map[string]string, len(secrets))
+	for k, v := range secrets {
+		out[k] = v
+		for _, envVar := range envCandidates(k) {
+			if val := getenv(envVar); val != "" && val == v {
+				out[k] = envRefPrefix + envVar
+				break
+			}
+		}
+	}
+	return out
+}
+
+// resolveSecretRefs expands "env:<VAR>" values from the host environment.
+// Plaintext values pass through. Refs whose variable is unset are dropped
+// and returned as [key, VAR] pairs so the caller can warn — a missing key
+// must never fail `stack up`.
+func resolveSecretRefs(secrets map[string]string, getenv func(string) string) (map[string]string, [][2]string) {
+	if len(secrets) == 0 {
+		return secrets, nil
+	}
+	out := make(map[string]string, len(secrets))
+	var unresolved [][2]string
+	for _, k := range sortedKeys(secrets) {
+		v := secrets[k]
+		envVar, isRef := strings.CutPrefix(v, envRefPrefix)
+		if !isRef {
+			out[k] = v
+			continue
+		}
+		if val := getenv(envVar); val != "" {
+			out[k] = val
+			continue
+		}
+		unresolved = append(unresolved, [2]string{k, envVar})
+	}
+	return out, unresolved
+}
+
+func sortedKeys(m map[string]string) []string {
+	keys := mapKeys(m)
+	sort.Strings(keys)
+	return keys
 }
 
 func mapKeys(m map[string]string) []string {

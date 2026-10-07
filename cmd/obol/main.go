@@ -7,14 +7,12 @@ import (
 	"os"
 	"runtime/debug"
 
-	"github.com/ObolNetwork/obol-stack/internal/agentcrd"
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
-	"github.com/ObolNetwork/obol-stack/internal/network"
 	"github.com/ObolNetwork/obol-stack/internal/passthrough"
+	"github.com/ObolNetwork/obol-stack/internal/replay"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
-	"github.com/ObolNetwork/obol-stack/internal/storefront"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/urfave/cli/v3"
@@ -423,43 +421,13 @@ func runStackUp(ctx context.Context, cfg *config.Config, u *ui.UI, wildcardDNS b
 	if err := stack.Up(cfg, u, wildcardDNS); err != nil {
 		return err
 	}
-	// Replay recorded remote RPC upstreams into the
-	// (possibly fresh) eRPC ConfigMap. Best-effort.
-	network.ReconcileRecordedRPCs(cfg, u)
-	// Re-apply durable multi-upstream eRPC operator
-	// overlays (baskets/scoring/rate-limits) AFTER
-	// simple recorded remotes. Best-effort.
-	// See ObolNetwork/obol-stack#763.
-	network.ReconcileERPCOverlay(cfg, u)
-	// Re-apply recorded Agent CRs BEFORE sell offers:
-	// agent-backed ServiceOffers resolve agent.ref and
-	// would dangle without their Agent. Best-effort.
-	agentcrd.ResumeAll(cfg, u)
-	// Replay recorded storefront branding into the
-	// (fresh) x402/obol-storefront-profile ConfigMap
-	// BEFORE offers republish, so the controller's first
-	// catalog rebuild carries the operator's branding.
-	// Best-effort. No-op when `obol sell info set` was
-	// never used.
-	storefront.ReconcileRecorded(cfg, u)
-	// Re-sync installed app deployments BEFORE sell
-	// offers: `obol sell http` offers can gate an
-	// app's Service as their upstream, and the
-	// controller's upstream health check needs it
-	// present. App state is declarative on disk
-	// (helmfile.yaml + values.yaml) but its cluster
-	// resources live in etcd. Best-effort.
-	app.ResumeAll(cfg, u)
-	// Re-apply cluster-side state for locally-persisted
-	// `obol sell *` offers. ServiceOffer CRs and the
-	// Service/Endpoints that route to the host gateway
-	// live in etcd, which is destroyed by `obol stack
-	// down`, so a fresh `stack up` would otherwise come
-	// back with the descriptors still on disk but no
-	// matching cluster resources. Best-effort: a resume
-	// failure does not block stack-up.
-	if err := resumeSellOffers(ctx, cfg, u); err != nil {
-		u.Warnf("Could not resume sell offers: %v", err)
-	}
+	// Replay every recorded piece of operator state (models, networks, RPC
+	// upstreams + eRPC overlay, x402 pricing, AgentIdentity, agent
+	// instances, Agent CRs, storefront, apps, then sell offers) in the one
+	// dependency order shared with `obol sell resume`. The ordering rules
+	// (overlay after recorded RPCs #763; Agent CRs, storefront and apps
+	// before offers) are documented and test-pinned on internal/replay.Order.
+	// Best-effort per step: a replay failure never fails stack-up.
+	replay.ReplayRecorded(ctx, cfg, u, replayOptions())
 	return nil
 }

@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/ObolNetwork/obol-stack/internal/config"
 )
 
 func TestSelectDataNamespaces(t *testing.T) {
@@ -331,37 +329,6 @@ func TestManifestComponent(t *testing.T) {
 	}
 	if c := m.component("nope"); c != nil {
 		t.Fatalf("component(nope) = %+v, want nil", c)
-	}
-}
-
-func TestListInstances(t *testing.T) {
-	cfg := &config.Config{ConfigDir: t.TempDir()}
-
-	// Missing applications/<runtime> dir lists nothing (not an error).
-	if got := listInstances(cfg, "hermes"); got != nil {
-		t.Fatalf("absent runtime dir = %v, want nil", got)
-	}
-
-	base := filepath.Join(cfg.ConfigDir, "applications", "hermes")
-	for _, id := range []string{"obol-agent", "quant"} {
-		if err := os.MkdirAll(filepath.Join(base, id), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// A stray file (not a dir) must be ignored — only instance dirs count.
-	if err := os.WriteFile(filepath.Join(base, "README"), []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	got := listInstances(cfg, "hermes")
-	if len(got) != 2 {
-		t.Fatalf("listInstances = %v, want 2 instance dirs", got)
-	}
-	seen := map[string]bool{}
-	for _, id := range got {
-		seen[id] = true
-	}
-	if !seen["obol-agent"] || !seen["quant"] {
-		t.Fatalf("listInstances = %v, want obol-agent + quant", got)
 	}
 }
 

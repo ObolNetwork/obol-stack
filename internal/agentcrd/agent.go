@@ -16,6 +16,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 )
 
@@ -430,6 +431,7 @@ func BuildAgent(name string, opts AgentOptions) map[string]any {
 		"metadata": map[string]any{
 			"name":      name,
 			"namespace": Namespace(name),
+			"labels":    map[string]any{kubectl.ManagedByLabel: kubectl.ManagedByObol},
 		},
 		"spec": spec,
 	}
