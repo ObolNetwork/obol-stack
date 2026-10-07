@@ -1658,7 +1658,9 @@ func restoreLiteLLMConfig(cfg *config.Config, kubeconfigPath, raw string) (bool,
 
 	manifest := configMapFieldOwnershipManifest("litellm-config", "llm", "config.yaml", raw)
 
-	return true, kubectl.ApplyServerSideForceConflicts(kubectlBinary, kubeconfigPath, manifest, "helm")
+	// Not "helm": under Helm 4 that is Helm's own SSA manager, and applying
+	// this label-less manifest as it drops Helm's ownership labels/annotations.
+	return true, kubectl.ApplyServerSideForceConflicts(kubectlBinary, kubeconfigPath, manifest, kubectl.FieldManagerObol)
 }
 
 func mergeLiteLLMConfig(currentRaw, previousRaw string) (string, error) {
