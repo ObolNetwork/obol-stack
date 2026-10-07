@@ -84,8 +84,7 @@ func identityDocumentMetadata(identity *monetizeapi.AgentIdentity, offers []*mon
 	// generated default when the offer left Spec.Registration.Description
 	// empty. The inference-typed default is more specific (names the model),
 	// so it preempts the generic default — but neither overrides an explicit
-	// operator value. Mirrors the same precedence in render.go's
-	// buildActiveRegistrationDocument.
+	// operator value.
 	description := owner.Spec.Registration.Description
 	if description == "" {
 		if owner.IsInference() && owner.Spec.Model.Name != "" {

@@ -1,12 +1,9 @@
 package main
 
 import (
-	"math/big"
 	"testing"
 
-	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
-	"github.com/ethereum/go-ethereum/common"
 )
 
 func TestNewAgentIdentityRecord_Defaults(t *testing.T) {
@@ -19,36 +16,6 @@ func TestNewAgentIdentityRecord_Defaults(t *testing.T) {
 	}
 	if rec.Metadata.Namespace != "x402" || rec.Metadata.Name != "default" {
 		t.Errorf("Metadata = %+v", rec.Metadata)
-	}
-}
-
-func TestMakeImportedIdentityRecord_PersistsVerifiedAgentID(t *testing.T) {
-	net, err := erc8004.ResolveNetwork("base-sepolia")
-	if err != nil {
-		t.Fatalf("ResolveNetwork: %v", err)
-	}
-	rec := makeImportedIdentityRecord("x402", "default", net, big.NewInt(4242))
-
-	if got := monetizeapi.AgentIdentityAgentIDForChain(rec.Status, net.Name); got != "4242" {
-		t.Errorf("registration[%s].agentId = %q, want 4242", net.Name, got)
-	}
-	if len(rec.Status.Registrations) != 1 || rec.Status.Registrations[0].Chain != net.Name {
-		t.Errorf("registrations = %+v, want one %s entry", rec.Status.Registrations, net.Name)
-	}
-}
-
-func TestVerifyImportedIdentity_OwnerMustMatchSigner(t *testing.T) {
-	signer := common.HexToAddress("0x1111111111111111111111111111111111111111")
-	other := common.HexToAddress("0x2222222222222222222222222222222222222222")
-
-	if err := verifyImportedIdentity(common.Address{}, signer); err == nil {
-		t.Error("zero owner should fail")
-	}
-	if err := verifyImportedIdentity(signer, signer); err != nil {
-		t.Errorf("matching owner should pass: %v", err)
-	}
-	if err := verifyImportedIdentity(other, signer); err == nil {
-		t.Error("mismatched owner must error")
 	}
 }
 

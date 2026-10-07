@@ -3974,15 +3974,6 @@ func kubectlRun(cfg *config.Config, args ...string) error {
 	return kubectl.Run(bin, kc, args...)
 }
 
-func mustMarshal(v any) string {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "{}"
-	}
-
-	return string(b)
-}
-
 func valueOrNone(s string) string {
 	if s == "" {
 		return "(not set)"
@@ -4192,7 +4183,7 @@ func loadProvenance(path string) (*inference.Provenance, error) {
 // route traffic to a host-side inference gateway.
 //
 // Kubernetes Endpoints require an IP address, not a hostname. We resolve the
-// host IP using the same strategy as ollamaHostIPForBackend in internal/stack.
+// host IP using the same strategy as defaults.OllamaHostIPForBackend.
 // ---------------------------------------------------------------------------
 // sell resume — re-apply persisted offers + relaunch host gateways
 // ---------------------------------------------------------------------------

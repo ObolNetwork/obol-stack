@@ -409,8 +409,11 @@ func TestResetERPC_RestoresBaseEntriesOverlayReplaced(t *testing.T) {
 		},
 	}
 
-	// Mirrors applyOverlayToCluster: snapshot provenance BEFORE merging.
-	if err := captureERPCProvenance(cfg, erpcConfig, ov); err != nil {
+	// Mirrors applyOverlayToCluster: snapshot provenance BEFORE merging, and
+	// persist it so the YAML round-trip of nil "added" entries is exercised.
+	captured := &erpcProvenance{}
+	captureERPCProvenanceEntries(captured, erpcConfig, ov)
+	if err := writeERPCProvenance(cfg, captured); err != nil {
 		t.Fatal(err)
 	}
 	if err := mergeERPCOverlay(erpcConfig, ov); err != nil {

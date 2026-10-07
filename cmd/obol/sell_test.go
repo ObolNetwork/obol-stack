@@ -914,28 +914,6 @@ func TestSellList_Flags(t *testing.T) {
 	assertFlagHasAlias(t, flags, "namespace", "n")
 }
 
-func TestMustMarshal_ValidJSON(t *testing.T) {
-	doc := map[string]any{"active": false, "name": "test"}
-
-	got := mustMarshal(doc)
-	if got == "{}" {
-		t.Fatal("mustMarshal returned empty object for valid input")
-	}
-
-	for _, want := range []string{`"active":false`, `"name":"test"`} {
-		if !strings.Contains(got, want) {
-			t.Errorf("mustMarshal output missing %s, got: %s", want, got)
-		}
-	}
-}
-
-func TestMustMarshal_InvalidInput(t *testing.T) {
-	got := mustMarshal(make(chan int))
-	if got != "{}" {
-		t.Errorf("mustMarshal should return {} on error, got: %s", got)
-	}
-}
-
 func TestResolveX402Chain(t *testing.T) {
 	tests := []struct {
 		name    string

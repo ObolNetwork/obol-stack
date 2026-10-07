@@ -3,7 +3,6 @@ package erc8004
 import (
 	"bytes"
 	"context"
-	"crypto/ecdsa"
 	"errors"
 	"fmt"
 	"math/big"
@@ -240,30 +239,6 @@ func (c *Client) SetAgentURIWithOpts(ctx context.Context, opts *bind.TransactOpt
 		return "", fmt.Errorf("erc8004: wait mined: %w", err)
 	}
 	return tx.Hash().Hex(), nil
-}
-
-// SetMetadata stores arbitrary key-value metadata on the agent NFT.
-// Read-before-write — see SetMetadataWithOpts for the rationale.
-func (c *Client) SetMetadata(ctx context.Context, key *ecdsa.PrivateKey, agentID *big.Int, k string, v []byte) error {
-	if existing, err := c.GetMetadata(ctx, agentID, k); err == nil && bytes.Equal(existing, v) {
-		return nil
-	}
-
-	opts, err := bind.NewKeyedTransactorWithChainID(key, c.chainID)
-	if err != nil {
-		return fmt.Errorf("erc8004: transactor: %w", err)
-	}
-	opts.Context = ctx
-
-	tx, err := c.contract.Transact(opts, "setMetadata", agentID, k, v)
-	if err != nil {
-		return wrapTransactError("erc8004: setMetadata tx", err)
-	}
-
-	if _, err := bind.WaitMined(ctx, c.eth, tx); err != nil {
-		return fmt.Errorf("erc8004: wait mined: %w", err)
-	}
-	return nil
 }
 
 // AgentWallet returns the registered wallet for an agent id via the ERC-8004

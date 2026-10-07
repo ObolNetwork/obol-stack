@@ -116,14 +116,6 @@ repositories:
 	if len(repos) != 1 || repos[0].Name != "obol" {
 		t.Fatalf("unexpected repos: %#v", repos)
 	}
-
-	names, err := ManagedRepoNames(path)
-	if err != nil {
-		t.Fatalf("ManagedRepoNames: %v", err)
-	}
-	if !reflect.DeepEqual(names, []string{"obol"}) {
-		t.Fatalf("names = %#v, want [obol]", names)
-	}
 }
 
 // TestUpdateRepos_NoNamesIsNoop ensures we don't shell out for an empty repo

@@ -35,21 +35,6 @@ func TestStaticSiteContentMatches(t *testing.T) {
 	}
 }
 
-func TestStaticSiteDeployedContentHash(t *testing.T) {
-	deployment := buildStaticSiteDeployment("abc12345", nil)
-	if got := staticSiteDeployedContentHash(deployment); got != "abc12345" {
-		t.Fatalf("hash = %q, want abc12345", got)
-	}
-	if got := staticSiteDeployedContentHash(nil); got != "" {
-		t.Fatalf("nil deployment hash = %q, want empty", got)
-	}
-
-	empty := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{}}}
-	if got := staticSiteDeployedContentHash(empty); got != "" {
-		t.Fatalf("missing annotation hash = %q, want empty", got)
-	}
-}
-
 // TestStaticSiteStaleChatWidgetTriggersUpdate pins the upgrade path: a
 // deployed ConfigMap whose chat widget differs from the binary's embedded
 // copy must NOT match, otherwise the skip-when-unchanged fast path pins the

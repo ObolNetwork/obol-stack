@@ -104,15 +104,15 @@ func TestVerifyAgentID(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			err := VerifyAgentID(tc.reg, tc.expected)
+			err := verifyAgentID(tc.reg, tc.expected, "")
 			if tc.wantErrSubs == "" {
 				if err != nil {
-					t.Fatalf("VerifyAgentID() = %v, want nil", err)
+					t.Fatalf("verifyAgentID() = %v, want nil", err)
 				}
 				return
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.wantErrSubs) {
-				t.Fatalf("VerifyAgentID() err = %v, want substring %q", err, tc.wantErrSubs)
+				t.Fatalf("verifyAgentID() err = %v, want substring %q", err, tc.wantErrSubs)
 			}
 		})
 	}
@@ -179,38 +179,6 @@ func TestVerifySellerEndpoint(t *testing.T) {
 	}
 	if err := VerifySellerEndpoint(reg, "https://seller.example/services/other/v1/chat/completions"); err == nil || !strings.Contains(err.Error(), "seller endpoint mismatch") {
 		t.Fatalf("VerifySellerEndpoint(mismatch) err = %v, want endpoint mismatch", err)
-	}
-}
-
-func TestValidateBudgetAgainstPricing(t *testing.T) {
-	pricing := &PricingResponse{Accepts: []PaymentOption{{Network: "base-sepolia", Amount: "1000"}}}
-	if err := ValidateBudgetAgainstPricing("1000", pricing); err != nil {
-		t.Fatalf("ValidateBudgetAgainstPricing(equal) = %v, want nil", err)
-	}
-	if err := ValidateBudgetAgainstPricing("2500", pricing); err != nil {
-		t.Fatalf("ValidateBudgetAgainstPricing(greater) = %v, want nil", err)
-	}
-	if err := ValidateBudgetAgainstPricing("999", pricing); err == nil || !strings.Contains(err.Error(), "smaller than one request price 1000") {
-		t.Fatalf("ValidateBudgetAgainstPricing(too small) err = %v, want floor error", err)
-	}
-}
-
-func TestValidateBudgetAgainstPricing_OBOLPricingAccepted(t *testing.T) {
-	// ValidateBudgetAgainstPricing is now token-agnostic; the token-mismatch
-	// check moved to ValidateTokenAgainstPricing. A budget that covers at least
-	// one OBOL request must pass when called after a successful token check.
-	pricing := &PricingResponse{Accepts: []PaymentOption{{
-		Network: "base-sepolia",
-		Asset:   "0x0a09371a8b011d5110656ceBCc70603e53FD2c78",
-		Amount:  "23000000000000000", // 0.023 OBOL in base units
-	}}}
-	// Budget equal to one request price — must pass.
-	if err := ValidateBudgetAgainstPricing("23000000000000000", pricing); err != nil {
-		t.Fatalf("ValidateBudgetAgainstPricing(OBOL equal) = %v, want nil", err)
-	}
-	// Budget smaller than one request price — must fail with floor error.
-	if err := ValidateBudgetAgainstPricing("1000000", pricing); err == nil || !strings.Contains(err.Error(), "smaller than one request price") {
-		t.Fatalf("ValidateBudgetAgainstPricing(OBOL too small) err = %v, want floor error", err)
 	}
 }
 

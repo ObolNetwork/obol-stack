@@ -143,8 +143,8 @@ type upstreamOpenAPICacheEntry struct {
 
 // upstreamOpenAPICache holds the last-good upstream fetch per offer, keyed
 // by UID. refresh is called from an offer's own reconcile (outside
-// staticSiteMu) at most once per observed generation; get is read-only and
-// is all buildOfferBundles ever calls. This keeps a slow or flapping
+// staticSiteMu) at most once per observed generation; getSettled is read-only
+// and is all buildOfferBundles ever calls. This keeps a slow or flapping
 // upstream from blocking, or flip-flopping the content hash of, the shared
 // static-site rebuild that runs for every offer on every offer's reconcile.
 type upstreamOpenAPICache struct {
@@ -152,16 +152,9 @@ type upstreamOpenAPICache struct {
 	entries map[types.UID]upstreamOpenAPICacheEntry
 }
 
-// get returns the cached doc, or nil if no fetch has completed yet for this
-// offer's current generation.
-func (c *upstreamOpenAPICache) get(offer *monetizeapi.ServiceOffer) map[string]any {
-	doc, _ := c.getSettled(offer)
-	return doc
-}
-
-// getSettled is get plus whether the cache has a SETTLED answer for this
-// offer — i.e. a fetch has completed at least once. A nil doc means two very
-// different things and callers that render discovery documents must tell them
+// getSettled returns the cached doc plus whether the cache has a SETTLED
+// answer for this offer — i.e. a fetch has completed at least once. A nil
+// doc means two very different things and callers that render discovery documents must tell them
 // apart:
 //
 //   - settled=true, doc=nil  → we probed and there is no upstream document.

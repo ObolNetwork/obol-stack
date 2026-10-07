@@ -276,10 +276,5 @@ func pidAlive(pid int) bool {
 // errSafetyAborted is a sentinel for "user declined a ConfirmRunningServicesLoss
 // prompt". destroyOldBackendIfSwitching returns it so Init stops the whole
 // command before switching backends (Down/Purge instead return nil directly
-// from their own top-level check); Init maps it to a clean exit-0. Exported via
-// ErrSafetyAborted() for callers that want to detect the abort with errors.Is.
+// from their own top-level check); Init maps it to a clean exit-0.
 var errSafetyAborted = errors.New("aborted by operator at safety prompt")
-
-// ErrSafetyAborted is exported for callers that want to detect the abort
-// path with errors.Is.
-func ErrSafetyAborted() error { return errSafetyAborted }

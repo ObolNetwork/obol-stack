@@ -2,7 +2,6 @@ package x402
 
 import (
 	"bytes"
-	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -32,11 +31,4 @@ func httpPost(t *testing.T, url, body string, headers map[string]string) *http.R
 	}
 
 	return resp
-}
-
-// mustQuoteJSON wraps a JSON string as a quoted JSON string value,
-// suitable for embedding in a kubectl patch -p '{"data":{"key":<here>}}'.
-func mustQuoteJSON(s string) string { //nolint:unused // used by integration tests (build tag)
-	b, _ := json.Marshal(s)
-	return string(b)
 }

@@ -85,7 +85,7 @@ func TestUpstreamOpenAPICache_DeterministicAcrossFlappingFetch(t *testing.T) {
 
 	var cache upstreamOpenAPICache
 	cache.refresh(offer, flapping)
-	first := cache.get(offer)
+	first, _ := cache.getSettled(offer)
 	if fetchCount != 1 {
 		t.Fatalf("fetchCount after first refresh = %d, want 1", fetchCount)
 	}
@@ -97,7 +97,7 @@ func TestUpstreamOpenAPICache_DeterministicAcrossFlappingFetch(t *testing.T) {
 	if fetchCount != 1 {
 		t.Fatalf("fetchCount after same-generation refresh = %d, want 1 (no re-fetch)", fetchCount)
 	}
-	second := cache.get(offer)
+	second, _ := cache.getSettled(offer)
 	firstJSON, _ := json.Marshal(first)
 	secondJSON, _ := json.Marshal(second)
 	if string(firstJSON) != string(secondJSON) {

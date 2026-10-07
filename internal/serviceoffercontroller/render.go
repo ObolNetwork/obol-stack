@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
-	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -1266,110 +1265,6 @@ func isConditionTrue(status monetizeapi.ServiceOfferStatus, conditionType string
 	return false
 }
 
-func buildActiveRegistrationDocument(owner *monetizeapi.ServiceOffer, offers []*monetizeapi.ServiceOffer, baseURL, agentID string) erc8004.AgentRegistration {
-	baseURL = strings.TrimRight(baseURL, "/")
-	// Operator-supplied description wins. Only fall back to a controller-
-	// generated default when the offer left Spec.Registration.Description
-	// empty. The inference-typed default is more specific (names the model),
-	// so it preempts the generic default — but neither overrides an explicit
-	// operator value.
-	description := owner.Spec.Registration.Description
-	if description == "" {
-		if owner.IsInference() && owner.Spec.Model.Name != "" {
-			description = fmt.Sprintf("%s inference via x402 micropayments", owner.Spec.Model.Name)
-		} else {
-			description = fmt.Sprintf("x402 payment-gated %s service: %s", fallbackOfferType(owner), owner.Name)
-		}
-	}
-
-	image := owner.Spec.Registration.Image
-	if image == "" {
-		image = baseURL + "/agent-icon.png"
-	}
-
-	services := buildRegistrationServices(owner, offers, baseURL)
-
-	registration := erc8004.AgentRegistration{
-		Type:           erc8004.RegistrationType,
-		Name:           defaultString(owner.Spec.Registration.Name, owner.Name),
-		Description:    description,
-		Image:          image,
-		Services:       services,
-		X402Support:    true,
-		Active:         true,
-		SupportedTrust: owner.Spec.Registration.SupportedTrust,
-	}
-	if agentID != "" {
-		registration.Registrations = []erc8004.OnChainReg{{
-			AgentID:       parseInt64(agentID),
-			AgentRegistry: fmt.Sprintf("eip155:%d:%s", erc8004.BaseSepoliaChainID, erc8004.IdentityRegistryBaseSepolia),
-		}}
-	}
-	if metadata := nonEmptyStringMap(owner.Spec.Registration.Metadata); len(metadata) > 0 {
-		registration.Metadata = metadata
-	}
-	if provenance := nonEmptyStringMap(owner.Spec.Provenance); len(provenance) > 0 {
-		registration.Provenance = provenance
-	}
-	return registration
-}
-
-func buildRegistrationServices(owner *monetizeapi.ServiceOffer, offers []*monetizeapi.ServiceOffer, baseURL string) []erc8004.ServiceDef {
-	baseURL = strings.TrimRight(baseURL, "/")
-	type offerKey struct {
-		namespace string
-		name      string
-	}
-	seen := map[offerKey]struct{}{}
-	ordered := []*monetizeapi.ServiceOffer{}
-	add := func(offer *monetizeapi.ServiceOffer, force bool) {
-		if offer == nil {
-			return
-		}
-		key := offerKey{namespace: offer.Namespace, name: offer.Name}
-		if _, ok := seen[key]; ok {
-			return
-		}
-		if !force && !offerPublishedForRegistration(offer) {
-			return
-		}
-		seen[key] = struct{}{}
-		ordered = append(ordered, offer)
-	}
-
-	add(owner, true)
-	for _, offer := range offers {
-		if owner != nil && offer != nil && offer.Namespace == owner.Namespace && offer.Name == owner.Name {
-			continue
-		}
-		add(offer, false)
-	}
-
-	services := make([]erc8004.ServiceDef, 0, len(ordered)*2)
-	for _, offer := range ordered {
-		services = append(services, serviceDefWithDrain(offer, erc8004.ServiceDef{
-			Name:     "web",
-			Endpoint: baseURL + offer.EffectivePath(),
-		}))
-		if len(offer.Spec.Registration.Skills) > 0 || len(offer.Spec.Registration.Domains) > 0 {
-			services = append(services, erc8004.ServiceDef{
-				Name:    "OASF",
-				Version: "0.8",
-				Skills:  offer.Spec.Registration.Skills,
-				Domains: offer.Spec.Registration.Domains,
-			})
-		}
-		for _, service := range offer.Spec.Registration.Services {
-			services = append(services, serviceDefWithDrain(offer, erc8004.ServiceDef{
-				Name:     service.Name,
-				Endpoint: service.Endpoint,
-				Version:  service.Version,
-			}))
-		}
-	}
-	return services
-}
-
 func serviceDefWithDrain(offer *monetizeapi.ServiceOffer, svc erc8004.ServiceDef) erc8004.ServiceDef {
 	if offer == nil || !offer.IsDraining() || offer.DrainExpired(time.Now()) {
 		return svc
@@ -2317,14 +2212,6 @@ func marshalRegistrationDocument(document erc8004.AgentRegistration) (string, st
 	}
 	sum := md5.Sum(data)
 	return string(data), fmt.Sprintf("%x", sum[:8]), nil
-}
-
-func registrationDataURL(document erc8004.AgentRegistration) (string, error) {
-	data, err := json.Marshal(document)
-	if err != nil {
-		return "", err
-	}
-	return "data:application/json," + url.PathEscape(string(data)), nil
 }
 
 func defaultString(value, fallback string) string {

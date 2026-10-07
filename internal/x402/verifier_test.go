@@ -1399,7 +1399,7 @@ func TestVerifier_MetricsVerifiedAndRejectedPayments(t *testing.T) {
 // The gauge is labeled identically to the verifier counters; for this rule
 // `chain` is the empty string because the test RouteRule has no Network set,
 // and `asset_symbol` is "unknown" because AssetSymbol is unset (the defensive
-// fallback emitted by prometheusLabels).
+// fallback emitted by labelsForPaymentOption).
 func TestVerifier_LastPaymentSuccessGauge(t *testing.T) {
 	labels := map[string]string{
 		"offer_namespace": "llm",
@@ -1753,7 +1753,7 @@ func TestVerifier_PrometheusLabels_IncludesAssetSymbol(t *testing.T) {
 		Network:        "eip155:84532",
 		AssetSymbol:    "USDC",
 	}
-	labels := prometheusLabels(rule)
+	labels := labelsForPaymentOption(rule, RoutePayment{Network: rule.Network, AssetSymbol: rule.AssetSymbol})
 	if got := labels["asset_symbol"]; got != "USDC" {
 		t.Errorf("asset_symbol = %q, want %q (full labels: %v)", got, "USDC", labels)
 	}
@@ -1774,7 +1774,7 @@ func TestVerifier_PrometheusLabels_DefaultsToUnknownIfEmpty(t *testing.T) {
 		Network:        "eip155:84532",
 		AssetSymbol:    "",
 	}
-	labels := prometheusLabels(rule)
+	labels := labelsForPaymentOption(rule, RoutePayment{Network: rule.Network, AssetSymbol: rule.AssetSymbol})
 	if got := labels["asset_symbol"]; got != "unknown" {
 		t.Errorf("asset_symbol = %q, want %q (full labels: %v)", got, "unknown", labels)
 	}

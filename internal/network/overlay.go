@@ -99,7 +99,7 @@ func erpcProvenancePath(cfg *config.Config) string {
 // (no prior base entry to restore); a key absent means "not yet recorded".
 // (A pointer, not a bare map, because a nil map[string]any round-trips
 // through a YAML marshal/unmarshal as an empty map, not nil — see
-// captureERPCProvenance.)
+// captureERPCProvenanceEntries.)
 type erpcProvenance struct {
 	Networks  map[string]*map[string]any `yaml:"networks,omitempty"`
 	Upstreams map[string]*map[string]any `yaml:"upstreams,omitempty"`
@@ -136,27 +136,7 @@ func writeERPCProvenance(cfg *config.Config, p *erpcProvenance) error {
 	return os.Rename(tmp, path)
 }
 
-// captureERPCProvenance records, for every overlay-owned key not already
-// tracked, whatever entry currently occupies that key in erpcConfig — the
-// chart-base or recorded-RPC entry mergeERPCOverlay is about to replace (or
-// nil if the key doesn't exist yet, meaning the overlay is adding it).
-// Must be called BEFORE mergeERPCOverlay mutates erpcConfig.
-func captureERPCProvenance(cfg *config.Config, erpcConfig map[string]any, ov *ERPCOverlay) error {
-	if len(ov.Networks) == 0 && len(ov.Upstreams) == 0 {
-		return nil
-	}
-	prov, err := readERPCProvenance(cfg)
-	if err != nil {
-		return err
-	}
-	if !captureERPCProvenanceEntries(prov, erpcConfig, ov) {
-		return nil
-	}
-	return writeERPCProvenance(cfg, prov)
-}
-
-// captureERPCProvenanceEntries is the in-memory half of
-// captureERPCProvenance. It records the original value for each newly-owned
+// captureERPCProvenanceEntries records the original value for each newly-owned
 // key after retired overlay entries have been stripped, so replacing one
 // overlay with another never mistakes the previous overlay value for chart
 // base state.

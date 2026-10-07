@@ -507,7 +507,7 @@ func TestValidateCustomEndpoint(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		err := ValidateCustomEndpoint(srv.URL+"/v1", "test-model", "")
+		err := ValidateCustomEndpointWithOptions(srv.URL+"/v1", "test-model", "", CustomEndpointOptions{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -561,7 +561,7 @@ func TestValidateCustomEndpoint(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		err := ValidateCustomEndpoint(srv.URL+"/v1", "nonexistent", "")
+		err := ValidateCustomEndpointWithOptions(srv.URL+"/v1", "nonexistent", "", CustomEndpointOptions{})
 		if err == nil {
 			t.Fatal("expected error for empty choices")
 		}
@@ -572,7 +572,7 @@ func TestValidateCustomEndpoint(t *testing.T) {
 	})
 
 	t.Run("endpoint unreachable", func(t *testing.T) {
-		err := ValidateCustomEndpoint("http://localhost:19999/v1", "test", "")
+		err := ValidateCustomEndpointWithOptions("http://localhost:19999/v1", "test", "", CustomEndpointOptions{})
 		if err == nil {
 			t.Fatal("expected error for unreachable endpoint")
 		}
@@ -592,7 +592,7 @@ func TestValidateCustomEndpoint(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		err := ValidateCustomEndpoint(srv.URL+"/v1", "test-model", "")
+		err := ValidateCustomEndpointWithOptions(srv.URL+"/v1", "test-model", "", CustomEndpointOptions{})
 		if err == nil {
 			t.Fatal("expected error for failed inference")
 		}
@@ -658,7 +658,7 @@ func TestValidateCustomEndpoint_RetriesOnNetworkError(t *testing.T) {
 			// Silence ErrAbortHandler panics — they're expected.
 			srv.Config.ErrorLog = nil
 
-			err := ValidateCustomEndpoint(srv.URL+"/v1", "test-model", "")
+			err := ValidateCustomEndpointWithOptions(srv.URL+"/v1", "test-model", "", CustomEndpointOptions{})
 			if tc.wantErr && err == nil {
 				t.Fatalf("expected error, got nil")
 			}
@@ -698,7 +698,7 @@ func TestValidateCustomEndpoint_NoRetryOnNon2xx(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			err := ValidateCustomEndpoint(srv.URL+"/v1", "test-model", "")
+			err := ValidateCustomEndpointWithOptions(srv.URL+"/v1", "test-model", "", CustomEndpointOptions{})
 			if err == nil {
 				t.Fatalf("expected error for HTTP %d", code)
 			}
@@ -731,7 +731,7 @@ func TestValidateCustomEndpoint_NoRetryOnInvalidResponseBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := ValidateCustomEndpoint(srv.URL+"/v1", "test-model", "")
+	err := ValidateCustomEndpointWithOptions(srv.URL+"/v1", "test-model", "", CustomEndpointOptions{})
 	if err == nil {
 		t.Fatal("expected JSON decode error")
 	}
