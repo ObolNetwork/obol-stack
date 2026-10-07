@@ -194,6 +194,8 @@ func ApplyUpgrades(cfg *config.Config, u *ui.UI, opts UpgradeOptions) error {
 
 	// When a chart filter is set, resolve it to release name(s) and use --selector
 	// so helmfile only syncs the targeted release instead of everything.
+	var selectors []string
+
 	if opts.ChartFilter != "" {
 		releaseNames := ResolveReleaseNames(cfg, opts.ChartFilter)
 		if len(releaseNames) == 0 {
@@ -201,8 +203,15 @@ func ApplyUpgrades(cfg *config.Config, u *ui.UI, opts UpgradeOptions) error {
 		}
 
 		for _, name := range releaseNames {
+			selectors = append(selectors, "name="+name)
 			helmfileArgs = append(helmfileArgs, "--selector", "name="+name)
 		}
+	}
+
+	// Helm never upgrades crds/, so bring CRDs up to the target chart
+	// versions before syncing.
+	if err := applyChartCRDs(cfg, u, helmfilePath, kubeconfigPath, selectors); err != nil {
+		return fmt.Errorf("failed to update CRDs: %w", err)
 	}
 
 	helmfileArgs = append(helmfileArgs, "sync")
