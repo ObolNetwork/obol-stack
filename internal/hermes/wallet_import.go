@@ -11,6 +11,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/keystore"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	ethcrypto "github.com/ethereum/go-ethereum/crypto"
@@ -138,11 +139,7 @@ func ImportWalletFromPrivateKey(cfg *config.Config, id, privateKeyHex string, u 
 	}
 
 	privKey := ethcrypto.FromECDSA(key)
-	defer func() {
-		for i := range privKey {
-			privKey[i] = 0
-		}
-	}()
+	defer keystore.Zero(privKey)
 
 	pubKeyWithPrefix := ethcrypto.FromECDSAPub(&key.PublicKey)
 	if len(privKey) != 32 || len(pubKeyWithPrefix) != 65 || pubKeyWithPrefix[0] != 0x04 {
@@ -152,12 +149,12 @@ func ImportWalletFromPrivateKey(cfg *config.Config, id, privateKeyHex string, u 
 	pubKey := pubKeyWithPrefix[1:]
 	address := ethcrypto.PubkeyToAddress(key.PublicKey).Hex()
 
-	password, err := generateRandomPassword(32)
+	password, err := keystore.RandomPassword(keystore.PasswordLength)
 	if err != nil {
 		return nil, fmt.Errorf("password generation failed: %w", err)
 	}
 
-	keystoreJSON, keystoreID, err := encryptToV3Keystore(privKey, pubKey, password)
+	keystoreJSON, keystoreID, err := keystore.EncryptV3(privKey, pubKey, password)
 	if err != nil {
 		return nil, fmt.Errorf("keystore encryption failed: %w", err)
 	}

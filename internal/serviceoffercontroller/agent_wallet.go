@@ -5,8 +5,8 @@ import (
 	"encoding/base64"
 	"fmt"
 
+	"github.com/ObolNetwork/obol-stack/internal/keystore"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
-	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -101,7 +101,7 @@ func (c *Controller) ensureSignerKeystore(ctx context.Context, agent *monetizeap
 		return "", err
 	}
 
-	mat, err := openclaw.GenerateKeystoreInMemory()
+	mat, err := keystore.GenerateInMemory()
 	if err != nil {
 		return "", err
 	}
@@ -164,7 +164,7 @@ func ensureRemoteSignerSecretLabels(secret *unstructured.Unstructured, agentName
 	return changed
 }
 
-func buildSignerKeystoreSecret(namespace string, mat *openclaw.KeystoreMaterial, authToken string) *unstructured.Unstructured {
+func buildSignerKeystoreSecret(namespace string, mat *keystore.Material, authToken string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetUnstructuredContent(map[string]any{
 		"apiVersion": "v1",
