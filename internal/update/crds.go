@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,7 +36,7 @@ func applyChartCRDs(cfg *config.Config, u *ui.UI, helmfilePath, kubeconfigPath s
 
 	out, err := u.ExecOutput(ui.ExecConfig{
 		Name: "Listing releases",
-		Cmd:  exec.Command(cfg.ToolPath("helmfile"), args...),
+		Cmd:  helmcmd.Helmfile(cfg.ToolPath("helmfile"), cfg.ToolPath("helm"), args...),
 	})
 	if err != nil {
 		return fmt.Errorf("helmfile list: %w", err)

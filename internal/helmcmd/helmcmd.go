@@ -170,3 +170,14 @@ func UpdateRepos(helmBinary string, names []string) ([]byte, error) {
 	out, err := cmd.CombinedOutput()
 	return out, err
 }
+
+// Helmfile builds a helmfile command that is pinned to helmBinary via
+// --helm-binary. Without it helmfile runs whatever `helm` is first on PATH,
+// while SyncFlagsForVersion probes the obol-resolved binary: with a Helm 4
+// on PATH and the pinned Helm 3 in the bin dir, sync ran Helm 4's
+// server-side apply WITHOUT --force-conflicts and failed on field-manager
+// conflicts (e.g. a Secret previously written by `kubectl apply`). Use this
+// for every helmfile invocation so the probed and executed helm match.
+func Helmfile(helmfileBinary, helmBinary string, args ...string) *exec.Cmd {
+	return exec.Command(helmfileBinary, append([]string{"--helm-binary", helmBinary}, args...)...)
+}

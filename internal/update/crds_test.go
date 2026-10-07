@@ -56,7 +56,8 @@ cat >> `+applied+`
 	got := string(calls)
 
 	for _, want := range []string{
-		"helmfile --file " + helmfile + " --kubeconfig /kc.yaml --selector name=traefik list --output json",
+		// --helm-binary pins helmfile to the same helm obol resolved (OBOL_HELM).
+		"helmfile --helm-binary " + cfg.ToolPath("helm") + " --file " + helmfile + " --kubeconfig /kc.yaml --selector name=traefik list --output json",
 		"helm show crds traefik/traefik --version 39.0.9",
 		"helm show crds stakater/reloader --version 2.2.18",
 		"helm show crds " + filepath.Join(dir, "defaults", "base"),

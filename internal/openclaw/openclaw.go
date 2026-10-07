@@ -455,7 +455,7 @@ func doSync(cfg *config.Config, id string, u *ui.UI) error {
 	u.Detail("Deployment directory", deploymentDir)
 
 	syncArgs := append([]string{"-f", helmfilePath, "sync"}, helmcmd.SyncFlagsForVersion(cfg.ToolPath("helm"))...)
-	cmd := exec.Command(helmfileBinary, syncArgs...)
+	cmd := helmcmd.Helmfile(helmfileBinary, cfg.ToolPath("helm"), syncArgs...)
 	cmd.Dir = deploymentDir
 
 	cmd.Env = append(os.Environ(),
@@ -1429,7 +1429,7 @@ func Delete(cfg *config.Config, id string, force bool, u *ui.UI) error {
 		helmfileBinary := cfg.ToolPath("helmfile")
 		if _, err := os.Stat(helmfilePath); err == nil {
 			if _, err := os.Stat(helmfileBinary); err == nil {
-				destroyCmd := exec.Command(helmfileBinary, "-f", helmfilePath, "destroy")
+				destroyCmd := helmcmd.Helmfile(helmfileBinary, cfg.ToolPath("helm"), "-f", helmfilePath, "destroy")
 				destroyCmd.Dir = deploymentDir
 
 				destroyCmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
