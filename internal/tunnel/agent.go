@@ -3,7 +3,6 @@ package tunnel
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -61,7 +60,7 @@ func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
 	// `kubectl set env` (field manager "kubectl-set"). Without this, Helm 4's
 	// server-side apply refuses the field and the sync fails with a conflict.
 	syncArgs := append([]string{"-f", helmfilePath, "sync"}, helmcmd.SyncFlagsForVersion(cfg.ToolPath("helm"))...)
-	cmd := exec.Command(helmfileBin, syncArgs...)
+	cmd := helmcmd.Helmfile(helmfileBin, cfg.ToolPath("helm"), syncArgs...)
 	cmd.Dir = deploymentDir
 
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)

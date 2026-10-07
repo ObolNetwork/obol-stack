@@ -3,7 +3,6 @@ package update
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -216,8 +215,7 @@ func ApplyUpgrades(cfg *config.Config, u *ui.UI, opts UpgradeOptions) error {
 
 	helmfileArgs = append(helmfileArgs, "sync")
 	helmfileArgs = append(helmfileArgs, helmcmd.SyncFlagsForVersion(cfg.ToolPath("helm"))...)
-	helmfileCmd := exec.Command(
-		cfg.ToolPath("helmfile"),
+	helmfileCmd := helmcmd.Helmfile(cfg.ToolPath("helmfile"), cfg.ToolPath("helm"),
 		helmfileArgs...,
 	)
 

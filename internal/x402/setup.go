@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -382,7 +381,7 @@ func helmfileSyncBaseRelease(cfg *config.Config) error {
 	}
 	args = append(args, helmcmd.SyncFlagsForVersion(helmBin)...)
 
-	cmd := exec.Command(helmfileBin, args...)
+	cmd := helmcmd.Helmfile(helmfileBin, cfg.ToolPath("helm"), args...)
 	cmd.Env = append(os.Environ(),
 		"KUBECONFIG="+kubeconfigPath,
 		"STACK_DATA_DIR="+cfg.DataDir,

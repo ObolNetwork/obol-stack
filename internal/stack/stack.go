@@ -491,7 +491,7 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		helmfileArgs = append(helmfileArgs, "--skip-deps")
 	}
 	helmfileArgs = append(helmfileArgs, helmcmd.SyncFlagsForVersion(helmBinary)...)
-	helmfileCmd := exec.Command(cfg.ToolPath("helmfile"), helmfileArgs...)
+	helmfileCmd := helmcmd.Helmfile(cfg.ToolPath("helmfile"), cfg.ToolPath("helm"), helmfileArgs...)
 	helmfileCmd.Env = append(os.Environ(),
 		"KUBECONFIG="+kubeconfigPath,
 		"STACK_DATA_DIR="+dataDir,

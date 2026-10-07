@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -227,4 +228,12 @@ func contains(haystack, needle string) bool {
 		}
 	}
 	return false
+}
+
+func TestHelmfile_PinsHelmBinary(t *testing.T) {
+	cmd := Helmfile("/bin/helmfile", "/opt/obol/bin/helm", "-f", "helmfile.yaml", "sync")
+	want := []string{"/bin/helmfile", "--helm-binary", "/opt/obol/bin/helm", "-f", "helmfile.yaml", "sync"}
+	if strings.Join(cmd.Args, " ") != strings.Join(want, " ") {
+		t.Fatalf("args = %q, want %q", cmd.Args, want)
+	}
 }

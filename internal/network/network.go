@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -327,7 +328,7 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	}
 
 	// Execute helmfile sync
-	cmd := exec.Command(helmfileBinary, "-f", helmfilePath, "sync",
+	cmd := helmcmd.Helmfile(helmfileBinary, cfg.ToolPath("helm"), "-f", helmfilePath, "sync",
 		"--state-values-file", valuesPath,
 		"--state-values-set", "id="+deploymentID)
 	cmd.Dir = deploymentDir
