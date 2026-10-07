@@ -23,6 +23,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
+  IMAGE: obolnetwork/obol-stack-public-storefront
 
 jobs:
   plan:
@@ -89,10 +90,20 @@ jobs:
           if [[ "${version}" != *-* ]]; then tags+=("${version%.*}"); fi
           .github/scripts/image-retag.sh "${GITHUB_SHA::7}" "${tags[@]}"
 
+  # One native runner per arch (no QEMU: emulated arm64 Next.js builds took
+  # 30+ min), each pushing by digest; merge then creates the multi-arch index.
   build:
     needs: plan
     if: needs.plan.outputs.mode == 'build'
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -104,8 +115,62 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: .
+          file: Dockerfile.public-storefront
+          platforms: ${{ matrix.platform }}
+          labels: |
+            org.opencontainers.image.title=obol-stack-public-storefront
+            org.opencontainers.image.description=Public tunnel storefront for Obol Stack
+            org.opencontainers.image.vendor=Obol
+            org.opencontainers.image.source=https://github.com/ObolNetwork/obol-stack
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=storefront-${{ matrix.runner }}
+          cache-to: type=gha,scope=storefront-${{ matrix.runner }},mode=max
+          provenance: true
+          sbom: true
+
+      - name: Export digest
+        run: |
+          mkdir -p "${RUNNER_TEMP}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digests-${{ matrix.runner }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
@@ -114,44 +179,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract image metadata
-        id: meta
-        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6.1.0
-        with:
-          images: ${{ env.REGISTRY }}/obolnetwork/obol-stack-public-storefront
-          tags: |
-            # Long SHA: needed by the security-scan step which references
-            # ${{ github.sha }} (40-char). Without it Trivy fails with
-            # MANIFEST_UNKNOWN. Same bug the x402 workflow used to have.
-            type=sha,format=long,prefix=
-            # Short SHA: matches the obol binary's version.GitCommit (set via
-            # ldflags from `git rev-parse --short HEAD`). internal/images.Resolve
-            # uses it to commit-pin the storefront deployment so binary upgrades
-            # actually roll the pod.
-            type=sha,format=short,prefix=
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-          labels: |
-            org.opencontainers.image.title=obol-stack-public-storefront
-            org.opencontainers.image.description=Public tunnel storefront for Obol Stack
-            org.opencontainers.image.vendor=Obol
-            org.opencontainers.image.source=https://github.com/ObolNetwork/obol-stack
-
-      - name: Build and push
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
-        with:
-          context: .
-          file: Dockerfile.public-storefront
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=storefront
-          cache-to: type=gha,scope=storefront,mode=max
-          provenance: true
-          sbom: true
+      - name: Create multi-arch index
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          ref="${REGISTRY}/${IMAGE}"
+          # Short SHA = the CLI's version.GitCommit pin; long SHA for Trivy.
+          tags=(-t "${ref}:${GITHUB_SHA::7}" -t "${ref}:${GITHUB_SHA}")
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then tags+=(-t "${ref}:latest"); fi
+          # shellcheck disable=SC2046 # one source arg per digest file
+          docker buildx imagetools create "${tags[@]}" $(printf "${ref}@sha256:%s " *)
+          docker buildx imagetools inspect "${ref}:${GITHUB_SHA::7}"
 
   security-scan:
-    needs: build
+    needs: merge
     runs-on: ubuntu-latest
     permissions:
       security-events: write
@@ -160,7 +200,7 @@ jobs:
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
-          image-ref: ${{ env.REGISTRY }}/obolnetwork/obol-stack-public-storefront:${{ github.sha }}
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ github.sha }}
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
