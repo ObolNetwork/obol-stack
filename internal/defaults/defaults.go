@@ -195,11 +195,16 @@ func infrastructureStamp(backendName, stackID string) (string, error) {
 		return "", err
 	}
 
-	// image= forces a re-copy when the binary's GitCommit (or dev mode)
-	// changes so image pins track the running CLI even if template bytes
-	// are unchanged.
+	// image= forces a re-copy when the binary's GitCommit (or, in dev mode,
+	// the checkout's dev-<sha> tag) changes so image pins and the persisted
+	// dev tag track the current build even if template bytes are unchanged.
+	identity := images.StampIdentity()
+	if identity == "dev" {
+		identity = "dev:" + DevImageTag()
+	}
+
 	return fmt.Sprintf("digest=%s\nbackend=%s\nstackID=%s\nimage=%s\n",
-		digest, backendName, stackID, images.StampIdentity()), nil
+		digest, backendName, stackID, identity), nil
 }
 
 // OllamaHostForBackend returns the hostname/IP that reaches the host Ollama
