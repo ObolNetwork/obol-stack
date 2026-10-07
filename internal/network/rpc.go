@@ -1,6 +1,8 @@
 package network
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -526,7 +528,17 @@ func readERPCConfig(cfg *config.Config) (map[string]any, error) {
 	return erpcConfig, nil
 }
 
-// writeERPCConfig serializes the eRPC config and patches the ConfigMap, then restarts eRPC.
+// erpcConfigHashAnnotation records, on eRPC's pod template, a hash of the
+// config obol last wrote. Changing it rolls the pods; writing the same value
+// is a no-op patch, so re-applying unchanged config doesn't restart eRPC.
+const erpcConfigHashAnnotation = "obol.org/config-hash"
+
+// writeERPCConfig serializes the eRPC config, patches the ConfigMap and rolls
+// eRPC only if the config differs from what its pods were started with.
+//
+// The ConfigMap alone can't tell us that: under Helm 4 every sync resets it
+// to the chart default, and stack up's replay writes the recorded upstreams
+// back, so the CM flips each run while the pods' config never changed.
 func writeERPCConfig(cfg *config.Config, erpcConfig map[string]any) error {
 	kubectlBin, kubeconfigPath := kubectl.Paths(cfg)
 
@@ -552,13 +564,22 @@ func writeERPCConfig(cfg *config.Config, erpcConfig map[string]any) error {
 		return fmt.Errorf("could not patch eRPC ConfigMap: %w", err)
 	}
 
-	// Restart eRPC to pick up new config.
 	if err := kubectl.RunSilent(kubectlBin, kubeconfigPath,
-		"rollout", "restart", "deployment/"+erpcDeployment, "-n", erpcNamespace); err != nil {
-		return fmt.Errorf("could not restart eRPC: %w", err)
+		"patch", "deployment", erpcDeployment, "-n", erpcNamespace,
+		"-p", erpcConfigHashPatch(updatedYAML), "--type=merge"); err != nil {
+		return fmt.Errorf("could not roll eRPC onto the new config: %w", err)
 	}
 
 	return nil
+}
+
+// erpcConfigHashPatch is the merge patch that stamps the config hash onto
+// eRPC's pod template.
+func erpcConfigHashPatch(configYAML []byte) string {
+	sum := sha256.Sum256(configYAML)
+
+	return fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{%q:%q}}}}}`,
+		erpcConfigHashAnnotation, hex.EncodeToString(sum[:16]))
 }
 
 // yamlInt extracts an int from a YAML-parsed interface{} value,

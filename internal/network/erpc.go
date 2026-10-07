@@ -1,7 +1,6 @@
 package network
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -192,35 +191,5 @@ func patchERPCUpstream(cfg *config.Config, upstreamID, endpoint string, chainID 
 		}
 	}
 
-	// Serialize back to YAML
-	updatedYAML, err := yaml.Marshal(erpcConfig)
-	if err != nil {
-		return fmt.Errorf("could not serialize eRPC config: %w", err)
-	}
-
-	// Patch the ConfigMap
-	patchData := map[string]any{
-		"data": map[string]string{
-			erpcConfigKey: string(updatedYAML),
-		},
-	}
-
-	patchJSON, err := json.Marshal(patchData)
-	if err != nil {
-		return fmt.Errorf("could not marshal patch: %w", err)
-	}
-
-	if err := kubectl.RunSilent(kubectlBin, kubeconfigPath,
-		"patch", "configmap", erpcConfigMapName, "-n", erpcNamespace,
-		"-p", string(patchJSON), "--type=merge"); err != nil {
-		return fmt.Errorf("could not patch eRPC ConfigMap: %w", err)
-	}
-
-	// Restart eRPC to pick up new config
-	if err := kubectl.RunSilent(kubectlBin, kubeconfigPath,
-		"rollout", "restart", "deployment/"+erpcDeployment, "-n", erpcNamespace); err != nil {
-		return fmt.Errorf("could not restart eRPC: %w", err)
-	}
-
-	return nil
+	return writeERPCConfig(cfg, erpcConfig)
 }

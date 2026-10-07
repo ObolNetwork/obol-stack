@@ -460,6 +460,12 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	defaultsHelmfilePath := filepath.Join(cfg.ConfigDir, "defaults")
 	helmfilePath := filepath.Join(defaultsHelmfilePath, "helmfile.yaml")
 
+	if wrote, err := x402verifier.BackfillRecordedPricing(cfg); err != nil {
+		u.Warnf("Could not record existing x402 pricing: %v", err)
+	} else if wrote {
+		u.Infof("Recorded existing x402 pricing to %s", x402verifier.RecordedPricingPath(cfg))
+	}
+
 	previousLiteLLMConfig, err := preserveLiteLLMConfigForHelm(cfg, kubeconfigPath)
 	if err != nil {
 		u.Warnf("Failed to preserve LiteLLM config across Helm sync: %v", err)
