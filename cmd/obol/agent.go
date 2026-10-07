@@ -212,9 +212,14 @@ Hermes/OpenClaw onboard flow used by the master agent.`,
 						Aliases: []string{"f"},
 						Usage:   "Skip confirmation prompt",
 					},
+					&cli.BoolFlag{
+						Name:  "delete-wallet",
+						Usage: "Also destroy the agent's wallet keystore (required when the agent holds a wallet; back it up first)",
+					},
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					u := getUI(cmd)
+					deleteWallet := cmd.Bool("delete-wallet")
 
 					// CRD-managed sub-agent path: when a positional name
 					// matches an Agent CR (and no legacy instance exists
@@ -223,6 +228,10 @@ Hermes/OpenClaw onboard flow used by the master agent.`,
 					if cmd.NArg() == 1 {
 						name := strings.TrimSpace(cmd.Args().First())
 						if isCRDAgent(cfg, name) && !hasLegacyInstance(cfg, name) {
+							if err := walletDeleteGuard(name, crdAgentWalletAddress(cfg, name),
+								"obol stack export --file backup.tar.gz", deleteWallet); err != nil {
+								return err
+							}
 							if !cmd.Bool("force") && u.IsTTY() {
 								confirm, _ := u.Input(fmt.Sprintf("Delete Agent %q (namespace %s) and host data? [y/N]", name, agentcrd.Namespace(name)), "n")
 								if !strings.EqualFold(strings.TrimSpace(confirm), "y") {
@@ -236,6 +245,10 @@ Hermes/OpenClaw onboard flow used by the master agent.`,
 
 					target, err := resolveAgentTarget(cfg, cmd.String("runtime"), cmd.Args().Slice())
 					if err != nil {
+						return err
+					}
+					backup := fmt.Sprintf("obol agent wallet backup --runtime %s %s --file %s-wallet.json", target.Runtime, target.ID, target.ID)
+					if err := walletDeleteGuard(target.ID, legacyAgentWalletAddress(cfg, target.Runtime, target.ID), backup, deleteWallet); err != nil {
 						return err
 					}
 					return deleteAgentTarget(cfg, target, cmd.Bool("force"), u)
