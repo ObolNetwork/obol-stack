@@ -34,7 +34,7 @@ one public social/demo prompt only when the release is demo-worthy.]
 
 ```bash
 # Install this release
-OBOL_RELEASE=[version] bash <(curl -s https://stack.obol.org)
+curl -fsSL https://stack.obol.org/[version] | bash
 
 # Run the stack
 obol stack init && obol stack up

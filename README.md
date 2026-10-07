@@ -39,13 +39,13 @@ For local models, install [Ollama](https://ollama.com) and pull at least one cha
 ### Install
 
 ```bash
-bash <(curl -fsSL https://stack.obol.org)
+curl -fsSL https://stack.obol.org | bash
 ```
 
 Pin a release (use the current tag from the [releases page](https://github.com/ObolNetwork/obol-stack/releases), not an ancient example):
 
 ```bash
-OBOL_RELEASE=v0.13.0 bash <(curl -fsSL https://stack.obol.org)
+curl -fsSL https://stack.obol.org/v0.15.0 | bash
 ```
 
 The installer sets up the `obol` CLI and all dependencies (`kubectl`, `helm`, `k3d`, `helmfile`, `k9s`) into `~/.local/bin/`, verifies release checksums, configures your PATH, tries to add `obol.stack` to `/etc/hosts`, and offers to start the cluster.
@@ -510,7 +510,7 @@ Follows the [XDG Base Directory](https://specifications.freedesktop.org/basedir-
 ## Updating
 
 ```bash
-bash <(curl -fsSL https://stack.obol.org)
+curl -fsSL https://stack.obol.org | bash
 ```
 
 The installer detects your existing installation and upgrades safely.
