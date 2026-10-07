@@ -60,7 +60,7 @@ jobs:
         id: plan
         env:
           FORCE_BUILD: ${{ inputs.force_build }}
-        run: .github/scripts/x402-image-plan.sh
+        run: .github/scripts/image-plan.sh
 
   retag:
     needs: plan
@@ -80,7 +80,7 @@ jobs:
         run: |
           tags=("${{ needs.plan.outputs.short_sha }}" "${{ needs.plan.outputs.long_sha }}")
           if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then tags+=(latest); fi
-          .github/scripts/x402-image-retag.sh "${{ needs.plan.outputs.source }}" "${tags[@]}"
+          .github/scripts/image-retag.sh "${{ needs.plan.outputs.source }}" "${tags[@]}"
 
   # ---------------------------------------------------------------------------
   # One bake job builds all five images for amd64+arm64. Pure-Go cross-compile

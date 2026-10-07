@@ -22,9 +22,9 @@ fetch_index_digest() {
     printf '%s' "${digest}"
 }
 
-# Stack-owned images built from Dockerfile.x402 / docker-bake.hcl and pinned
-# by the CLI at :<short-sha>. Single list for the publish, retag and release
-# gate scripts.
+# Stack-owned images pinned by the CLI at :<short-sha> (internal/images
+# Managed), grouped by the workflow that publishes them. Single source for the
+# publish, retag and release-gate scripts.
 X402_IMAGES=(
     x402-verifier
     serviceoffer-controller
@@ -32,11 +32,26 @@ X402_IMAGES=(
     job-broker
     demo-server
 )
+STOREFRONT_IMAGES=(
+    obol-stack-public-storefront
+)
+# shellcheck disable=SC2034 # used by scripts that source this file
+IMAGE_GROUPS=(x402 storefront)
 
-# images_exist <tag> → 0 when every X402_IMAGES entry has <tag> on GHCR.
+# group_images <group> → image names, one per line.
+group_images() {
+    case "$1" in
+        x402) printf '%s\n' "${X402_IMAGES[@]}" ;;
+        storefront) printf '%s\n' "${STOREFRONT_IMAGES[@]}" ;;
+        *) echo "unknown image group: $1" >&2; return 1 ;;
+    esac
+}
+
+# images_exist <tag> [group] → 0 when every image in the group (default x402)
+# has <tag> on GHCR.
 images_exist() {
     local image
-    for image in "${X402_IMAGES[@]}"; do
+    while read -r image; do
         fetch_index_digest "${image}" "$1" >/dev/null 2>&1 || return 1
-    done
+    done < <(group_images "${2:-x402}")
 }

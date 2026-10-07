@@ -46,7 +46,8 @@ import (
 const PlaceholderTag = "__OBOL_IMAGE__"
 
 // ManagedRepos that go through Resolve / RewriteTree. Keep in lockstep with
-// internal/stack baseLocalImages and docker-publish-x402.yml.
+// internal/stack baseLocalImages and the image groups in
+// .github/scripts/lib-ghcr.sh (publish workflows + release gate).
 var Managed = []string{
 	"ghcr.io/obolnetwork/x402-verifier",
 	"ghcr.io/obolnetwork/serviceoffer-controller",

@@ -12,14 +12,19 @@ in git.
 | `OBOL_DEVELOPMENT=true` | `repo:dev-<sha>` (local k3d import tag) |
 | Unknown / dirty build | `repo:latest` |
 
-- Short-SHA tags are published by `docker-publish-x402.yml` for **every** `main`
-  push. `.github/scripts/x402-image-plan.sh` decides per commit: **skip** if
+- Short-SHA tags are published for **every** `main` push by
+  `docker-publish-x402.yml` (five Go images) and `docker-publish-storefront.yml`
+  (public storefront). `.github/scripts/image-plan.sh` decides per commit and
+  image group: **skip** if
   the commit already has images, **retag** (copy manifests byte-for-byte, same
   digests) when no image input changed since the nearest published ancestor,
   otherwise **build** (bake → `docker-bake.hcl` / `Dockerfile.x402`). Image
   inputs = in-module packages the five binaries compile (`go list -deps`, no
-  tests) + `go.mod`/`go.sum` + Dockerfile/bake/`.dockerignore`. Not run on `v*`
-  tags, so a release never overwrites its commit's short-SHA tags.
+  tests) + `go.mod`/`go.sum` + Dockerfile/bake/`.dockerignore`; storefront
+  inputs = `web/public-storefront/` + its Dockerfile. Tags never rebuild: x402
+  ignores `v*`, storefront only copies the commit's image to semver tags, so a
+  release never overwrites its commit's short-SHA tags. The release gate checks
+  every image in `.github/scripts/lib-ghcr.sh` (= `internal/images.Managed`).
 - CI builds all five pure-Go images in **one bake job**: shared builder stage,
   native cross-compile (`BUILDPLATFORM` + `GOARCH`, no QEMU), shared GHA cache.
 - The CLI embeds the same short SHA via goreleaser ldflags
