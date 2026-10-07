@@ -17,6 +17,11 @@ tests/
 plansold/
 plans/
 node_modules/
+# Nested too: a host web/public-storefront/node_modules (e.g. darwin builds
+# from a local `npm install`) would otherwise be copied over the image's
+# `npm ci` output, mixing package versions (next vs @next/swc).
+**/node_modules/
+**/.next/
 coverage/
 *.log
 *.out
