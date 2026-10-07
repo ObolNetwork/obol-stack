@@ -1,11 +1,15 @@
 package agentcrd
 
 import (
+	"bytes"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/stackbackup"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"gopkg.in/yaml.v3"
 )
 
@@ -115,5 +119,36 @@ func TestStripServerManagedMetadataOnAgentManifest(t *testing.T) {
 	}
 	if spec["model"] != "qwen3.5:9b" {
 		t.Fatalf("spec.model altered: %v", spec["model"])
+	}
+}
+
+// A recorded agent must be replayed with server-side apply: client-side apply
+// fails ("resourceVersion: Invalid value: 0") on objects whose
+// last-applied-configuration carries server-managed metadata.
+func TestResumeAllUsesServerSideApply(t *testing.T) {
+	dir := t.TempDir()
+	log := filepath.Join(dir, "kubectl.log")
+	stub := filepath.Join(dir, "kubectl")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\necho \"$*\" >> "+log+"\ncat >/dev/null\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("OBOL_KUBECTL", stub)
+
+	cfg := &config.Config{ConfigDir: filepath.Join(dir, "cfg"), BinDir: filepath.Join(dir, "bin")}
+	manifest := map[string]any{
+		"apiVersion": "obol.org/v1alpha1",
+		"kind":       "Agent",
+		"metadata":   map[string]any{"name": "rt", "namespace": "agent-rt", "resourceVersion": "7936", "uid": "x"},
+		"spec":       map[string]any{"objective": "o"},
+	}
+	if err := PersistManifest(cfg, "rt", manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	ResumeAll(cfg, ui.NewForTest(&bytes.Buffer{}, &bytes.Buffer{}))
+
+	calls, _ := os.ReadFile(log)
+	if !strings.Contains(string(calls), "apply --server-side --force-conflicts --field-manager=obol -f -") {
+		t.Fatalf("agent not replayed with server-side apply; kubectl calls:\n%s", calls)
 	}
 }

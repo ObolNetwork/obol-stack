@@ -9,6 +9,9 @@ package kubectl
 const (
 	ManagedByLabel = "obol.org/managed-by"
 	ManagedByObol  = "obol"
+	// FieldManagerObol is the server-side apply field manager for objects obol
+	// applies from its records.
+	FieldManagerObol = "obol"
 )
 
 // SetManagedBy stamps ManagedByLabel=ManagedByObol onto a decoded manifest
