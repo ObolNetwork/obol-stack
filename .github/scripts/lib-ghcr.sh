@@ -21,3 +21,22 @@ fetch_index_digest() {
     fi
     printf '%s' "${digest}"
 }
+
+# Stack-owned images built from Dockerfile.x402 / docker-bake.hcl and pinned
+# by the CLI at :<short-sha>. Single list for the publish, retag and release
+# gate scripts.
+X402_IMAGES=(
+    x402-verifier
+    serviceoffer-controller
+    x402-buyer
+    job-broker
+    demo-server
+)
+
+# images_exist <tag> → 0 when every X402_IMAGES entry has <tag> on GHCR.
+images_exist() {
+    local image
+    for image in "${X402_IMAGES[@]}"; do
+        fetch_index_digest "${image}" "$1" >/dev/null 2>&1 || return 1
+    done
+}
