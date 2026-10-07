@@ -139,6 +139,65 @@ dev-frontend-reset:
     obol kubectl rollout status deployment/obol-frontend-obol-app -n obol-frontend --timeout=120s
     echo "✓ Frontend reset to released image"
 
+# Dev builds tag images `dev-<git-sha>` (internal/defaults/defaults.go::
+# DevImageTag) and nothing GCs them, so every commit you ran `obol stack up`
+# on leaves a full tagged image set behind. Keeps: tags recorded in any active
+# `.dev-image-tag` (workspace config, $OBOL_CONFIG_DIR, ~/.config/obol), the
+# current HEAD's tag, and `:latest`. Safe while clusters run — k3d nodes hold
+# their own imported copies.
+#
+# Prune stale dev images, dangling images, and docker build cache
+dev-prune:
+    #!/usr/bin/env bash
+    set -e
+    keep="latest dev-$(git -C {{ justfile_directory() }} rev-parse --short=12 HEAD 2>/dev/null || echo none)"
+    for f in "{{ justfile_directory() }}/.workspace/config/.dev-image-tag" \
+             "${OBOL_CONFIG_DIR:+${OBOL_CONFIG_DIR}/.dev-image-tag}" \
+             "${XDG_CONFIG_HOME:-$HOME/.config}/obol/.dev-image-tag"; do
+        [ -n "$f" ] && [ -f "$f" ] && keep="$keep $(cat "$f")"
+    done
+    echo "→ Keeping tags: $keep"
+    stale=""
+    for img in $(docker images --format '{{{{.Repository}}:{{{{.Tag}}' | grep -E '^ghcr\.io/obolnetwork/.*:dev-' || true); do
+        tag="${img##*:}"
+        case " $keep " in
+            *" $tag "*) ;;
+            *) stale="$stale $img" ;;
+        esac
+    done
+    if [ -n "$stale" ]; then
+        echo "→ Removing stale dev images:$stale"
+        docker rmi $stale || true
+    else
+        echo "→ No stale dev-tagged images"
+    fi
+    echo "→ Pruning dangling images"
+    docker image prune -f
+    echo "→ Trimming build cache to 8GB (keeps recent layers warm)"
+    docker builder prune -f --keep-storage 8GB
+    docker system df
+
+# registry:2 never garbage-collects, so old image versions accumulate in the
+# pull-through caches (docker.io/ghcr.io/quay.io) and the localhost:54103 push
+# target forever. Containers and caches are recreated on the next
+# `obol stack up`; a running cluster falls back to pulling from upstream
+# registries in the meantime.
+#
+# Wipe the k3d registry mirror caches (recreated on next `obol stack up`)
+dev-prune-registries:
+    #!/usr/bin/env bash
+    set -e
+    for name in k3d-obol-docker-io.localhost k3d-obol-ghcr-io.localhost \
+                k3d-obol-quay-io.localhost k3d-obol-local.localhost; do
+        docker rm -f "$name" >/dev/null 2>&1 && echo "→ Removed $name" || true
+    done
+    cache_root="${OBOL_REGISTRY_CACHE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/obol/registry-cache}"
+    if [ -d "$cache_root" ]; then
+        echo "→ Wiping $(du -sh "$cache_root" | cut -f1) at $cache_root"
+        rm -rf "$cache_root"
+    fi
+    echo "✓ Registry caches wiped — next 'obol stack up' recreates them"
+
 # Regenerate CRD manifests + DeepCopy methods from kubebuilder markers
 # in internal/monetizeapi/. The Go types are the single source of truth;
 # CI (.github/workflows/lint-test.yaml::generate-check) fails if the

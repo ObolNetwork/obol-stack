@@ -267,6 +267,8 @@ k3d: 1 server, ports `80:80` + `8080:80` + `443:443` + `8443:443`, image `ranche
 
 Generated k3d registry config written to `$OBOL_CONFIG_DIR/registries.yaml`. Cache data under `~/.local/state/obol/registry-cache/` by default, or under `OBOL_REGISTRY_CACHE_DIR` when set.
 
+Nothing garbage-collects dev artifacts: `dev-<sha>` image tags, docker build cache, and the registry caches all grow unbounded. Prune with `just dev-prune` (stale dev tags + dangling images + build cache) and `just dev-prune-registries` (wipes mirror caches; recreated on next `stack up`) — details in the obol-stack-dev skill.
+
 Local push target: `just dev-frontend` builds `obol-stack-front-end`, pushes `localhost:54103/obol-stack-front-end:dev`, **imports into the active k3d cluster** (`k3d image import` — required because `imagePullPolicy: IfNotPresent` caches the `:dev` tag), and restarts the frontend pod. Use `just dev-frontend-rebuild` after code changes (forces `docker build --no-cache`). Reset: `just dev-frontend-reset`.
 
 ### Local frontend development

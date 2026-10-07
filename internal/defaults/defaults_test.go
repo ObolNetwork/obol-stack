@@ -84,6 +84,43 @@ func TestReadDevImageTag_FallbackWhenAbsent(t *testing.T) {
 	}
 }
 
+// ResolveWorkloadImage must hand dynamically-created workloads (storefront,
+// demo-server) the locally-imported dev tag under OBOL_DEVELOPMENT. Using
+// images.Resolve there returns :latest, which imagePullPolicy IfNotPresent
+// satisfies from a stale registry pull instead of the `stack up` local build
+// (the tunnel-storefront crashloop).
+func TestResolveWorkloadImage_DevUsesRecordedTag(t *testing.T) {
+	t.Setenv("OBOL_DEVELOPMENT", "true")
+
+	cfg := &config.Config{ConfigDir: t.TempDir()}
+	tagFile := filepath.Join(cfg.ConfigDir, devImageTagFile)
+	if err := os.WriteFile(tagFile, []byte("dev-cafe0123beef\n"), 0o600); err != nil {
+		t.Fatalf("write dev image tag: %v", err)
+	}
+
+	got := ResolveWorkloadImage(cfg, "ghcr.io/obolnetwork/demo-server")
+	want := "ghcr.io/obolnetwork/demo-server:dev-cafe0123beef"
+	if got != want {
+		t.Errorf("ResolveWorkloadImage dev = %q, want %q", got, want)
+	}
+
+	// No recorded tag → fall back to :latest (same as before the fix).
+	if got := ResolveWorkloadImage(&config.Config{ConfigDir: t.TempDir()}, "ghcr.io/obolnetwork/demo-server"); got != "ghcr.io/obolnetwork/demo-server:latest" {
+		t.Errorf("ResolveWorkloadImage dev without tag file = %q, want :latest", got)
+	}
+}
+
+func TestResolveWorkloadImage_ProductionDelegatesToResolve(t *testing.T) {
+	t.Setenv("OBOL_DEVELOPMENT", "")
+	t.Setenv("OBOL_SKIP_IMAGE_DIGEST", "true")
+
+	cfg := &config.Config{ConfigDir: t.TempDir()}
+	got := ResolveWorkloadImage(cfg, "ghcr.io/obolnetwork/demo-server")
+	if got != images.Resolve("ghcr.io/obolnetwork/demo-server") {
+		t.Errorf("ResolveWorkloadImage prod = %q, want images.Resolve result", got)
+	}
+}
+
 func TestCopyInfrastructure_ProductionUsesCommitSHA(t *testing.T) {
 	// Production path: rewrite placeholder → :GitCommit (digest skipped for
 	// offline unit tests). Never :latest, never leave the placeholder.

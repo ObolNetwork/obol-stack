@@ -2147,7 +2147,7 @@ func TestBuildDemoServiceOffer_OBOLIncludesAssetBlock(t *testing.T) {
 }
 
 func TestBuildDemoResources_UsesImportedImageAndERPCPath(t *testing.T) {
-	resources := buildDemoResources("demo-blocks", demoSpec{Type: "blocks", NeedsERPC: true}, "base-sepolia")
+	resources := buildDemoResources(newTestConfig(t), "demo-blocks", demoSpec{Type: "blocks", NeedsERPC: true}, "base-sepolia")
 	deploy := resources[1]
 	spec := deploy["spec"].(map[string]any)
 	template := spec["template"].(map[string]any)
@@ -2169,6 +2169,30 @@ func TestBuildDemoResources_UsesImportedImageAndERPCPath(t *testing.T) {
 	}
 
 	t.Fatal("ERPC_URL not set for chain-backed demo")
+}
+
+// Demo backends are created dynamically (not via the rendered defaults tree),
+// so in dev mode they must pin the locally-imported dev tag — :latest with
+// IfNotPresent silently sticks to a stale registry pull (see
+// defaults.ResolveWorkloadImage).
+func TestBuildDemoResources_DevModePinsLocalDevTag(t *testing.T) {
+	t.Setenv("OBOL_DEVELOPMENT", "true")
+
+	cfg := newTestConfig(t)
+	if err := os.WriteFile(filepath.Join(cfg.ConfigDir, ".dev-image-tag"), []byte("dev-cafe0123beef"), 0o600); err != nil {
+		t.Fatalf("write dev image tag: %v", err)
+	}
+
+	resources := buildDemoResources(cfg, "demo-blocks", demoSpec{Type: "blocks"}, "base-sepolia")
+	deploy := resources[1]
+	spec := deploy["spec"].(map[string]any)
+	template := spec["template"].(map[string]any)
+	podSpec := template["spec"].(map[string]any)
+	container := podSpec["containers"].([]map[string]any)[0]
+
+	if got := container["image"]; got != "ghcr.io/obolnetwork/demo-server:dev-cafe0123beef" {
+		t.Errorf("image = %v, want ghcr.io/obolnetwork/demo-server:dev-cafe0123beef", got)
+	}
 }
 
 // TestSellResumeCommand_Registered pins `obol sell resume` as a

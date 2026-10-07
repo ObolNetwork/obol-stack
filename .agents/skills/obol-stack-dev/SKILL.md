@@ -105,6 +105,14 @@ OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=serviceoffer-controller,x402-buyer obol stac
 
 Values: `true`/`all` → all; comma-separated short names → those only; unset/`false`/`0` → reuse cached. Image set: `x402-verifier`, `serviceoffer-controller`, `x402-buyer`, `demo-server`, `obol-stack-public-storefront` (alias `public-storefront`). The "Local dev images ready" summary line surfaces this hint when nothing was rebuilt.
 
+## Prune Stale Dev Images & Registry Caches
+
+Dev builds tag images `dev-<git-sha>` (`internal/defaults/defaults.go::DevImageTag`); nothing GCs them, docker build layers accumulate, and the k3d registry mirror caches (`registry:2` has no garbage collection) grow forever. Symptoms: tens of GB of reclaimable images/build-cache in `docker system df`, multi-GB `~/.local/state/obol/registry-cache`.
+
+- `just dev-prune` — remove `ghcr.io/obolnetwork/*:dev-*` tags not recorded in any active `.dev-image-tag` (workspace config, `$OBOL_CONFIG_DIR`, `~/.config/obol`) or current HEAD; prune dangling images; trim build cache to 8GB. Safe while clusters run — k3d nodes hold their own imported copies; a deleted tag rebuilds warm from the build cache.
+- `just dev-prune-registries` — remove the registry mirror containers and wipe the cache dir. Next `obol stack up` recreates them; containerd falls back to upstream pulls in the meantime.
+- Big non-obol images are NOT auto-pruned: `nousresearch/hermes-agent` older than the pin in `internal/hermes/hermes.go` and `ghcr.io/obolnetwork/openclaw` older than `internal/openclaw/OPENCLAW_VERSION` are the usual multi-GB offenders — check the pins, then `docker rmi` manually.
+
 ## Rebuild Hints by Changed Path
 
 | Changed path | What it lands in | Needs CLI rebuild? | Needs image rebuild? | Skill PVC re-seed? |

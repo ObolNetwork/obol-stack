@@ -20,7 +20,6 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
 	"github.com/ObolNetwork/obol-stack/internal/dns"
-	"github.com/ObolNetwork/obol-stack/internal/images"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 )
@@ -1384,11 +1383,7 @@ func buildStorefrontPreviewHTTPRoute() map[string]any {
 }
 
 func storefrontImage(cfg *config.Config) string {
-	const repo = "ghcr.io/obolnetwork/obol-stack-public-storefront"
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("OBOL_DEVELOPMENT")), "true") {
-		return images.ResolveDev(repo, stackdefaults.ReadDevImageTag(cfg))
-	}
-	return images.Resolve(repo)
+	return stackdefaults.ResolveWorkloadImage(cfg, "ghcr.io/obolnetwork/obol-stack-public-storefront")
 }
 
 // CreateStorefront creates (or updates) the public storefront landing page and
