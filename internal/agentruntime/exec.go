@@ -4,11 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"syscall"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/passthrough"
 )
 
 // BuildExecArgs returns the kubectl argv for `kubectl exec` into the agent
@@ -33,35 +32,36 @@ func BuildExecArgs(runtime Runtime, id string, argv []string, withTTY bool) []st
 }
 
 // ExecInPod runs argv inside the agent pod identified by (runtime, id) using
-// the bundled kubectl binary. Stdin/stdout/stderr are wired to the host TTY.
+// the resolved kubectl binary, handing the terminal over to it (see
+// internal/passthrough: on unix obol is replaced by kubectl, so TTY, signals
+// and exit codes are native). `-t` is requested only when both stdin and
+// stdout are terminals.
 //
-// On non-zero exit from the in-pod command, ExecInPod calls os.Exit with the
-// same status to preserve exit codes for shell scripting. A nil return means
-// the command exited 0.
+// KUBECONFIG is always the stack kubeconfig (an ambient KUBECONFIG is
+// ignored: the agent pod only exists in the stack). Exec into a pod always
+// needs a cluster, so a missing stack kubeconfig is reported up front instead
+// of letting kubectl fail. The in-pod exit status becomes obol's exit status.
 func ExecInPod(cfg *config.Config, runtime Runtime, id string, argv []string) error {
 	if len(argv) == 0 {
 		return errors.New("ExecInPod: argv is empty")
 	}
 
+	kubectlBinary, err := passthrough.ResolveTool(cfg.BinDir, "kubectl", os.Stderr)
+	if err != nil {
+		return err
+	}
+
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+	env := passthrough.SetEnv(os.Environ(), "KUBECONFIG", kubeconfigPath)
+	if passthrough.StackHint(true, kubeconfigPath) != "" {
 		return errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
-	kubectlBinary := cfg.ToolPath("kubectl")
-
-	cmd := exec.Command(kubectlBinary, BuildExecArgs(runtime, id, argv, shouldRequestTTY())...)
-	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-
-	if err := cmd.Run(); err != nil {
-		exitErr := &exec.ExitError{}
+	args := BuildExecArgs(runtime, id, argv, shouldRequestTTY())
+	if err := passthrough.Exec(kubectlBinary, args, env); err != nil {
+		var exitErr *passthrough.ExitError
 		if errors.As(err, &exitErr) {
-			if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-				os.Exit(status.ExitStatus())
-			}
+			return err
 		}
 		return fmt.Errorf("kubectl exec into %s/%s: %w", Namespace(runtime, id), Describe(runtime).ServiceName, err)
 	}

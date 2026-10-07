@@ -1,0 +1,4 @@
+export KUBECONFIG='/home/o b/.config/obol/kubeconfig.yaml'
+case ":${PATH}:" in *':/home/o b/.local/bin:'*) ;; *) export PATH='/home/o b/.local/bin'":${PATH}" ;; esac
+# Run this command to configure your shell:
+# eval "$(obol env)"

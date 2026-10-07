@@ -1,0 +1,2 @@
+unset KUBECONFIG
+export PATH='/usr/bin:/bin'

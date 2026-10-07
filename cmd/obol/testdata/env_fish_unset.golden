@@ -1,0 +1,2 @@
+set -e KUBECONFIG
+set -gx PATH (string match -v -- '/home/o b/.local/bin' $PATH)

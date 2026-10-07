@@ -5,19 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"runtime/debug"
-	"syscall"
 
 	"github.com/ObolNetwork/obol-stack/internal/agentcrd"
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/network"
+	"github.com/ObolNetwork/obol-stack/internal/passthrough"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
 	"github.com/ObolNetwork/obol-stack/internal/storefront"
-	"github.com/ObolNetwork/obol-stack/internal/tools"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/urfave/cli/v3"
@@ -29,6 +26,13 @@ func main() {
 	cliApp := newRootCommand(cfg)
 
 	if err := cliApp.Run(context.Background(), os.Args); err != nil {
+		// A passthrough tool's exit status (normally already applied by
+		// urfave's ExitCoder handling) is propagated without extra output.
+		var exitErr *passthrough.ExitError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.Code)
+		}
+
 		// Use the UI instance for colored error output if available.
 		u, _ := cliApp.Metadata["ui"].(*ui.UI)
 		if u == nil {
@@ -89,7 +93,7 @@ func newRootCommand(cfg *config.Config) *cli.Command {
 			u.SetNoBrowser(cmd.Bool("no-open"))
 			cmd.Metadata = map[string]any{"ui": u}
 
-			return ctx, nil
+			return ctx, checkGlobalFlagsBeforePassthrough(cmd)
 		},
 		Commands: []*cli.Command{
 			// ============================================================
@@ -235,10 +239,9 @@ func newRootCommand(cfg *config.Config) *cli.Command {
 			// ============================================================
 			passthroughCommand(cfg, "kubectl", nil),
 			passthroughCommand(cfg, "helm", nil),
-			passthroughCommand(cfg, "helmfile", func(cfg *config.Config) []string {
-				return []string{"HELMFILE_FILE_PATH=" + filepath.Join(cfg.ConfigDir, "helmfile.yaml")}
-			}),
+			passthroughCommand(cfg, "helmfile", helmfileEnv),
 			passthroughCommand(cfg, "k9s", nil),
+			envCommand(cfg),
 			// ============================================================
 			// Utility Commands
 			// ============================================================
@@ -449,43 +452,4 @@ func debugReadBuildInfo() (string, bool) {
 		return "", false
 	}
 	return bi.GoVersion, true
-}
-
-// passthroughCommand builds a CLI command that execs a bundled tool with
-// KUBECONFIG pre-set. extraEnv, if non-nil, yields additional env vars at run time.
-func passthroughCommand(cfg *config.Config, tool string, extraEnv func(*config.Config) []string) *cli.Command {
-	return &cli.Command{
-		Name:            tool,
-		Usage:           "Run " + tool + " with stack kubeconfig (passthrough)",
-		SkipFlagParsing: true,
-		Action: func(ctx context.Context, cmd *cli.Command) error {
-			kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-			if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-				return errors.New("stack not running, use 'obol stack up' first")
-			}
-			toolPath := cfg.ToolPath(tool)
-			if _, err := os.Stat(toolPath); os.IsNotExist(err) {
-				return tools.MissingError(tool)
-			}
-
-			proc := exec.Command(toolPath, cmd.Args().Slice()...)
-			env := append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-			if extraEnv != nil {
-				env = append(env, extraEnv(cfg)...)
-			}
-			proc.Env = env
-			proc.Stdin, proc.Stdout, proc.Stderr = os.Stdin, os.Stdout, os.Stderr
-
-			if err := proc.Run(); err != nil {
-				exitErr := &exec.ExitError{}
-				if errors.As(err, &exitErr) {
-					if status, ok := exitErr.Sys().(syscall.WaitStatus); ok {
-						os.Exit(status.ExitStatus())
-					}
-				}
-				return err
-			}
-			return nil
-		},
-	}
 }

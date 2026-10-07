@@ -1,0 +1,4 @@
+set -gx KUBECONFIG '/home/o b/.config/obol/kubeconfig.yaml'
+contains -- '/home/o b/.local/bin' $PATH; or set -gx PATH '/home/o b/.local/bin' $PATH
+# Run this command to configure your shell:
+# obol env --shell fish | source

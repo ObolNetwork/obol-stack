@@ -1,0 +1,2 @@
+Remove-Item Env:KUBECONFIG -ErrorAction SilentlyContinue
+$env:PATH = (($env:PATH -split [IO.Path]::PathSeparator) | Where-Object { $_ -ne '/home/o b/.local/bin' }) -join [IO.Path]::PathSeparator

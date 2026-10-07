@@ -555,7 +555,7 @@ func CLI(cfg *config.Config, id string, args []string) error {
 }
 
 func ResolveCLIInvocation(cfg *config.Config, args []string) (string, []string, error) {
-	selectedID, hermesArgs, err := splitCLISelection(args)
+	selectedID, hermesArgs, err := splitCLISelection(args, os.Getenv(AgentEnvVar))
 	if err != nil {
 		return "", nil, err
 	}
@@ -582,47 +582,41 @@ func ResolveCLIInvocation(cfg *config.Config, args []string) (string, []string, 
 		return ids[0], hermesArgs, nil
 	}
 
-	return "", nil, fmt.Errorf("multiple Hermes instances found, specify one with --agent: %s", strings.Join(ids, ", "))
+	return "", nil, fmt.Errorf("multiple Hermes instances found, specify one with a leading --agent <name> (or %s): %s", AgentEnvVar, strings.Join(ids, ", "))
 }
 
-func splitCLISelection(args []string) (selectedID string, hermesArgs []string, err error) {
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			hermesArgs = append(hermesArgs, args[i+1:]...)
-			return selectedID, hermesArgs, nil
-		}
+// AgentEnvVar selects the Hermes instance for `obol hermes` when no leading
+// --agent is given.
+const AgentEnvVar = "OBOL_AGENT"
 
-		if arg == "--agent" {
-			if selectedID != "" {
-				return "", nil, errors.New("--agent specified multiple times")
-			}
-			if i+1 >= len(args) {
+// splitCLISelection separates obol's instance selector from the Hermes argv.
+// `--agent <id>` / `--agent=<id>` is recognised only as the very first
+// argument(s); otherwise OBOL_AGENT (envAgent) is used. A single "--" right
+// after the selector position ends obol's options (`obol hermes -- --help`,
+// `obol hermes -- --agent x` for Hermes' own --agent). Everything else is
+// passed to Hermes verbatim, including later --agent flags and "--".
+func splitCLISelection(args []string, envAgent string) (selectedID string, hermesArgs []string, err error) {
+	rest := args
+	if len(rest) > 0 {
+		if rest[0] == "--agent" {
+			if len(rest) < 2 || strings.TrimSpace(rest[1]) == "" {
 				return "", nil, errors.New("--agent requires an instance name")
 			}
-			selectedID = strings.TrimSpace(args[i+1])
-			if selectedID == "" {
+			selectedID, rest = strings.TrimSpace(rest[1]), rest[2:]
+		} else if value, ok := strings.CutPrefix(rest[0], "--agent="); ok {
+			if strings.TrimSpace(value) == "" {
 				return "", nil, errors.New("--agent requires an instance name")
 			}
-			i++
-			continue
+			selectedID, rest = strings.TrimSpace(value), rest[1:]
 		}
-
-		if value, ok := strings.CutPrefix(arg, "--agent="); ok {
-			if selectedID != "" {
-				return "", nil, errors.New("--agent specified multiple times")
-			}
-			selectedID = strings.TrimSpace(value)
-			if selectedID == "" {
-				return "", nil, errors.New("--agent requires an instance name")
-			}
-			continue
-		}
-
-		hermesArgs = append(hermesArgs, arg)
 	}
-
-	return selectedID, hermesArgs, nil
+	if len(rest) > 0 && rest[0] == "--" {
+		rest = rest[1:]
+	}
+	if selectedID == "" {
+		selectedID = strings.TrimSpace(envAgent)
+	}
+	return selectedID, append([]string{}, rest...), nil
 }
 
 func containsID(ids []string, id string) bool {
