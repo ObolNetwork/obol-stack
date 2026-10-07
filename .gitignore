@@ -72,9 +72,16 @@ bin
 
 obol-agent
 
-# Wallet backups (contain keystore passwords)
+# Wallet material — keystores, keystore passwords, stack export archives.
+# NEVER commit these; see CLAUDE.md "Secrets & wallet keys".
 obol-wallet-backup-*.json
 obol-wallet-backup-*.enc
+obol-stack-backup-*.tar.gz
+obol-stack-export-*
 .private_keys/
+**/remote-signer-keystores/
+values-remote-signer.yaml
+UTC--*
+*.keystore
 .claude/worktrees/
 plans/
