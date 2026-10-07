@@ -417,7 +417,17 @@ Key code: `cmd/x402-buyer/`, `internal/x402/buyer/`, `internal/x402/forwardauth.
 1. **Absolute paths required** — Docker volume mounts need absolute paths (resolved at `obol stack init`)
 2. **Two-stage templating** — Stage 1 (CLI flags) → Stage 2 (Helmfile); separation is critical
 3. **Unique namespaces** — each deployment must have unique namespace
-4. **`OBOL_DEVELOPMENT=true`** — required for `obol stack up` to auto-build local images: `x402-verifier`, `serviceoffer-controller`, `x402-buyer`, `demo-server`, `obol-stack-public-storefront` (`public-storefront` alias accepted). Build path reuses same-name local tag for warm-run speed. `OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES` controls force-rebuilds: `true`/`all` = every image; comma-separated list (e.g. `x402-verifier,serviceoffer-controller`) = only those; `false`/`0`/unset = skip. "Local dev images ready" summary surfaces when nothing was rebuilt.
+4. **`OBOL_DEVELOPMENT=true`** — required for `obol stack up` to auto-build local images: `x402-verifier`, `serviceoffer-controller`, `x402-buyer`, `job-broker`, `demo-server`, `obol-stack-public-storefront` (`public-storefront` alias accepted). Images are tagged `dev-<12-char HEAD sha>` of the git checkout you run `obol` from (`defaults.DevImageTag`), so **committing rebuilds automatically** (new tag) and a warm run on the same commit reuses the images. **Uncommitted edits reuse the committed tag** — force them with `OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES`: `true`/`all` = every image; comma list (e.g. `x402-verifier,serviceoffer-controller`) = only those (prefer this — only rebuild what you touched); unset = reuse. "Local dev images ready" surfaces when nothing was rebuilt. The front-end is NOT built here (pinned image; use `just dev-frontend`). Good practice before a dev bring-up — rebuild the CLI too, from the same checkout:
+
+   ```bash
+   cd <obol-stack> && git pull --ff-only
+   go build -o .workspace/bin/obol ./cmd/obol
+   OBOL_DEVELOPMENT=true .workspace/bin/obol stack up
+   # uncommitted changes to e.g. the controller only:
+   OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=serviceoffer-controller OBOL_DEVELOPMENT=true .workspace/bin/obol stack up
+   ```
+
+   Old `dev-<sha>` tags accumulate — `just dev-prune` (see Dev Registry Cache).
 5. **Root-owned PVCs** — `-f` flag required to remove in `obol stack purge`
 6. **Narrow review boundaries** — for controller/RBAC/payment changes, spell out exact security and user-journey invariants before editing or delegating; broad review prompts have previously missed test drift
 
