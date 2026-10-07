@@ -32,11 +32,15 @@ func (h ReleaseHealth) String() string {
 	}
 }
 
-// NamespaceReleaseHealth runs `helm list -n <ns> -a -o json` and classifies
-// the result. Cheap (one helm call, no chart rendering), so record replay can
-// use it to decide whether an expensive `helmfile sync` is needed at all.
+// NamespaceReleaseHealth runs `helm list -n <ns> -o json` (all statuses) and
+// classifies the result. Cheap (one helm call, no chart rendering), so record
+// replay can use it to decide whether an expensive `helmfile sync` is needed.
 func NamespaceReleaseHealth(helmBinary, kubeconfig, namespace string) (ReleaseHealth, error) {
-	cmd := exec.Command(helmBinary, "list", "-n", namespace, "-a", "-o", "json")
+	major, verr := MajorVersion(helmBinary)
+	if verr != nil {
+		major = 4 // current pin; an unknown binary is far likelier to be new
+	}
+	cmd := exec.Command(helmBinary, listAllArgs(major, namespace)...)
 	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
 	out, err := cmd.Output()
 	if err != nil {
@@ -71,4 +75,16 @@ func ParseReleaseHealth(out []byte) (ReleaseHealth, error) {
 		}
 	}
 	return ReleasesDeployed, nil
+}
+
+// listAllArgs builds `helm list` args covering every release status. Helm 4
+// lists all statuses by default and removed -a/--all; Helm 3 needs -a to
+// include pending/uninstalling releases.
+func listAllArgs(major int, namespace string) []string {
+	args := []string{"list", "-n", namespace}
+	if major < 4 {
+		args = append(args, "-a")
+	}
+
+	return append(args, "-o", "json")
 }
