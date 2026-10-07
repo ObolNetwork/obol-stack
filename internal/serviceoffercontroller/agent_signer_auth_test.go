@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ObolNetwork/obol-stack/internal/openclaw"
+	"github.com/ObolNetwork/obol-stack/internal/keystore"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -32,7 +32,7 @@ func TestEnsureAgentWallet_FreshSecretCarriesAuthToken(t *testing.T) {
 // untouched, and the token never rotates on later reconciles.
 func TestEnsureAgentWallet_BackfillsAuthTokenWithoutTouchingKeyMaterial(t *testing.T) {
 	agent := agentWithWallet(t, "quant", "agent-quant", true)
-	preAuth := buildSignerKeystoreSecret("agent-quant", &openclaw.KeystoreMaterial{
+	preAuth := buildSignerKeystoreSecret("agent-quant", &keystore.Material{
 		Address:      "0x1111111111111111111111111111111111111111",
 		KeystoreUUID: "existing-uuid",
 		KeystoreJSON: []byte(`{"crypto":{"ciphertext":"preserved"}}`),

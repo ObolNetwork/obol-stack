@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ObolNetwork/obol-stack/internal/keystore"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
-	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -83,7 +83,7 @@ func TestEnsureAgentWallet_ReusesExistingKeystore(t *testing.T) {
 	// Pre-seed a Secret with the current controller-created shape and a known
 	// address. The controller must recover that address rather than mint a
 	// fresh keypair.
-	preSeeded := buildSignerKeystoreSecret("agent-quant", &openclaw.KeystoreMaterial{
+	preSeeded := buildSignerKeystoreSecret("agent-quant", &keystore.Material{
 		Address:      "0x1111111111111111111111111111111111111111",
 		KeystoreUUID: "existing-uuid",
 		KeystoreJSON: []byte(`{"crypto":{}}`),
@@ -131,7 +131,7 @@ func TestEnsureAgentWallet_ReusesExistingKeystore(t *testing.T) {
 
 func TestEnsureAgentWallet_RejectsExistingSecretWithoutAddressAnnotation(t *testing.T) {
 	agent := agentWithWallet(t, "quant", "agent-quant", true)
-	orphaned := buildSignerKeystoreSecret("agent-quant", &openclaw.KeystoreMaterial{
+	orphaned := buildSignerKeystoreSecret("agent-quant", &keystore.Material{
 		Address:      "0x1111111111111111111111111111111111111111",
 		KeystoreUUID: "existing-uuid",
 		KeystoreJSON: []byte(`{"crypto":{}}`),
@@ -204,7 +204,7 @@ func TestReconcileAgent_WithWallet_PopulatesAddressAndReady(t *testing.T) {
 
 func TestReconcileAgent_WithExistingWallet_DoesNotRotateKeyMaterial(t *testing.T) {
 	agent := agentWithWallet(t, "quant-wallet", "agent-quant-wallet", true)
-	preSeeded := buildSignerKeystoreSecret("agent-quant-wallet", &openclaw.KeystoreMaterial{
+	preSeeded := buildSignerKeystoreSecret("agent-quant-wallet", &keystore.Material{
 		Address:      "0x1111111111111111111111111111111111111111",
 		KeystoreUUID: "existing-uuid",
 		KeystoreJSON: []byte(`{"crypto":{"ciphertext":"preserved"}}`),

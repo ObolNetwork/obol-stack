@@ -2,13 +2,9 @@ package hermes
 
 import (
 	"bytes"
-	"crypto/aes"
-	"crypto/cipher"
-	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,11 +13,8 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/keystore"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
-	secp256k1 "github.com/decred/dcrd/dcrec/secp256k1/v4"
-	"github.com/google/uuid"
-	"golang.org/x/crypto/scrypt"
-	"golang.org/x/crypto/sha3"
 )
 
 type WalletInfo struct {
@@ -33,55 +26,21 @@ type WalletInfo struct {
 	Password     string `json:"-"`
 }
 
-type v3Keystore struct {
-	Address string   `json:"address"`
-	Crypto  v3Crypto `json:"crypto"`
-	ID      string   `json:"id"`
-	Version int      `json:"version"`
-}
-
-type v3Crypto struct {
-	Cipher       string       `json:"cipher"`
-	CipherText   string       `json:"ciphertext"`
-	CipherParams cipherParams `json:"cipherparams"`
-	KDF          string       `json:"kdf"`
-	KDFParams    kdfParams    `json:"kdfparams"`
-	MAC          string       `json:"mac"`
-}
-
-type cipherParams struct {
-	IV string `json:"iv"`
-}
-
-type kdfParams struct {
-	DKLen int    `json:"dklen"`
-	N     int    `json:"n"`
-	R     int    `json:"r"`
-	P     int    `json:"p"`
-	Salt  string `json:"salt"`
-}
-
-const (
-	scryptN     = 262144
-	scryptR     = 8
-	scryptP     = 1
-	scryptDKLen = 32
-)
-
 func GenerateWallet(cfg *config.Config, id string, u *ui.UI) (*WalletInfo, error) {
-	privKey, pubKey, err := generateKeypair()
+	privKey, pubKey, err := keystore.GenerateKeypair()
 	if err != nil {
 		return nil, fmt.Errorf("key generation failed: %w", err)
 	}
+	defer keystore.Zero(privKey)
 
-	address := addressFromPublicKey(pubKey)
+	address := keystore.AddressFromPublicKey(pubKey)
 
-	password, err := generateRandomPassword(32)
+	password, err := keystore.RandomPassword(keystore.PasswordLength)
 	if err != nil {
 		return nil, fmt.Errorf("password generation failed: %w", err)
 	}
 
-	keystoreJSON, keystoreID, err := encryptToV3Keystore(privKey, pubKey, password)
+	keystoreJSON, keystoreID, err := keystore.EncryptV3(privKey, pubKey, password)
 	if err != nil {
 		return nil, fmt.Errorf("keystore encryption failed: %w", err)
 	}
@@ -101,62 +60,6 @@ func GenerateWallet(cfg *config.Config, id string, u *ui.UI) (*WalletInfo, error
 	}, nil
 }
 
-func generateKeypair() (privKeyBytes []byte, pubKeyUncompressed []byte, err error) {
-	privKey, err := secp256k1.GeneratePrivateKey()
-	if err != nil {
-		return nil, nil, fmt.Errorf("secp256k1 key generation: %w", err)
-	}
-
-	privKeyBytes = privKey.Serialize()
-	pubKeyUncompressed = privKey.PubKey().SerializeUncompressed()[1:]
-	return privKeyBytes, pubKeyUncompressed, nil
-}
-
-func addressFromPublicKey(pubKey []byte) string {
-	h := sha3.NewLegacyKeccak256()
-	_, _ = h.Write(pubKey)
-	hash := h.Sum(nil)
-	return toChecksumAddress(hex.EncodeToString(hash[12:]))
-}
-
-func toChecksumAddress(addr string) string {
-	addr = strings.ToLower(strings.TrimPrefix(addr, "0x"))
-	hash := sha3.NewLegacyKeccak256()
-	_, _ = hash.Write([]byte(addr))
-	sum := hex.EncodeToString(hash.Sum(nil))
-
-	var out strings.Builder
-	out.WriteString("0x")
-	for i, c := range addr {
-		if c >= '0' && c <= '9' {
-			out.WriteRune(c)
-			continue
-		}
-		if sum[i] >= '8' {
-			out.WriteRune(rune(strings.ToUpper(string(c))[0]))
-		} else {
-			out.WriteRune(c)
-		}
-	}
-
-	return out.String()
-}
-
-func generateRandomPassword(length int) (string, error) {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	charsetLen := big.NewInt(int64(len(charset)))
-
-	result := make([]byte, length)
-	for i := range result {
-		n, err := rand.Int(rand.Reader, charsetLen)
-		if err != nil {
-			return "", fmt.Errorf("random int: %w", err)
-		}
-		result[i] = charset[n.Int64()]
-	}
-	return string(result), nil
-}
-
 func provisionKeystoreToVolume(cfg *config.Config, id, keystoreID string, keystoreJSON []byte, u *ui.UI) (string, error) {
 	dir := agentruntime.KeystoreVolumePath(cfg, agentruntime.Hermes, id)
 	ensureVolumeWritable(cfg, dir, u)
@@ -171,66 +74,6 @@ func provisionKeystoreToVolume(cfg *config.Config, id, keystoreID string, keysto
 
 	fixRuntimeVolumeOwnership(cfg, dir, u)
 	return path, nil
-}
-
-func encryptToV3Keystore(privKey, pubKey []byte, password string) ([]byte, string, error) {
-	salt := make([]byte, 32)
-	if _, err := rand.Read(salt); err != nil {
-		return nil, "", fmt.Errorf("salt generation: %w", err)
-	}
-
-	iv := make([]byte, aes.BlockSize)
-	if _, err := rand.Read(iv); err != nil {
-		return nil, "", fmt.Errorf("iv generation: %w", err)
-	}
-
-	dk, err := scrypt.Key([]byte(password), salt, scryptN, scryptR, scryptP, scryptDKLen)
-	if err != nil {
-		return nil, "", fmt.Errorf("scrypt: %w", err)
-	}
-
-	block, err := aes.NewCipher(dk[:16])
-	if err != nil {
-		return nil, "", fmt.Errorf("aes cipher: %w", err)
-	}
-
-	stream := cipher.NewCTR(block, iv)
-	ciphertext := make([]byte, len(privKey))
-	stream.XORKeyStream(ciphertext, privKey)
-
-	macHasher := sha3.NewLegacyKeccak256()
-	_, _ = macHasher.Write(dk[16:32])
-	_, _ = macHasher.Write(ciphertext)
-	mac := macHasher.Sum(nil)
-
-	keystoreID := uuid.NewString()
-	keystore := v3Keystore{
-		Address: strings.TrimPrefix(addressFromPublicKey(pubKey), "0x"),
-		Crypto: v3Crypto{
-			Cipher:     "aes-128-ctr",
-			CipherText: hex.EncodeToString(ciphertext),
-			CipherParams: cipherParams{
-				IV: hex.EncodeToString(iv),
-			},
-			KDF: "scrypt",
-			KDFParams: kdfParams{
-				DKLen: scryptDKLen,
-				N:     scryptN,
-				R:     scryptR,
-				P:     scryptP,
-				Salt:  hex.EncodeToString(salt),
-			},
-			MAC: hex.EncodeToString(mac),
-		},
-		ID:      keystoreID,
-		Version: 3,
-	}
-
-	raw, err := json.MarshalIndent(keystore, "", "  ")
-	if err != nil {
-		return nil, "", fmt.Errorf("marshal keystore: %w", err)
-	}
-	return raw, keystoreID, nil
 }
 
 func generateRemoteSignerValues(wallet *WalletInfo) string {

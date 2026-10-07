@@ -11,6 +11,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/keystore"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/walletbackup"
 )
@@ -220,12 +221,12 @@ func TestRestoreWalletCmd_HermesAcceptsRawEthereumV3Keystore(t *testing.T) {
 	cfg, deployDir := walletImportTestConfig(t, id)
 	stubVolumeOwnership(t)
 
-	privKey, pubKey, err := generateKeypair()
+	privKey, pubKey, err := keystore.GenerateKeypair()
 	if err != nil {
 		t.Fatalf("generate keypair: %v", err)
 	}
 	password := "raw-v3-password"
-	keystoreJSON, keystoreID, err := encryptToV3Keystore(privKey, pubKey, password)
+	keystoreJSON, keystoreID, err := keystore.EncryptV3(privKey, pubKey, password)
 	if err != nil {
 		t.Fatalf("encrypt keystore: %v", err)
 	}
@@ -246,8 +247,8 @@ func TestRestoreWalletCmd_HermesAcceptsRawEthereumV3Keystore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read restored metadata: %v", err)
 	}
-	if restored.Address != addressFromPublicKey(pubKey) {
-		t.Fatalf("restored address = %q, want %q", restored.Address, addressFromPublicKey(pubKey))
+	if restored.Address != keystore.AddressFromPublicKey(pubKey) {
+		t.Fatalf("restored address = %q, want %q", restored.Address, keystore.AddressFromPublicKey(pubKey))
 	}
 	if restored.PublicKey != "0x04"+hex.EncodeToString(pubKey) {
 		t.Fatalf("restored public key = %q", restored.PublicKey)

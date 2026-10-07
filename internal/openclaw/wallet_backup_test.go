@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/keystore"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
@@ -266,7 +267,7 @@ func TestImportPrivateKeyWalletCmd_ReplacesExistingWallet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	recovered, err := decryptV3Keystore(keystoreJSON, password)
+	recovered, err := keystore.DecryptV3(keystoreJSON, password)
 	if err != nil {
 		t.Fatalf("decrypt imported keystore: %v", err)
 	}
