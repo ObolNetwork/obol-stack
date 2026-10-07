@@ -46,7 +46,16 @@ metadata:
     defaultVolumeType: local
 provisioner: rancher.io/local-path
 parameters:
+  # PVC data must live at exactly $DATA_DIR/<namespace>/<pvc-name>: host-side
+  # code addresses it there (agentruntime.KeystoreVolumePath, wallet
+  # backup/restore, stack export). local-path-provisioner >= v0.0.33 rejects
+  # any pathPattern that is not a SUBDIRECTORY of <namespace>/<pvc-name>
+  # (error: "pathPattern must start with <namespace>/<pvc-name>/"), leaving
+  # every PVC Pending. No template braces in these comments: Helm renders
+  # comments too. The pattern is fixed (no user input, no
+  # traversal), so opt out of that check rather than move everyone's data.
   pathPattern: '{{`{{ .PVC.Namespace }}/{{ .PVC.Name }}`}}'
+  allowUnsafePathPattern: "true"
 volumeBindingMode: WaitForFirstConsumer
 reclaimPolicy: Delete
 ---

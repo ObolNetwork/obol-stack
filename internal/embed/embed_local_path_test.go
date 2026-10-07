@@ -35,3 +35,25 @@ func TestLocalPathProvisionerUsesLocalPV(t *testing.T) {
 		}
 	}
 }
+
+// TestLocalPathStorageClassKeepsNamespacePVCLayout pins the on-disk PVC
+// layout ($DATA_DIR/<namespace>/<pvc-name>) that host-side wallet, backup and
+// export code depends on, and the provisioner opt-out that layout needs:
+// local-path-provisioner >= v0.0.33 rejects a pathPattern that equals
+// <namespace>/<pvc-name> unless allowUnsafePathPattern is set, which left
+// every PVC Pending after the v0.0.30 -> v0.0.37 bump.
+func TestLocalPathStorageClassKeepsNamespacePVCLayout(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/local-path.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"pathPattern: '{{`{{ .PVC.Namespace }}/{{ .PVC.Name }}`}}'",
+		`allowUnsafePathPattern: "true"`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("local-path StorageClass missing %q", want)
+		}
+	}
+}
