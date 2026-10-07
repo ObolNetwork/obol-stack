@@ -214,9 +214,7 @@ func TestSellInference_Flags(t *testing.T) {
 
 	requireFlags(t, flags,
 		"model", "wallet", "price", "per-request", "per-mtok", "chain", "token", "facilitator",
-		"listen", "upstream", "enclave-tag",
-		"vm", "vm-image", "vm-cpus", "vm-memory", "vm-host-port",
-		"tee", "model-hash",
+		"listen", "upstream",
 		// Registration parity with `obol sell http`. Their absence on the
 		// inference subcommand was the regression that left
 		// /.well-known/agent-registration.json unrouted (see
@@ -235,10 +233,16 @@ func TestSellInference_Flags(t *testing.T) {
 	assertStringDefault(t, flags, "listen", ":8402")
 	assertStringDefault(t, flags, "upstream", "http://localhost:11434")
 	assertStringDefault(t, flags, "facilitator", "https://x402.gcp.obol.tech")
-	assertStringDefault(t, flags, "vm-image", "ollama/ollama:latest")
-	assertIntDefault(t, flags, "vm-cpus", 4)
-	assertIntDefault(t, flags, "vm-memory", 8192)
-	assertIntDefault(t, flags, "vm-host-port", 11435)
+
+	// The Secure Enclave / Apple Containerization VM / TEE modes were
+	// removed; their flags must not come back.
+	for _, gone := range []string{
+		"enclave-tag", "vm", "vm-image", "vm-cpus", "vm-memory", "vm-host-port", "tee", "model-hash",
+	} {
+		if _, ok := flags[gone]; ok {
+			t.Errorf("removed flag --%s is still registered on `sell inference`", gone)
+		}
+	}
 }
 
 // TestSell_PayToFlagAliases locks in the --pay-to rollout: every sell
@@ -1511,6 +1515,38 @@ func TestResumeOneInferenceOffer_RequiresModelName(t *testing.T) {
 		if !strings.Contains(err.Error(), sub) {
 			t.Errorf("error must name the missing field and the recovery command; missing %q: %v", sub, err)
 		}
+	}
+}
+
+// TestResumeOneInferenceOffer_SkipsRemovedIsolationModes pins that a
+// descriptor written by `sell inference --vm` or `--tee` (both removed) is
+// not replayed as a plain host gateway: the operator asked for isolation the
+// CLI can no longer provide, so resume refuses with a recovery hint instead
+// of silently downgrading the offer.
+func TestResumeOneInferenceOffer_SkipsRemovedIsolationModes(t *testing.T) {
+	cfg := newTestConfig(t)
+	u := ui.New(false)
+
+	for _, tc := range []struct {
+		name string
+		d    *inference.Deployment
+		flag string
+	}{
+		{"vm", &inference.Deployment{Name: "vm-offer", ModelName: "qwen3.5:4b", LegacyVMMode: true}, "--vm"},
+		{"tee", &inference.Deployment{Name: "tee-offer", ModelName: "qwen3.5:4b", LegacyTEEType: "tdx"}, "--tee"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := resumeOneInferenceOffer(cfg, u, tc.d)
+			if err == nil {
+				t.Fatal("expected resume to refuse a removed isolation mode")
+			}
+
+			for _, sub := range []string{tc.flag, "removed", "obol sell inference " + tc.d.Name, "obol sell delete " + tc.d.Name + " -n llm"} {
+				if !strings.Contains(err.Error(), sub) {
+					t.Errorf("error missing %q: %v", sub, err)
+				}
+			}
+		})
 	}
 }
 

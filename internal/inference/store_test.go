@@ -3,7 +3,7 @@ package inference_test
 import (
 	"errors"
 	"os"
-	"runtime"
+	"path/filepath"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/inference"
@@ -20,19 +20,6 @@ func TestStoreCreateAndGet(t *testing.T) {
 
 	if err := store.Create(d, false); err != nil {
 		t.Fatalf("Create: %v", err)
-	}
-
-	// EnclaveTag is auto-assigned only on macOS (Secure Enclave).
-	// On Linux the field stays empty so the gateway runs without the
-	// enclave middleware (payment gating still works).
-	if runtime.GOOS == "darwin" {
-		if d.EnclaveTag == "" {
-			t.Error("EnclaveTag should have been set by Create on macOS")
-		}
-	} else {
-		if d.EnclaveTag != "" {
-			t.Errorf("EnclaveTag should be empty on %s, got %q", runtime.GOOS, d.EnclaveTag)
-		}
 	}
 
 	if d.Chain == "" {
@@ -59,15 +46,6 @@ func TestStoreCreateAndGet(t *testing.T) {
 		t.Errorf("WalletAddress mismatch: %s", got.WalletAddress)
 	}
 
-	if runtime.GOOS == "darwin" {
-		if got.EnclaveTag != "com.obol.inference.test-deploy" {
-			t.Errorf("unexpected EnclaveTag: %s", got.EnclaveTag)
-		}
-	} else {
-		if got.EnclaveTag != "" {
-			t.Errorf("EnclaveTag should be empty on %s, got %q", runtime.GOOS, got.EnclaveTag)
-		}
-	}
 	if got.Chain != "base" {
 		t.Errorf("persisted Chain = %q, want %q", got.Chain, "base")
 	}
@@ -323,7 +301,6 @@ func TestStoreCreate_PersistsResumeFields(t *testing.T) {
 
 	in := &inference.Deployment{
 		Name:             "aeon",
-		EnclaveTag:       "com.obol.inference.aeon",
 		ListenAddr:       "0.0.0.0:8402",
 		UpstreamURL:      "http://127.0.0.1:8000",
 		WalletAddress:    "0xeFAb75b7b199bf8512e2d5b379374Cb94dfdBA47",
@@ -400,5 +377,50 @@ func TestStoreCreate_LegacyDescriptorWithoutResumeFields(t *testing.T) {
 	}
 	if got.Registration != nil {
 		t.Errorf("Registration = %#v, want nil for legacy descriptor", got.Registration)
+	}
+}
+
+// TestStoreGet_DescriptorWithRemovedIsolationFields pins that descriptors
+// written before the Secure Enclave / --vm / --tee modes were removed still
+// load (unknown fields are ignored), and that RemovedIsolationMode flags the
+// ones resume must not replay as a plain gateway. A bare enclave_tag (auto-
+// assigned on every macOS offer) is NOT an isolation mode: those offers keep
+// resuming as plain x402 gateways.
+func TestStoreGet_DescriptorWithRemovedIsolationFields(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		extra string
+		want  string
+	}{
+		{"enclave-tag-only", `"enclave_tag": "com.obol.inference.x"`, ""},
+		{"vm", `"enclave_tag": "com.obol.inference.x", "vm_mode": true, "vm_image": "ollama/ollama:latest", "vm_cpus": 4, "vm_memory_mb": 8192, "vm_host_port": 11435`, "vm"},
+		{"tee", `"tee_type": "snp", "model_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"`, "tee (snp)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			configDir := filepath.Join(dir, "inference", "x")
+
+			if err := os.MkdirAll(configDir, 0o700); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+
+			raw := `{"name": "x", "listen_addr": ":8402", "model_name": "qwen3.5:4b", ` + tc.extra + `}`
+			if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(raw), 0o600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+
+			got, err := inference.NewStore(dir).Get("x")
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+
+			if got.ModelName != "qwen3.5:4b" {
+				t.Errorf("ModelName = %q, want qwen3.5:4b", got.ModelName)
+			}
+
+			if mode := got.RemovedIsolationMode(); mode != tc.want {
+				t.Errorf("RemovedIsolationMode() = %q, want %q", mode, tc.want)
+			}
+		})
 	}
 }

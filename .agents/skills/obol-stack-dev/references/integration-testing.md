@@ -39,9 +39,6 @@ go test -tags integration -v -run 'TestIntegration_(Ollama|Anthropic|OpenAI)Infe
 go test -tags integration -v \
   -run TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance \
   -timeout 30m ./internal/openclaw/
-
-# x402 BDD
-go test -tags integration -v -run TestBDDIntegration -timeout 10m ./internal/x402/
 ```
 
 ## Key Test Matrix
@@ -78,12 +75,6 @@ obol kubectl delete ns \
 ```
 
 Wait for namespace deletion to complete before re-running. `waitForPodReady` must run **after** `helmfile sync` completes, not concurrently.
-
-## BDD-Specific
-
-- godog dep: `go get github.com/cucumber/godog@v0.15.1`
-- Feature files live alongside `*_test.go`
-- Use `t.Helper()` in shared step impls so failures point at the step, not the helper
 
 ## Release-Gate Boundary
 
