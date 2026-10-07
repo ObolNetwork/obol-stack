@@ -26,6 +26,11 @@ coverage/
 web/**
 !web/public-storefront/
 !web/public-storefront/**
+# After the re-include above (last match wins): a host
+# web/public-storefront/node_modules from a local `npm install` would
+# otherwise be copied over the image's `npm ci` output (next vs @next/swc).
+web/public-storefront/node_modules/
+web/public-storefront/.next/
 
 # Tests and fixtures are not compiled into release binaries.
 **/*_test.go

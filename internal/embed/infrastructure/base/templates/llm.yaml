@@ -71,12 +71,25 @@ subsets:
 # writable emptyDir before LiteLLM starts so /model/new can update the live
 # router and persist to its configured YAML path without trying to write back to
 # a read-only ConfigMap volume.
+#
+# Once it exists, obol (model setup/sync, stack up's recorded-model replay)
+# owns its contents, so a sync carries the live config.yaml over via lookup.
+# Helm 4 applies server-side with --force-conflicts: rendering the default
+# here would reset every model on each `stack up` and force LiteLLM restarts.
+{{- $liveLiteLLM := lookup "v1" "ConfigMap" "llm" "litellm-config" }}
+{{- $liveLiteLLMConfig := "" }}
+{{- if $liveLiteLLM }}
+{{- $liveLiteLLMConfig = get ($liveLiteLLM.data | default dict) "config.yaml" }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: litellm-config
   namespace: llm
 data:
+{{- if $liveLiteLLMConfig }}
+  config.yaml: {{ $liveLiteLLMConfig | quote }}
+{{- else }}
   config.yaml: |
     model_list:
       - model_name: "paid/*"
@@ -93,6 +106,7 @@ data:
     litellm_settings:
       cache: false
       drop_params: true
+{{- end }}
 
 ---
 # Buyer ConfigMaps — the serviceoffer-controller writes one <upstreamKey>.json

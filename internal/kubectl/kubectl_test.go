@@ -229,6 +229,11 @@ func TestRefreshK3dKubeconfig_NonK3dBackendDeclines(t *testing.T) {
 }
 
 func TestPaths(t *testing.T) {
+	// Isolate from the host: Paths falls back to a kubectl on $PATH (or
+	// OBOL_KUBECTL) when <BinDir>/kubectl is not executable.
+	t.Setenv("PATH", "")
+	t.Setenv("OBOL_KUBECTL", "")
+
 	cfg := &config.Config{
 		BinDir:    "/usr/local/bin",
 		ConfigDir: "/home/user/.config/obol",

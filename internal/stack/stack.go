@@ -504,6 +504,11 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		"KUBECONFIG="+kubeconfigPath,
 		"STACK_DATA_DIR="+dataDir,
 		"OBOL_STACK_VERSION="+version.Version,
+		// stack up is authoritative for the frontend's secret env
+		// (BETTER_AUTH_SECRET, OBOL_GOOGLE_CLIENT_SECRET): the base chart
+		// renders Secret obol-frontend-secrets from the host env. Other
+		// base syncs leave it unset and keep the live Secret.
+		"OBOL_FRONTEND_SECRETS_FROM_ENV=true",
 	)
 
 	// In development mode, build and import local repo images that aren't on a
@@ -1653,7 +1658,9 @@ func restoreLiteLLMConfig(cfg *config.Config, kubeconfigPath, raw string) (bool,
 
 	manifest := configMapFieldOwnershipManifest("litellm-config", "llm", "config.yaml", raw)
 
-	return true, kubectl.ApplyServerSideForceConflicts(kubectlBinary, kubeconfigPath, manifest, "helm")
+	// Not "helm": under Helm 4 that is Helm's own SSA manager, and applying
+	// this label-less manifest as it drops Helm's ownership labels/annotations.
+	return true, kubectl.ApplyServerSideForceConflicts(kubectlBinary, kubeconfigPath, manifest, kubectl.FieldManagerObol)
 }
 
 func mergeLiteLLMConfig(currentRaw, previousRaw string) (string, error) {

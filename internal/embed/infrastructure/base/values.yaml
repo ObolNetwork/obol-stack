@@ -38,3 +38,13 @@ x402:
     # Optional; the verifier applies its own defaults when these are unset.
     captureDeadlineSecs: null
     refundDeadlineSecs: null
+
+# obol-frontend sensitive env (rendered into Secret obol-frontend-secrets,
+# never into the Deployment spec). Fed from host env by values/base.yaml.gotmpl;
+# empty = feature off. fromEnv=false (any sync other than `obol stack up`)
+# keeps the live Secret's values instead.
+frontend:
+  secrets:
+    fromEnv: false
+    betterAuthSecret: ""
+    googleClientSecret: ""
