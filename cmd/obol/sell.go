@@ -25,6 +25,7 @@ import (
 	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
+	"github.com/ObolNetwork/obol-stack/internal/images"
 	"github.com/ObolNetwork/obol-stack/internal/inference"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
@@ -5272,9 +5273,21 @@ func resumePersistedServiceOffers(cfg *config.Config, u *ui.UI) (failed []string
 
 	u.Blank()
 	u.Infof("Resuming %d locally-persisted sell offer(s)...", len(manifests))
+	// Recorded manifests pin stack-owned images (e.g. demo-server) at the tag
+	// current when the offer was created. Re-resolve them to this CLI's
+	// policy so replay upgrades with the stack and, in dev mode, never asks
+	// for a dev-<sha> tag that a recreated cluster no longer has imported.
+	replacers := images.BuildReplacers(func(repo string) string {
+		return stackdefaults.ResolveWorkloadImage(cfg, repo)
+	})
 	for _, m := range manifests {
 		// Legacy ledger entries predate the managed-by label.
 		kubectl.SetManagedBy(m.Manifest)
+		if refreshed, err := refreshManagedImages(m.Manifest, replacers); err != nil {
+			u.Warnf("resume %s %s/%s: re-resolving images: %v (applying as recorded)", m.label(), m.Namespace, m.Name, err)
+		} else {
+			m.Manifest = refreshed
+		}
 		if err := kubectlApply(cfg, m.Manifest); err != nil {
 			u.Warnf("resume %s %s/%s: %v", m.label(), m.Namespace, m.Name, err)
 			failed = append(failed, fmt.Sprintf("%s/%s", m.Namespace, m.Name))
@@ -5328,6 +5341,24 @@ func loadPersistedServiceOffers(dir string, u *ui.UI) ([]persistedServiceOffer, 
 		})
 	}
 	return manifests, nil
+}
+
+// refreshManagedImages rewrites every stack-owned image reference in a
+// recorded manifest using replacers (see images.BuildReplacers).
+func refreshManagedImages(manifest map[string]any, replacers []images.Replacer) (map[string]any, error) {
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		return nil, err
+	}
+	out := images.RewriteBytes(raw, replacers)
+	if bytes.Equal(out, raw) {
+		return manifest, nil
+	}
+	var refreshed map[string]any
+	if err := json.Unmarshal(out, &refreshed); err != nil {
+		return nil, err
+	}
+	return refreshed, nil
 }
 
 type persistedServiceOffer struct {

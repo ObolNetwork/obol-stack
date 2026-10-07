@@ -143,6 +143,9 @@ func BuildReplacers(resolve func(repo string) string) []replacer {
 	return buildReplacers(resolve)
 }
 
+// Replacer rewrites one managed image's references (see BuildReplacers).
+type Replacer = replacer
+
 type replacer struct {
 	pattern     *regexp.Regexp
 	replacement string
