@@ -178,16 +178,6 @@ func requireClusterConfig(t *testing.T) clusterConfig {
 	return cfg
 }
 
-func pathFromPattern(pattern string) string {
-	pattern = strings.TrimSpace(pattern)
-	path := strings.TrimSuffix(pattern, "/*")
-	path = strings.TrimSuffix(path, "/*")
-	if path == "" {
-		return ""
-	}
-	return path + "/v1/chat/completions"
-}
-
 func firstPublishedOfferPath(raw string) (string, error) {
 	var payload struct {
 		Items []struct {
@@ -219,4 +209,4 @@ func firstPublishedOfferPath(raw string) (string, error) {
 	return "", nil
 }
 
-// httpPost and mustQuoteJSON are in helpers_test.go (shared with non-integration tests).
+// httpPost is in helpers_test.go (shared with non-integration tests).

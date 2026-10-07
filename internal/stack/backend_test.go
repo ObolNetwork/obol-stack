@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
@@ -395,17 +396,17 @@ func TestCleanupStaleBackendConfigs(t *testing.T) {
 
 func TestOllamaHostForBackend(t *testing.T) {
 	t.Run("k3s returns localhost", func(t *testing.T) {
-		got := ollamaHostForBackend(BackendK3s)
+		got := stackdefaults.OllamaHostForBackend(BackendK3s)
 		if got != "127.0.0.1" {
-			t.Errorf("ollamaHostForBackend(k3s) = %q, want %q", got, "127.0.0.1")
+			t.Errorf("stackdefaults.OllamaHostForBackend(k3s) = %q, want %q", got, "127.0.0.1")
 		}
 	})
 
 	t.Run("k3d returns docker host", func(t *testing.T) {
-		got := ollamaHostForBackend(BackendK3d)
+		got := stackdefaults.OllamaHostForBackend(BackendK3d)
 		// On macOS: host.docker.internal, on Linux: host.k3d.internal
 		if got != "host.docker.internal" && got != "host.k3d.internal" {
-			t.Errorf("ollamaHostForBackend(k3d) = %q, want docker host", got)
+			t.Errorf("stackdefaults.OllamaHostForBackend(k3d) = %q, want docker host", got)
 		}
 	})
 }

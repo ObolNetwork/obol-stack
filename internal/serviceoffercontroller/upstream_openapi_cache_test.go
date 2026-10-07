@@ -40,7 +40,7 @@ func TestUpstreamOpenAPICache_FailedProbeIsNotPinned(t *testing.T) {
 	failing := func(*monetizeapi.ServiceOffer) map[string]any { calls++; return nil }
 
 	c.refresh(offer, failing)
-	if got := c.get(offer); got != nil {
+	if got, _ := c.getSettled(offer); got != nil {
 		t.Errorf("after a failed probe, get = %v, want nil", got)
 	}
 	if calls != 1 {
@@ -56,13 +56,13 @@ func TestUpstreamOpenAPICache_FailedProbeIsNotPinned(t *testing.T) {
 
 	// Upstream comes up; the retry now succeeds and is cached.
 	c.refresh(offer, func(*monetizeapi.ServiceOffer) map[string]any { return goodDoc() })
-	if got := c.get(offer); got == nil {
+	if got, _ := c.getSettled(offer); got == nil {
 		t.Fatal("after a successful probe, get = nil, want the document")
 	}
 
 	// And a LATER failure must not evict the last-good document.
 	c.refresh(probeableOffer(2), failing)
-	if got := c.get(offer); got == nil {
+	if got, _ := c.getSettled(offer); got == nil {
 		t.Error("a later failed probe evicted the last-good document; stale beats collapsed")
 	}
 }

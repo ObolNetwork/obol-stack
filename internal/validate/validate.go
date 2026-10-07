@@ -7,7 +7,6 @@ import (
 	"net/url"
 	"regexp"
 	"strconv"
-	"strings"
 )
 
 // nameRegex matches k8s-safe DNS labels: starts with lowercase alphanumeric,
@@ -21,54 +20,6 @@ func Name(s string) error {
 	}
 	if !nameRegex.MatchString(s) {
 		return fmt.Errorf("invalid name %q: must be lowercase alphanumeric with hyphens, 1-63 chars, starting with a letter or digit", s)
-	}
-	return nil
-}
-
-// Namespace validates a Kubernetes namespace (same rules as Name).
-func Namespace(s string) error {
-	if err := Name(s); err != nil {
-		return fmt.Errorf("invalid namespace: %w", err)
-	}
-	return nil
-}
-
-// WalletAddress validates an Ethereum wallet address (0x-prefixed, 42 hex chars).
-func WalletAddress(s string) error {
-	if s == "" {
-		return fmt.Errorf("wallet address cannot be empty")
-	}
-	if !strings.HasPrefix(s, "0x") {
-		return fmt.Errorf("wallet address must start with 0x: %q", s)
-	}
-	if len(s) != 42 {
-		return fmt.Errorf("wallet address must be 42 characters (got %d): %q", len(s), s)
-	}
-	for _, c := range s[2:] {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
-			return fmt.Errorf("wallet address contains invalid hex character: %q", s)
-		}
-	}
-	return nil
-}
-
-// knownChains is the set of valid chain names for x402 and ERC-8004.
-var knownChains = map[string]bool{
-	"base":             true,
-	"base-mainnet":     true,
-	"base-sepolia":     true,
-	"ethereum":         true,
-	"ethereum-mainnet": true,
-	"mainnet":          true,
-}
-
-// ChainName validates a blockchain chain name.
-func ChainName(s string) error {
-	if s == "" {
-		return fmt.Errorf("chain name cannot be empty")
-	}
-	if !knownChains[strings.ToLower(s)] {
-		return fmt.Errorf("unknown chain %q (supported: base-sepolia, base, ethereum)", s)
 	}
 	return nil
 }
@@ -102,33 +53,6 @@ func URL(s string) error {
 	}
 	if u.Host == "" {
 		return fmt.Errorf("URL missing host: %q", s)
-	}
-	return nil
-}
-
-// Path validates a URL path segment (no path traversal, no control chars).
-func Path(s string) error {
-	if s == "" {
-		return nil // empty path is valid
-	}
-	if strings.Contains(s, "..") {
-		return fmt.Errorf("path must not contain '..': %q", s)
-	}
-	if strings.Contains(s, "%2e") || strings.Contains(s, "%2E") {
-		return fmt.Errorf("path must not contain encoded traversal: %q", s)
-	}
-	if err := NoControlChars(s); err != nil {
-		return fmt.Errorf("invalid path: %w", err)
-	}
-	return nil
-}
-
-// NoControlChars rejects strings containing control characters (except \n and \t).
-func NoControlChars(s string) error {
-	for i, c := range s {
-		if c < 0x20 && c != '\n' && c != '\t' {
-			return fmt.Errorf("contains control character at position %d (0x%02x)", i, c)
-		}
 	}
 	return nil
 }

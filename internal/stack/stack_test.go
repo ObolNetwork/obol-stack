@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"gopkg.in/yaml.v3"
@@ -485,7 +486,7 @@ func TestOllamaHostIPForBackend_K3s(t *testing.T) {
 	// the result feeds a Kubernetes Endpoints object, and Kubernetes rejects
 	// loopback addresses there (enforced since v1.33). The resolver must
 	// substitute the host's routable address instead.
-	ip, err := ollamaHostIPForBackend(BackendK3s)
+	ip, err := stackdefaults.OllamaHostIPForBackend(BackendK3s)
 	if err != nil {
 		t.Fatalf("unexpected error for k3s backend: %v", err)
 	}
@@ -505,7 +506,7 @@ func TestOllamaHostIPForBackend_K3d(t *testing.T) {
 	//   macOS: DNS resolution of host.docker.internal
 	//   Linux: DNS resolution of host.k3d.internal, or docker0 bridge fallback
 	// In CI without Docker, both may fail → skip.
-	ip, err := ollamaHostIPForBackend(BackendK3d)
+	ip, err := stackdefaults.OllamaHostIPForBackend(BackendK3d)
 	if err != nil {
 		t.Skipf("skipping: resolution failed (expected in CI without Docker): %v", err)
 	}
@@ -525,7 +526,7 @@ func TestOllamaHostIPForBackend_AlreadyIP(t *testing.T) {
 	// (127.0.0.1), so this exercises that path — the loopback guard then
 	// swaps it for a routable address, which must still be a valid IP and
 	// must not have gone through a DNS lookup failure.
-	ip, err := ollamaHostIPForBackend(BackendK3s)
+	ip, err := stackdefaults.OllamaHostIPForBackend(BackendK3s)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -542,7 +543,7 @@ func TestDockerBridgeGatewayIP(t *testing.T) {
 		t.Skip("docker0 interface only exists on Linux")
 	}
 
-	ip, err := dockerBridgeGatewayIP()
+	ip, err := stackdefaults.DockerBridgeGatewayIP()
 	if err != nil {
 		t.Skipf("skipping: docker0 not available (expected without Docker): %v", err)
 	}

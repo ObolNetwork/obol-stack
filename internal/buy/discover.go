@@ -17,7 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"net/http"
 	"net/url"
 	"strings"
@@ -61,13 +60,6 @@ type PaymentOption struct {
 	Asset             string `json:"asset"`
 	Amount            string `json:"amount"`
 	MaxAmountRequired string `json:"maxAmountRequired"`
-}
-
-func (p PaymentOption) requiredAmount() string {
-	if strings.TrimSpace(p.Amount) != "" {
-		return strings.TrimSpace(p.Amount)
-	}
-	return strings.TrimSpace(p.MaxAmountRequired)
 }
 
 // FetchSellerRegistration fetches and parses the seller's ERC-8004
@@ -293,13 +285,6 @@ func payAgentHint(endpoint string) string {
 	)
 }
 
-// VerifyAgentID returns nil iff at least one of reg.Registrations matches the
-// expected ERC-8004 tokenId. The seller may publish multiple registrations
-// (one per chain); a match on any of them is sufficient.
-func VerifyAgentID(reg *erc8004.AgentRegistration, expected int64) error {
-	return verifyAgentID(reg, expected, "")
-}
-
 // VerifyAgentIDOnRegistry requires the expected agentId to appear on the
 // specific CAIP-10 registry identifier resolved from the seller's priced
 // payment network.
@@ -358,9 +343,6 @@ func VerifySellerEndpoint(reg *erc8004.AgentRegistration, sellerURL string) erro
 // seller's priced asset. When there is a mismatch it returns a structured
 // error that names both the requested token and the seller's required asset,
 // and suggests the correct --token value when the asset address is known.
-//
-// Call this before ValidateBudgetAgainstPricing so the caller sees a clear
-// token-mismatch error instead of a confusing budget-validation failure.
 func ValidateTokenAgainstPricing(token string, pricing *PricingResponse) error {
 	payment, err := firstPaymentOption(pricing)
 	if err != nil {
@@ -414,38 +396,6 @@ func tokenSymbolForAsset(assetAddr, chainName string) string {
 		return assetAddr[:6] + "…" + assetAddr[len(assetAddr)-4:]
 	}
 	return assetAddr
-}
-
-// ValidateBudgetAgainstPricing rejects budgets smaller than one request price.
-// buy.py currently rounds `budget // price` up to at least one auth; the host
-// CLI advertises --budget as a spending cap, so we fail early instead of
-// silently overspending the requested cap.
-//
-// Call ValidateTokenAgainstPricing first; this function assumes the token has
-// already been validated against the seller's priced asset.
-func ValidateBudgetAgainstPricing(budgetBase string, pricing *PricingResponse) error {
-	payment, err := firstPaymentOption(pricing)
-	if err != nil {
-		return err
-	}
-
-	budget, ok := new(big.Int).SetString(strings.TrimSpace(budgetBase), 10)
-	if !ok || budget.Sign() <= 0 {
-		return fmt.Errorf("invalid budget base-units %q", budgetBase)
-	}
-
-	priceRaw := payment.requiredAmount()
-	if priceRaw == "" {
-		return errors.New("pricing response missing amount/maxAmountRequired")
-	}
-	price, ok := new(big.Int).SetString(priceRaw, 10)
-	if !ok || price.Sign() <= 0 {
-		return fmt.Errorf("pricing response has invalid amount %q", priceRaw)
-	}
-	if budget.Cmp(price) < 0 {
-		return fmt.Errorf("--budget %s is smaller than one request price %s on %s; raise the budget or buy.py will round up to one authorization and exceed the requested ceiling", budget.String(), price.String(), payment.Network)
-	}
-	return nil
 }
 
 func verifyAgentID(reg *erc8004.AgentRegistration, expected int64, expectedRegistry string) error {

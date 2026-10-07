@@ -2,6 +2,7 @@ package erc8004
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -494,6 +495,17 @@ func TestSetAgentURI(t *testing.T) {
 	}
 }
 
+// setMetadataWithKey builds keyed transact opts and calls SetMetadataWithOpts,
+// the production entry point.
+func setMetadataWithKey(ctx context.Context, c *Client, key *ecdsa.PrivateKey, agentID *big.Int, k string, v []byte) error {
+	opts, err := bind.NewKeyedTransactorWithChainID(key, c.chainID)
+	if err != nil {
+		return err
+	}
+	opts.Context = ctx
+	return c.SetMetadataWithOpts(ctx, opts, agentID, k, v)
+}
+
 func TestSetMetadata(t *testing.T) {
 	key, err := crypto.GenerateKey()
 	if err != nil {
@@ -514,7 +526,7 @@ func TestSetMetadata(t *testing.T) {
 	}
 	defer client.Close()
 
-	err = client.SetMetadata(ctx, key, big.NewInt(42), "x402", []byte(`{"payment":"info"}`))
+	err = setMetadataWithKey(ctx, client, key, big.NewInt(42), "x402", []byte(`{"payment":"info"}`))
 	if err != nil {
 		t.Fatalf("SetMetadata: %v", err)
 	}
@@ -542,7 +554,7 @@ func TestSetMetadata_TransactRevert(t *testing.T) {
 	}
 	defer client.Close()
 
-	err = client.SetMetadata(ctx, key, big.NewInt(42), "x402", []byte(`{"payment":"info"}`))
+	err = setMetadataWithKey(ctx, client, key, big.NewInt(42), "x402", []byte(`{"payment":"info"}`))
 	if err == nil {
 		t.Fatal("expected setMetadata revert error, got nil")
 	}
@@ -585,7 +597,7 @@ func TestSetMetadata_RevertSurfacesErrorString(t *testing.T) {
 	}
 	defer client.Close()
 
-	err = client.SetMetadata(ctx, key, big.NewInt(42), "x402", []byte(`{"payment":"info"}`))
+	err = setMetadataWithKey(ctx, client, key, big.NewInt(42), "x402", []byte(`{"payment":"info"}`))
 	if err == nil {
 		t.Fatal("expected setMetadata revert error, got nil")
 	}
@@ -624,7 +636,7 @@ func TestSetMetadata_RevertSurfacesCustomErrorSelector(t *testing.T) {
 	}
 	defer client.Close()
 
-	err = client.SetMetadata(ctx, key, big.NewInt(42), "x402", []byte(`{"payment":"info"}`))
+	err = setMetadataWithKey(ctx, client, key, big.NewInt(42), "x402", []byte(`{"payment":"info"}`))
 	if err == nil {
 		t.Fatal("expected setMetadata revert error, got nil")
 	}

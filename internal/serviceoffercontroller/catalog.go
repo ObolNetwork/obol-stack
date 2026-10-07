@@ -109,11 +109,3 @@ func computeStaticSiteContentHash(content, servicesJSON, openAPIJSON, apiDocsHTM
 	// old asset forever). The per-offer chat pages flow through bundles.
 	return fmt.Sprintf("%x", md5Sum(content+servicesJSON+openAPIJSON+apiDocsHTML+wellKnownX402JSON+chatWidgetVendorJS+bundleDigestInput(bundles)))[:8]
 }
-
-func staticSiteDeployedContentHash(deployment *unstructured.Unstructured) string {
-	if deployment == nil {
-		return ""
-	}
-	hash, _, _ := unstructured.NestedString(deployment.Object, "spec", "template", "metadata", "annotations", "obol.org/content-hash")
-	return hash
-}

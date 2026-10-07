@@ -1004,17 +1004,9 @@ func AddCustomEndpointWithOptions(cfg *config.Config, u *ui.UI, endpoint, modelN
 	return nil
 }
 
-// probeBackoffSleep is the sleep used between ValidateCustomEndpoint inference-probe
+// probeBackoffSleep is the sleep used between ValidateCustomEndpointWithOptions inference-probe
 // retries. Overridable in tests to keep them fast.
 var probeBackoffSleep = time.Sleep
-
-// ValidateCustomEndpoint validates that a custom OpenAI-compatible endpoint works.
-// It runs a 2-step validation: reachability check, then inference probe.
-// The inference probe is the definitive test — some servers (e.g., mlx-lm) don't
-// list the loaded model in /models but accept it for inference.
-func ValidateCustomEndpoint(endpoint, modelName, apiKey string) error {
-	return ValidateCustomEndpointWithOptions(endpoint, modelName, apiKey, CustomEndpointOptions{})
-}
 
 // ValidateCustomEndpointWithOptions validates that a custom OpenAI-compatible
 // endpoint works. It runs a 2-step validation: reachability check, then

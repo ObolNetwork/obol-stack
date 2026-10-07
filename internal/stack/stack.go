@@ -210,18 +210,6 @@ func cleanupStaleBackendConfigs(cfg *config.Config, oldBackend string) {
 	}
 }
 
-func ollamaHostForBackend(backendName string) string {
-	return stackdefaults.OllamaHostForBackend(backendName)
-}
-
-func ollamaHostIPForBackend(backendName string) (string, error) {
-	return stackdefaults.OllamaHostIPForBackend(backendName)
-}
-
-func dockerBridgeGatewayIP() (string, error) {
-	return stackdefaults.DockerBridgeGatewayIP()
-}
-
 // Up starts the cluster using the configured backend
 func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 	stackID := getStackID(cfg)

@@ -109,21 +109,6 @@ func parseHelmfileReposBytes(data []byte) ([]helmfileRepo, error) {
 	return out, nil
 }
 
-// ManagedRepoNames returns just the repo names from a helmfile.yaml. These are
-// the only repos this stack is responsible for keeping up to date; everything
-// else in the user's global `helm repo list` belongs to other tools.
-func ManagedRepoNames(helmfilePath string) ([]string, error) {
-	repos, err := ParseHelmfileRepos(helmfilePath)
-	if err != nil {
-		return nil, err
-	}
-	names := make([]string, 0, len(repos))
-	for _, r := range repos {
-		names = append(names, r.Name)
-	}
-	return names, nil
-}
-
 // EnsureRepos registers each (name, url) pair via `helm repo add --force-update`
 // so that a fresh host without `helm repo add` for our managed repos still gets
 // them registered before we ask helm to update them by name. Best-effort:

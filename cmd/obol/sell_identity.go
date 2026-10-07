@@ -447,26 +447,3 @@ was registered before AgentIdentity existed.`,
 		},
 	}
 }
-
-// Pure helpers exposed for testing the import command without a live
-// kubectl/RPC; cmd/obol/sell_identity_test.go covers the persist path.
-
-// verifyImportedIdentity checks the chain ownership invariant the import
-// command relies on. Extracted so tests can exercise it without a live RPC.
-func verifyImportedIdentity(owner, signer common.Address) error {
-	if owner == (common.Address{}) {
-		return fmt.Errorf("agent owner is zero")
-	}
-	if owner != signer {
-		return fmt.Errorf("signer %s does not control agent (owner: %s)", signer.Hex(), owner.Hex())
-	}
-	return nil
-}
-
-// makeImportedIdentityRecord builds the record the import command would
-// persist for the given inputs. Pure helper to make the wiring testable.
-func makeImportedIdentityRecord(ns, name string, network erc8004.NetworkConfig, agentID *big.Int) *agentIdentityRecord {
-	rec := newAgentIdentityRecord(ns, name)
-	rec.Status = monetizeapi.UpsertAgentIdentityRegistration(rec.Status, network.Name, agentID.String())
-	return rec
-}

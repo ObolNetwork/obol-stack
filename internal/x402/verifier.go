@@ -1101,25 +1101,14 @@ func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	return nil, nil, fmt.Errorf("hijacking not supported")
 }
 
-func prometheusLabels(rule *RouteRule) prometheus.Labels {
-	// `route` (= rule.Pattern) was dropped in favor of (offer_namespace,
-	// offer_name) which already uniquely identifies a paid route — the
-	// pattern was redundant and unbounded by path fragments, which would
-	// have ballooned series count for sellers running many granular routes.
-	//
-	// asset_symbol is included for direct per-token aggregation in PromQL
-	// (e.g. "what's my OBOL revenue?") without having to join the metric
-	// against the ServiceOffer CR at query time. Cardinality cost is zero
-	// because each offer pins exactly one asset — the new dimension is
-	// functionally constant within the existing (ns, name) group.
-	// The inline fields describe the primary payment option; delegate so
-	// primary and per-option labels share one definition.
-	return labelsForPaymentOption(rule, RoutePayment{Network: rule.Network, AssetSymbol: rule.AssetSymbol})
-}
-
 // labelsForPaymentOption builds the metric label set for one accepted payment
 // option of a route. A multi-payment offer emits one series per option so
 // revenue/charges attribute to the actual (chain, asset) the buyer used.
+//
+// `route` (= rule.Pattern) is deliberately not a label: (offer_namespace,
+// offer_name) already identifies a paid route, and the pattern is unbounded
+// by path fragments. asset_symbol enables per-token aggregation in PromQL
+// at zero cardinality cost, since each option pins exactly one asset.
 func labelsForPaymentOption(rule *RouteRule, opt RoutePayment) prometheus.Labels {
 	asset := opt.AssetSymbol
 	if asset == "" {
