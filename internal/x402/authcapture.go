@@ -54,6 +54,11 @@ func (c *AuthCaptureUnlockConfig) Validate() error {
 		if c.CaptureAuthorizer == "" {
 			return fmt.Errorf("captureAuthorizer must be non-empty when enabled")
 		}
+		// The scheme lets charge() take any fee in [min, max] and the
+		// facilitator does not report which; fee revenue metrics assume max.
+		if c.MinFeeBps != c.MaxFeeBps {
+			return fmt.Errorf("minFeeBps %d must equal maxFeeBps %d when enabled", c.MinFeeBps, c.MaxFeeBps)
+		}
 	}
 	if c.MinFeeBps > c.MaxFeeBps {
 		return fmt.Errorf("minFeeBps %d exceeds maxFeeBps %d", c.MinFeeBps, c.MaxFeeBps)

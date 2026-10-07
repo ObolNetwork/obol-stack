@@ -28,7 +28,7 @@ func validAuthCaptureConfig() AuthCaptureUnlockConfig {
 		OfferPrefix:       "/services/agent",
 		Price:             "1.00",
 		FeeRecipient:      testFeeRecipient,
-		MinFeeBps:         100,
+		MinFeeBps:         250,
 		MaxFeeBps:         250,
 		CaptureAuthorizer: testCaptureAuthorizer,
 	}
@@ -460,6 +460,17 @@ func TestValidateSignedUnlockRequirement(t *testing.T) {
 		{"rejects missing extra", func(s *x402types.PaymentRequirements) { s.Extra = nil }, "extra"},
 		{"rejects expired captureDeadline", func(s *x402types.PaymentRequirements) { s.Extra["captureDeadline"] = float64(now.Unix() + 6) }, "captureDeadline"},
 		{"rejects inverted refundDeadline", func(s *x402types.PaymentRequirements) { s.Extra["refundDeadline"] = float64(captureDeadline(s) - 1) }, "refundDeadline"},
+		{"rejects swapped EIP-712 name", func(s *x402types.PaymentRequirements) { s.Extra["name"] = "USD Coin" }, "EIP-712"},
+		{"rejects swapped EIP-712 version", func(s *x402types.PaymentRequirements) { s.Extra["version"] = "1" }, "EIP-712"},
+		{"accepts captureDeadline within skew", func(s *x402types.PaymentRequirements) {
+			s.Extra["captureDeadline"] = float64(now.Unix() + int64(cfg.CaptureDeadlineSecs) + 60)
+		}, ""},
+		{"rejects far-future captureDeadline", func(s *x402types.PaymentRequirements) {
+			s.Extra["captureDeadline"] = float64(now.Unix() + int64(cfg.CaptureDeadlineSecs) + 61)
+		}, "captureDeadline"},
+		{"rejects far-future refundDeadline", func(s *x402types.PaymentRequirements) {
+			s.Extra["refundDeadline"] = float64(now.Unix() + int64(cfg.RefundDeadlineSecs) + 61)
+		}, "refundDeadline"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -562,5 +573,21 @@ func TestPaidUnlock_RejectsTamperedPayment(t *testing.T) {
 		if c.Name == SIWXSessionCookie {
 			t.Error("tampered payment minted a session cookie")
 		}
+	}
+}
+
+func TestAuthCaptureValidateRequiresFixedFeeWhenEnabled(t *testing.T) {
+	cfg := validAuthCaptureConfig()
+	cfg.Enabled = true
+	cfg.OfferPrefix = "unlock-"
+	cfg.MinFeeBps = 100
+
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "must equal maxFeeBps") {
+		t.Fatalf("want min/max fee error, got %v", err)
+	}
+
+	cfg.Enabled = false
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("disabled config with a fee range should validate, got %v", err)
 	}
 }
