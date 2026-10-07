@@ -69,6 +69,20 @@ func ReadDevImageTag(cfg *config.Config) string {
 	return tag
 }
 
+// ResolveWorkloadImage returns the image reference for stack-owned workloads
+// created dynamically at runtime (tunnel storefront, demo-server) rather than
+// through the rendered defaults tree. Under OBOL_DEVELOPMENT it pins the
+// locally-imported tag recorded at CopyInfrastructure time, matching what
+// `stack up` builds and imports into the cluster. images.Resolve alone returns
+// `:latest` in dev mode, which imagePullPolicy IfNotPresent then satisfies
+// from a stale registry pull instead of the local build.
+func ResolveWorkloadImage(cfg *config.Config, repo string) string {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("OBOL_DEVELOPMENT")), "true") {
+		return images.ResolveDev(repo, ReadDevImageTag(cfg))
+	}
+	return images.Resolve(repo)
+}
+
 // RefreshInfrastructureIfChanged refreshes the generated defaults tree when
 // the embedded infrastructure assets, backend, or stack ID changed.
 func RefreshInfrastructureIfChanged(cfg *config.Config, backendName, stackID string) (bool, error) {

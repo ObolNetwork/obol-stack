@@ -63,7 +63,9 @@ var Managed = []string{
 //	// → "ghcr.io/obolnetwork/demo-server:abc1234"           (prod, offline)
 //	// → "ghcr.io/obolnetwork/demo-server:latest"            (dev / unknown commit)
 //
-// Prefer ResolveDev under OBOL_DEVELOPMENT so the local import tag matches.
+// Prefer ResolveDev under OBOL_DEVELOPMENT so the local import tag matches —
+// dynamically-created workloads should go through defaults.ResolveWorkloadImage,
+// which handles that switch.
 func Resolve(repo string) string {
 	if useLatest() {
 		return repo + ":latest"

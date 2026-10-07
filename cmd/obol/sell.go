@@ -27,7 +27,6 @@ import (
 	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
-	"github.com/ObolNetwork/obol-stack/internal/images"
 	"github.com/ObolNetwork/obol-stack/internal/inference"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
@@ -1922,7 +1921,7 @@ Example:
 			// upstream. kubectl applies List manifests natively; the List
 			// metadata only keys the ledger file.
 			items := make([]any, 0, 4)
-			for _, res := range buildDemoResources(name, spec, chain) {
+			for _, res := range buildDemoResources(cfg, name, spec, chain) {
 				items = append(items, res)
 			}
 			items = append(items, soManifest)
@@ -2068,7 +2067,7 @@ func waitForOfferReady(cfg *config.Config, u *ui.UI, name, ns string, timeout ti
 
 // deployDemoBackend creates the demo namespace, Deployment, and Service.
 func deployDemoBackend(cfg *config.Config, u *ui.UI, name string, spec demoSpec, paymentChain string) error {
-	resources := buildDemoResources(name, spec, paymentChain)
+	resources := buildDemoResources(cfg, name, spec, paymentChain)
 
 	for _, res := range resources {
 		data, err := json.Marshal(res)
@@ -2093,7 +2092,7 @@ func deployDemoBackend(cfg *config.Config, u *ui.UI, name string, spec demoSpec,
 }
 
 // buildDemoResources returns the K8s manifests for a demo backend.
-func buildDemoResources(name string, spec demoSpec, paymentChain string) []map[string]any {
+func buildDemoResources(cfg *config.Config, name string, spec demoSpec, paymentChain string) []map[string]any {
 	env := []map[string]string{
 		{"name": "DEMO_TYPE", "value": spec.Type},
 		{"name": "PORT", "value": "8080"},
@@ -2141,7 +2140,7 @@ func buildDemoResources(name string, spec demoSpec, paymentChain string) []map[s
 						"containers": []map[string]any{
 							{
 								"name":            "demo",
-								"image":           images.Resolve("ghcr.io/obolnetwork/demo-server"),
+								"image":           stackdefaults.ResolveWorkloadImage(cfg, "ghcr.io/obolnetwork/demo-server"),
 								"imagePullPolicy": "IfNotPresent",
 								"env":             env,
 								"ports": []map[string]any{
