@@ -639,7 +639,12 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		u.Info("Starting persistent Cloudflare tunnel")
 		if err := tunnel.RestorePersistentResources(cfg, u); err != nil {
 			u.Warnf("Tunnel resources could not be restored automatically: %v", err)
-			u.Dim("  Fix and retry with: obol tunnel restart")
+
+			if tunnel.ConnectorTokenRejected(cfg) {
+				u.Warn(tunnel.TokenRejectedHint(st.Hostname))
+			} else {
+				u.Dim("  Fix and retry with: obol tunnel restart")
+			}
 		} else if tunnelURL, err := tunnel.EnsureRunning(cfg, u); err != nil {
 			u.Warnf("Tunnel not started: %v", err)
 			u.Dim("  Start manually with: obol tunnel restart")
