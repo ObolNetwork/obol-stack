@@ -60,6 +60,9 @@ type tunnelStatusResult struct {
 	PublicReachable  bool `json:"public_reachable,omitempty"`
 	PublicHTTPStatus int  `json:"public_http_status,omitempty"`
 
+	// TokenRejected: cloudflared logs show Cloudflare refusing the token.
+	TokenRejected bool `json:"token_rejected,omitempty"`
+
 	LastUpdated string `json:"last_updated"`
 }
 
@@ -210,6 +213,7 @@ func Status(cfg *config.Config, u *ui.UI, opts StatusOptions) error {
 				result.ConnectorStatus = "connected"
 			} else {
 				result.ConnectorStatus = "waiting_for_connections"
+				result.TokenRejected = ConnectorTokenRejected(cfg)
 			}
 		}
 	}
@@ -839,6 +843,15 @@ func printStatusReport(u *ui.UI, result tunnelStatusResult, lastUpdated time.Tim
 			reach = "unreachable (" + reach + ")"
 		}
 		u.Detail("Public check", reach)
+
+		if result.PublicHTTPStatus == 525 {
+			u.Dim("  525: Cloudflare is speaking TLS to the origin. Set the dashboard Public Hostname's")
+			u.Dim("  Service to http://traefik.traefik.svc.cluster.local:80 (plain HTTP).")
+		}
+	}
+
+	if result.TokenRejected {
+		u.Warn(TokenRejectedHint(result.Hostname))
 	}
 	if u.IsVerbose() {
 		if result.ManagementMode != "" {

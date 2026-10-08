@@ -89,9 +89,9 @@ func ProvisionWithToken(cfg *config.Config, u *ui.UI, opts TokenProvisionOptions
 	if err := SyncAgentBaseURL(cfg, tunnelURL); err != nil {
 		u.Warnf("could not sync AGENT_BASE_URL to obol-agent: %v", err)
 	}
-	if err := SyncTunnelConfigMap(cfg, tunnelURL); err != nil {
-		u.Warnf("could not sync tunnel URL to frontend ConfigMap: %v", err)
-	}
+	// Same fan-out as stack up: live AGENT_BASE_URL, frontend tunnelURL and
+	// the storefront route, so a hostname change via setup takes effect now.
+	syncTunnelDependents(cfg, u, tunnelURL)
 
 	u.Blank()
 	u.Success("Tunnel configured")
