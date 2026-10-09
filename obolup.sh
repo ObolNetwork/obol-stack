@@ -55,7 +55,7 @@ fi
 # Pinned dependency versions
 # Update these versions to upgrade dependencies across all installations
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
-readonly KUBECTL_VERSION="1.36.5"
+readonly KUBECTL_VERSION="1.37.1"
 # renovate: datasource=github-releases depName=helm/helm
 readonly HELM_VERSION="4.3.0"
 # renovate: datasource=github-releases depName=k3d-io/k3d
@@ -67,7 +67,7 @@ readonly K9S_VERSION="0.51.0"
 # renovate: datasource=github-releases depName=databus23/helm-diff
 readonly HELM_DIFF_VERSION="3.15.15"
 # renovate: datasource=github-releases depName=ollama/ollama
-readonly OLLAMA_VERSION="0.35.1"
+readonly OLLAMA_VERSION="0.40.2"
 # Must match internal/openclaw/OPENCLAW_VERSION (without "v" prefix).
 # Tested by TestOpenClawVersionConsistency.
 # OpenClaw is deprecated (removed in v0.16): its CLI is only installed when
