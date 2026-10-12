@@ -15,18 +15,18 @@ func TestGetEmbeddedSkillNames(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Core skills that must always be present
+	// The built-in set is exactly the stack-operation skills; reference and
+	// domain skills are opt-in from ObolNetwork/skills (internal/agentskills).
+	// Adding one here grows every agent's per-turn context: keep it deliberate.
 	coreSkills := []string{
-		"addresses", "agent-factory", "building-blocks", "buy-x402", "concepts", "discovery",
-		"distributed-validators", "ethereum-networks", "ethereum-local-wallet",
-		"gas", "indexing", "l2s", "sell", "obol-stack", "standards", "sub-agent-business",
-		"swap", "wallets", "why",
+		"agent-factory", "buy-x402", "discovery", "ethereum-local-wallet", "ethereum-networks",
+		"inspect", "obol-stack", "sell", "sub-agent-business", "swap",
 	}
 
 	sort.Strings(names)
 
-	if len(names) < len(coreSkills) {
-		t.Fatalf("got %d skills %v, want at least %d", len(names), names, len(coreSkills))
+	if len(names) != len(coreSkills) {
+		t.Fatalf("got %d skills %v, want exactly %d", len(names), names, len(coreSkills))
 	}
 
 	nameSet := make(map[string]bool, len(names))
@@ -43,7 +43,7 @@ func TestGetEmbeddedSkillNames(t *testing.T) {
 
 func TestWriteSkillSubset_WritesOnlyRequested(t *testing.T) {
 	dst := t.TempDir()
-	want := []string{"ethereum-networks", "ethereum-local-wallet", "addresses", "gas"}
+	want := []string{"ethereum-networks", "ethereum-local-wallet", "swap"}
 
 	if err := WriteSkillSubset(dst, want); err != nil {
 		t.Fatalf("WriteSkillSubset: %v", err)
@@ -90,7 +90,7 @@ func TestWriteSkillSubset_LeavesExistingSkillsAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := WriteSkillSubset(dst, []string{"addresses"}); err != nil {
+	if err := WriteSkillSubset(dst, []string{"swap"}); err != nil {
 		t.Fatalf("WriteSkillSubset: %v", err)
 	}
 
@@ -98,7 +98,8 @@ func TestWriteSkillSubset_LeavesExistingSkillsAlone(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(custom, "SKILL.md")); err != nil {
 		t.Errorf("agent-installed skill clobbered: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dst, "addresses", "SKILL.md")); err != nil {
+
+	if _, err := os.Stat(filepath.Join(dst, "swap", "SKILL.md")); err != nil {
 		t.Errorf("requested skill missing: %v", err)
 	}
 }
@@ -106,7 +107,7 @@ func TestWriteSkillSubset_LeavesExistingSkillsAlone(t *testing.T) {
 func TestWriteSkillSubset_RejectsUnknownSkill(t *testing.T) {
 	dst := t.TempDir()
 
-	err := WriteSkillSubset(dst, []string{"addresses", "this-skill-does-not-exist"})
+	err := WriteSkillSubset(dst, []string{"swap", "this-skill-does-not-exist"})
 	if err == nil {
 		t.Fatal("expected error for unknown skill, got nil")
 	}
@@ -116,7 +117,7 @@ func TestWriteSkillSubset_RejectsUnknownSkill(t *testing.T) {
 
 	// When the input is invalid, no partial write should happen — fail fast
 	// before touching the destination so callers can retry without cleanup.
-	if _, err := os.Stat(filepath.Join(dst, "addresses")); err == nil {
+	if _, err := os.Stat(filepath.Join(dst, "swap")); err == nil {
 		t.Error("partial write occurred despite invalid input")
 	}
 }
@@ -139,7 +140,7 @@ func TestCopySkills(t *testing.T) {
 	}
 
 	// Every skill must have a SKILL.md
-	skills := []string{"discovery", "distributed-validators", "ethereum-networks", "ethereum-local-wallet", "sell", "obol-stack", "addresses", "wallets"}
+	skills := []string{"discovery", "ethereum-networks", "ethereum-local-wallet", "sell", "obol-stack", "swap", "inspect"}
 	for _, skill := range skills {
 		skillMD := filepath.Join(destDir, skill, "SKILL.md")
 
@@ -186,6 +187,7 @@ func TestCopySkills(t *testing.T) {
 		"sell/references/serviceoffer-spec.md",
 		"sell/references/registrationrequest-spec.md",
 		"sell/references/x402-pricing.md",
+		"sell/references/monetize-guide.md",
 	} {
 		if _, err := os.Stat(filepath.Join(destDir, sub)); err != nil {
 			t.Errorf("missing %s: %v", sub, err)
@@ -216,10 +218,6 @@ func TestCopySkills(t *testing.T) {
 		}
 	}
 
-	// distributed-validators must have references/api-examples.md
-	if _, err := os.Stat(filepath.Join(destDir, "distributed-validators", "references", "api-examples.md")); err != nil {
-		t.Errorf("missing distributed-validators/references/api-examples.md: %v", err)
-	}
 }
 
 func TestMonetizePy_Syntax(t *testing.T) {

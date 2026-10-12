@@ -73,6 +73,7 @@ Integration tests use `//go:build integration`; skip when prerequisites missing.
 obol                (root help is generated: each top-level command has a Category — see cmd/obol/help.go)
 ├── stack           init, up, down, purge, export, import
 ├── agent           init, new, sync, setup, auth, list, delete, update
+│   ├── skills      list [--available], add, remove (opt-in skills from ObolNetwork/skills)
 │   └── wallet      address, list, backup, restore
 ├── wallet          import
 ├── hermes          passthrough (SkipFlagParsing) → native hermes CLI (`obol hermes --help` = obol help, `obol hermes -- --help` = native; `--agent X` only as first arg, or `OBOL_AGENT`)
@@ -371,9 +372,9 @@ Key code: `internal/inference/{gateway,store,detect}.go`. Descriptors persist un
 | PVC host path | `$DATA_DIR/hermes-obol-agent/hermes-data/.hermes` |
 | Skills path (pod) | `/data/.hermes/obol-skills` (`OBOL_SKILLS_DIR` env, `skills.external_dirs`) |
 
-**Obol skills**: `SKILL.md` + optional scripts/references, embedded in `obol` binary (`internal/embed/skills/`).
+**Obol skills** (`internal/agentskills`): two tiers. **Built-in** = the 10 stack-operation skills embedded in the binary (`internal/embed/skills/`: agent-factory, buy-x402, discovery, ethereum-local-wallet, ethereum-networks, inspect, obol-stack, sell, sub-agent-business, swap), always installed; adding one grows every agent's per-turn context, so `TestGetEmbeddedSkillNames` pins the exact set. **Opt-in** = skills from a pinned ObolNetwork/skills release (`agentskills.Release` + `ContentSHA256`, a digest of the extracted `skills/` tree, not the tarball; bump both, get the digest with `OBOL_SKILLS_VERIFY_PIN=1 go test -run TestPinnedRelease ./internal/agentskills`), e.g. `ethereum-reference` (the ten former reference skills as one) and `distributed-validators`. Default agent: `obol agent skills add|remove` records them in `$CONFIG_DIR/skills/<agent>.yaml`; sub-agents: `obol agent update <name> --skills +x` (Agent.spec.skills). Downloads are cached in `$STATE_DIR/skills/<release>/`; `OBOL_SKILLS_SOURCE=<skills checkout>` uses local, unreleased skills. Sync writes `obol-skills/.obol-managed` and removes only skills obol installed (or `agentskills.Retired` on the first sync), never hand-placed ones; offline, built-ins still sync and opt-in copies are kept (`PartialError` → warning).
 
-**Monetize skill** (`internal/embed/skills/monetize/`): thin compatibility wrapper around ServiceOffer CRUD, controller waiting, `/skill.md` publication.
+**Sell skill** (`internal/embed/skills/sell/`): ServiceOffer CRUD, controller waiting, `/skill.md` publication; the guided end-to-end walkthrough (former monetize-guide) is `sell/references/monetize-guide.md`.
 
 **Remote-signer wallet**: keypair + Web3 V3 keystore crypto lives in `internal/keystore` (shared by `internal/hermes`, `internal/serviceoffercontroller` sub-agent wallets via `keystore.GenerateInMemory`; interop with go-ethereum's decoder pinned by `TestEncryptV3InteropGeth`). Runtimes provision it as secp256k1 → V3 keystore → remote-signer REST API at port 9000 in same ns.
 
@@ -506,7 +507,7 @@ Enforced by `.claude/settings.json` (Read/Edit/Write deny) + `.claude/hooks/secr
 | `internal/inference` | `gateway.go`, `store.go`, `detect.go` | Standalone x402 gateway |
 | `internal/embed` | `embed.go` | Embedded assets (skills, infrastructure, networks) |
 
-**Embedded assets**: `internal/embed/infrastructure/` (K8s templates), `internal/embed/networks/` (ethereum, aztec), `internal/embed/skills/` (22 skills; the autoresearch trio lives in the ObolNetwork/skills plugin).
+**Embedded assets**: `internal/embed/infrastructure/` (K8s templates), `internal/embed/networks/` (ethereum, aztec), `internal/embed/skills/` (10 built-in skills; reference/domain skills are opt-in from ObolNetwork/skills, see Obol skills above).
 
 **Tests**: `cmd/obol/sell_test.go` (CLI flags), `internal/x402/*_test.go` (verifier, config, matcher, E2E), `internal/erc8004/*_test.go` (ABI, client), `internal/embed/embed_crd_test.go` (CRD+RBAC validation), `internal/inference/gateway_test.go`, `internal/serviceoffercontroller/*_test.go` (controller, render).
 

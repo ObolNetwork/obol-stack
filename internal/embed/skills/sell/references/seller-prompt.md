@@ -27,7 +27,7 @@ You are helping me monetize a service on my obol-stack cluster.
 
 ## Constraints
 
-- Use the `monetize-guide` skill for the end-to-end flow
+- Follow `references/monetize-guide.md` in the `sell` skill for the end-to-end flow
 - Always ask me to confirm pricing before proceeding
 - Register the service on ERC-8004 for on-chain discovery
 - Use OASF skills/domains that match my service type

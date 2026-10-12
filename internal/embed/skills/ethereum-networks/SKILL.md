@@ -19,7 +19,7 @@ Query Ethereum blockchain data through the local eRPC gateway. Supports any JSON
 ## When NOT to Use
 
 - Sending transactions, signing, or deploying contracts — use `ethereum-local-wallet`
-- Validator monitoring — use `distributed-validators`
+- Validator monitoring — use the `distributed-validators` skill (opt-in: `obol agent skills add distributed-validators`)
 - Kubernetes pod diagnostics — use `obol-stack`
 
 ## RPC Gateway

@@ -1702,8 +1702,7 @@ var demoTypes = map[string]demoSpec{
 			Skills: []string{
 				"ethereum-networks",
 				"ethereum-local-wallet",
-				"addresses",
-				"gas",
+				"ethereum-reference", // opt-in, from the pinned ObolNetwork/skills release
 			},
 			Objective: "You are a focused EVM chain analyst. Answer the user's question using only the RPC tools you have. Be concise. If a question is outside chain analysis, refuse politely.",
 		},

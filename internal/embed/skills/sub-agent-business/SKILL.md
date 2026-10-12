@@ -83,11 +83,14 @@ Use `agent-factory` (load that skill for full flags):
 ```bash
 python3 "$SKILLS/agent-factory/scripts/factory.py" create aave-risk-monitor \
   --model qwen3.5:9b \
-  --skills aave-watch,ethereum-networks,addresses \
+  --skills aave-watch,ethereum-networks,ethereum-reference \
   --objective "Monitor Aave v3 positions on Base for liquidation risk. Given an address, report health factor, at-risk collateral, and concrete de-risking steps with current numbers. Refuse questions outside Aave-on-Base risk. Always cite the block number your data came from." \
   --price 0.02 --pay-to 0xYourWallet --network base \
   --register-name "Aave Risk Monitor"
 ```
+
+Child skills are copied from this agent's own skills. `ethereum-reference` is opt-in:
+if it is missing, ask the operator to run `obol agent skills add ethereum-reference`.
 
 The `--objective` is the child's SOUL — spend real effort here: persona,
 scope, refusal policy, output format, citation rules. One sharp paragraph
@@ -186,5 +189,5 @@ offer its own `payTo` if you want clean per-agent attribution.
 | `sell` | ServiceOffer status, lifecycle, deletion |
 | `discovery` | Finding registered competitor/complement agents |
 | `buy-x402` | Probing competitor pricing; buying inputs your agent resells |
-| `monetize-guide` | Selling raw inference or a plain HTTP API instead of an agent |
+| `sell` (`references/monetize-guide.md`) | Selling raw inference or a plain HTTP API instead of an agent |
 | `ethereum-networks` | Reading revenue balances |
