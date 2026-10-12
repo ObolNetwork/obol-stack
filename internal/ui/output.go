@@ -121,3 +121,31 @@ func (u *UI) Blank() {
 
 	fmt.Fprintln(u.stdout)
 }
+
+// Check prints one diagnostic line, "  ✓ title  message", with the symbol
+// coloured by kind (ok, info, skip, warn, fail) and an optional dimmed
+// "→ fix" line under it. title is padded to width. Warn and fail lines are
+// shown even in quiet mode.
+func (u *UI) Check(kind, title string, width int, msg, fix string) {
+	symbol := map[string]string{
+		"ok":   successStyle.Render("✓"),
+		"info": dimStyle.Render("·"),
+		"skip": dimStyle.Render("–"),
+		"warn": warnStyle.Render("!"),
+		"fail": errorStyle.Render("✗"),
+	}[kind]
+
+	if u.quiet && kind != "warn" && kind != "fail" {
+		return
+	}
+
+	if kind == "skip" {
+		msg = dimStyle.Render(msg)
+	}
+
+	fmt.Fprintf(u.stdout, "  %s %-*s  %s\n", symbol, width, title, msg)
+
+	if fix != "" {
+		fmt.Fprintf(u.stdout, "    %*s  %s\n", width, "", dimStyle.Render("→ "+fix))
+	}
+}

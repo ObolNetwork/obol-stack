@@ -47,6 +47,7 @@ var topLevelCategories = map[string]string{
 	"helmfile": catTools,
 	"k9s":      catTools,
 	"env":      catStack,
+	"doctor":   catStack,
 	"update":   catOther,
 	"upgrade":  catOther,
 	"version":  catOther,

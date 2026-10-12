@@ -201,6 +201,7 @@ func newRootCommand(cfg *config.Config) *cli.Command {
 			passthroughCommand(cfg, "helmfile", helmfilePrepare),
 			passthroughCommand(cfg, "k9s", nil),
 			envCommand(cfg),
+			doctorCommand(cfg),
 			// ============================================================
 			// Utility Commands
 			// ============================================================

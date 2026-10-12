@@ -121,15 +121,27 @@ type RestartOptions struct {
 	TransportProtocol string
 }
 
-// Status displays the current tunnel status and URL.
-func Status(cfg *config.Config, u *ui.UI, opts StatusOptions) error {
-	kubectlPath := cfg.ToolPath("kubectl")
+// StatusReport is the tunnel's state as `obol tunnel status` reports it.
+type StatusReport = tunnelStatusResult
+
+// Report gathers the tunnel status without printing or changing anything
+// (Status also re-syncs tunnel dependents). running is false when the
+// cloudflared deployment can't be read. noProbe skips the connector metrics
+// and public URL probes.
+func Report(cfg *config.Config, noProbe bool) (StatusReport, bool, error) {
 	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
 	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
-		return errors.New("stack not running, use 'obol stack up' first")
+		return StatusReport{}, false, errors.New("stack not running, use 'obol stack up' first")
 	}
 
-	now := time.Now()
+	result, running := gatherStatus(cfg, cfg.ToolPath("kubectl"), kubeconfigPath, noProbe, time.Now())
+
+	return result, running, nil
+}
+
+// gatherStatus collects the tunnel state: deployment health, URL, connector
+// metrics and the public probe (unless noProbe). It never mutates anything.
+func gatherStatus(cfg *config.Config, kubectlPath, kubeconfigPath string, noProbe bool, now time.Time) (tunnelStatusResult, bool) {
 	st, _ := loadTunnelState(cfg)
 	mode, url := tunnelModeAndURL(st)
 	result := tunnelStatusResult{
@@ -163,21 +175,8 @@ func Status(cfg *config.Config, u *ui.UI, opts StatusOptions) error {
 		} else {
 			result.Status = "not running"
 		}
-		if u.IsJSON() {
-			return u.JSON(result)
-		}
-		printStatusReport(u, result, now)
-		u.Blank()
-		if mode == tunnelExposureQuick {
-			u.Print("The tunnel will start automatically when you sell a service.")
-			u.Print("  Start manually:  obol tunnel restart")
-			u.Print("  Permanent URL:   obol tunnel setup")
-		} else {
-			u.Print("Troubleshooting:")
-			u.Print("  - Start the stack: obol stack up")
-			u.Print("  - Restore persistent tunnel resources: obol tunnel restart")
-		}
-		return nil
+
+		return result, false
 	}
 
 	result.DesiredReplicas = runtime.DesiredReplicas
@@ -200,10 +199,8 @@ func Status(cfg *config.Config, u *ui.UI, opts StatusOptions) error {
 	}
 
 	// Connector health: prefer the connector's own /ready + /metrics endpoint
-	// (works in every mode, no Cloudflare API token needed). Fall back to the
-	// remote-management API path only when the local probe is skipped/unavailable
-	// and a token happens to be present.
-	if !opts.NoProbe {
+	// (works in every mode, no Cloudflare API token needed).
+	if !noProbe {
 		if probe := probeCloudflaredMetrics(cfg); probe.Reachable {
 			result.ActiveConnections = probe.ReadyConns
 			result.ConnectorVersion = probe.Version
@@ -222,16 +219,59 @@ func Status(cfg *config.Config, u *ui.UI, opts StatusOptions) error {
 	}
 
 	// Public reachability probe: GET the public URL root and assert HTTP < 400.
-	publicURL := result.URL
-	probeablePublicURL := strings.HasPrefix(publicURL, "https://") || strings.HasPrefix(publicURL, "http://")
-	if !opts.NoProbe && probeablePublicURL {
-		if code, ok := probePublicURL(publicURL); ok {
+	if !noProbe && isProbeableURL(result.URL) {
+		if code, ok := probePublicURL(result.URL); ok {
 			result.PublicHTTPStatus = code
 			result.PublicReachable = code < 400
 		}
 	}
 
 	result.Status = summarizeTunnelStatus(result)
+
+	return result, true
+}
+
+func isProbeableURL(u string) bool {
+	return strings.HasPrefix(u, "https://") || strings.HasPrefix(u, "http://")
+}
+
+// Status displays the current tunnel status and URL.
+func Status(cfg *config.Config, u *ui.UI, opts StatusOptions) error {
+	kubectlPath := cfg.ToolPath("kubectl")
+
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+		return errors.New("stack not running, use 'obol stack up' first")
+	}
+
+	now := time.Now()
+	result, running := gatherStatus(cfg, kubectlPath, kubeconfigPath, opts.NoProbe, now)
+	mode := result.Mode
+
+	if !running {
+		if u.IsJSON() {
+			return u.JSON(result)
+		}
+
+		printStatusReport(u, result, now)
+		u.Blank()
+
+		if mode == tunnelExposureQuick {
+			u.Print("The tunnel will start automatically when you sell a service.")
+			u.Print("  Start manually:  obol tunnel restart")
+			u.Print("  Permanent URL:   obol tunnel setup")
+		} else {
+			u.Print("Troubleshooting:")
+			u.Print("  - Start the stack: obol stack up")
+			u.Print("  - Restore persistent tunnel resources: obol tunnel restart")
+		}
+
+		return nil
+	}
+
+	publicURL := result.URL
+	probeablePublicURL := isProbeableURL(publicURL)
+
 	if u.IsJSON() {
 		return u.JSON(result)
 	}
