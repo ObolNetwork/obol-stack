@@ -308,41 +308,6 @@ func HasConfiguredModels(cfg *config.Config) bool {
 	return false
 }
 
-// LoadDotEnv reads KEY=value pairs from a .env file.
-// Returns an empty map if the file doesn't exist or is unreadable.
-// Skips comments (#) and blank lines. Does not call os.Setenv.
-func LoadDotEnv(path string) map[string]string {
-	result := make(map[string]string)
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return result
-	}
-
-	for line := range strings.SplitSeq(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-
-		idx := strings.IndexByte(line, '=')
-		if idx < 1 {
-			continue
-		}
-
-		key := strings.TrimSpace(line[:idx])
-		val := strings.TrimSpace(line[idx+1:])
-		// Strip surrounding quotes
-		if len(val) >= 2 && ((val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'')) {
-			val = val[1 : len(val)-1]
-		}
-
-		result[key] = val
-	}
-
-	return result
-}
-
 // ConfigureLiteLLM adds a provider to the LiteLLM gateway.
 // For cloud providers, it patches the Secret with the API key and adds
 // the model to config.yaml. For Ollama, it discovers local models and adds them.
@@ -805,7 +770,7 @@ func reorderModelList(entries []ModelEntry, names []string) ([]ModelEntry, bool,
 // Returns an error if any of the requested names is not present in the
 // current model_list — typos should be loud, not silent no-ops.
 //
-// ConfigMap-only operation: hermes/openclaw read the agent primary from the
+// ConfigMap-only operation: hermes reads the agent primary from the
 // ConfigMap via GetConfiguredModels, and LiteLLM's router does not use
 // model_list order for routing, so no pod restart is needed. The live
 // /v1/models listing keeps the old order until the next natural restart.
@@ -947,7 +912,7 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 // LiteLLM `model_name` contract — the canonical identifier is the bare
 // `modelName`. Same convention every other code path in this stack uses:
 // Ollama writes `qwen3.5:9b`, Anthropic writes `claude-opus-4-7`, OpenAI
-// writes `gpt-5.4`. The agent (Hermes / OpenClaw) reads `model_name` straight
+// writes `gpt-5.4`. The agent (Hermes) reads `model_name` straight
 // back as the `model` field on chat-completion calls — any provider-prefix
 // namespacing (`custom/<name>/<model>`) on this side breaks that round-trip
 // because the agent then strips it and calls LiteLLM with a key that doesn't
@@ -1400,8 +1365,8 @@ func ProviderEnvVar(provider string) string {
 }
 
 // WellKnownModels maps provider names to their commonly-used model IDs.
-// Used to populate OpenClaw's model allowlist when a wildcard is configured
-// and the LiteLLM pod is not reachable for a live /v1/models query.
+// Used as the model list for a provider when a wildcard is configured and
+// the LiteLLM pod is not reachable for a live /v1/models query.
 var WellKnownModels = map[string][]string{
 	ProviderAnthropic: {
 		"claude-opus-4-6",

@@ -295,7 +295,7 @@ func deleteTunnelState(cfg *config.Config) error {
 	return nil
 }
 
-// TunnelState is an exported alias so other packages (agent, openclaw)
+// TunnelState is an exported alias so other packages (agent)
 // can read tunnel state without reaching into unexported types.
 type TunnelState = tunnelState
 

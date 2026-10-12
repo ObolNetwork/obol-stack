@@ -338,15 +338,16 @@ else
     fail "RBAC write rule is too broad or missing Obol CRD CRUD — ${write_rules:0:100}"
 fi
 
-# §4: Read/write ClusterRoleBindings must include default Hermes and OpenClaw SAs.
-step "RBAC: openclaw-monetize bindings have agent SAs as subjects"
+# §4: Read/write ClusterRoleBindings bind the default Hermes SA. The
+# openclaw-* names predate the OpenClaw removal (v0.16); its SA must be gone.
+step "RBAC: openclaw-monetize bindings have the Hermes SA (and no OpenClaw SA)"
 rbac_out=$("$OBOL" kubectl get clusterrolebinding openclaw-monetize-read-binding \
     -o jsonpath='{.subjects}' 2>&1) || true
 rbac_write=$("$OBOL" kubectl get clusterrolebinding openclaw-monetize-write-binding \
     -o jsonpath='{.subjects}' 2>&1) || true
-if echo "$rbac_out" | grep -q "hermes" && echo "$rbac_out" | grep -q "openclaw" && \
-   echo "$rbac_write" | grep -q "hermes" && echo "$rbac_write" | grep -q "openclaw"; then
-    pass "Read/write ClusterRoleBindings have Hermes and OpenClaw SAs"
+if echo "$rbac_out" | grep -q "hermes" && ! echo "$rbac_out" | grep -q '"namespace":"openclaw-' && \
+   echo "$rbac_write" | grep -q "hermes" && ! echo "$rbac_write" | grep -q '"namespace":"openclaw-'; then
+    pass "Read/write ClusterRoleBindings have the Hermes SA only"
 else
     fail "RBAC binding missing agent SA — read: ${rbac_out:0:80} write: ${rbac_write:0:80}"
 fi

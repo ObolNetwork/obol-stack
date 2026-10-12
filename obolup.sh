@@ -68,17 +68,6 @@ readonly K9S_VERSION="0.51.0"
 readonly HELM_DIFF_VERSION="3.15.15"
 # renovate: datasource=github-releases depName=ollama/ollama
 readonly OLLAMA_VERSION="0.35.1"
-# Must match internal/openclaw/OPENCLAW_VERSION (without "v" prefix).
-# Tested by TestOpenClawVersionConsistency.
-# OpenClaw is deprecated (removed in v0.16): its CLI is only installed when
-# OBOL_INSTALL_OPENCLAW=true.
-readonly OPENCLAW_VERSION="2026.4.21"
-
-# openclaw_install_requested reports whether the deprecated OpenClaw CLI
-# should be installed (opt-in for v0.15; dropped entirely in v0.16).
-openclaw_install_requested() {
-	[[ "${OBOL_INSTALL_OPENCLAW:-false}" == "true" ]]
-}
 
 # Repository URL for building from source
 readonly OBOL_REPO_URL="git@github.com:ObolNetwork/obol-stack.git"
@@ -131,39 +120,6 @@ command_exists() {
 # only tools the user must install separately.
 check_prerequisites() {
 	local missing=()
-
-	# Node.js 22+ / npm — preferred for the (deprecated, opt-in) openclaw CLI
-	# install. If missing, install_openclaw() will fall back to Docker image
-	# extraction. Only block here if OBOL_INSTALL_OPENCLAW=true and neither
-	# npm NOR docker is available.
-	local need_npm=false
-	if openclaw_install_requested; then
-		need_npm=true
-	fi
-	if [[ "$need_npm" == "true" ]] && command_exists openclaw; then
-		local oc_version
-		oc_version=$(openclaw --version 2>/dev/null | tr -d '[:space:]' || echo "")
-		if [[ -n "$oc_version" ]] && version_ge "$oc_version" "$OPENCLAW_VERSION"; then
-			need_npm=false
-		fi
-	fi
-
-	if [[ "$need_npm" == "true" ]]; then
-		if ! command_exists npm; then
-			if ! command_exists docker; then
-				missing+=("Node.js 22+ (npm) or Docker — required to install openclaw CLI")
-			fi
-			# npm missing but docker available — install_openclaw() will use Docker fallback
-		else
-			local node_major
-			node_major=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
-			if [[ -z "$node_major" ]] || [[ "$node_major" -lt 22 ]]; then
-				if ! command_exists docker; then
-					missing+=("Node.js 22+ (found: v${node_major:-none}) or Docker — required for openclaw CLI")
-				fi
-			fi
-		fi
-	fi
 
 	if [[ ${#missing[@]} -gt 0 ]]; then
 		log_error "Missing prerequisites:"
@@ -1304,169 +1260,6 @@ install_k9s() {
 	fi
 }
 
-# Install openclaw CLI
-# Unlike other tools, openclaw has no standalone binary downloads.
-# It's distributed as an npm package, so we install it locally into
-# OBOL_BIN_DIR using npm --prefix to keep it workspace-contained.
-install_openclaw() {
-	local current_version=""
-	local target_version="$OPENCLAW_VERSION"
-
-	# Remove broken symlink if exists
-	remove_broken_symlink "openclaw"
-
-	# Check for global openclaw first (same pattern as kubectl, helm, etc.)
-	local global_openclaw
-	if global_openclaw=$(check_global_binary "openclaw"); then
-		local global_version
-		global_version=$("$global_openclaw" --version 2>/dev/null | tr -d '[:space:]' || echo "")
-		if [[ -n "$global_version" ]] && version_ge "$global_version" "$target_version"; then
-			if create_binary_symlink "openclaw" "$global_openclaw"; then
-				log_success "openclaw v$global_version already installed at: $global_openclaw (symlinked)"
-			else
-				log_success "openclaw v$global_version already installed at: $global_openclaw"
-			fi
-			return 0
-		fi
-	fi
-
-	# Check current version in OBOL_BIN_DIR
-	if [[ -f "$OBOL_BIN_DIR/openclaw" ]]; then
-		current_version=$("$OBOL_BIN_DIR/openclaw" --version 2>/dev/null | tr -d '[:space:]' || echo "")
-	fi
-
-	if [[ -n "$current_version" ]] && version_ge "$current_version" "$target_version"; then
-		log_success "openclaw v$current_version is up to date"
-		return 0
-	fi
-
-	# Prefer npm install; fall back to extracting the binary from Docker image.
-	local use_npm=true
-	if ! command_exists npm; then
-		use_npm=false
-	else
-		local node_major
-		node_major=$(node --version 2>/dev/null | sed 's/v//' | cut -d. -f1)
-		if [[ -z "$node_major" ]] || [[ "$node_major" -lt 22 ]]; then
-			use_npm=false
-		fi
-	fi
-
-	if [[ "$use_npm" == "false" ]]; then
-		# Docker fallback: extract openclaw binary from the published image.
-		if command_exists docker; then
-			log_info "npm/Node.js not available — extracting openclaw from Docker image..."
-			local image="ghcr.io/obolnetwork/openclaw:$target_version"
-			local pull_err
-			if ! pull_err=$(docker pull "$image" 2>&1); then
-				log_warn "docker pull $image failed:"
-				printf '  %s\n' "$pull_err" | sed 's/^  $//'
-				echo "  Pull the Docker image manually: docker pull $image"
-				echo ""
-				return 1
-			fi
-
-			local cid create_err
-			if ! cid=$(docker create "$image" 2>&1); then
-				create_err="$cid"
-				cid=""
-				log_warn "docker create $image failed:"
-				printf '  %s\n' "$create_err"
-				echo ""
-				return 1
-			fi
-
-			local cp_err="" cp_ok=false
-			for src in /usr/local/bin/openclaw /app/openclaw /openclaw; do
-				if cp_out=$(docker cp "$cid:$src" "$OBOL_BIN_DIR/openclaw" 2>&1); then
-					cp_ok=true
-					break
-				fi
-				cp_err+="  $src: $cp_out"$'\n'
-			done
-			docker rm "$cid" >/dev/null 2>&1
-
-			if [[ "$cp_ok" == "true" ]] && [[ -f "$OBOL_BIN_DIR/openclaw" ]]; then
-				chmod +x "$OBOL_BIN_DIR/openclaw"
-				log_success "openclaw v$target_version installed (from Docker image)"
-				return 0
-			fi
-
-			log_warn "docker cp could not locate openclaw binary in $image (tried /usr/local/bin, /app, /):"
-			printf '%s' "$cp_err"
-			echo ""
-			return 1
-		fi
-
-		log_warn "npm and Docker both unavailable — cannot install openclaw CLI"
-		echo ""
-		echo "  Install Node.js 22+ first, then re-run obolup.sh"
-		echo "  Or pull the Docker image: docker pull ghcr.io/obolnetwork/openclaw:$target_version"
-		echo ""
-		return 1
-	fi
-
-	if [[ -n "$current_version" ]]; then
-		log_info "Upgrading openclaw from v$current_version to v$target_version..."
-	else
-		log_info "Installing openclaw v$target_version..."
-	fi
-
-	# Install into OBOL_BIN_DIR using npm --prefix so the package lives
-	# alongside the other managed binaries (works for both production
-	# ~/.local/bin and development .workspace/bin layouts).
-	local npm_prefix="$OBOL_BIN_DIR/.openclaw-npm"
-
-	if npm install --prefix "$npm_prefix" "openclaw@$target_version" 2>&1; then
-		# Create a wrapper script in OBOL_BIN_DIR that invokes the local install.
-		# npm --prefix puts the .bin stubs in node_modules/.bin/ which handle
-		# the correct entry point (openclaw.mjs) automatically.
-		cat > "$OBOL_BIN_DIR/openclaw" <<WRAPPER
-#!/usr/bin/env bash
-exec "$npm_prefix/node_modules/.bin/openclaw" "\$@"
-WRAPPER
-		chmod +x "$OBOL_BIN_DIR/openclaw"
-		log_success "openclaw v$target_version installed"
-		return 0
-	fi
-
-	log_warn "Failed to install openclaw CLI via npm"
-
-	# Fallback: use Docker image as a portable runtime.
-	# OpenClaw publishes multi-arch images (amd64+arm64) to GHCR,
-	# so this works on npm-deprived setups as long as Docker is available.
-	if command_exists docker && docker info >/dev/null 2>&1; then
-		log_info "Trying Docker fallback for openclaw..."
-		local image="ghcr.io/obolnetwork/openclaw:$target_version"
-		if docker pull "$image" 2>&1; then
-			cat > "$OBOL_BIN_DIR/openclaw" <<WRAPPER
-#!/usr/bin/env bash
-# openclaw via Docker — fallback for environments without npm/Node.js.
-# Volume mounts pass through the host config so openclaw sees the same
-# state as the rest of the obol toolchain.
-exec docker run --rm -i \\
-  --network host \\
-  -v "\${OBOL_CONFIG_DIR:-\${XDG_CONFIG_HOME:-\$HOME/.config}/obol}:/config" \\
-  -v "\${OBOL_DATA_DIR:-\${XDG_DATA_HOME:-\$HOME/.local/share}/obol}:/data" \\
-  -e OBOL_CONFIG_DIR=/config \\
-  -e OBOL_DATA_DIR=/data \\
-  -e KUBECONFIG=/config/kubeconfig.yaml \\
-  "$image" "\$@"
-WRAPPER
-			chmod +x "$OBOL_BIN_DIR/openclaw"
-			log_success "openclaw v$target_version installed (Docker fallback)"
-			return 0
-		fi
-		log_warn "Docker pull failed for $image"
-	fi
-
-	echo ""
-	echo "  Install manually: npm install -g openclaw@$target_version"
-	echo "  Or pull the Docker image: docker pull ghcr.io/obolnetwork/openclaw:$target_version"
-	echo ""
-	return 1
-}
-
 # Configure Ollama to listen on 0.0.0.0 so k3d containers can reach it.
 # On macOS, Docker Desktop routes host.docker.internal through the hypervisor,
 # so Ollama's bind address doesn't matter. On Linux, k3d uses the docker
@@ -1697,10 +1490,6 @@ install_dependencies() {
 	install_helmfile || log_warn "helmfile installation failed (continuing...)"
 	install_k9s || log_warn "k9s installation failed (continuing...)"
 	install_helm_diff || log_warn "helm-diff plugin installation failed (continuing...)"
-	if openclaw_install_requested; then
-		log_warn "OpenClaw is deprecated and will be removed in v0.16 (installing its CLI because OBOL_INSTALL_OPENCLAW=true)"
-		install_openclaw || log_warn "openclaw CLI installation failed (continuing...)"
-	fi
 	install_ollama || log_warn "Ollama installation skipped (continuing...)"
 
 	echo ""
@@ -1958,69 +1747,6 @@ configure_path() {
 }
 
 # Print post-install instructions
-# Check if ~/.openclaw/openclaw.json specifies a cloud model that needs an API key.
-# If the key is missing and we have a TTY, prompt for it interactively and export
-# it so the subsequent obol bootstrap / stack up picks it up via autoConfigureLLM.
-check_agent_model_api_key() {
-	local config_file="$HOME/.openclaw/openclaw.json"
-	[[ -f "$config_file" ]] || return 0
-
-	# Extract agents.defaults.model.primary (e.g., "anthropic/claude-sonnet-4-6")
-	local primary_model=""
-	if command_exists python3; then
-		primary_model=$(python3 -c "
-import json, sys
-try:
-    d = json.load(open('$config_file'))
-    print(d.get('agents',{}).get('defaults',{}).get('model',{}).get('primary',''))
-except: pass
-" 2>/dev/null)
-	fi
-
-	[[ -n "$primary_model" ]] || return 0
-
-	# Determine provider and required env var
-	local provider="" env_var="" provider_name=""
-	case "$primary_model" in
-		*claude*) provider="anthropic"; env_var="ANTHROPIC_API_KEY"; provider_name="Anthropic" ;;
-		gpt*|o1*|o3*|o4*) provider="openai"; env_var="OPENAI_API_KEY"; provider_name="OpenAI" ;;
-		*) return 0 ;;
-	esac
-
-	echo ""
-	if [[ -n "${!env_var:-}" ]]; then
-		log_success "$env_var detected for $primary_model"
-		return 0
-	fi
-
-	# Anthropic-specific fallback: Claude Code subscription token
-	if [[ "$provider" == "anthropic" && -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
-		export ANTHROPIC_API_KEY="$CLAUDE_CODE_OAUTH_TOKEN"
-		log_success "Claude Code subscription detected (CLAUDE_CODE_OAUTH_TOKEN)"
-		return 0
-	fi
-
-	# Interactive: prompt for the API key (like hermes-agent's setup wizard)
-	if [[ -c /dev/tty ]]; then
-		log_info "Your agent uses $primary_model ($provider_name)"
-		echo ""
-		local api_key=""
-		read -r -p "  $provider_name API key ($env_var): " api_key </dev/tty
-		if [[ -n "$api_key" ]]; then
-			export "$env_var=$api_key"
-			log_success "$env_var configured"
-		else
-			echo ""
-			log_dim "  Skipped. Configure later: obol model setup --provider $provider"
-		fi
-	else
-		# Non-interactive: just warn
-		log_warn "Agent uses $primary_model but $env_var is not set."
-		log_dim "  Set it before starting: export $env_var=..."
-		log_dim "  Or configure after startup: obol model setup --provider $provider"
-	fi
-}
-
 print_instructions() {
 	local install_mode="$1"
 
@@ -2031,9 +1757,6 @@ print_instructions() {
 		log_success "Obol Stack installation complete!"
 	fi
 	echo ""
-
-	# Check if the agent's primary model requires a cloud API key.
-	check_agent_model_api_key
 
 	# Check if we can prompt the user for bootstrap (works with curl | bash via /dev/tty).
 	# [[ -c /dev/tty ]] only tests that the file is a char device — it does not test

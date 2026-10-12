@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Kubernetes API helper for Obol Stack OpenClaw pods.
+"""Kubernetes API helper for Obol Stack agent pods.
 
 Uses the mounted ServiceAccount token to query the Kubernetes API.
 No kubectl required — pure HTTP via urllib.

@@ -1222,7 +1222,6 @@ func TestBuildAndImportLocalImages_PreloadsRuntimeImagesViaCrictl(t *testing.T) 
 	}
 	log := string(logData)
 	for _, want := range []string{
-		"docker exec k3d-obol-stack-test-stack-server-0 crictl pull ghcr.io/obolnetwork/openclaw:",
 		"docker exec k3d-obol-stack-test-stack-server-0 crictl pull nousresearch/hermes-agent:",
 	} {
 		if !strings.Contains(log, want) {
@@ -1230,9 +1229,7 @@ func TestBuildAndImportLocalImages_PreloadsRuntimeImagesViaCrictl(t *testing.T) 
 		}
 	}
 	for _, unwanted := range []string{
-		"docker pull ghcr.io/obolnetwork/openclaw",
 		"docker pull nousresearch/hermes-agent",
-		"k3d image import ghcr.io/obolnetwork/openclaw",
 		"k3d image import nousresearch/hermes-agent",
 	} {
 		if strings.Contains(log, unwanted) {

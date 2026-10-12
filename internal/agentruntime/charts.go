@@ -1,9 +1,9 @@
 package agentruntime
 
 // RemoteSignerChartVersion is the single source of truth for the
-// `remote-signer` Helm chart pin used by both Hermes and OpenClaw
-// deployments. It MUST be updated as a single edit; bumping it here
-// updates every consumer in lockstep.
+// `remote-signer` Helm chart pin used by Hermes deployments. It MUST be
+// updated as a single edit; bumping it here updates every consumer in
+// lockstep.
 //
 // Chart 0.4.0 ships remote-signer image `v0.4.0`, which honours
 // `SIGNER__AUTH__TOKEN` (the bearer token the controller mints into the

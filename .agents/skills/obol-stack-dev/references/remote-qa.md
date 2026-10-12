@@ -34,7 +34,7 @@ git -C "$BASE" worktree add --detach "$QA" HEAD
 cp "$BASE/.env" "$QA/.env"
 chmod 600 "$QA/.env"
 mkdir -p "$QA/.workspace/bin"
-for tool in kubectl helm helmfile k3d k9s openclaw obol; do
+for tool in kubectl helm helmfile k3d k9s obol; do
   [ -x "$TOOL_ROOT/$tool" ] && ln -sf "$TOOL_ROOT/$tool" "$QA/.workspace/bin/$tool"
 done
 ```

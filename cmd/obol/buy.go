@@ -1179,18 +1179,9 @@ func promoteAndSyncModel(cfg *config.Config, u *ui.UI, modelID string) error {
 	if err != nil {
 		return fmt.Errorf("list hermes instances: %w", err)
 	}
-	openclawIDs, err := agentruntime.ListInstanceIDs(cfg, agentruntime.OpenClaw)
-	if err != nil {
-		return fmt.Errorf("list openclaw instances: %w", err)
-	}
 	for _, id := range hermesIDs {
 		if err := syncAgentTarget(cfg, agentTarget{Runtime: agentruntime.Hermes, ID: id}, u); err != nil {
 			return fmt.Errorf("sync hermes/%s: %w", id, err)
-		}
-	}
-	for _, id := range openclawIDs {
-		if err := syncAgentTarget(cfg, agentTarget{Runtime: agentruntime.OpenClaw, ID: id}, u); err != nil {
-			return fmt.Errorf("sync openclaw/%s: %w", id, err)
 		}
 	}
 	return nil

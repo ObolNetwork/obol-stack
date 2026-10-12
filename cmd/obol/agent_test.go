@@ -97,7 +97,6 @@ func TestShouldIncludeCRDAgents(t *testing.T) {
 		{"all", true},
 		{"ALL", true},
 		{"hermes", false},
-		{"openclaw", false},
 	}
 	for _, tt := range tests {
 		if got := shouldIncludeCRDAgents(tt.runtime); got != tt.want {
@@ -217,16 +216,25 @@ func TestResolveAgentTarget(t *testing.T) {
 			instances: []agentTarget{
 				{Runtime: agentruntime.Hermes, ID: agentruntime.DefaultInstanceID},
 				{Runtime: agentruntime.Hermes, ID: "research"},
-				{Runtime: agentruntime.OpenClaw, ID: "legacy"},
 			},
 			want: agentTarget{Runtime: agentruntime.Hermes, ID: agentruntime.DefaultInstanceID},
 		},
 		{
-			name: "falls back to single OpenClaw instance",
+			name: "falls back to single Hermes instance",
 			instances: []agentTarget{
-				{Runtime: agentruntime.OpenClaw, ID: "legacy"},
+				{Runtime: agentruntime.Hermes, ID: "research"},
 			},
-			want: agentTarget{Runtime: agentruntime.OpenClaw, ID: "legacy"},
+			want: agentTarget{Runtime: agentruntime.Hermes, ID: "research"},
+		},
+		{
+			name: "ignores a leftover OpenClaw instance dir",
+			instances: []agentTarget{
+				{Runtime: agentruntime.Runtime("openclaw"), ID: "legacy"},
+			},
+			runtimeFlag: "",
+			args:        nil,
+			want:        agentTarget{Runtime: "", ID: ""},
+			wantErr:     "no agent instances found",
 		},
 		{
 			name: "resolves explicit runtime default Hermes",
@@ -248,22 +256,9 @@ func TestResolveAgentTarget(t *testing.T) {
 			want:        agentTarget{Runtime: agentruntime.Hermes, ID: "research"},
 		},
 		{
-			name: "resolves openclaw by instance name without runtime",
-			instances: []agentTarget{
-				{Runtime: agentruntime.Hermes, ID: agentruntime.DefaultInstanceID},
-				{Runtime: agentruntime.OpenClaw, ID: "legacy"},
-			},
-			args: []string{"legacy"},
-			want: agentTarget{Runtime: agentruntime.OpenClaw, ID: "legacy"},
-		},
-		{
-			name: "errors on same id across runtimes",
-			instances: []agentTarget{
-				{Runtime: agentruntime.Hermes, ID: "shared"},
-				{Runtime: agentruntime.OpenClaw, ID: "shared"},
-			},
-			args:    []string{"shared"},
-			wantErr: "exists in multiple runtimes",
+			name:        "openclaw runtime points at the wallet migration",
+			runtimeFlag: "openclaw",
+			wantErr:     "OpenClaw was removed in v0.16",
 		},
 		{
 			name: "errors on unknown instance",
@@ -282,7 +277,7 @@ func TestResolveAgentTarget(t *testing.T) {
 			name: "errors on multiple non-default instances without selector",
 			instances: []agentTarget{
 				{Runtime: agentruntime.Hermes, ID: "research"},
-				{Runtime: agentruntime.OpenClaw, ID: "legacy"},
+				{Runtime: agentruntime.Hermes, ID: "legacy"},
 			},
 			wantErr: "multiple agent instances found",
 		},
@@ -339,7 +334,7 @@ func TestResolveRuntimeInstance(t *testing.T) {
 		},
 		{
 			name:      "uses single instance",
-			runtime:   agentruntime.OpenClaw,
+			runtime:   agentruntime.Hermes,
 			instances: []string{"legacy"},
 			want:      "legacy",
 		},

@@ -46,8 +46,7 @@ import (
 //	    assertBundledSkillsSkippedInPod for why we assert pod filesystem state
 //	    rather than grep a log line.
 //
-// Like the rest of the integration suite (internal/openclaw/*_integration_test.go)
-// it t.Skip()s gracefully when prerequisites are missing, so `go test` without a
+// Like the rest of the integration suite it t.Skip()s gracefully when prerequisites are missing, so `go test` without a
 // cluster is a no-op.
 //
 // To run manually (a local OpenAI-compatible inference endpoint is available at
@@ -66,9 +65,8 @@ import (
 // ─────────────────────────────────────────────────────────────────────────────
 
 // acObolRun executes the obol binary and returns combined stdout/stderr,
-// fataling on failure. Mirrors internal/openclaw.obolRun; redeclared here
-// (with an `ac` prefix) because the two packages do not share a test helper
-// file and the non-tagged agent_test.go in this package must keep compiling.
+// fataling on failure. The `ac` prefix keeps it clear of helpers in the
+// non-tagged agent_test.go in this package.
 func acObolRun(t *testing.T, cfg *config.Config, args ...string) string {
 	t.Helper()
 	out, err := acObolRunErr(cfg, args...)
@@ -91,8 +89,8 @@ func acObolRunErr(cfg *config.Config, args ...string) (string, error) {
 	return buf.String(), nil
 }
 
-// acRequireCluster skips when no k3d cluster is reachable. Same shape as
-// internal/openclaw.requireCluster: kubeconfig presence + a live cluster-info
+// acRequireCluster skips when no k3d cluster is reachable: kubeconfig
+// presence + a live cluster-info
 // probe through the obol-managed KUBECONFIG.
 func acRequireCluster(t *testing.T) *config.Config {
 	t.Helper()
@@ -108,8 +106,7 @@ func acRequireCluster(t *testing.T) *config.Config {
 }
 
 // acRequireAgentCRD skips when the obol.org Agent CRD is not installed (the
-// reconciler that provisions sub-agent pods watches it). Mirrors the
-// requireCRD shape used by internal/openclaw for ServiceOffers.
+// reconciler that provisions sub-agent pods watches it).
 func acRequireAgentCRD(t *testing.T, cfg *config.Config) {
 	t.Helper()
 	out, err := acObolRunErr(cfg, "kubectl", "get", "crd", "agents.obol.org")
@@ -214,9 +211,7 @@ func waitForAgentPodReady(t *testing.T, cfg *config.Config, ns, name string) {
 }
 
 // getHermesConfigYAML returns the rendered config.yaml from the agent's
-// hermes-config ConfigMap. Uses jsonpath to pull just the data key, matching
-// the kubectl-helper style used elsewhere in the integration suite (e.g.
-// internal/openclaw.getERPCConfigYAML).
+// hermes-config ConfigMap. Uses jsonpath to pull just the data key.
 func getHermesConfigYAML(t *testing.T, cfg *config.Config, ns string) string {
 	t.Helper()
 	out := acObolRun(t, cfg, "kubectl", "get", "configmap", hermesConfigMapName, "-n", ns,
@@ -286,7 +281,7 @@ func containsListItem(yamlBody, item string) bool {
 //	    (the marker stopped bundled seeding).
 //
 // All exec is via `obol kubectl exec` into the "hermes" container (see
-// agentPodSpec), the same non-interactive pattern internal/openclaw uses.
+// agentPodSpec), non-interactively.
 func assertBundledSkillsSkippedInPod(t *testing.T, cfg *config.Config, ns string) {
 	t.Helper()
 

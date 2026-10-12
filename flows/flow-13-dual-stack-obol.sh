@@ -100,8 +100,8 @@ fi
 export FLOW11_ARTIFACT_DIR="$FLOW13_ARTIFACT_DIR"
 export BASE_SEPOLIA_RPC="$ANVIL_RPC_HOST"
 
-# Initial Hermes defaults; detect_buyer_runtime overwrites these once Bob's
-# cluster is up and we know whether OpenClaw or Hermes was deployed.
+# Hermes defaults; detect_buyer_runtime re-exports the same values once
+# Bob's cluster is up.
 BOB_AGENT_NS="hermes-obol-agent"
 BOB_AGENT_DEPLOY="hermes"
 BOB_AGENT_CONTAINER="hermes"
@@ -726,7 +726,6 @@ step "Bob: locate remote-signer wallet address"
 BOB_SIGNER_ADDR=""
 for candidate_path in \
     "$BOB_DIR/config/applications/$BOB_AGENT_RUNTIME/obol-agent/wallet.json" \
-    "$BOB_DIR/config/applications/openclaw/obol-agent/wallet.json" \
     "$BOB_DIR/config/applications/hermes/obol-agent/wallet.json"; do
     if [ -f "$candidate_path" ]; then
         BOB_SIGNER_ADDR=$(python3 -c "

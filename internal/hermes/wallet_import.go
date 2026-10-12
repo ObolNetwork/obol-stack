@@ -38,7 +38,7 @@ var (
 )
 
 // ImportPrivateKeyWalletCmd imports an existing private key as the
-// remote-signer wallet for a Hermes instance. Mirror of the OpenClaw path.
+// remote-signer wallet for a Hermes instance.
 func ImportPrivateKeyWalletCmd(cfg *config.Config, id string, opts ImportPrivateKeyWalletOptions, u *ui.UI) error {
 	raw, err := os.ReadFile(opts.PrivateKeyFile)
 	if err != nil {

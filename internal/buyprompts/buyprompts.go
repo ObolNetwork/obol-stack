@@ -25,7 +25,7 @@ const DefaultTaskExample = "Summarise the README and list the top 3 risks."
 // Prompt keys published in the catalog `buy.prompts` map. Stable API for
 // storefront and downstream consumers.
 const (
-	// PromptObolAgent is pasted into an Obol Stack agent (Hermes/OpenClaw)
+	// PromptObolAgent is pasted into an Obol Stack agent (Hermes)
 	// that has the buy-x402 skill.
 	PromptObolAgent = "obol-agent"
 	// PromptGenericLLM is pasted into any other AI agent (Claude, ChatGPT,

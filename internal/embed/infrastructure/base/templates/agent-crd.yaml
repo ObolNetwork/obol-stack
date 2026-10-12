@@ -39,8 +39,8 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          Agent is the declarative spec for an Obol Stack agent (Hermes today,
-          OpenClaw later). Decouples agent lifecycle from selling: `obol sell
+          Agent is the declarative spec for an Obol Stack agent (Hermes).
+          Decouples agent lifecycle from selling: `obol sell
           agent <name>` references an existing Agent rather than provisioning
           one inline. Internal manager agents with RBAC can also create Agent
           resources to spawn sub-agents.
@@ -156,7 +156,7 @@ spec:
                 type: string
               runtime:
                 default: hermes
-                description: Agent runtime (only hermes today; openclaw planned).
+                description: Agent runtime (only hermes).
                 enum:
                 - hermes
                 type: string

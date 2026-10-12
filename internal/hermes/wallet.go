@@ -119,9 +119,7 @@ func ReadWalletMetadata(deploymentDir string) (*WalletInfo, error) {
 
 // applyWalletMetadataConfigMap creates or updates a wallet-metadata ConfigMap
 // in the instance namespace. The frontend reads this to display wallet
-// addresses on the agent card. Mirrors the OpenClaw helper at
-// internal/openclaw/wallet.go so the frontend's getWalletMetadata works
-// identically for either runtime. Must be called after helmfile sync (the
+// addresses on the agent card. Must be called after helmfile sync (the
 // namespace must exist).
 func applyWalletMetadataConfigMap(cfg *config.Config, id, deploymentDir string) {
 	wallet, err := ReadWalletMetadata(deploymentDir)

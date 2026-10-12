@@ -140,7 +140,7 @@ func TestUnknownCommand_ExitsWithUsageError(t *testing.T) {
 	for _, args := range [][]string{
 		{"obol", "stak"},
 		{"obol", "stack", "bogus"},
-		{"obol", "openclaw", "skills", "nope"},
+		{"obol", "agent", "wallet", "nope"},
 	} {
 		root := newRootCommand(newTestConfig(t))
 		root.Writer = &bytes.Buffer{}
@@ -167,9 +167,6 @@ func TestPassthroughHelp_NoCluster(t *testing.T) {
 	}{
 		{[]string{"obol", "hermes", "--help"}, "obol hermes -- --help"},
 		{[]string{"obol", "hermes", "-h"}, "native Hermes CLI"},
-		{[]string{"obol", "openclaw", "cli", "--help"}, "obol openclaw cli -- --help"},
-		{[]string{"obol", "openclaw", "skills", "add", "--help"}, "<package-or-path>"},
-		{[]string{"obol", "openclaw", "skills", "remove", "-h"}, "<skill-name>"},
 		{[]string{"obol", "completion", "--help"}, "shell completion"},
 	} {
 		root := newRootCommand(newTestConfig(t))

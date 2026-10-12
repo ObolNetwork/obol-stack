@@ -29,6 +29,10 @@ func RestorePersistentResources(cfg *config.Config, u *ui.UI) error {
 
 	switch st.Management() {
 	case tunnelManagementLocal:
+		u.Warn("This tunnel was created with 'obol tunnel login', which was removed in v0.16. It keeps")
+		u.Warn("  running, but its hostnames can't be changed. Move it to a connector token from the")
+		u.Warn("  Cloudflare dashboard: obol tunnel setup <connector-token> --hostname " + st.Hostname)
+
 		return restoreLocalManagedResources(cfg, u, kubeconfigPath, st)
 	case tunnelManagementRemote:
 		return restoreRemoteManagedResources(cfg, u, kubeconfigPath, st)
@@ -39,7 +43,7 @@ func RestorePersistentResources(cfg *config.Config, u *ui.UI) error {
 
 func restoreLocalManagedResources(cfg *config.Config, u *ui.UI, kubeconfigPath string, st *tunnelState) error {
 	if st.TunnelID == "" {
-		return errors.New("persistent local tunnel is missing tunnel_id; rerun 'obol tunnel setup --management local --hostname <host>'")
+		return errLocalManagedNoChanges
 	}
 
 	cloudflaredDir := defaultCloudflaredDir()

@@ -14,7 +14,7 @@ Foreground surface:
 
 Background surface:
 - `buy.py process --all` is the maintenance reconcile loop intended for Hermes
-  cron jobs or OpenClaw heartbeat automation
+  cron jobs
 
 ## Example
 
@@ -136,5 +136,5 @@ status:
 - A draining purchase still owns `paid/<model>`; a second purchase for that
   model remains rejected until the original CR is fully gone.
 - Manual `refill` / `remove` commands are still not first-class flows.
-- For Hermes/OpenClaw integration, schedule `process --all`; do not model that
+- For Hermes integration, schedule `process --all`; do not model that
   maintenance loop as a foreground user action.

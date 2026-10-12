@@ -1,3 +1,0 @@
-# renovate: datasource=github-releases depName=openclaw/openclaw
-# Pins the upstream OpenClaw version to build and publish.
-v2026.4.21

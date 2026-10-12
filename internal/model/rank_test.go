@@ -79,7 +79,7 @@ func TestRank_AllEmbeddingModelsPreserveOrder(t *testing.T) {
 }
 
 // TestRank_PreservesProviderPrefixOnOutput documents the contract relied on by
-// internal/hermes and internal/openclaw: Rank returns input strings unchanged.
+// internal/hermes: Rank returns input strings unchanged.
 // The agent round-trips the returned primary back to LiteLLM as the `model`
 // field on chat-completions; stripping here would mismatch LiteLLM model_name
 // and surface as 400 "no healthy deployments".

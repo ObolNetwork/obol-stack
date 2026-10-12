@@ -17,7 +17,7 @@ import (
 // does not become the default chat model when another option exists.
 //
 // The returned strings are the original inputs. Do not strip provider prefixes
-// or normalize names here; Hermes/OpenClaw round-trip the returned primary back
+// or normalize names here; Hermes round-trips the returned primary back
 // to LiteLLM as the chat-completions model field.
 func Rank(models []string) (primary string, fallbacks []string) {
 	if len(models) == 0 {

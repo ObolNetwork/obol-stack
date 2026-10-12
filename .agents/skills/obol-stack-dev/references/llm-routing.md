@@ -25,7 +25,6 @@ Only routes published through Traefik are reachable at `http://obol.stack:8080/`
 | Traefik ingress (frontend, eRPC, x402 routes) | `http://obol.stack:8080/...` |
 | LiteLLM | `obol kubectl port-forward svc/litellm 14000:4000 -n llm` then `http://127.0.0.1:14000` |
 | x402-buyer (own Deployment + Service) | `obol kubectl port-forward -n llm svc/x402-buyer 18402:8402` then `http://127.0.0.1:18402` |
-| OpenClaw instance | `obol kubectl port-forward -n openclaw-<id> svc/openclaw 18789:18789` |
 
 `http://obol.stack:8080/v1/...` does **not** hit LiteLLM — Traefik has no `/v1` route and returns the frontend 404. The `x402-buyer` binary is **distroless** — no `wget`/`curl`/shell. Always port-forward, never `kubectl exec`.
 
@@ -81,7 +80,7 @@ paid/* → openai/* → http://x402-buyer.llm.svc.cluster.local:8402/v1
 
 ### Buyer flow
 
-`buy.py` (in the agent pod, `${OBOL_SKILLS_DIR:-/data/.openclaw/skills}/buy-x402/scripts/buy.py`) creates a `PurchaseRequest` CR with pre-signed ERC-3009 (USDC) or Permit2 (OBOL) auths. The serviceoffer-controller reconciles the CR, writes per-upstream buyer config/auth files into the buyer ConfigMaps, and hot-adds the `paid/<model>` LiteLLM route. The buyer spends one auth per paid request.
+`buy.py` (in the agent pod, `${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py`) creates a `PurchaseRequest` CR with pre-signed ERC-3009 (USDC) or Permit2 (OBOL) auths. The serviceoffer-controller reconciles the CR, writes per-upstream buyer config/auth files into the buyer ConfigMaps, and hot-adds the `paid/<model>` LiteLLM route. The buyer spends one auth per paid request.
 
 ```
 probe <endpoint-url> [--model <id>]

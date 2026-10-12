@@ -23,58 +23,29 @@ go build -o .workspace/bin/obol ./cmd/obol      # rebuild every time
 ## Common Commands
 
 ```bash
-# All integration tests in a package
-go test -tags integration -v -timeout 15m ./internal/openclaw/
+# All Go integration tests (they t.Skip() when the cluster/prereqs are missing)
+go test -tags integration -v -timeout 15m ./internal/stack/ ./internal/x402/ ./internal/agentcrd/
 
 # A single test
-go test -tags integration -v -run 'TestIntegration_OllamaInference' \
-  -timeout 10m ./internal/openclaw/
-
-# Only inference (all 3 providers)
-go test -tags integration -v -run 'TestIntegration_(Ollama|Anthropic|OpenAI)Inference' \
-  -timeout 15m ./internal/openclaw/
-
-# Validated paid commerce loop (requires qwen3.5:9b on host Ollama).
-# Does NOT replace release-gate flows 11/13/14 with OBOL_LLM_ENDPOINT.
-go test -tags integration -v \
-  -run TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance \
-  -timeout 30m ./internal/openclaw/
+go test -tags integration -v -run 'TestIntegration_AgentContract_HonorsRenderedConstraints' -timeout 15m ./internal/agentcrd/
 ```
 
-## Key Test Matrix
-
-| Test | Provider | Model | What it covers |
-|---|---|---|---|
-| `TestIntegration_OllamaInference` | Ollama (local) | first available | scaffold → sync → token → inference |
-| `TestIntegration_AnthropicInference` | Anthropic | `claude-sonnet-4-5-20250929` | model setup → scaffold → sync → token → inference |
-| `TestIntegration_OpenAIInference` | OpenAI | `gpt-4o-mini` | model setup → scaffold → sync → token → inference |
-| `TestIntegration_MultiInstance` | Ollama | first available | 3 instances side-by-side |
-| `TestIntegration_SellBuyRoundtrip_LiteLLM` | LiteLLM + Ollama + x402 | `qwen3.5:9b` | sell → 402 → pay → inference → settlement |
-| `TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance` | LiteLLM + x402-buyer + ERC-8004 | `qwen3.5:9b` | register → discover → buy → `paid/<model>` → quota decrement → USDC movement |
+The paid commerce loop (sell → discover → buy → `paid/<model>` → settlement) is
+covered by the release-gate flows 11/13/14, not by Go tests: the old
+`internal/openclaw` suite ran its buyer inside an OpenClaw pod and was removed
+with OpenClaw in v0.16.
 
 ## Timing Budgets
 
 | Operation | Typical | Timeout |
 |---|---|---|
-| `obol openclaw sync` (first deploy) | 5–15 s | 60 s |
-| `obol openclaw sync` (re-deploy, no changes) | 2–5 s | 60 s |
+| `obol agent sync` (first deploy) | 5–15 s | 60 s |
+| `obol agent sync` (re-deploy, no changes) | 2–5 s | 60 s |
 | Pod startup | 10–60 s | 180 s (`obol kubectl wait`) |
 | Port-forward ready | 1–10 s | 30 s |
 | Chat completion (Ollama) | 1–30 s | 90 s |
 | Chat completion (cloud) | 2–10 s | 90 s |
-| `obol openclaw delete` (ns deletion) | 5–30 s | 60 s |
-| Full single-provider test | 25–60 s | – |
-| Full suite (3 providers) | 2–3 min | 15 min |
-
-## Cleanup Between Runs
-
-```bash
-obol kubectl delete ns \
-  openclaw-test-ollama openclaw-test-anthropic openclaw-test-openai \
-  --ignore-not-found
-```
-
-Wait for namespace deletion to complete before re-running. `waitForPodReady` must run **after** `helmfile sync` completes, not concurrently.
+| `obol agent delete` (ns deletion) | 5–30 s | 60 s |
 
 ## Release-Gate Boundary
 

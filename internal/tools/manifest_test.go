@@ -72,7 +72,7 @@ func TestParseManifestRejectsBadEntries(t *testing.T) {
 const sha64 = "0000000000000000000000000000000000000000000000000000000000000000"
 
 // TestManifestMatchesObolup keeps manifest.yaml and the obolup.sh pins in
-// lockstep (same spirit as TestOpenClawVersionConsistency). If this fails,
+// lockstep. If this fails,
 // bump the manifest version AND all four sha256 values in the same commit.
 func TestManifestMatchesObolup(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)

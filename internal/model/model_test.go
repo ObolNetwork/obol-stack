@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -439,56 +437,6 @@ func TestProviderFromModelName(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestLoadDotEnv(t *testing.T) {
-	t.Run("happy path", func(t *testing.T) {
-		dir := t.TempDir()
-		path := filepath.Join(dir, ".env")
-		os.WriteFile(path, []byte("FOO=bar\nBAZ=qux\n"), 0o644)
-
-		m := LoadDotEnv(path)
-		if m["FOO"] != "bar" {
-			t.Errorf("FOO = %q, want bar", m["FOO"])
-		}
-
-		if m["BAZ"] != "qux" {
-			t.Errorf("BAZ = %q, want qux", m["BAZ"])
-		}
-	})
-
-	t.Run("missing file", func(t *testing.T) {
-		m := LoadDotEnv("/nonexistent/.env")
-		if len(m) != 0 {
-			t.Errorf("expected empty map, got %v", m)
-		}
-	})
-
-	t.Run("comments and blanks", func(t *testing.T) {
-		dir := t.TempDir()
-		path := filepath.Join(dir, ".env")
-		os.WriteFile(path, []byte("# comment\n\nKEY=val\n"), 0o644)
-
-		m := LoadDotEnv(path)
-		if len(m) != 1 || m["KEY"] != "val" {
-			t.Errorf("expected {KEY:val}, got %v", m)
-		}
-	})
-
-	t.Run("quoted values", func(t *testing.T) {
-		dir := t.TempDir()
-		path := filepath.Join(dir, ".env")
-		os.WriteFile(path, []byte(`KEY="hello world"`+"\n"+`KEY2='single'`+"\n"), 0o644)
-
-		m := LoadDotEnv(path)
-		if m["KEY"] != "hello world" {
-			t.Errorf("KEY = %q, want 'hello world'", m["KEY"])
-		}
-
-		if m["KEY2"] != "single" {
-			t.Errorf("KEY2 = %q, want 'single'", m["KEY2"])
-		}
-	})
 }
 
 func TestValidateCustomEndpoint(t *testing.T) {

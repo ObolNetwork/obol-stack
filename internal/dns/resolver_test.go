@@ -78,7 +78,7 @@ func TestHasNMDnsmasqConfig(t *testing.T) {
 }
 
 // EnsureHostsEntries replaces the managed block wholesale, and most callers
-// (internal/hermes, internal/openclaw) only know about agent hostnames. If the
+// (internal/hermes) only know about agent hostnames. If the
 // storefront preview origin were merely appended by one caller, whichever call
 // ran last would silently drop it — which is exactly what happened on a real
 // stack: `obol stack up` added it, then the agent-resume path overwrote the

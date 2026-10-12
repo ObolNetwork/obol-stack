@@ -15,11 +15,6 @@ import (
 // AddHostnameOptions configures `obol tunnel hostname add`.
 type AddHostnameOptions struct {
 	Hostname string
-
-	// OverwriteDNS forwards --overwrite-dns to `cloudflared tunnel route dns`
-	// (local-managed only) so an existing A/AAAA/CNAME at the hostname is
-	// replaced instead of failing with Cloudflare API error 1003.
-	OverwriteDNS bool
 }
 
 // RemoveHostnameOptions configures `obol tunnel hostname remove`.
@@ -128,9 +123,7 @@ func AddHostname(cfg *config.Config, u *ui.UI, opts AddHostnameOptions) (*Hostna
 
 	switch st.Management() {
 	case tunnelManagementLocal:
-		if err := addHostnameLocal(cfg, u, kubeconfigPath, st, hostname, updated, opts.OverwriteDNS); err != nil {
-			return nil, err
-		}
+		return nil, errLocalManagedNoChanges
 	case tunnelManagementRemote:
 		printRemoteAddHostnameSteps(u, hostname)
 	default:
@@ -160,48 +153,6 @@ func AddHostname(cfg *config.Config, u *ui.UI, opts AddHostnameOptions) (*Hostna
 		ManagementMode: st.Management(),
 		Hostnames:      hostnameInfos(updated),
 	}, nil
-}
-
-func addHostnameLocal(cfg *config.Config, u *ui.UI, kubeconfigPath string, st *tunnelState, hostname string, updated []string, overwriteDNS bool) error {
-	if st.TunnelID == "" {
-		return errors.New("local tunnel is missing its tunnel id; re-run 'obol tunnel setup --management local --hostname <host>'")
-	}
-
-	cloudflaredPath, err := exec.LookPath("cloudflared")
-	if err != nil {
-		return errors.New("cloudflared not found in PATH. Install it first (e.g. 'brew install cloudflared' on macOS)")
-	}
-
-	tunnelName := st.TunnelName
-	if strings.TrimSpace(tunnelName) == "" {
-		tunnelName = st.TunnelID // cloudflared accepts the UUID as the tunnel ref
-	}
-
-	u.Infof("Creating DNS route for %s...", hostname)
-	routeArgs := routeDNSArgs(tunnelName, hostname, overwriteDNS)
-	routeOut, err := exec.Command(cloudflaredPath, routeArgs...).CombinedOutput()
-	if err != nil {
-		hint := ""
-		if !overwriteDNS && strings.Contains(string(routeOut), "record with that host already exists") {
-			hint = "\nhint: a record for this hostname already exists. Re-run with --overwrite-dns to replace it."
-		}
-		return fmt.Errorf("cloudflared tunnel route dns failed: %w\n%s%s", err, strings.TrimSpace(string(routeOut)), hint)
-	}
-	if err := verifyRoutedHostname(string(routeOut), hostname); err != nil {
-		return err
-	}
-
-	// Re-render the local config ConfigMap with one ingress rule per hostname,
-	// then reload the connector (helm upgrade alone does not roll the pods on a
-	// ConfigMap-only change, so the connector would keep its old ingress).
-	cfgYAML := buildLocalManagedConfigYAML(updated, st.TunnelID)
-	if err := kubectlApply(cfg, u, kubeconfigPath, cfgYAML); err != nil {
-		return err
-	}
-	if err := helmUpgradeCloudflared(cfg, u, kubeconfigPath); err != nil {
-		return err
-	}
-	return restartCloudflaredConnector(cfg, u, kubeconfigPath)
 }
 
 // RemoveHostname removes a public hostname from a persistent tunnel while every

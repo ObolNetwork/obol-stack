@@ -119,17 +119,17 @@ go build -o .workspace/bin/obol ./cmd/obol
 Flags must come **before** positional arguments:
 
 ```bash
-obol openclaw delete --force my-instance        # CORRECT
-obol openclaw delete my-instance --force        # WRONG — --force is parsed as arg
+obol agent delete --force my-instance        # CORRECT
+obol agent delete my-instance --force        # WRONG — --force is parsed as arg
 ```
 
 ### Pod label selector mismatch
 
-Helm sets `app.kubernetes.io/instance` to the **release name** (`openclaw`, `hermes`), not `<release>-<id>`. Namespace provides instance isolation.
+Helm sets `app.kubernetes.io/instance` to the **release name** (`hermes`), not `<release>-<id>`. Namespace provides instance isolation.
 
 ```bash
-obol kubectl wait -n openclaw-test-ollama -l app.kubernetes.io/instance=openclaw       # CORRECT
-obol kubectl wait -n openclaw-test-ollama -l app.kubernetes.io/instance=openclaw-test  # WRONG
+obol kubectl wait -n hermes-research -l app.kubernetes.io/instance=hermes           # CORRECT
+obol kubectl wait -n hermes-research -l app.kubernetes.io/instance=hermes-research  # WRONG
 ```
 
 ### Port-forward EOF on first request

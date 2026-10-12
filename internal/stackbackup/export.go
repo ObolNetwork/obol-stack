@@ -12,7 +12,6 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
-	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/ObolNetwork/obol-stack/internal/walletbackup"
@@ -47,9 +46,8 @@ func Export(cfg *config.Config, opts ExportOptions, u *ui.UI) (string, error) {
 	// Resolve the wallet passphrase up front so the interactive prompt does
 	// not interrupt long-running copy work.
 	hermesWallets := hermes.FindInstancesWithWallets(cfg)
-	openclawWallets := openclaw.FindInstancesWithWallets(cfg)
 	passphrase := opts.Passphrase
-	if len(hermesWallets)+len(openclawWallets) > 0 && !opts.HasPassFlag {
+	if len(hermesWallets) > 0 && !opts.HasPassFlag {
 		var err error
 		passphrase, err = walletbackup.PromptPassphrase(opts.Passphrase, opts.HasPassFlag, u)
 		if err != nil {
@@ -84,7 +82,7 @@ func Export(cfg *config.Config, opts ExportOptions, u *ui.UI) (string, error) {
 	}
 
 	// Component: wallets (portable, individually encryptable).
-	walletNotes := exportWallets(cfg, filepath.Join(staging, "wallets"), hermesWallets, openclawWallets, passphrase, u)
+	walletNotes := exportWallets(cfg, filepath.Join(staging, "wallets"), hermesWallets, passphrase, u)
 	manifest.Components = append(manifest.Components, Component{
 		Name:     "wallets",
 		Included: len(walletNotes) > 0,
@@ -206,8 +204,8 @@ func warnAll(u *ui.UI, warns []string) {
 // exportWallets writes walletbackup-format files for every instance with a
 // wallet. Failures are recorded as notes, not fatal: the same keys also ride
 // along inside the data/ component's keystore dirs.
-func exportWallets(cfg *config.Config, destDir string, hermesIDs, openclawIDs []string, passphrase string, u *ui.UI) []string {
-	if len(hermesIDs)+len(openclawIDs) == 0 {
+func exportWallets(cfg *config.Config, destDir string, hermesIDs []string, passphrase string, u *ui.UI) []string {
+	if len(hermesIDs) == 0 {
 		return nil
 	}
 	if err := os.MkdirAll(destDir, 0o700); err != nil {
@@ -225,13 +223,6 @@ func exportWallets(cfg *config.Config, destDir string, hermesIDs, openclawIDs []
 			Output: out, Passphrase: passphrase, HasPassFlag: true,
 		}, u)
 		notes = append(notes, walletNote("hermes", id, err))
-	}
-	for _, id := range openclawIDs {
-		out := filepath.Join(destDir, fmt.Sprintf("openclaw-%s.%s", id, ext))
-		err := openclaw.BackupWalletCmd(cfg, id, openclaw.BackupWalletOptions{
-			Output: out, Passphrase: passphrase, HasPassFlag: true,
-		}, u)
-		notes = append(notes, walletNote("openclaw", id, err))
 	}
 	return notes
 }

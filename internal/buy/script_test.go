@@ -25,16 +25,6 @@ func TestBuyPyCommandRuntimePaths(t *testing.T) {
 				"--json",
 			},
 		},
-		{
-			name:    "openclaw",
-			runtime: agentruntime.OpenClaw,
-			want: []string{
-				"python3",
-				"/data/.openclaw/skills/buy-x402/scripts/buy.py",
-				"list",
-				"--json",
-			},
-		},
 	}
 
 	for _, tc := range tests {

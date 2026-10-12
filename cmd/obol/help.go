@@ -22,7 +22,7 @@ const (
 	catModels   = "Models"
 	catNetworks = "Networks"
 	catApps     = "Apps"
-	catTunnel   = "Tunnel & domains"
+	catTunnel   = "Tunnel"
 	catTools    = "Kubernetes tools (passthrough, auto KUBECONFIG)"
 	catOther    = "Other"
 )
@@ -36,14 +36,12 @@ var topLevelCategories = map[string]string{
 	"agent":    catAgents,
 	"wallet":   catAgents,
 	"hermes":   catAgents,
-	"openclaw": catAgents,
 	"sell":     catCommerce,
 	"buy":      catCommerce,
 	"model":    catModels,
 	"network":  catNetworks,
 	"app":      catApps,
 	"tunnel":   catTunnel,
-	"domain":   catTunnel,
 	"kubectl":  catTools,
 	"helm":     catTools,
 	"helmfile": catTools,

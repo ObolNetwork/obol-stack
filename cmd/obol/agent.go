@@ -16,7 +16,6 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
-	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/stackbackup"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/urfave/cli/v3"
@@ -64,7 +63,7 @@ func agentCommand(cfg *config.Config) *cli.Command {
 seeds SOUL.md + the per-agent skills dir on the host.
 
 Without a positional name, falls back to the legacy host-rendered
-Hermes/OpenClaw onboard flow used by the master agent.`,
+Hermes onboard flow used by the master agent.`,
 				Flags: []cli.Flag{
 					agentRuntimeFlag("hermes"),
 					&cli.StringFlag{
@@ -111,7 +110,7 @@ Hermes/OpenClaw onboard flow used by the master agent.`,
 						return agentNewCRD(cfg, cmd, u)
 					}
 
-					// Legacy onboard path (master agent, additional Hermes/OpenClaw).
+					// Legacy onboard path (master agent, additional Hermes).
 					runtime, err := parseAgentRuntime(cmd.String("runtime"))
 					if err != nil {
 						return err
@@ -123,13 +122,6 @@ Hermes/OpenClaw onboard flow used by the master agent.`,
 							ID:    cmd.String("id"),
 							Force: cmd.Bool("force"),
 							Sync:  !cmd.Bool("no-sync"),
-						}, u)
-					case agentruntime.OpenClaw:
-						return openclaw.Onboard(cfg, openclaw.OnboardOptions{
-							ID:          cmd.String("id"),
-							Force:       cmd.Bool("force"),
-							Sync:        !cmd.Bool("no-sync"),
-							Interactive: u.IsTTY() && !u.IsJSON(),
 						}, u)
 					default:
 						return fmt.Errorf("unsupported runtime: %s", runtime)
@@ -563,12 +555,6 @@ func agentWalletCommand(cfg *config.Config) *cli.Command {
 							Passphrase:  cmd.String("passphrase"),
 							HasPassFlag: cmd.IsSet("passphrase"),
 						}, getUI(cmd))
-					case agentruntime.OpenClaw:
-						return openclaw.BackupWalletCmd(cfg, target.ID, openclaw.BackupWalletOptions{
-							Output:      cmd.String("file"),
-							Passphrase:  cmd.String("passphrase"),
-							HasPassFlag: cmd.IsSet("passphrase"),
-						}, getUI(cmd))
 					default:
 						return fmt.Errorf("unsupported runtime %q", target.Runtime)
 					}
@@ -612,13 +598,6 @@ func agentWalletCommand(cfg *config.Config) *cli.Command {
 							Force:        cmd.Bool("force"),
 							ApplyCluster: true,
 						}, getUI(cmd))
-					case agentruntime.OpenClaw:
-						return openclaw.RestoreWalletCmd(cfg, target.ID, openclaw.RestoreWalletOptions{
-							Input:       cmd.String("input"),
-							Passphrase:  cmd.String("passphrase"),
-							HasPassFlag: cmd.IsSet("passphrase"),
-							Force:       cmd.Bool("force"),
-						}, getUI(cmd))
 					default:
 						return fmt.Errorf("unsupported runtime %q", target.Runtime)
 					}
@@ -630,10 +609,9 @@ func agentWalletCommand(cfg *config.Config) *cli.Command {
 
 func agentRuntimeFlag(value string) cli.Flag {
 	return &cli.StringFlag{
-		Name:   "runtime",
-		Usage:  "Agent runtime: hermes, openclaw (deprecated), or all",
-		Value:  value,
-		Action: warnIfOpenClawRuntime,
+		Name:  "runtime",
+		Usage: "Agent runtime: hermes or all",
+		Value: value,
 	}
 }
 
@@ -642,9 +620,10 @@ func parseAgentRuntime(value string) (agentruntime.Runtime, error) {
 	case "hermes", "herme":
 		return agentruntime.Hermes, nil
 	case "openclaw":
-		return agentruntime.OpenClaw, nil
+		return "", errors.New("OpenClaw was removed in v0.16; Hermes is the only runtime. " +
+			"To move an OpenClaw wallet into Hermes, back it up with obol v0.15, then run 'obol agent wallet restore --input <file> --force'")
 	default:
-		return "", fmt.Errorf("unsupported agent runtime %q (expected hermes or openclaw)", value)
+		return "", fmt.Errorf("unsupported agent runtime %q (expected hermes)", value)
 	}
 }
 
@@ -666,32 +645,19 @@ func resolveAgentTarget(cfg *config.Config, runtimeValue string, args []string) 
 }
 
 func resolveAnyAgentTarget(cfg *config.Config, args []string) (agentTarget, error) {
-	if len(args) > 0 {
-		var matches []agentTarget
-		for _, runtime := range []agentruntime.Runtime{agentruntime.Hermes, agentruntime.OpenClaw} {
-			ids, err := agentruntime.ListInstanceIDs(cfg, runtime)
-			if err != nil {
-				return agentTarget{}, err
-			}
-			if containsString(ids, args[0]) {
-				matches = append(matches, agentTarget{Runtime: runtime, ID: args[0]})
-			}
-		}
-
-		switch len(matches) {
-		case 1:
-			return matches[0], nil
-		case 0:
-			return agentTarget{}, fmt.Errorf("agent instance %q not found", args[0])
-		default:
-			return agentTarget{}, fmt.Errorf("agent instance %q exists in multiple runtimes; specify --runtime hermes or --runtime openclaw", args[0])
-		}
-	}
-
 	hermesIDs, err := agentruntime.ListInstanceIDs(cfg, agentruntime.Hermes)
 	if err != nil {
 		return agentTarget{}, err
 	}
+
+	if len(args) > 0 {
+		if containsString(hermesIDs, args[0]) {
+			return agentTarget{Runtime: agentruntime.Hermes, ID: args[0]}, nil
+		}
+
+		return agentTarget{}, fmt.Errorf("agent instance %q not found", args[0])
+	}
+
 	if containsString(hermesIDs, agentruntime.DefaultInstanceID) {
 		return agentTarget{Runtime: agentruntime.Hermes, ID: agentruntime.DefaultInstanceID}, nil
 	}
@@ -699,13 +665,6 @@ func resolveAnyAgentTarget(cfg *config.Config, args []string) (agentTarget, erro
 	var all []agentTarget
 	for _, id := range hermesIDs {
 		all = append(all, agentTarget{Runtime: agentruntime.Hermes, ID: id})
-	}
-	openclawIDs, err := agentruntime.ListInstanceIDs(cfg, agentruntime.OpenClaw)
-	if err != nil {
-		return agentTarget{}, err
-	}
-	for _, id := range openclawIDs {
-		all = append(all, agentTarget{Runtime: agentruntime.OpenClaw, ID: id})
 	}
 
 	switch len(all) {
@@ -747,8 +706,6 @@ func syncAgentTarget(cfg *config.Config, target agentTarget, u *ui.UI) error {
 	switch target.Runtime {
 	case agentruntime.Hermes:
 		return hermes.Sync(cfg, target.ID, u)
-	case agentruntime.OpenClaw:
-		return openclaw.Sync(cfg, target.ID, u)
 	default:
 		return fmt.Errorf("unsupported runtime: %s", target.Runtime)
 	}
@@ -758,8 +715,6 @@ func setupAgentTarget(cfg *config.Config, target agentTarget, u *ui.UI) error {
 	switch target.Runtime {
 	case agentruntime.Hermes:
 		return hermes.Setup(cfg, target.ID, hermes.SetupOptions{}, u)
-	case agentruntime.OpenClaw:
-		return openclaw.Setup(cfg, target.ID, openclaw.SetupOptions{}, u)
 	default:
 		return fmt.Errorf("unsupported runtime: %s", target.Runtime)
 	}
@@ -769,8 +724,6 @@ func printAgentToken(cfg *config.Config, target agentTarget, u *ui.UI) error {
 	switch target.Runtime {
 	case agentruntime.Hermes:
 		return hermes.Token(cfg, target.ID, u)
-	case agentruntime.OpenClaw:
-		return openclaw.Token(cfg, target.ID, u)
 	default:
 		return fmt.Errorf("unsupported runtime: %s", target.Runtime)
 	}
@@ -780,8 +733,6 @@ func regenerateAgentToken(cfg *config.Config, target agentTarget, u *ui.UI) (str
 	switch target.Runtime {
 	case agentruntime.Hermes:
 		return hermes.RegenerateToken(cfg, target.ID, u)
-	case agentruntime.OpenClaw:
-		return openclaw.RegenerateToken(cfg, target.ID, u)
 	default:
 		return "", fmt.Errorf("unsupported runtime: %s", target.Runtime)
 	}
@@ -791,8 +742,6 @@ func deleteAgentTarget(cfg *config.Config, target agentTarget, force bool, u *ui
 	switch target.Runtime {
 	case agentruntime.Hermes:
 		return hermes.Delete(cfg, target.ID, force, u)
-	case agentruntime.OpenClaw:
-		return openclaw.Delete(cfg, target.ID, force, u)
 	default:
 		return fmt.Errorf("unsupported runtime: %s", target.Runtime)
 	}
@@ -805,13 +754,6 @@ func printAgentWalletAddress(cfg *config.Config, target agentTarget, u *ui.UI) e
 	switch target.Runtime {
 	case agentruntime.Hermes:
 		wallet, walletErr := hermes.ReadWalletMetadata(hermes.DeploymentPath(cfg, target.ID))
-		if walletErr != nil {
-			err = walletErr
-		} else {
-			address = wallet.Address
-		}
-	case agentruntime.OpenClaw:
-		wallet, walletErr := openclaw.ReadWalletMetadata(openclaw.DeploymentPath(cfg, target.ID))
 		if walletErr != nil {
 			err = walletErr
 		} else {
@@ -894,10 +836,10 @@ func isCRDAgent(cfg *config.Config, name string) bool {
 }
 
 // hasLegacyInstance reports whether the name matches a host-managed
-// Hermes/OpenClaw instance. Used to disambiguate `obol agent delete <name>`
+// Hermes instance. Used to disambiguate `obol agent delete <name>`
 // when both forms could conceivably be present.
 func hasLegacyInstance(cfg *config.Config, name string) bool {
-	for _, runtime := range []agentruntime.Runtime{agentruntime.Hermes, agentruntime.OpenClaw} {
+	for _, runtime := range []agentruntime.Runtime{agentruntime.Hermes} {
 		ids, err := agentruntime.ListInstanceIDs(cfg, runtime)
 		if err != nil {
 			continue
@@ -1109,18 +1051,13 @@ func listAgentWallets(cfg *config.Config, runtimeValue string, args []string, u 
 		return listWalletsForRuntime(cfg, target.Runtime, target.ID, u)
 	}
 
-	if err := listWalletsForRuntime(cfg, agentruntime.Hermes, "", u); err != nil {
-		return err
-	}
-	return listWalletsForRuntime(cfg, agentruntime.OpenClaw, "", u)
+	return listWalletsForRuntime(cfg, agentruntime.Hermes, "", u)
 }
 
 func listWalletsForRuntime(cfg *config.Config, runtime agentruntime.Runtime, id string, u *ui.UI) error {
 	switch runtime {
 	case agentruntime.Hermes:
 		return hermes.ListWallets(cfg, id, u)
-	case agentruntime.OpenClaw:
-		return openclaw.ListWallets(cfg, id, u)
 	default:
 		return fmt.Errorf("unsupported runtime: %s", runtime)
 	}
@@ -1129,7 +1066,7 @@ func listWalletsForRuntime(cfg *config.Config, runtime agentruntime.Runtime, id 
 func listRuntimes(runtimeValue string) ([]agentruntime.Runtime, error) {
 	switch strings.ToLower(strings.TrimSpace(runtimeValue)) {
 	case "", "all":
-		return []agentruntime.Runtime{agentruntime.Hermes, agentruntime.OpenClaw}, nil
+		return []agentruntime.Runtime{agentruntime.Hermes}, nil
 	default:
 		runtime, err := parseAgentRuntime(runtimeValue)
 		if err != nil {

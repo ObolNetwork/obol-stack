@@ -41,10 +41,6 @@ func removeHeartbeatFile(cfg *config.Config, u *ui.UI) error {
 			runtime: agentruntime.Hermes,
 			path:    filepath.Join(agentruntime.WorkspacePath(cfg, agentruntime.Hermes, DefaultInstanceID), "HEARTBEAT.md"),
 		},
-		{
-			runtime: agentruntime.OpenClaw,
-			path:    filepath.Join(agentruntime.WorkspacePath(cfg, agentruntime.OpenClaw, DefaultInstanceID), "HEARTBEAT.md"),
-		},
 	}
 
 	for _, target := range targets {

@@ -42,7 +42,7 @@ func ListInstanceIDs(cfg *config.Config) ([]string, error) {
 			}
 			// Only include directories that contain a values.yaml — this
 			// distinguishes app deployments from other subsystems (e.g.
-			// openclaw) that share the applications/ parent directory.
+			// hermes) that share the applications/ parent directory.
 			valuesPath := filepath.Join(appsDir, appDir.Name(), deployment.Name(), "values.yaml")
 			if _, err := os.Stat(valuesPath); err != nil {
 				continue

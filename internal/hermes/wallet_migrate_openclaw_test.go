@@ -4,55 +4,55 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/keystore"
-	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/walletbackup"
 )
 
 // TestRestoreWalletCmd_MigratesOpenClawBackup pins the OpenClaw → Hermes
-// migration path advertised by the v0.15 deprecation warning:
+// migration that `obol stack up` still points leftover OpenClaw users at
+// (OpenClaw was removed in v0.16):
 //
-//	obol agent wallet backup --runtime openclaw <id> --file w.json
-//	obol agent wallet restore --runtime hermes --input w.json --force
+//	obol v0.15:  obol agent wallet backup --runtime openclaw <id> --file w.json
+//	obol v0.16+: obol agent wallet restore --input w.json --force
 //
-// An OpenClaw wallet backup must restore into an existing Hermes instance
-// (replacing its wallet) and keep the same address + decryptable keystore.
-// Delete together with internal/openclaw in v0.16.
+// The fixture is built the way v0.15's openclaw.BackupWalletCmd did (same
+// walletbackup.File shape), so the restore must keep the address and a
+// decryptable keystore.
 func TestRestoreWalletCmd_MigratesOpenClawBackup(t *testing.T) {
 	for _, passphrase := range []string{"", "migrate-me"} {
 		cfg, hermesID, hermesWallet := setupHermesBackupInstance(t, agentruntime.DefaultInstanceID)
 
-		// Source: a real OpenClaw instance wallet in the same data dir.
-		const ocID = "legacy-claw"
-		if err := os.MkdirAll(openclaw.DeploymentPath(cfg, ocID), 0o755); err != nil {
-			t.Fatal(err)
-		}
-
-		ocWallet, err := openclaw.GenerateWallet(cfg, ocID, newTestUI())
+		oc, err := keystore.GenerateInMemory()
 		if err != nil {
-			t.Fatalf("openclaw wallet: %v", err)
-		}
-
-		if err := openclaw.WriteWalletMetadata(openclaw.DeploymentPath(cfg, ocID), ocWallet); err != nil {
 			t.Fatal(err)
 		}
 
-		values := "keystorePassword:\n  value: \"" + ocWallet.Password + "\"\n"
-		if err := os.WriteFile(filepath.Join(openclaw.DeploymentPath(cfg, ocID), "values-remote-signer.yaml"), []byte(values), 0o600); err != nil {
+		data, _, err := walletbackup.Encode(&walletbackup.File{
+			Version:  walletbackup.Version,
+			Instance: "legacy-claw",
+			Wallets: []walletbackup.Wallet{{
+				Address:          oc.Address,
+				PublicKey:        oc.PublicKey,
+				KeystoreUUID:     oc.KeystoreUUID,
+				CreatedAt:        time.Now().UTC().Format(time.RFC3339),
+				Keystore:         oc.KeystoreJSON,
+				KeystorePassword: oc.Password,
+			}},
+		}, passphrase)
+		if err != nil {
 			t.Fatal(err)
 		}
 
 		backupPath := filepath.Join(t.TempDir(), "openclaw-wallet.json")
-		if err := openclaw.BackupWalletCmd(cfg, ocID, openclaw.BackupWalletOptions{
-			Output: backupPath, Passphrase: passphrase, HasPassFlag: true,
-		}, newTestUI()); err != nil {
-			t.Fatalf("openclaw backup: %v", err)
+		if err := os.WriteFile(backupPath, data, 0o600); err != nil {
+			t.Fatal(err)
 		}
 
 		// Restoring over the existing Hermes wallet needs --force.
-		opts := RestoreWalletOptions{Input: backupPath, Passphrase: passphrase, HasPassFlag: true}
+		opts := RestoreWalletOptions{Input: backupPath, Passphrase: passphrase, HasPassFlag: true, Force: false, ApplyCluster: false}
 		if err := RestoreWalletCmd(cfg, hermesID, opts, newTestUI()); err == nil {
 			t.Fatal("restore over existing Hermes wallet without --force should fail")
 		}
@@ -69,8 +69,8 @@ func TestRestoreWalletCmd_MigratesOpenClawBackup(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if restored.Address != ocWallet.Address || restored.Address == hermesWallet.Address {
-			t.Fatalf("restored address = %s, want OpenClaw address %s", restored.Address, ocWallet.Address)
+		if restored.Address != oc.Address || restored.Address == hermesWallet.Address {
+			t.Fatalf("restored address = %s, want OpenClaw address %s", restored.Address, oc.Address)
 		}
 
 		password, err := walletbackup.ReadKeystorePassword(deployDir)

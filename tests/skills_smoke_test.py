@@ -1,11 +1,8 @@
 #!/usr/bin/env python3
-"""Smoke tests for OpenClaw skills (ethereum-networks, obol-stack, distributed-validators).
+"""Smoke tests for the embedded Hermes skills (ethereum-networks, obol-stack, distributed-validators).
 
-Run inside the OpenClaw pod:
-    obol kubectl exec -i -n openclaw-default deploy/openclaw -c openclaw -- python3 - < tests/skills_smoke_test.py
-
-Or from outside:
-    obol kubectl exec -i -n openclaw-<id> deploy/openclaw -c openclaw -- python3 - < tests/skills_smoke_test.py
+Run inside the default Hermes agent pod:
+    obol kubectl exec -i -n hermes-obol-agent deploy/hermes -c hermes -- /opt/hermes/.venv/bin/python3 - < tests/skills_smoke_test.py
 """
 
 import json
@@ -15,7 +12,7 @@ import subprocess
 import sys
 import urllib.request
 
-SKILLS_DIR = "/data/.openclaw/skills"
+SKILLS_DIR = "/data/.hermes/obol-skills"
 RPC = os.path.join(SKILLS_DIR, "ethereum-networks", "scripts", "rpc.py")
 KUBE = os.path.join(SKILLS_DIR, "obol-stack", "scripts", "kube.py")
 
@@ -72,7 +69,7 @@ test("ethereum-networks/files_exist", test_blockchain_files)
 
 
 def test_block_number():
-    rc, out, err = run(["python3", RPC, "eth_blockNumber"])
+    rc, out, err = run([sys.executable, RPC, "eth_blockNumber"])
     assert rc == 0, f"exit {rc}: {err}"
     assert "Block:" in out, f"unexpected output: {out}"
     m = re.search(r"Block:\s+([\d,]+)", out)
@@ -85,7 +82,7 @@ test("ethereum-networks/block_number", test_block_number)
 
 
 def test_chain_id():
-    rc, out, err = run(["python3", RPC, "eth_chainId"])
+    rc, out, err = run([sys.executable, RPC, "eth_chainId"])
     assert rc == 0, f"exit {rc}: {err}"
     assert "Chain ID: 1" in out, f"unexpected chain id: {out}"
     assert "mainnet" in out, f"missing 'mainnet' in: {out}"
@@ -95,7 +92,7 @@ test("ethereum-networks/chain_id", test_chain_id)
 
 
 def test_gas_price():
-    rc, out, err = run(["python3", RPC, "eth_gasPrice"])
+    rc, out, err = run([sys.executable, RPC, "eth_gasPrice"])
     assert rc == 0, f"exit {rc}: {err}"
     assert "Gwei" in out, f"missing 'Gwei' in: {out}"
     m = re.search(r"([\d.]+)\s*Gwei", out)
@@ -109,7 +106,7 @@ test("ethereum-networks/gas_price", test_gas_price)
 
 def test_eth_balance():
     vitalik = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
-    rc, out, err = run(["python3", RPC, "eth_getBalance", vitalik])
+    rc, out, err = run([sys.executable, RPC, "eth_getBalance", vitalik])
     assert rc == 0, f"exit {rc}: {err}"
     assert "ETH" in out, f"missing 'ETH' in: {out}"
     m = re.search(r"([\d.]+)\s*ETH", out)
@@ -123,7 +120,7 @@ test("ethereum-networks/eth_balance", test_eth_balance)
 
 def test_erc20_total_supply():
     usdc = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
-    rc, out, err = run(["python3", RPC, "eth_call", usdc, "0x18160ddd"])
+    rc, out, err = run([sys.executable, RPC, "eth_call", usdc, "0x18160ddd"])
     assert rc == 0, f"exit {rc}: {err}"
     assert "Result:" in out or "0x" in out, f"unexpected output: {out}"
 
@@ -132,7 +129,7 @@ test("ethereum-networks/erc20_total_supply", test_erc20_total_supply)
 
 
 def test_hoodi_chain_id():
-    rc, out, err = run(["python3", RPC, "--network", "evm/560048", "eth_chainId"])
+    rc, out, err = run([sys.executable, RPC, "--network", "evm/560048", "eth_chainId"])
     assert rc == 0, f"exit {rc}: {err}"
     assert "560048" in out, f"missing '560048' in: {out}"
     assert "hoodi" in out, f"missing 'hoodi' in: {out}"
@@ -160,12 +157,12 @@ _discovered_pod = [None]
 
 
 def test_pods():
-    rc, out, err = run(["python3", KUBE, "pods"])
+    rc, out, err = run([sys.executable, KUBE, "pods"])
     assert rc == 0, f"exit {rc}: {err}"
-    assert "openclaw" in out.lower(), f"no openclaw pod in: {out}"
-    # extract first pod name containing "openclaw"
+    assert "hermes" in out.lower(), f"no hermes pod in: {out}"
+    # extract first pod name containing "hermes"
     for line in out.splitlines():
-        if "openclaw" in line.lower() and not line.startswith(("-", "NAME", "=")):
+        if "hermes" in line.lower() and not line.startswith(("-", "NAME", "=")):
             _discovered_pod[0] = line.split()[0]
             break
 
@@ -174,7 +171,7 @@ test("obol-stack/pods", test_pods)
 
 
 def test_services():
-    rc, out, err = run(["python3", KUBE, "services"])
+    rc, out, err = run([sys.executable, KUBE, "services"])
     assert rc == 0, f"exit {rc}: {err}"
     assert len(out) > 0, "empty output"
 
@@ -183,16 +180,16 @@ test("obol-stack/services", test_services)
 
 
 def test_deployments():
-    rc, out, err = run(["python3", KUBE, "deployments"])
+    rc, out, err = run([sys.executable, KUBE, "deployments"])
     assert rc == 0, f"exit {rc}: {err}"
-    assert "openclaw" in out.lower(), f"no openclaw deployment in: {out}"
+    assert "hermes" in out.lower(), f"no hermes deployment in: {out}"
 
 
 test("obol-stack/deployments", test_deployments)
 
 
 def test_events():
-    rc, out, err = run(["python3", KUBE, "events"])
+    rc, out, err = run([sys.executable, KUBE, "events"])
     assert rc == 0, f"exit {rc}: {err}"
     # events may legitimately be empty
 
@@ -201,9 +198,9 @@ test("obol-stack/events", test_events)
 
 
 def test_configmaps():
-    rc, out, err = run(["python3", KUBE, "configmaps"])
+    rc, out, err = run([sys.executable, KUBE, "configmaps"])
     assert rc == 0, f"exit {rc}: {err}"
-    assert "openclaw" in out.lower(), f"no openclaw configmap in: {out}"
+    assert "hermes" in out.lower(), f"no hermes configmap in: {out}"
 
 
 test("obol-stack/configmaps", test_configmaps)
@@ -212,7 +209,7 @@ test("obol-stack/configmaps", test_configmaps)
 def test_logs():
     pod = _discovered_pod[0]
     assert pod, "no pod discovered from pods test"
-    rc, out, err = run(["python3", KUBE, "logs", pod, "--tail", "10"])
+    rc, out, err = run([sys.executable, KUBE, "logs", pod, "--tail", "10"])
     assert rc == 0, f"exit {rc}: {err}"
     assert len(out) > 0, "empty logs"
 
@@ -221,7 +218,7 @@ test("obol-stack/logs", test_logs)
 
 
 def test_describe_deployment():
-    rc, out, err = run(["python3", KUBE, "describe", "deployment", "openclaw"])
+    rc, out, err = run([sys.executable, KUBE, "describe", "deployment", "hermes"])
     assert rc == 0, f"exit {rc}: {err}"
     assert "replica" in out.lower() or "Replica" in out, f"no replicas info in: {out[:200]}"
 

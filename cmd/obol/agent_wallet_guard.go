@@ -28,7 +28,7 @@ func walletDeleteGuard(agent, address, backupCmd string, deleteWallet bool) erro
 }
 
 // legacyAgentWalletAddress returns the public address of a host-rendered
-// agent's keystore (Hermes/OpenClaw instance), "" if it has none. A keystore
+// agent's keystore (Hermes instance), "" if it has none. A keystore
 // file whose address can't be read still counts as a wallet.
 func legacyAgentWalletAddress(cfg *config.Config, runtime agentruntime.Runtime, id string) string {
 	dir := agentruntime.KeystoreVolumePath(cfg, runtime, id)

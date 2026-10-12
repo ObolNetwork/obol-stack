@@ -77,7 +77,6 @@ go build -o .workspace/bin/obol ./cmd/obol      # rebuild after every code chang
 | `network` | `list` `install` `add` `remove` `status` `sync` `delete` |
 | `sell` | `inference` `http` `list` `status` `stop` `delete` `pricing` `register` |
 | `hermes` | `onboard` `setup` `sync` `list` `delete` `wallet` `skills` (plus legacy `token` — **do not use**) |
-| `openclaw` | `onboard` `setup` `sync` `list` `delete` `dashboard` `cli` `token` `skills` |
 | `app` | `install` `sync` `list` `delete` |
 | `tunnel` | `status` `login` `provision` `restart` `logs` |
 | passthrough | `kubectl` `helm` `helmfile` `k9s` |

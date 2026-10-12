@@ -81,11 +81,11 @@ prepare_workspace() {
     # cfg.BinDir/k3s with NO PATH fallback, so without this OBOL_BACKEND=k3s
     # could never be exercised by the smoke — every run died on
     # "prerequisites check failed: k3s not found at <workspace>/bin/k3s".
-    for tool in kubectl helm helmfile k3d k3s k9s openclaw; do
+    for tool in kubectl helm helmfile k3d k3s k9s; do
         src=$(command -v "$tool" 2>/dev/null || true)
         [ -n "$src" ] && ln -sf "$src" "$OBOL_BIN_DIR/$tool"
     done
-    for tool in "$OBOL_BIN_DIR/kubectl" "$OBOL_BIN_DIR/helm" "$OBOL_BIN_DIR/helmfile" "$OBOL_BIN_DIR/k3d" "$OBOL_BIN_DIR/openclaw"; do
+    for tool in "$OBOL_BIN_DIR/kubectl" "$OBOL_BIN_DIR/helm" "$OBOL_BIN_DIR/helmfile" "$OBOL_BIN_DIR/k3d"; do
         if [ ! -x "$tool" ]; then
             echo "Missing required tool: $tool" >&2
             return 1

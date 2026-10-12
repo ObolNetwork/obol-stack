@@ -2655,7 +2655,7 @@ def cmd_pay_agent(url, messages=None, network=None, timeout=None, body=None, tok
       - HTTP path is always POST <base>/v1/chat/completions (OpenAI-compatible).
       - Body forces `stream: true` so the seller emits SSE chunks per-write.
       - Response is read line-by-line and each SSE event is flushed to stdout
-        immediately, so a calling Hermes/OpenClaw agent can re-emit the
+        immediately, so a calling Hermes agent can re-emit the
         stream to its own user (telegram, `obol hermes chat`, REST clients).
       - Default timeout is 1 hour (operator-overridable). Agent calls can
         legitimately run for many minutes — the seller's MaxTimeoutSeconds
@@ -2790,7 +2790,7 @@ def cmd_pay_agent(url, messages=None, network=None, timeout=None, body=None, tok
                 print(f"X-PAYMENT-RESPONSE: {settle}")
             print()
             # Stream events line-by-line and flush each one to stdout so a
-            # calling Hermes/OpenClaw agent can re-emit them as they arrive.
+            # calling Hermes agent can re-emit them as they arrive.
             # SSE frames are delimited by blank lines; we forward each raw
             # line verbatim and let the caller parse.
             try:

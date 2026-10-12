@@ -35,7 +35,7 @@ const (
 	// origin. Like domain it is a fixed property of every local stack, so
 	// EnsureHostsEntries always emits it — the managed block is replaced
 	// wholesale on each call, and callers that only know about agent
-	// hostnames would otherwise drop it (see internal/hermes, internal/openclaw).
+	// hostnames would otherwise drop it (see internal/hermes).
 	StorefrontPreviewHostname = "storefront-preview.obol.stack"
 
 	// OS name constants for runtime.GOOS comparisons.
@@ -173,7 +173,7 @@ func buildHostsBlock(hostnames []string) string {
 }
 
 // EnsureHostsEntries adds /etc/hosts entries for the given hostnames.
-// Always includes "obol.stack" plus any additional hostnames (e.g. openclaw subdomains).
+// Always includes "obol.stack" plus any additional hostnames (e.g. agent subdomains).
 // Entries are idempotent — existing managed block is replaced.
 func EnsureHostsEntries(hostnames []string) error {
 	block := strings.Builder{}

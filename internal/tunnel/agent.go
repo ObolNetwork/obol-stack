@@ -54,7 +54,7 @@ func SyncAgentBaseURL(cfg *config.Config, tunnelURL string) error {
 
 	fmt.Printf("Syncing AGENT_BASE_URL=%s to obol-agent...\n", tunnelURL)
 
-	// Match every other helmfile-sync path (stack/app/openclaw/hermes): on Helm 4+
+	// Match every other helmfile-sync path (stack/app/hermes): on Helm 4+
 	// append --force-conflicts so the SSA upgrade can take ownership of the
 	// AGENT_BASE_URL env field, which InjectBaseURL previously wrote via
 	// `kubectl set env` (field manager "kubectl-set"). Without this, Helm 4's

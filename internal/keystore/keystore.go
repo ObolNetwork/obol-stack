@@ -1,8 +1,8 @@
 // Package keystore mints secp256k1 wallets and encrypts/decrypts them as
 // Web3 Secret Storage v3 keystores (scrypt + AES-128-CTR), the format the
-// remote-signer loads. It is shared by the Hermes runtime, the
-// serviceoffer-controller (sub-agent wallets) and the deprecated OpenClaw
-// runtime so there is exactly one implementation of the wallet crypto path.
+// remote-signer loads. It is shared by the Hermes runtime and the
+// serviceoffer-controller (sub-agent wallets) so there is exactly one
+// implementation of the wallet crypto path.
 package keystore
 
 import (

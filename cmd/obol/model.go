@@ -818,7 +818,7 @@ func printPaidPurchases(u *ui.UI, cfg *config.Config) bool {
 	rows := make(map[rowKey][]buy.PurchaseSummary)
 	var keys []rowKey
 
-	for _, runtime := range []agentruntime.Runtime{agentruntime.Hermes, agentruntime.OpenClaw} {
+	for _, runtime := range []agentruntime.Runtime{agentruntime.Hermes} {
 		ids, err := agentruntime.ListInstanceIDs(cfg, runtime)
 		if err != nil {
 			continue
@@ -912,7 +912,6 @@ func printSubAgentSyncHint(cfg *config.Config, u *ui.UI) {
 	if err != nil {
 		return
 	}
-	openclawIDs, _ := agentruntime.ListInstanceIDs(cfg, agentruntime.OpenClaw)
 
 	var subs []string
 	for _, id := range hermesIDs {
@@ -920,9 +919,6 @@ func printSubAgentSyncHint(cfg *config.Config, u *ui.UI) {
 			continue
 		}
 		subs = append(subs, "hermes/"+id)
-	}
-	for _, id := range openclawIDs {
-		subs = append(subs, "openclaw/"+id)
 	}
 	if len(subs) == 0 {
 		return

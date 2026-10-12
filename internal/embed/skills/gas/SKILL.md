@@ -102,7 +102,7 @@ automatically; `gas-info` is for inspection.
 
 For ad-hoc reads:
 
-`cast` is available inside OpenClaw pods. Use the `ethereum-networks` skill for convenience:
+Use the `ethereum-networks` skill for convenience:
 
 ```bash
 # Via rpc.sh wrapper (simplest)

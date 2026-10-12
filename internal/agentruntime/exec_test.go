@@ -50,21 +50,6 @@ func TestBuildExecArgs(t *testing.T) {
 				"--budget", "1000000",
 			},
 		},
-		{
-			name:    "openclaw alternate runtime, no TTY",
-			runtime: OpenClaw,
-			id:      "research",
-			argv:    []string{"node", "openclaw.mjs", "skills", "list"},
-			withTTY: false,
-			want: []string{
-				"exec", "-i",
-				"-c", "openclaw",
-				"-n", "openclaw-research",
-				"deploy/openclaw",
-				"--",
-				"node", "openclaw.mjs", "skills", "list",
-			},
-		},
 	}
 
 	for _, tc := range tests {

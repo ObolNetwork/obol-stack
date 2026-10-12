@@ -159,7 +159,7 @@ releases:
     values:
       - ./values/base.yaml.gotmpl
 
-  # Cloudflare Tunnel (dormant until configured via obol tunnel login/provision).
+  # Cloudflare Tunnel (dormant until a quick tunnel starts or `obol tunnel setup` runs).
   # `condition: cloudflared.enabled` lets `obol stack up` flip this off when an
   # active quick tunnel is already serving — re-syncing the chart kills the
   # running pod (chart renders replicas: 0 in quick-tunnel mode), and that

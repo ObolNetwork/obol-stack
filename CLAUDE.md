@@ -1,6 +1,6 @@
 ## Project Overview
 
-Obol Stack: AI agents running decentralised infra locally. k3d cluster + Hermes default agent + optional OpenClaw instances + blockchain networks + payment-gated inference (x402) + Cloudflare tunnels. CLI: `github.com/urfave/cli/v3`.
+Obol Stack: AI agents running decentralised infra locally. k3d cluster + Hermes default agent + blockchain networks + payment-gated inference (x402) + Cloudflare tunnels. CLI: `github.com/urfave/cli/v3`.
 
 ## Conventions
 
@@ -25,12 +25,9 @@ go test -v -run 'TestName' ./internal/pkg/    # single test
 # Requires running cluster + host Ollama
 export OBOL_DEVELOPMENT=true OBOL_CONFIG_DIR=$(pwd)/.workspace/config OBOL_BIN_DIR=$(pwd)/.workspace/bin OBOL_DATA_DIR=$(pwd)/.workspace/data
 go build -o .workspace/bin/obol ./cmd/obol    # MUST rebuild after code changes
-go test -tags integration -v -timeout 15m ./internal/openclaw/
-
-# Paid-inference commerce loop — needs host Ollama qwen3.5:9b
-# Does NOT replace release-gate flows 11/13/14 (those require OBOL_LLM_ENDPOINT → vLLM/llama.cpp)
+go test -tags integration -v -timeout 15m ./internal/stack/ ./internal/x402/ ./internal/agentcrd/
 # Reuse worktree cluster: export OBOL_CONFIG_DIR=<worktree>/.workspace/config
-go test -tags integration -v -run TestIntegration_Tunnel_SellDiscoverBuySidecar_QuotaAndBalance -timeout 30m ./internal/openclaw/
+# The paid commerce loop is covered by the release-gate flows (11/13/14), not Go tests.
 
 # Release-gate buyer/seller smoke — needs OBOL_LLM_ENDPOINT → OpenAI-compatible vLLM/llama.cpp
 RELEASE_SMOKE_INCLUDE_OBOL=true RELEASE_SMOKE_INCLUDE_OBOL_FORK=true \
@@ -80,16 +77,12 @@ obol                (root help is generated: each top-level command has a Catego
 ├── wallet          import
 ├── hermes          passthrough (SkipFlagParsing) → native hermes CLI (`obol hermes --help` = obol help, `obol hermes -- --help` = native; `--agent X` only as first arg, or `OBOL_AGENT`)
 │                   Token retrieval moved to `obol agent auth`
-├── openclaw        DEPRECATED (v0.15, removed v0.16): onboard, sync, token, list, delete, setup, dashboard, cli
-│   ├── wallet      backup, restore, address, list
-│   └── skills      add, remove, list, sync
 ├── sell            inference, http, mcp, agent, demo, list, status, test, stop, update, delete, pricing, register, identity, info, resume
 ├── buy             inference
 ├── model           setup (has sub: custom), status, token, sync, pull, list, prefer, discover, remove
 ├── network         list, install, sync, delete, add, remove, status, erpc (set, status, reset)
 ├── app             install, sync, list, delete
-├── tunnel          status, setup, hostname (list, add, remove), restart, stop, delete, logs (login hidden + DEPRECATED: browser-managed fallback)
-├── domain          DEPRECATED (removed v0.16): list, search, check, register
+├── tunnel          status, setup, hostname (list, add, remove), restart, stop, delete, logs
 ├── kubectl/helm/helmfile/k9s   Passthrough (KUBECONFIG pinned to stack unless --kubeconfig, exec'd; completion delegated to `<tool> __complete`)
 ├── env             Shell exports: KUBECONFIG + PATH with obol bin dir (`eval "$(obol env)"`, --shell sh|bash|zsh|fish|pwsh, --unset)
 ├── update          Helm + pinned tools + CLI version check (--json)
@@ -98,18 +91,18 @@ obol                (root help is generated: each top-level command has a Catego
 └── completion      bash|zsh|fish|pwsh shell completion script
 ```
 
-- **Deprecations (v0.15 → removed v0.16)**: `obol openclaw …`, `--runtime openclaw` on `agent` commands, `obol domain …`, `obol tunnel login` and `tunnel setup --management local`. `cmd/obol/deprecation.go` prints a once-per-invocation `ui.Warn` (stderr only — JSON stdout stays clean) naming the removal version + migration; deprecated commands keep `(deprecated)` in Usage. OpenClaw migration text lives in `openclaw.DeprecationNotice` (also printed by `obol stack up` when `openclaw-*` namespaces exist); the backup→Hermes-restore path is pinned by `hermes.TestRestoreWalletCmd_MigratesOpenClawBackup`. `obolup.sh` installs the openclaw CLI only with `OBOL_INSTALL_OPENCLAW=true`.
+- **Removed in v0.16**: OpenClaw (`obol openclaw …`, `--runtime openclaw` now errors with the migration hint), `obol domain`, `obol tunnel login` / `tunnel setup --management local`. `obol stack up` warns about leftover `openclaw-*` namespaces with their keystore/password paths (`internal/stack/openclaw_leftover.go`); a v0.15 OpenClaw wallet backup still restores into Hermes (`hermes.TestRestoreWalletCmd_MigratesOpenClawBackup`). An existing locally-managed tunnel is still restored on `stack up` (with a migrate warning) but can't add hostnames (`internal/tunnel/local_managed.go`). The `openclaw-monetize-*` ClusterRoles and `openclaw-resource-guard` policy keep their names (Hermes uses them; renaming would be an RBAC migration).
 - **CLI conventions** (enforced by `cmd/obol/cli_tree_test.go`): global flags are `--verbose`, `--quiet/-q`, `--output/-o human|json` (persistent; env `OBOL_OUTPUT`; JSON on stdout, diagnostics on stderr; prompts return their default under JSON, non-TTY or `OBOL_NONINTERACTIVE=true`; never redefine them, or `-h`/`-v`, on a subcommand — use `--file` for output paths); no backticks in flag Usage (urfave renders them as a value placeholder); command Usage has no trailing period; new top-level commands need an entry in `topLevelCategories` (help.go). Unknown subcommands print "did you mean" (`internal/ui/suggest.go`) and exit 2. JSON list output must be `[]`, never `null`. `NO_COLOR` disables color (`internal/ui/color.go`).
 - `buy inference [<seller-url>]`: positional seller URL (default `https://inference.v1337.org/`). Walks `/api/services.json`, auto-resolves model + token from the catalog asset, prompts in a TTY (auto-top-up Y/N → count with cost preview → confirm), and pre-signs via the agent's remote signer. `--agent X` pays from X AND switches X's hermes-config to `paid/<model>` in-pod (no global model_list reorder); `--set-default` promotes globally + syncs every agent. `--cost-cap` bounds future top-ups against price hikes (reconcile loop re-probes seller pricing). Identity verification is opt-in via `--expected-agent-id`.
-- `agent auth` (alias `token`): `--runtime [hermes|openclaw|all]`, `--regenerate`; positional `[instance-name]` defaults to stack-managed agent. Replaces legacy `hermes token`.
-- `agent new` (alias `onboard`): CRD-declared sub-agent via `--model`, `--skills`, `--objective`, `--create-wallet`. Without positional name, falls back to legacy host-rendered Hermes/OpenClaw onboard.
+- `agent auth` (alias `token`): `--runtime [hermes|all]`, `--regenerate`; positional `[instance-name]` defaults to stack-managed agent. Replaces legacy `hermes token`.
+- `agent new` (alias `onboard`): CRD-declared sub-agent via `--model`, `--skills`, `--objective`, `--create-wallet`. Without positional name, falls back to legacy host-rendered Hermes onboard.
 - `network install` has dynamic subcommands (one per supported chain; `--help` to list). `network sync [<network>/<id>]` with `--all`.
 - `sell info` is the buyer's-eye read of the storefront: `obol sell info` prints branding + every on-sale service (rendered from the published `/api/services.json` envelope, i.e. only operationally-ready offers); `obol sell info <name>` focuses one service + how-to-buy; global `--verbose` adds health/detail. Operator health/conditions (incl. not-ready/draining offers) stay under `sell status`. Branding writes live under `sell info set` (no flags on a TTY → interactive; with flags → patch only those fields) and `sell info reset` (no flags → all defaults; with field flags → reset only those). Writes `x402/obol-storefront-profile`; controller merges into the catalog envelope AND the verifier watches the same CM (own informer + RBAC) to brand its 402/SIWX/error pages. Identity fields: `--display-name --tagline --logo-url/--logo-file --contact-email --theme [light|dark|obol] --accent '#hex' --favicon-url/-file --og-image-url/-file --description '<markdown>' --css-file custom.css`. Theme tokens come from one preset map (`internal/storefront/theme.go`, light is default); descriptions render through the single markdown sanitizer (`internal/storefront/richtext.go` — goldmark raw-HTML-off + bluemonday; the ONLY markdown→HTML path, never add another); custom CSS is 64KiB-capped, breakout-checked at set AND render (`SafeCustomCSS`), and targets the stable `data-obol` attributes (contract pinned by `TestPaymentRequiredHTML_LayoutContract`). Per-origin override for hostname-bound offers: `obol sell info set --hostname audit.acme.io --display-name AuditCo …` patches `spec.branding` (field-wise merge over the profile; `--contact-email` stays storefront-wide). Example: `obol sell info set --display-name "Acme Labs" --tagline "Paid APIs." --theme obol --logo-file ./logo.png`. **Dev note**: branding changes need both a dev-built `obol` CLI (`go build -o .workspace/bin/obol ./cmd/obol`) and a current `serviceoffer-controller` image — if `sell info set` times out with `timed out waiting for controller to publish /api/services.json`, the profile ConfigMap was likely applied but the running controller is still publishing the legacy bare-array catalog. Rebuild + roll the controller before retrying: `OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=serviceoffer-controller OBOL_DEVELOPMENT=true obol stack up`, or `docker build -f Dockerfile.serviceoffer-controller -t ghcr.io/obolnetwork/serviceoffer-controller:latest . && k3d image import … -c <cluster> && kubectl rollout restart deploy/serviceoffer-controller -n x402`.
 - `sell mcp [name]` runs a foreground x402-paid MCP server: forwards buyer JSON args to a backend HTTP service, injecting the seller's own API key (buyer never sees it). Payment rides MCP `_meta` (`internal/x402mcp`).
 - `sell resume` runs the same `replay.ReplayRecorded` list as `obol stack up` (ends with every persisted sell offer: inference incl. detached host-gateway relaunch; http/agent/demo-agent via the manifest ledger at `$OBOL_CONFIG_DIR/sell-http/`) — run after a host reboot. `--install-boot-unit` adds a systemd user unit (Linux). `sell mcp` is foreground-only, no offer, not resumed.
-- `tunnel setup [<token>]`: the one permanent-URL command. Connector-token based (dashboard-managed) — no host binary, no account-wide API key. Accepts the bare connector token, the `--token` flag, a positional arg, or the whole `cloudflared tunnel run --token …` line (prefix stripped via `extractConnectorToken`). Reuses the remote runtime (`ProvisionWithToken` → `TUNNEL_TOKEN` secret, chart `management_mode=remote`); DNS/ingress are configured by the user in the Cloudflare dashboard (route Public Hostname → `http://traefik.traefik.svc.cluster.local:80`), not via API. The API-token provisioning path was removed (no more `tunnel provision`, no setup `--api-token/--account-id/--zone-id/--register-domain`). `--management local` (alias hidden `tunnel login`) is the browser fallback (needs `cloudflared`) — deprecated, removed in v0.16. `tunnel status` reads connector health from cloudflared's in-cluster `/ready`+`/metrics` (port 2000, no token) plus a public HTTP probe; concise by default, `--verbose` for replicas/pods, `--no-probe` to stay offline. Domain management lives under `obol domain` (`list`, `search`, `check`, `register`; deprecated, removed in v0.16) — an optional CLI wrapper around Cloudflare Registrar; still uses a scoped Cloudflare **API token** (Account → Domain perm, via `--api-token`/`CLOUDFLARE_API_TOKEN`; on a TTY it walks you through token creation and prompts). `--api-token` deliberately has NO `-t` alias to avoid colliding with `tunnel setup -t` (connector token — a different credential). `register` is billable (needs a payment method on the CF account); on success it prints the `obol tunnel setup --hostname …` handoff.
-- **Passthrough** (`internal/passthrough`, `cmd/obol/passthrough.go`): `obol kubectl|helm|helmfile|k9s` pass argv verbatim (exactly one leading `--` stripped). Env policy: the `obol` prefix means "target the stack": `KUBECONFIG=<config>/kubeconfig.yaml` always replaces an ambient `KUBECONFIG` (silently) unless the args contain an explicit `--kubeconfig[=]` (`--context` alone doesn't opt out); helmfile also defaults `HELMFILE_FILE_PATH` unless set or `-f/--file` given, and gets `--helm-binary <obol-resolved helm>` prepended unless `-b/--helm-binary` or `HELMFILE_HELM_BINARY` is given; the stack path is set even when missing (never fall back to `~/.kube/config`). `agentruntime.ExecInPod` (hermes/openclaw) is always pinned to the stack kubeconfig, no override. Plain tools target the stack via `obol env`. No existence gate: stack kubeconfig present (or `--kubeconfig` given) → `passthrough.Exec` (unix `syscall.Exec`: native TTY/signals/exit codes); stack kubeconfig missing → child process + "is the stack up?" hint on non-zero exit. Child path (`passthrough.Run`, also Windows and openclaw port-forward) forwards SIGTERM/SIGHUP, maps signal deaths to 128+n, and returns `*passthrough.ExitError` (urfave ExitCoder) so defers run before obol exits. Tool resolution via `passthrough.ResolveTool`: same order as `cfg.ToolPath`, plus a warn-and-use fallback for a version-incompatible `$PATH` copy (stack up stays strict). obol global flags before a passthrough (`obol -o json kubectl …`) are an error (root Before). `<TAB>` after `obol kubectl …` runs the tool's cobra `__complete`. Golden tests use the test binary as a stub tool (`internal/passthrough/stubtool`, `OBOL_KUBECTL`/`OBOL_HELM`).
-- `hermes` is passthrough to native hermes CLI via `hermes.CLI()` (cmd/obol/hermes.go) → `agentruntime.ExecInPod` (exec'd `kubectl exec -i[-t]`, `-t` only when stdin+stdout are TTYs). `--agent <id>`/`--agent=<id>` is recognised only as the first argument (else `OBOL_AGENT`); one `--` right after it is consumed; everything else reaches Hermes verbatim. No Go-level subcommands registered; a leading `-h/--help` prints obol's help without a cluster (same for `openclaw cli` and `openclaw skills add/remove`). `openclaw cli [instance] [--] <args>` forwards args before and after a later `--`; in-pod commands share `ExecInPod`, remote-capable ones (gateway/acp/browser/logs) run the local openclaw as a child with a port-forward that is stopped on every exit path.
+- `tunnel setup [<token>]`: the one permanent-URL command. Connector-token based (dashboard-managed) — no host binary, no account-wide API key. Accepts the bare connector token, the `--token` flag, a positional arg, or the whole `cloudflared tunnel run --token …` line (prefix stripped via `extractConnectorToken`). Reuses the remote runtime (`ProvisionWithToken` → `TUNNEL_TOKEN` secret, chart `management_mode=remote`); DNS/ingress are configured by the user in the Cloudflare dashboard (route Public Hostname → `http://traefik.traefik.svc.cluster.local:80`), not via API. The API-token provisioning path was removed (no more `tunnel provision`, no setup `--api-token/--account-id/--zone-id/--register-domain`). `tunnel status` reads connector health from cloudflared's in-cluster `/ready`+`/metrics` (port 2000, no token) plus a public HTTP probe; concise by default, `--verbose` for replicas/pods, `--no-probe` to stay offline. Buying/transferring a domain happens in the Cloudflare dashboard.
+- **Passthrough** (`internal/passthrough`, `cmd/obol/passthrough.go`): `obol kubectl|helm|helmfile|k9s` pass argv verbatim (exactly one leading `--` stripped). Env policy: the `obol` prefix means "target the stack": `KUBECONFIG=<config>/kubeconfig.yaml` always replaces an ambient `KUBECONFIG` (silently) unless the args contain an explicit `--kubeconfig[=]` (`--context` alone doesn't opt out); helmfile also defaults `HELMFILE_FILE_PATH` unless set or `-f/--file` given, and gets `--helm-binary <obol-resolved helm>` prepended unless `-b/--helm-binary` or `HELMFILE_HELM_BINARY` is given; the stack path is set even when missing (never fall back to `~/.kube/config`). `agentruntime.ExecInPod` (hermes) is always pinned to the stack kubeconfig, no override. Plain tools target the stack via `obol env`. No existence gate: stack kubeconfig present (or `--kubeconfig` given) → `passthrough.Exec` (unix `syscall.Exec`: native TTY/signals/exit codes); stack kubeconfig missing → child process + "is the stack up?" hint on non-zero exit. Child path (`passthrough.Run`, also Windows) forwards SIGTERM/SIGHUP, maps signal deaths to 128+n, and returns `*passthrough.ExitError` (urfave ExitCoder) so defers run before obol exits. Tool resolution via `passthrough.ResolveTool`: same order as `cfg.ToolPath`, plus a warn-and-use fallback for a version-incompatible `$PATH` copy (stack up stays strict). obol global flags before a passthrough (`obol -o json kubectl …`) are an error (root Before). `<TAB>` after `obol kubectl …` runs the tool's cobra `__complete`. Golden tests use the test binary as a stub tool (`internal/passthrough/stubtool`, `OBOL_KUBECTL`/`OBOL_HELM`).
+- `hermes` is passthrough to native hermes CLI via `hermes.CLI()` (cmd/obol/hermes.go) → `agentruntime.ExecInPod` (exec'd `kubectl exec -i[-t]`, `-t` only when stdin+stdout are TTYs). `--agent <id>`/`--agent=<id>` is recognised only as the first argument (else `OBOL_AGENT`); one `--` right after it is consumed; everything else reaches Hermes verbatim. No Go-level subcommands registered; a leading `-h/--help` prints obol's help without a cluster.
 - `bootstrap` (cmd/obol/bootstrap.go) is a hidden command for installer use only — not user-facing.
 - **Host tools** (`internal/tools`): kubectl/helm/k3d/helmfile/k9s + helm-diff are pinned with per-platform sha256 in `internal/tools/manifest.yaml` (versions must equal obolup.sh pins — `TestManifestMatchesObolup`). NEVER `filepath.Join(cfg.BinDir, "<tool>")`; use `cfg.ToolPath("<tool>")` (order: `OBOL_<TOOL>` env → `cfg.BinDir` → compatible `$PATH`). `obol stack init/up` auto-install missing required tools; `obol upgrade` installs/upgrades obol-managed copies only (never PATH/env ones). helm-diff goes into `helm env HELM_PLUGINS`. Helm 4: every `helm upgrade`/`helmfile sync` must carry `helmcmd.UpgradeFlagsForVersion`/`SyncFlagsForVersion` (`--server-side=true --force-conflicts` on helm ≥4, nothing on 3) so Helm-3-installed releases converge on SSA and helm takes ownership over obol's own `kubectl apply` writes.
 
@@ -230,7 +223,7 @@ obol sell delete ollama-gated -n llm
 
 **ERC-8004**: Registration publication isolated behind `RegistrationRequest`. Controller serves `/.well-known/agent-registration.json` from dedicated child resources, watches the chain selected by the offer's `payment.network` (`mainnet`, `base`, `base-sepolia`) for the matching registration tx — submitted by the operator via `obol sell register`, never by the controller. Per-chain RPC routed through in-cluster eRPC at `http://erpc.erpc.svc.cluster.local/rpc/<alias>` (override via `ERC8004_RPC_BASE` env on controller; default `http://erpc.erpc.svc.cluster.local/rpc` in `internal/erc8004/abi.go:27`). `obol sell register --chain` defaults to `mainnet` (cmd/obol/sell.go:2752); `obol sell http --chain` defaults to `base` (cmd/obol/sell.go:538).
 
-**RBAC** (`internal/embed/infrastructure/base/templates/obol-agent-monetize-rbac.yaml`): Controller owns child-resource + registration write access. Agent (Hermes SA in `hermes-obol-agent`, OpenClaw SA in `openclaw-obol-agent`) gets read on `serviceoffers` + `serviceoffers/status`, full CRUD on `serviceoffers` + `purchaserequests` for compatibility commands, and agent-factory writes on `namespaces`, `secrets`, `agents` (hermes-only).
+**RBAC** (`internal/embed/infrastructure/base/templates/obol-agent-monetize-rbac.yaml`): Controller owns child-resource + registration write access. Agent (Hermes SA in `hermes-obol-agent`; the `openclaw-monetize-*` role names are historical) gets read on `serviceoffers` + `serviceoffers/status`, full CRUD on `serviceoffers` + `purchaserequests` for compatibility commands, and agent-factory writes on `namespaces`, `secrets`, `agents` (hermes-only).
 
 ## RPC Gateway
 
@@ -249,9 +242,9 @@ Two-stage templating: `values.yaml.gotmpl` annotated with `@enum`/`@default`/`@d
 | Command | Action |
 |---------|--------|
 | `obol stack init` | Generate cluster ID (petname), resolve absolute paths, write k3d.yaml, copy infrastructure |
-| `obol stack up` | `k3d cluster create`, export kubeconfig, k3s auto-applies manifests, auto-configures LiteLLM with Ollama models (preserves Ollama modified-time order; `:cloud` aliases demoted behind local chat models; embedding-only models last; warns + suggests `ollama pull qwen3.5:4b` when empty or all-`:cloud`), re-imposes recorded model config (`model.ReconcileRecorded` — operator's `obol model` choices win over auto-detect), deploys default Hermes agent, applies agent capabilities, starts persistent Cloudflare tunnel, then runs the ONE record replay list `replay.ReplayRecorded` (`internal/replay.Order`, shared with `obol sell resume`; best-effort per step + `n ok / n warned` summary): models → local networks whose helm release is missing/failed → RPC upstreams → eRPC overlay (#763) → x402 pricing (`$CFG/x402/pricing.yaml`) → AgentIdentity (`$CFG/identity/<ns>__<name>.json`, seeds status.registrations) → hermes/openclaw instances whose release is missing/failed → Agent CRs → storefront → apps → sell offers (`resumeSellOffers`). New replayable state = add a step to `replay.Order`, never inline in `runStackUp`. Guards: `internal/replay/replay_test.go`, `cmd/obol/stackup_resume_guard_test.go` |
+| `obol stack up` | `k3d cluster create`, export kubeconfig, k3s auto-applies manifests, auto-configures LiteLLM with Ollama models (preserves Ollama modified-time order; `:cloud` aliases demoted behind local chat models; embedding-only models last; warns + suggests `ollama pull qwen3.5:4b` when empty or all-`:cloud`), re-imposes recorded model config (`model.ReconcileRecorded` — operator's `obol model` choices win over auto-detect), deploys default Hermes agent, applies agent capabilities, starts persistent Cloudflare tunnel, then runs the ONE record replay list `replay.ReplayRecorded` (`internal/replay.Order`, shared with `obol sell resume`; best-effort per step + `n ok / n warned` summary): models → local networks whose helm release is missing/failed → RPC upstreams → eRPC overlay (#763) → x402 pricing (`$CFG/x402/pricing.yaml`) → AgentIdentity (`$CFG/identity/<ns>__<name>.json`, seeds status.registrations) → Hermes instances whose release is missing/failed → Agent CRs → storefront → apps → sell offers (`resumeSellOffers`). New replayable state = add a step to `replay.Order`, never inline in `runStackUp`. Guards: `internal/replay/replay_test.go`, `cmd/obol/stackup_resume_guard_test.go` |
 | `obol stack down` | `k3d cluster stop` (delete fallback; preserves config + data) |
-| `obol stack purge [-f]` | Delete config; `-f` also deletes root-owned PVCs; `-f` offers a full `stack export` first (fallback: OpenClaw wallet prompt) |
+| `obol stack purge [-f]` | Delete config; `-f` also deletes root-owned PVCs; `-f` offers a full `stack export` first |
 | `obol stack export` | Full backup archive: config dir (minus kubeconfig/defaults), agent data dirs (brains + keystores, deployments quiesced for consistency), encrypted wallet backups, etcd-drift resources (Agent CRs, ServiceOffers, LiteLLM/eRPC CMs). `internal/stackbackup/` |
 | `obol stack import <archive>` | One command: restore host state (absolute paths re-pointed to this host) → `stack up` via the shared `runStackUp` path when the cluster isn't running → re-apply CRs/CMs + re-sync agents. Over a fresh `init`/`up` pass `--force`; an EMPTY pre-import cluster of the replaced stack is deleted (frees ingress ports), a populated one never is; another stack's cluster behind a stale kubeconfig is left untouched (`internal/stackbackup/identity.go`). `--cluster-only` re-applies only. PurchaseRequests/buyer auths intentionally not restored (auths expire) |
 
@@ -308,15 +301,14 @@ Caveats:
 | Traefik ingress (frontend, eRPC, x402 routes) | `http://obol.stack:8080/...` |
 | LiteLLM (`llm` ns, port 4000) | `kubectl port-forward svc/litellm 14000:4000 -n llm` → `http://127.0.0.1:14000` |
 | x402-buyer (own Deployment + Service, port 8402) | `kubectl port-forward -n llm svc/x402-buyer 18402:8402` → `http://127.0.0.1:18402` |
-| OpenClaw instance | `kubectl port-forward -n openclaw-<id> svc/openclaw 18789:18789` |
 
 **Never call `http://obol.stack:8080/v1/...`** — Traefik has no `/v1` route, returns frontend 404.
 
 **x402-buyer is distroless** — no `wget`, `curl`, or shell. Use port-forward (`svc/x402-buyer`), not `kubectl exec`.
 
-**LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy → Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). Auto-configured with Ollama models during `obol stack up` (no manual `obol model setup`). `ConfigureLiteLLM()` patches config + Secret + restarts or hot-adds via LiteLLM model API. Paid remote inference: Obol LiteLLM fork + standalone `x402-buyer` Deployment, with static `paid/*` → `openai/*` → `http://x402-buyer.llm.svc.cluster.local:8402/v1` route (wildcard catch-all, requires >=1 concrete `paid/<model>` entry to be useful). Hermes uses provider `"custom"` pointed at `http://litellm.llm.svc.cluster.local:4000/v1`; optional OpenClaw instances reuse the `"openai"` provider slot (ollama slot disabled). Agent configs use `dangerouslyDisableDeviceAuth` for Traefik-proxied access.
+**LiteLLM gateway** (`llm` ns, port 4000): OpenAI-compatible proxy → Ollama/Anthropic/OpenAI. ConfigMap `litellm-config` (YAML config.yaml with model_list), Secret `litellm-secrets` (master key + API keys). Auto-configured with Ollama models during `obol stack up` (no manual `obol model setup`). `ConfigureLiteLLM()` patches config + Secret + restarts or hot-adds via LiteLLM model API. Paid remote inference: Obol LiteLLM fork + standalone `x402-buyer` Deployment, with static `paid/*` → `openai/*` → `http://x402-buyer.llm.svc.cluster.local:8402/v1` route (wildcard catch-all, requires >=1 concrete `paid/<model>` entry to be useful). Hermes uses provider `"custom"` pointed at `http://litellm.llm.svc.cluster.local:4000/v1`;
 
-**Auto-configuration**: `obol stack up` → `autoConfigureLLM()` detects host Ollama models, patches LiteLLM config. `obolup.sh` → `check_agent_model_api_key()` reads `~/.openclaw/openclaw.json`, resolves API key from `ANTHROPIC_API_KEY` / `CLAUDE_CODE_OAUTH_TOKEN` (Anthropic) or `OPENAI_API_KEY` (OpenAI), exports for downstream.
+**Auto-configuration**: `obol stack up` → `autoConfigureLLM()` detects host Ollama models, patches LiteLLM config. Cloud providers are configured with `obol model setup` and replayed from the recorded model config.
 
 **BYOK cloud providers** (easiest getting-started path) — provider knowledge is a single registry in `internal/model/model.go` (`knownProviders` / `ProviderInfo` with `Mode`/`BaseURL`/`Default`/`KeyURL`/`JoinURL`/`Free`); adding a provider is one row, no per-provider switch. `KeyURL` is the API-key dashboard (assumes account); optional `JoinURL` is a new-user landing page (may carry a referral tag) used in preference to `KeyURL` for browser-open and "new to X? Sign up" hints. Built-in: `anthropic`, `openai`, `ollama` (native/local) + OpenAI-compatible aggregators `venice`, `openrouter`, `nvidia`, `gmi`, `novita`, `huggingface` (`Mode=openai-compatible` → `model_list` entry `openai/<id>` + explicit `api_base` + key from the provider's env var; no wildcard). When `--model` is omitted, setup uses the registry `Default` or lists the live `GET <base>/v1/models` (TTY picker / non-TTY error naming real ids). `--free` seeds the curated free-tier model snapshot (currently OpenRouter only) intersected against the live `/v1/models` response to drop rotated-out ids; auto-applied for `openrouter` when no `--model` is passed.
 
@@ -360,7 +352,6 @@ obol model status     # show provider state
 
 Flow scripts (`flows/lib.sh:route_llm_via_obol_cli`) wrap this behind `OBOL_LLM_ENDPOINT` / `OBOL_LLM_MODEL` / `OBOL_LLM_API_KEY` env vars for smoke-test GPU targeting.
 
-**Per-instance overlay**: `buildLiteLLMRoutedOverlay()` uses `"openai"` provider slot (Name: "openai", ollama slot disabled) → `http://litellm.llm.svc.cluster.local:4000/v1`, `api: openai-completions`, `agentModel: "openai/<model>"`. App → litellm:4000 → routes by model_name → actual API.
 
 ## Standalone Inference Gateway
 
@@ -380,21 +371,11 @@ Key code: `internal/inference/{gateway,store,detect}.go`. Descriptors persist un
 | PVC host path | `$DATA_DIR/hermes-obol-agent/hermes-data/.hermes` |
 | Skills path (pod) | `/data/.hermes/obol-skills` (`OBOL_SKILLS_DIR` env, `skills.external_dirs`) |
 
-**OpenClaw** — DEPRECATED optional manual runtime (v0.15; removed in v0.16). Its overlay sets `OBOL_SKILLS_DIR=/data/.openclaw/skills` because embedded skills now default to the Hermes path.
-
-| Item | Value |
-|------|-------|
-| State dir | `applications/openclaw/<id>` |
-| Namespace | `openclaw-<id>` |
-| Service / Deployment | `openclaw` |
-| ConfigMap | `openclaw-config` |
-| Skills path (pod) | `/data/.openclaw/skills` (PVC injection) |
-
 **Obol skills**: `SKILL.md` + optional scripts/references, embedded in `obol` binary (`internal/embed/skills/`).
 
 **Monetize skill** (`internal/embed/skills/monetize/`): thin compatibility wrapper around ServiceOffer CRUD, controller waiting, `/skill.md` publication.
 
-**Remote-signer wallet**: keypair + Web3 V3 keystore crypto lives in `internal/keystore` (shared by `internal/hermes`, `internal/serviceoffercontroller` sub-agent wallets via `keystore.GenerateInMemory`, and deprecated `internal/openclaw`; interop with go-ethereum's decoder pinned by `TestEncryptV3InteropGeth`). Runtimes provision it as secp256k1 → V3 keystore → remote-signer REST API at port 9000 in same ns.
+**Remote-signer wallet**: keypair + Web3 V3 keystore crypto lives in `internal/keystore` (shared by `internal/hermes`, `internal/serviceoffercontroller` sub-agent wallets via `keystore.GenerateInMemory`; interop with go-ethereum's decoder pinned by `TestEncryptV3InteropGeth`). Runtimes provision it as secp256k1 → V3 keystore → remote-signer REST API at port 9000 in same ns.
 
 ## Buyer (x402-buyer)
 
@@ -431,15 +412,6 @@ Key code: `cmd/x402-buyer/`, `internal/x402/buyer/`, `internal/x402/forwardauth.
 5. **Root-owned PVCs** — `-f` flag required to remove in `obol stack purge`
 6. **Narrow review boundaries** — for controller/RBAC/payment changes, spell out exact security and user-journey invariants before editing or delegating; broad review prompts have previously missed test drift
 
-### OpenClaw Version Management
-
-Three places pin the version — all must agree:
-1. `internal/openclaw/OPENCLAW_VERSION` — source of truth (Renovate watches, CI reads)
-2. `internal/openclaw/openclaw.go` — `openclawImageTag` constant
-3. `obolup.sh` — `OPENCLAW_VERSION` shell constant for standalone installs (only used with `OBOL_INSTALL_OPENCLAW=true` since v0.15)
-
-`TestOpenClawVersionConsistency` in `internal/openclaw/version_test.go` catches drift.
-
 ### Pitfalls
 
 **First diagnostic when release-smoke goes red**: confirm what is actually deployed before reading verifier code. A `503 Payment verification failed` from Traefik is almost never a real verifier bug — it is usually one of pitfalls 9–13 below.
@@ -453,7 +425,7 @@ kubectl get deploy -n llm  litellm -o jsonpath='{.spec.template.spec.containers[
 A registry digest pin instead of `:latest` on the verifier means your dev rewrite was bypassed (pitfall 9).
 
 1. **Kubeconfig port drift** — k3d API port can change between restarts. Fix: `k3d kubeconfig write <name> -o .workspace/config/kubeconfig.yaml --overwrite`
-2. **Agent RBAC binding empty** — `obol-agent-monetize-rbac` (Hermes default; legacy `openclaw-monetize-binding` for OpenClaw runs) may have empty subjects if `obol agent init` races with k3s manifest apply. Re-run `obol agent init`.
+2. **Agent RBAC binding empty** — `obol-agent-monetize-rbac` (`openclaw-monetize-*-binding`, Hermes SA) may have empty subjects if `obol agent init` races with k3s manifest apply. Re-run `obol agent init`.
 3. **ConfigMap propagation** — ~60-120s for k3d file watcher; force restart for immediate effect
 4. **ExternalName services** — do not work with Traefik Gateway API; use ClusterIP + Endpoints
 5. **eRPC `eth_call` cache** — default TTL is 10s for unfinalized reads; `buy.py balance` can lag behind an already-settled paid request for a few seconds
@@ -518,7 +490,7 @@ Enforced by `.claude/settings.json` (Read/Edit/Write deny) + `.claude/hooks/secr
 
 | Package | Key Files | Role |
 |---------|-----------|------|
-| `cmd/obol` | `main.go`, `sell.go`, `network.go`, `openclaw.go`, `model.go` | CLI commands |
+| `cmd/obol` | `main.go`, `sell.go`, `network.go`, `agent.go`, `model.go` | CLI commands |
 | `cmd/serviceoffer-controller` | `main.go` | ServiceOffer controller binary |
 | `internal/config` | `config.go` | XDG Config struct |
 | `internal/stack` | `stack.go` | Cluster lifecycle |
@@ -531,13 +503,12 @@ Enforced by `.claude/settings.json` (Read/Edit/Write deny) + `.claude/hooks/secr
 | `internal/agent` | `agent.go` | obol-agent singleton |
 | `internal/model` | `model.go` | LiteLLM gateway configuration |
 | `internal/keystore` | `keystore.go` | secp256k1 keygen, EIP-55, Web3 V3 keystore encrypt/decrypt |
-| `internal/openclaw` | `openclaw.go`, `wallet.go`, `resolve.go` | OpenClaw setup, wallet, instance resolution (deprecated, removed v0.16) |
 | `internal/inference` | `gateway.go`, `store.go`, `detect.go` | Standalone x402 gateway |
 | `internal/embed` | `embed.go` | Embedded assets (skills, infrastructure, networks) |
 
 **Embedded assets**: `internal/embed/infrastructure/` (K8s templates), `internal/embed/networks/` (ethereum, aztec), `internal/embed/skills/` (22 skills; the autoresearch trio lives in the ObolNetwork/skills plugin).
 
-**Tests**: `cmd/obol/sell_test.go` (CLI flags), `internal/x402/*_test.go` (verifier, config, matcher, E2E), `internal/erc8004/*_test.go` (ABI, client), `internal/embed/embed_crd_test.go` (CRD+RBAC validation), `internal/openclaw/integration_test.go` (full-cluster inference), `internal/openclaw/overlay_test.go`, `internal/inference/gateway_test.go`, `internal/serviceoffercontroller/*_test.go` (controller, render).
+**Tests**: `cmd/obol/sell_test.go` (CLI flags), `internal/x402/*_test.go` (verifier, config, matcher, E2E), `internal/erc8004/*_test.go` (ABI, client), `internal/embed/embed_crd_test.go` (CRD+RBAC validation), `internal/inference/gateway_test.go`, `internal/serviceoffercontroller/*_test.go` (controller, render).
 
 **Docs**: `docs/guides/monetize-inference.md` (E2E monetize walkthrough), `README.md`.
 
@@ -551,5 +522,4 @@ These are sibling Git repositories that this stack integrates with. Set the env 
 |----------|------------|--------------|
 | Frontend | `ObolNetwork/obol-stack-front-end` | `OBOL_FRONTEND_DIR` |
 | Docs | `ObolNetwork/obol-stack-docs` | `OBOL_DOCS_DIR` |
-| OpenClaw | `ObolNetwork/openclaw` | `OPENCLAW_DIR` |
 | LiteLLM (Obol fork) | `ObolNetwork/litellm-fork` | `LITELLM_FORK_DIR` |

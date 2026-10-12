@@ -14,7 +14,7 @@ import (
 // derives (Namespace/Hostname, and for Hermes DashboardHostname's "-ui"
 // suffix) at or under the 63-character RFC 1123 limit.
 func TestMaxIDLengthKeepsDerivedLabelsWithinDNSLimit(t *testing.T) {
-	for _, rt := range []Runtime{OpenClaw, Hermes} {
+	for _, rt := range []Runtime{Hermes} {
 		id := strings.Repeat("a", MaxIDLength(rt))
 
 		if n := len(Namespace(rt, id)); n > 63 {
@@ -81,12 +81,6 @@ func TestDashboardHostname(t *testing.T) {
 			id:      "alice",
 			want:    "hermes-alice-ui.obol.stack",
 		},
-		{
-			name:    "openclaw",
-			runtime: OpenClaw,
-			id:      "default",
-			want:    "openclaw-default.obol.stack",
-		},
 	}
 
 	for _, tt := range tests {
@@ -98,7 +92,8 @@ func TestDashboardHostname(t *testing.T) {
 	}
 }
 
-func TestCollectHostnamesIncludesHermesDashboardsAndOpenClawInstances(t *testing.T) {
+// A leftover applications/openclaw/<id> dir (<= v0.15) adds no hostname.
+func TestCollectHostnamesIncludesHermesDashboardsOnly(t *testing.T) {
 	cfg := &config.Config{
 		ConfigDir: t.TempDir(),
 		DataDir:   t.TempDir(),
@@ -107,7 +102,7 @@ func TestCollectHostnamesIncludesHermesDashboardsAndOpenClawInstances(t *testing
 	for _, path := range []string{
 		DeploymentPath(cfg, Hermes, "alice"),
 		DeploymentPath(cfg, Hermes, DefaultInstanceID),
-		DeploymentPath(cfg, OpenClaw, "default"),
+		filepath.Join(cfg.ConfigDir, "applications", "openclaw", "default"),
 	} {
 		if err := os.MkdirAll(path, 0o755); err != nil {
 			t.Fatalf("MkdirAll(%q): %v", path, err)
@@ -126,7 +121,6 @@ func TestCollectHostnamesIncludesHermesDashboardsAndOpenClawInstances(t *testing
 		"hermes-alice-ui.obol.stack",
 		"hermes-obol-agent.obol.stack",
 		"obol-agent.obol.stack",
-		"openclaw-default.obol.stack",
 	}
 
 	assertSameStringSet(t, got, want)

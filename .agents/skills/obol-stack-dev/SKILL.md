@@ -111,7 +111,7 @@ Dev builds tag images `dev-<git-sha>` (`internal/defaults/defaults.go::DevImageT
 
 - `just dev-prune` — remove `ghcr.io/obolnetwork/*:dev-*` tags not recorded in any active `.dev-image-tag` (workspace config, `$OBOL_CONFIG_DIR`, `~/.config/obol`) or current HEAD; prune dangling images; trim build cache to 8GB. Safe while clusters run — k3d nodes hold their own imported copies; a deleted tag rebuilds warm from the build cache.
 - `just dev-prune-registries` — remove the registry mirror containers and wipe the cache dir. Next `obol stack up` recreates them; containerd falls back to upstream pulls in the meantime.
-- Big non-obol images are NOT auto-pruned: `nousresearch/hermes-agent` older than the pin in `internal/hermes/hermes.go` and `ghcr.io/obolnetwork/openclaw` older than `internal/openclaw/OPENCLAW_VERSION` are the usual multi-GB offenders — check the pins, then `docker rmi` manually.
+- Big non-obol images are NOT auto-pruned: `nousresearch/hermes-agent` older than the pin in `internal/hermes/hermes.go` (and any leftover `ghcr.io/obolnetwork/openclaw`) are the usual multi-GB offenders — check the pins, then `docker rmi` manually.
 
 ## Rebuild Hints by Changed Path
 

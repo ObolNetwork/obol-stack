@@ -736,8 +736,9 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 	if !bindingHasSubject(readCRB, "hermes", "hermes-obol-agent") {
 		t.Error("read binding missing hermes-obol-agent/hermes subject")
 	}
-	if !bindingHasSubject(readCRB, "openclaw", "openclaw-obol-agent") {
-		t.Error("read binding missing openclaw-obol-agent/openclaw subject")
+	// OpenClaw was removed in v0.16: its service account must not keep agent RBAC.
+	if bindingHasSubject(readCRB, "openclaw", "openclaw-obol-agent") {
+		t.Error("read binding still grants openclaw-obol-agent/openclaw")
 	}
 
 	writeRB := findDocByName(docs, "ClusterRoleBinding", "openclaw-monetize-write-binding")
@@ -753,8 +754,9 @@ func TestMonetizeRBAC_Parses(t *testing.T) {
 	if !bindingHasSubject(writeRB, "hermes", "hermes-obol-agent") {
 		t.Error("write binding missing hermes-obol-agent/hermes subject")
 	}
-	if !bindingHasSubject(writeRB, "openclaw", "openclaw-obol-agent") {
-		t.Error("write binding missing openclaw-obol-agent/openclaw subject")
+	// OpenClaw was removed in v0.16: its service account must not keep agent RBAC.
+	if bindingHasSubject(writeRB, "openclaw", "openclaw-obol-agent") {
+		t.Error("write binding still grants openclaw-obol-agent/openclaw")
 	}
 
 	factoryRB := findDocByName(docs, "ClusterRoleBinding", "hermes-agent-factory-write-binding")

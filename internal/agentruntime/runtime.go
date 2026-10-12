@@ -12,8 +12,7 @@ import (
 type Runtime string
 
 const (
-	OpenClaw Runtime = "openclaw"
-	Hermes   Runtime = "hermes"
+	Hermes Runtime = "hermes"
 
 	DefaultDomain     = "obol.stack"
 	DefaultInstanceID = "obol-agent"
@@ -34,28 +33,17 @@ type DeploymentRef struct {
 	ID      string
 }
 
+// Describe returns the descriptor for runtime. Hermes is the only runtime
+// (OpenClaw was removed in v0.16).
 func Describe(runtime Runtime) Descriptor {
-	switch runtime {
-	case Hermes:
-		return Descriptor{
-			Runtime:       Hermes,
-			DisplayName:   "Hermes",
-			ServiceName:   "hermes",
-			ConfigMapName: "hermes-config",
-			DataPVCName:   "hermes-data",
-			HomeDir:       ".hermes",
-			DefaultPort:   8642,
-		}
-	default:
-		return Descriptor{
-			Runtime:       OpenClaw,
-			DisplayName:   "OpenClaw",
-			ServiceName:   "openclaw",
-			ConfigMapName: "openclaw-config",
-			DataPVCName:   "openclaw-data",
-			HomeDir:       ".openclaw",
-			DefaultPort:   18789,
-		}
+	return Descriptor{
+		Runtime:       Hermes,
+		DisplayName:   "Hermes",
+		ServiceName:   "hermes",
+		ConfigMapName: "hermes-config",
+		DataPVCName:   "hermes-data",
+		HomeDir:       ".hermes",
+		DefaultPort:   8642,
 	}
 }
 
@@ -132,7 +120,7 @@ func CollectHostnames(cfg *config.Config, include ...DeploymentRef) []string {
 		add(ref.Runtime, ref.ID)
 	}
 
-	for _, runtime := range []Runtime{Hermes, OpenClaw} {
+	for _, runtime := range []Runtime{Hermes} {
 		ids, err := ListInstanceIDs(cfg, runtime)
 		if err != nil {
 			continue

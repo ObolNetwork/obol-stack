@@ -45,7 +45,7 @@ fi
 step "Core platform pods Running or Completed (excluding agent runtimes/cloudflared, max 180x5s)"
 for i in $(seq 1 180); do
     pod_output=$("$OBOL" kubectl get pods -A --no-headers 2>&1)
-    platform_pods=$(echo "$pod_output" | grep -v -E '^(openclaw|hermes)-' | grep -v ' cloudflared-' || true)
+    platform_pods=$(echo "$pod_output" | grep -v -E '^hermes-' | grep -v ' cloudflared-' || true)
     bad_pods=$(echo "$platform_pods" | grep -v -E "Running|Completed" || true)
     if [ -z "$bad_pods" ]; then
         pass "All pods healthy (attempt $i)"

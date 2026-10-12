@@ -69,7 +69,7 @@ var Order = []string{
 	// controller consults it when registering and would otherwise mint a
 	// NEW on-chain agent.
 	StepAgentIdentity,
-	// Hermes/OpenClaw helmfile instances whose release is missing or failed
+	// Hermes helmfile instances whose release is missing or failed
 	// (the default instance was just deployed by stack.Up, so it is skipped).
 	StepAgentInstances,
 	// Recorded Agent CRs. Before offers: agent-backed ServiceOffers resolve

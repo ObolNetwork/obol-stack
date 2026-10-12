@@ -928,8 +928,7 @@ func (pr *PurchaseRequest) EffectiveBuyerNamespace() string {
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// Agent is the declarative spec for an Obol Stack agent (Hermes today,
-// OpenClaw later). Decouples agent lifecycle from selling: `obol sell
+// Agent is the declarative spec for an Obol Stack agent (Hermes). Decouples agent lifecycle from selling: `obol sell
 // agent <name>` references an existing Agent rather than provisioning
 // one inline. Internal manager agents with RBAC can also create Agent
 // resources to spawn sub-agents.
@@ -950,7 +949,7 @@ type AgentList struct {
 }
 
 type AgentSpec struct {
-	// Agent runtime (only hermes today; openclaw planned).
+	// Agent runtime (only hermes).
 	// +kubebuilder:default=hermes
 	// +kubebuilder:validation:Enum=hermes
 	Runtime string `json:"runtime,omitempty"`

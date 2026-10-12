@@ -11,7 +11,7 @@
 //
 //	manifest.json          archive + obol version, stack id, component notes
 //	config/...             $OBOL_CONFIG_DIR minus kubeconfig*/defaults/
-//	data/<namespace>/...   agent data dirs (hermes-*, openclaw-*, agent-*)
+//	data/<namespace>/...   agent data dirs (hermes-*, agent-*; openclaw-* left over from <= v0.15)
 //	wallets/...            walletbackup-format files (encrypted if passphrase)
 //	cluster/...            stripped JSON dumps of CRs/ConfigMaps/Secrets
 //
@@ -89,6 +89,8 @@ func decodeManifest(data []byte) (*Manifest, error) {
 // dataNamespacePrefixes selects which $OBOL_DATA_DIR entries hold agent state
 // worth backing up. Network chain data (ethereum-*, aztec-*) is deliberately
 // excluded: it is large and re-syncable.
+// openclaw-* is kept so wallets of instances left over from <= v0.15 still
+// reach the archive (keystore here, its password in the config dir).
 var dataNamespacePrefixes = []string{"hermes-", "openclaw-", "agent-"}
 
 // selectDataNamespaces returns DataDir entries that look like agent

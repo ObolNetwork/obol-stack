@@ -100,7 +100,7 @@ Permit2 approval above).
   `type:agent` services return *first-class* responses (knowledge to save
   to memory, tool-call traces, partial results to use mid-task), so the
   calling agent wants to consume the stream itself. `pay-agent` streams
-  SSE events straight to stdout; the calling Hermes/OpenClaw re-emits
+  SSE events straight to stdout; the calling Hermes agent re-emits
   them through its normal user channel (telegram, `obol hermes chat`,
   REST clients). No LiteLLM wire-up.
 - **Prefer `/api/services.json` over parsing markdown.** The seller's
@@ -282,13 +282,13 @@ to buy:
 
 ### Agent / automation surface
 
-Use this when Hermes or OpenClaw is maintaining existing purchases in the
+Use this when Hermes is maintaining existing purchases in the
 background:
 
 - `process --all` — maintenance reconcile loop for `autoRefill`
 
 Current controller-mode limitation:
-- `process --all` is the intended heartbeat / cron entrypoint for Hermes or OpenClaw.
+- `process --all` is the intended cron entrypoint for Hermes.
 - Re-running `buy <same-name>` is the manual top-up path.
 - Only one active purchase may own a given `paid/<remote-model>` alias at a time.
 - Manual `refill` is still not a first-class command.
@@ -298,22 +298,13 @@ Current controller-mode limitation:
 
 ## Automation Recipes
 
-### OpenClaw heartbeat recipe
-
-Use the absolute script path inside the pod. Do not rely on `cd ... && ...`
-shell wrapping.
-
-```bash
-python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py process --all
-```
-
-Tell the agent to schedule that as its maintenance loop only when at least one
-`PurchaseRequest.spec.autoRefill.enabled=true` purchase exists.
-
 ### Hermes cron recipe
 
-Hermes already has a cron scheduler. The maintenance job should load the
-buy-x402 skill and run the same reconcile primitive on a schedule.
+Hermes has a cron scheduler. The maintenance job should load the buy-x402
+skill and run the reconcile primitive on a schedule, using the absolute
+script path inside the pod (do not rely on `cd ... && ...` shell wrapping).
+Schedule it only when at least one
+`PurchaseRequest.spec.autoRefill.enabled=true` purchase exists.
 
 CLI example:
 
@@ -349,7 +340,7 @@ flowchart LR
   end
 
   subgraph Agent["Agent / Background"]
-    A1["Hermes cron or OpenClaw heartbeat"]
+    A1["Hermes cron"]
     A2["process --all"]
   end
 
@@ -470,7 +461,7 @@ flowchart LR
 ## Constraints
 
 - **Python stdlib only** — no pip install, no external packages
-- **Requires remote-signer** — must have agent wallet provisioned via `obol openclaw onboard`
+- **Requires remote-signer** — the agent needs a wallet (the default Hermes agent gets one; sub-agents need `obol agent new --create-wallet`)
 - **Requires x402-buyer image** — `ghcr.io/obolnetwork/x402-buyer:latest` must be available in cluster
 - **Static public interface** — purchased models are always addressed as `paid/<remote-model>`
 - **Max 1000 auths per batch** — signing takes ~50s at 1000; this cap applies to both `buy` and each refill batch driven by `process --all`

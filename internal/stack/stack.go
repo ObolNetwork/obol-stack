@@ -27,7 +27,6 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/model"
-	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/stackbackup"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
@@ -273,9 +272,9 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 		}
 	}
 
-	// OpenClaw is deprecated (v0.15) — nudge users still running instances
-	// towards the Hermes wallet migration. Best effort, never fails up.
-	warnLegacyOpenClawNamespaces(cfg, u)
+	// OpenClaw was removed in v0.16: tell anyone still running instances
+	// how to keep the wallet. Best effort, never fails up.
+	warnLeftoverOpenClawNamespaces(cfg, u)
 
 	return nil
 }
@@ -352,12 +351,8 @@ func Purge(cfg *config.Config, u *ui.UI, force, skipConfirm bool) error {
 
 	// Offer a full stack export (agents, wallets, config) in both modes:
 	// --force deletes the data dir, and even a plain purge deletes the config
-	// dir holding the keystore passwords, stranding the kept keystores. Falls
-	// back to the narrower OpenClaw wallet prompt when the user declines, as a
-	// second chance for keys specifically.
-	if !stackbackup.PromptExportBeforePurge(cfg, u, force) {
-		openclaw.PromptBackupBeforePurge(cfg, u)
-	}
+	// dir holding the keystore passwords, stranding the kept keystores.
+	stackbackup.PromptExportBeforePurge(cfg, u, force)
 
 	stackID := getStackID(cfg)
 
@@ -963,11 +958,6 @@ func autoConfigureLLM(cfg *config.Config, u *ui.UI) {
 
 	configured = append(configured, autoDetectLocalProviders(cfg, u)...)
 
-	// --- Cloud provider from ~/.openclaw ---
-	if cloudProvider := autoDetectCloudProvider(cfg, u); cloudProvider != "" {
-		configured = append(configured, cloudProvider)
-	}
-
 	// --- Single restart for all providers ---
 	if len(configured) > 0 {
 		label := strings.Join(configured, " + ")
@@ -1046,87 +1036,6 @@ func autoDetectLocalProviders(cfg *config.Config, u *ui.UI) []string {
 	return labels
 }
 
-// autoDetectCloudProvider reads ~/.openclaw config, resolves the cloud
-// provider API key, and patches LiteLLM (without restart). Returns the
-// provider name on success, or "" if nothing was configured.
-func autoDetectCloudProvider(cfg *config.Config, u *ui.UI) string {
-	imported, err := openclaw.DetectExistingConfig()
-	if err != nil || imported == nil {
-		return ""
-	}
-
-	agentModel := imported.AgentModel
-	if agentModel == "" {
-		return ""
-	}
-
-	// Extract provider and model name from "anthropic/claude-sonnet-4-6".
-	provider, modelName := "", agentModel
-	if before, after, ok := strings.Cut(agentModel, "/"); ok {
-		provider = before
-		modelName = after
-	}
-
-	if provider == "" {
-		provider = model.ProviderFromModelName(agentModel)
-	}
-
-	if provider == "" || provider == "ollama" {
-		return ""
-	}
-
-	// Skip only when both the model entry AND the API key are present.
-	// A re-up that lost the Secret's API key (or any drift between
-	// ConfigMap and Secret) heals here by re-patching from the env var,
-	// instead of leaving `obol model status` reporting
-	// `enabled: true, api_key: false` as it did before this check.
-	if statuses, err := model.GetProviderStatus(cfg); err == nil {
-		if st, ok := statuses[provider]; ok && st.Enabled && st.HasAPIKey {
-			return ""
-		}
-	}
-
-	// Resolve API key: try primary + alt env vars, then .env in dev mode.
-	apiKey, envVarUsed := model.ResolveAPIKey(provider)
-	if apiKey == "" && os.Getenv("OBOL_DEVELOPMENT") == "true" {
-		envVar := model.ProviderEnvVar(provider)
-		dotEnv := model.LoadDotEnv(filepath.Join(".", ".env"))
-
-		apiKey = dotEnv[envVar]
-		if apiKey != "" {
-			envVarUsed = envVar + " (.env)"
-		}
-	}
-
-	if apiKey == "" {
-		u.Blank()
-
-		primaryEnv := model.ProviderEnvVar(provider)
-		u.Warnf("Agent model %s detected but %s is not set", agentModel, primaryEnv)
-		u.Dim(fmt.Sprintf("  Set it in your environment: export %s=...", primaryEnv))
-		u.Dim("  Or configure after startup: obol model setup --provider " + provider)
-
-		return ""
-	}
-
-	u.Blank()
-
-	if envVarUsed != model.ProviderEnvVar(provider) {
-		u.Infof("Cloud model %s detected via %s — configuring %s provider", agentModel, envVarUsed, provider)
-	} else {
-		u.Infof("Cloud model %s detected — configuring %s provider", agentModel, provider)
-	}
-
-	if err := model.PatchLiteLLMProvider(cfg, u, provider, apiKey, []string{modelName}); err != nil {
-		u.Warnf("Auto-configure %s failed: %v", provider, err)
-		u.Dim(fmt.Sprintf("  Run 'obol model setup --provider %s' to configure manually.", provider))
-
-		return ""
-	}
-
-	return provider
-}
-
 // localImage describes a Docker image built from source in this repo.
 type localImage struct {
 	tag        string // e.g. "ghcr.io/obolnetwork/x402-verifier:latest"
@@ -1149,9 +1058,6 @@ var baseLocalImages = []localImage{
 
 func devPreloadImages() []string {
 	var images []string
-	if ref := openclaw.ImageRef(); ref != "" {
-		images = append(images, ref)
-	}
 	if ref := hermes.ImageRef(); ref != "" {
 		images = append(images, ref)
 	}

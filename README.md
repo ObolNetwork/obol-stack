@@ -144,7 +144,7 @@ obol tunnel setup --hostname stack.example.com <connector-token>
 obol tunnel status
 ```
 
-This uses a least-privilege, single-tunnel connector token — no account-wide API key required. Need a domain? Buy or transfer one in the Cloudflare dashboard so it is a zone in your account. (`obol domain` and the browser-login `obol tunnel login` / `tunnel setup --management local` paths are deprecated and will be removed in v0.16.)
+This uses a least-privilege, single-tunnel connector token — no account-wide API key required. Need a domain? Buy or transfer one in the Cloudflare dashboard so it is a zone in your account.
 
 ### 3. Get discovered
 
@@ -256,7 +256,7 @@ The CLI probes the seller's 402 pricing, prompts for how many requests to pre-au
 
 Hermes is the default runtime, deployed by the stack as `obol-agent`. Multiple instances run side-by-side, each in its own namespace with its own wallet.
 
-> **OpenClaw is deprecated** (v0.15) and will be removed in v0.16. `obol openclaw …` and `--runtime openclaw` still work but print a warning, and `obolup.sh` no longer installs the `openclaw` CLI unless `OBOL_INSTALL_OPENCLAW=true`. Move an OpenClaw wallet to Hermes with `obol agent wallet backup --runtime openclaw <id> --file openclaw-wallet.json`, then `obol agent wallet restore --runtime hermes --input openclaw-wallet.json --force` (this replaces the Hermes agent's wallet — back that up first).
+> **OpenClaw was removed in v0.16.** If you still run an OpenClaw instance, `obol stack up` lists it with its keystore and password paths: copy those before deleting the namespace. To move the wallet into Hermes, back it up with obol v0.15 (`obol agent wallet backup --runtime openclaw <id> --file w.json`), then run `obol agent wallet restore --input w.json --force` (this replaces the Hermes agent's wallet, so back that up first).
 
 ```bash
 # Default stack-managed Hermes agent

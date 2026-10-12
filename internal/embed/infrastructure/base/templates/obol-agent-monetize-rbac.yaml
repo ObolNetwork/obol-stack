@@ -7,9 +7,9 @@
 
 ---
 #------------------------------------------------------------------------------
-# Namespace - pre-create the default Hermes obol-agent namespace. ClusterRole
-# bindings below also include the default OpenClaw namespace so either runtime
-# can use the same sell/buy compatibility skills.
+# Namespace - pre-create the default Hermes obol-agent namespace. The
+# openclaw-* ClusterRole names predate the OpenClaw removal (v0.16) and are kept
+# so upgrades do not have to migrate RBAC objects.
 #------------------------------------------------------------------------------
 apiVersion: v1
 kind: Namespace
@@ -116,9 +116,6 @@ subjects:
   - kind: ServiceAccount
     name: hermes
     namespace: hermes-obol-agent
-  - kind: ServiceAccount
-    name: openclaw
-    namespace: openclaw-obol-agent
 
 ---
 #------------------------------------------------------------------------------
@@ -153,6 +150,3 @@ subjects:
   - kind: ServiceAccount
     name: hermes
     namespace: hermes-obol-agent
-  - kind: ServiceAccount
-    name: openclaw
-    namespace: openclaw-obol-agent

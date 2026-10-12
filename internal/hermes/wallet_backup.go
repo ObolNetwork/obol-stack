@@ -40,9 +40,8 @@ type RestoreWalletOptions struct {
 var readHostKeystoreFileFn = os.ReadFile
 
 // BackupWalletCmd creates a backup of the Hermes instance's remote-signer
-// wallet. The on-disk format is identical to OpenClaw's, so a Hermes backup
-// can be restored into an OpenClaw instance and vice versa — instance
-// names and namespace scoping are not part of the backup payload.
+// wallet. Instance names and namespace scoping are not part of the backup
+// payload, so it restores into any instance (also v0.15 OpenClaw backups).
 func BackupWalletCmd(cfg *config.Config, id string, opts BackupWalletOptions, u *ui.UI) error {
 	deployDir := DeploymentPath(cfg, id)
 
@@ -114,8 +113,8 @@ func BackupWalletCmd(cfg *config.Config, id string, opts BackupWalletOptions, u 
 	return nil
 }
 
-// RestoreWalletCmd restores a Hermes wallet from a backup file. Mirrors
-// openclaw.RestoreWalletCmd, sharing the wire format via walletbackup.
+// RestoreWalletCmd restores a Hermes wallet from a backup file (wire format
+// in walletbackup).
 func RestoreWalletCmd(cfg *config.Config, id string, opts RestoreWalletOptions, u *ui.UI) error {
 	raw, err := os.ReadFile(opts.Input)
 	if err != nil {

@@ -570,7 +570,7 @@ bootstrap_flow_workspace() {
     # impossible to exercise from the flows at all — every run died on
     # "prerequisites check failed: k3s not found at <workspace>/bin/k3s".
     # It is linked only when present, so k3d-only hosts are unaffected.
-    for tool in kubectl helm helmfile k3d k3s k9s openclaw; do
+    for tool in kubectl helm helmfile k3d k3s k9s; do
         src=$(command -v "$tool" 2>/dev/null || printf '%s\n' "$OBOL_ROOT/.workspace/bin/$tool")
         [ -f "$src" ] && ln -sf "$src" "$dir/bin/$tool" 2>/dev/null
     done
@@ -1145,8 +1145,7 @@ remote_signer_chart_version() {
         /remoteSignerChartVersion =/ {print $2; found=1; exit}
         END {exit found ? 0 : 1}
     ' \
-        "$OBOL_ROOT/internal/agentruntime/charts.go" \
-        "$OBOL_ROOT/internal/openclaw/openclaw.go"
+        "$OBOL_ROOT/internal/agentruntime/charts.go"
 }
 
 remote_signer_chart_available() {
@@ -1189,28 +1188,17 @@ with socket.socket() as sock:
 PY
 }
 
+# detect_buyer_runtime sets Bob's agent coordinates. Hermes is the only
+# runtime (OpenClaw was removed in v0.16); the name is kept for the callers.
 detect_buyer_runtime() {
-    local runner="${1:-bob}"
-    if command -v "$runner" >/dev/null 2>&1 && \
-       "$runner" kubectl get ns openclaw-obol-agent >/dev/null 2>&1; then
-        BOB_AGENT_RUNTIME="openclaw"
-        BOB_AGENT_NS="openclaw-obol-agent"
-        BOB_AGENT_DEPLOY="openclaw"
-        BOB_AGENT_CONTAINER="openclaw"
-        BOB_AGENT_SERVICE="openclaw"
-        BOB_AGENT_REMOTE_PORT="18789"
-        BOB_OBOL_SKILLS_DIR="/data/.openclaw/skills"
-        BOB_AGENT_LABEL="app.kubernetes.io/name=openclaw"
-    else
-        BOB_AGENT_RUNTIME="hermes"
-        BOB_AGENT_NS="hermes-obol-agent"
-        BOB_AGENT_DEPLOY="hermes"
-        BOB_AGENT_CONTAINER="hermes"
-        BOB_AGENT_SERVICE="hermes"
-        BOB_AGENT_REMOTE_PORT="8642"
-        BOB_OBOL_SKILLS_DIR="/data/.hermes/obol-skills"
-        BOB_AGENT_LABEL="app.kubernetes.io/name=hermes"
-    fi
+    BOB_AGENT_RUNTIME="hermes"
+    BOB_AGENT_NS="hermes-obol-agent"
+    BOB_AGENT_DEPLOY="hermes"
+    BOB_AGENT_CONTAINER="hermes"
+    BOB_AGENT_SERVICE="hermes"
+    BOB_AGENT_REMOTE_PORT="8642"
+    BOB_OBOL_SKILLS_DIR="/data/.hermes/obol-skills"
+    BOB_AGENT_LABEL="app.kubernetes.io/name=hermes"
     export BOB_AGENT_RUNTIME BOB_AGENT_NS BOB_AGENT_DEPLOY BOB_AGENT_CONTAINER \
            BOB_AGENT_SERVICE BOB_AGENT_REMOTE_PORT BOB_OBOL_SKILLS_DIR BOB_AGENT_LABEL
 }

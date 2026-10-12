@@ -411,7 +411,7 @@ func TestPatchAgentBaseURL_InsertHermesManifestIndentation(t *testing.T) {
       template:
         spec:
           containers:
-            - name: openclaw
+            - name: hermes
               env:
                 - name: REMOTE_SIGNER_URL
                   value: http://remote-signer:9000

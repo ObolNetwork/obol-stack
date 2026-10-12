@@ -370,7 +370,7 @@ func upgradeNetworks(cfg *config.Config, u *ui.UI) error {
 	return nil
 }
 
-// upgradeApps syncs each installed app. Agent runtimes (Hermes, OpenClaw)
+// upgradeApps syncs each installed app. Agent runtimes (Hermes)
 // share applications/ but aren't apps; stack up and agent sync own them.
 func upgradeApps(cfg *config.Config, u *ui.UI) error {
 	ids, err := app.ListInstanceIDs(cfg)

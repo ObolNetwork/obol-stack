@@ -245,19 +245,6 @@ func TestBuildBuyPyArgv(t *testing.T) {
 				"--model", "qwen3.5:9b",
 			),
 		},
-		{
-			name: "openclaw runtime uses openclaw skill mount",
-			opts: buyPyOptions{
-				Runtime:     agentruntime.OpenClaw,
-				Name:        "demo",
-				Seller:      "https://s.example",
-				BudgetMicro: "1000000",
-			},
-			want: append(buy.BuyPyCommand(agentruntime.OpenClaw, "buy", "demo"),
-				"--endpoint", "https://s.example",
-				"--budget", "1000000",
-			),
-		},
 	}
 
 	for _, tc := range tests {

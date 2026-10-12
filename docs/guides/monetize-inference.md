@@ -849,7 +849,8 @@ Missing any of these fields causes the facilitator to reject the payment before 
 
 The default agent should be able to create and patch Obol resources without a
 manual RBAC patch. Verify the installed read and write bindings include the
-default Hermes/OpenClaw service accounts:
+default Hermes service account (the `openclaw-*` names predate the OpenClaw
+removal and are kept):
 
 ```bash
 kubectl get clusterrolebinding openclaw-monetize-read-binding \

@@ -71,11 +71,10 @@ fi
 USDC_ADDRESS_BASE_SEPOLIA="0x036CbD53842c5426634e7929541eC2318f3dCF7e"
 ERC8004_IDENTITY_REGISTRY_BASE_SEPOLIA="0x8004A818BFB912233c491871b3d84c89A494BD9e"
 # Initial Hermes defaults for Bob's buyer agent. These are replaced at runtime by
-# detect_buyer_runtime bob (called after Bob's stack comes up) which inspects which
-# agent namespace actually exists in Bob's cluster and re-exports BOB_AGENT_NS,
-# BOB_AGENT_DEPLOY, BOB_AGENT_CONTAINER, BOB_AGENT_SERVICE, BOB_AGENT_REMOTE_PORT,
-# BOB_OBOL_SKILLS_DIR, BOB_AGENT_LABEL, BOB_AGENT_RUNTIME accordingly. This lets the
-# flow run against either Hermes or OpenClaw without code changes.
+# detect_buyer_runtime bob (called after Bob's stack comes up) re-exports
+# BOB_AGENT_NS, BOB_AGENT_DEPLOY, BOB_AGENT_CONTAINER, BOB_AGENT_SERVICE,
+# BOB_AGENT_REMOTE_PORT, BOB_OBOL_SKILLS_DIR, BOB_AGENT_LABEL and
+# BOB_AGENT_RUNTIME for the Hermes agent.
 BOB_AGENT_NS="hermes-obol-agent"
 BOB_AGENT_DEPLOY="hermes"
 BOB_AGENT_CONTAINER="hermes"
@@ -349,7 +348,7 @@ bob_buy_skill_balance() {
 
 bob_remote_signer_address() {
     # BOB_AGENT_NS / BOB_AGENT_DEPLOY / BOB_AGENT_CONTAINER are set by
-    # detect_buyer_runtime so this works against either Hermes or OpenClaw.
+    # detect_buyer_runtime.
     bob kubectl exec -n "$BOB_AGENT_NS" "deploy/$BOB_AGENT_DEPLOY" -c "$BOB_AGENT_CONTAINER" -- \
         python3 -c "
 import json
@@ -1131,9 +1130,8 @@ route_llm_via_obol_cli bob
 
 seed_bob_wallet
 
-# Detect which buyer-agent runtime (Hermes or OpenClaw) Bob's cluster actually deployed.
-# This re-exports BOB_AGENT_NS / DEPLOY / CONTAINER / SERVICE / REMOTE_PORT /
-# OBOL_SKILLS_DIR / LABEL / RUNTIME based on which namespace exists. Must run before
+# Set Bob's buyer-agent coordinates (Hermes). This re-exports BOB_AGENT_NS /
+# DEPLOY / CONTAINER / SERVICE / REMOTE_PORT / OBOL_SKILLS_DIR / LABEL / RUNTIME. Must run before
 # any `bob kubectl exec` against the agent pod or any `bob <runtime> token` call.
 detect_buyer_runtime bob
 
@@ -1359,7 +1357,7 @@ else
     buy_content=$(extract_assistant_content "$buy_response" 2>/dev/null || true)
     # The agent's textual response is informational only; the purchase is confirmed
     # structurally by the next step's PurchaseRequest CR Ready=True poll. Natural-language
-    # matching has been brittle across runtime versions (OpenClaw vs Hermes).
+    # matching has been brittle across agent versions.
     echo "${buy_content:0:500}"
     if [ -z "$(printf '%s' "$buy_content" | tr -d '[:space:]')" ]; then
         echo "  ! Agent returned no final assistant text; confirming purchase via PurchaseRequest CR"

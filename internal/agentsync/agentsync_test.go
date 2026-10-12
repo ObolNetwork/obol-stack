@@ -38,7 +38,8 @@ func TestListInstances(t *testing.T) {
 
 func TestSyncInstances_OnlyMissingSkipsDeployed(t *testing.T) {
 	cfg := &config.Config{ConfigDir: t.TempDir()}
-	for _, p := range []string{"hermes/obol-agent", "hermes/quant", "openclaw/legacy"} {
+	// openclaw/legacy is left over from <= v0.15 and must be ignored.
+	for _, p := range []string{"hermes/obol-agent", "hermes/quant", "hermes/broken", "openclaw/legacy"} {
 		if err := os.MkdirAll(filepath.Join(cfg.ConfigDir, "applications", p), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -51,15 +52,14 @@ func TestSyncInstances_OnlyMissingSkipsDeployed(t *testing.T) {
 	rec := func(rt agentruntime.Runtime) func(*config.Config, string, *ui.UI) error {
 		return func(_ *config.Config, id string, _ *ui.UI) error {
 			synced = append(synced, string(rt)+"/"+id)
-			if id == "legacy" {
+			if id == "broken" {
 				return errors.New("boom")
 			}
 			return nil
 		}
 	}
 	syncFns = map[agentruntime.Runtime]func(*config.Config, string, *ui.UI) error{
-		agentruntime.Hermes:   rec(agentruntime.Hermes),
-		agentruntime.OpenClaw: rec(agentruntime.OpenClaw),
+		agentruntime.Hermes: rec(agentruntime.Hermes),
 	}
 	releaseHealthFn = func(_ *config.Config, ns string) (helmcmd.ReleaseHealth, error) {
 		if ns == "hermes-obol-agent" {
@@ -70,9 +70,10 @@ func TestSyncInstances_OnlyMissingSkipsDeployed(t *testing.T) {
 
 	err := SyncInstances(cfg, ui.New(false), Options{OnlyMissing: true})
 	if err == nil {
-		t.Fatal("expected joined error for the failing openclaw instance")
+		t.Fatal("expected joined error for the failing instance")
 	}
-	if want := []string{"hermes/quant", "openclaw/legacy"}; !reflect.DeepEqual(synced, want) {
+
+	if want := []string{"hermes/broken", "hermes/quant"}; !reflect.DeepEqual(synced, want) {
 		t.Fatalf("synced = %v, want %v (deployed default instance must be skipped)", synced, want)
 	}
 

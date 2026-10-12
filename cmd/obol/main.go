@@ -193,7 +193,6 @@ func newRootCommand(cfg *config.Config) *cli.Command {
 			// Tunnel & Domain Commands
 			// ============================================================
 			tunnelCommand(cfg),
-			domainCommand(cfg),
 			// ============================================================
 			// Kubernetes Tool Passthroughs (with auto-configured KUBECONFIG)
 			// ============================================================
@@ -237,7 +236,6 @@ func newRootCommand(cfg *config.Config) *cli.Command {
 			upgradeCommand(cfg),
 			networkCommand(cfg),
 			hermesCommand(cfg),
-			openclawCommand(cfg),
 			sellCommand(cfg),
 			buyCommand(cfg),
 			modelCommand(cfg),

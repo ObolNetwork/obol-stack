@@ -327,7 +327,7 @@ func upgradeOneHelmfile(helmfilePath, helmBinary, kubeconfigPath string, major b
 }
 
 // collectHelmfiles returns all helmfile paths to check: the defaults helmfile
-// plus any application instance helmfiles (e.g. openclaw instances that pin
+// plus any application instance helmfiles (e.g. agent instances that pin
 // obol/remote-signer).
 func collectHelmfiles(cfg *config.Config) []string {
 	paths := []string{filepath.Join(cfg.ConfigDir, "defaults", "helmfile.yaml")}

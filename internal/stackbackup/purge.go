@@ -4,14 +4,13 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
-	"github.com/ObolNetwork/obol-stack/internal/openclaw"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 // PromptExportBeforePurge offers a full stack export before a destructive
 // purge and returns true when one was written (callers can then skip
 // narrower wallet-only prompts). Non-interactive shells get a warning but
-// are never blocked, mirroring openclaw.PromptBackupBeforePurge.
+// are never blocked.
 //
 // Offered for BOTH purge modes: a plain purge keeps the data dir but deletes
 // the config dir, which holds every agent's keystore password
@@ -20,9 +19,8 @@ import (
 // wallets that exist only as in-cluster Secrets.
 func PromptExportBeforePurge(cfg *config.Config, u *ui.UI, force bool) bool {
 	hermesWallets := hermes.FindInstancesWithWallets(cfg)
-	openclawWallets := openclaw.FindInstancesWithWallets(cfg)
 	dataNamespaces := selectDataNamespaces(cfg.DataDir)
-	if len(hermesWallets)+len(openclawWallets)+len(dataNamespaces) == 0 {
+	if len(hermesWallets)+len(dataNamespaces) == 0 {
 		return false
 	}
 
