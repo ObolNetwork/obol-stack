@@ -150,6 +150,9 @@ releases:
             {{- else if eq .Values.consensusClient "lodestar" }}
             # renovate: datasource=github-releases depName=ChainSafe/lodestar
             tag: v1.49.0
+            {{- else if eq .Values.consensusClient "grandine" }}
+            # renovate: datasource=docker depName=sifrai/grandine
+            tag: "2.0.6"
             {{- end }}
           persistence:
             enabled: true
