@@ -352,6 +352,20 @@ else
     fail "RBAC binding missing agent SA — read: ${rbac_out:0:80} write: ${rbac_write:0:80}"
 fi
 
+# Hermes stewardship visibility: cluster-wide workload/event/PVC read, but
+# never cluster-wide Secrets or ConfigMaps (several hold credentials).
+step "RBAC: Hermes reads workloads cluster-wide, never Secrets/ConfigMaps"
+hermes_sa="system:serviceaccount:hermes-obol-agent:hermes"
+can() { "$OBOL" kubectl auth can-i "$@" --as="$hermes_sa" 2>/dev/null || true; }
+if [ "$(can list statefulsets.apps -A)" = "yes" ] && [ "$(can list events -A)" = "yes" ] && \
+   [ "$(can list persistentvolumeclaims -A)" = "yes" ] && [ "$(can get pods --subresource=log -A)" = "yes" ] && \
+   [ "$(can get secrets -A)" = "no" ] && [ "$(can list configmaps -A)" = "no" ] && \
+   [ "$(can get configmaps -n llm)" = "no" ]; then
+    pass "Hermes read RBAC: workloads/events/PVCs/logs yes; Secrets and ConfigMaps no"
+else
+    fail "Hermes read RBAC drift (expect sts/events/pvcs/logs=yes, secrets/configmaps=no)"
+fi
+
 # §2 component table: Remote Signer running (getting-started §2 lists it as a component)
 # The remote-signer provides signing services for the agent's Ethereum wallet.
 # It exposes a REST API on port 9000 for health and key management.

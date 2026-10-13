@@ -791,6 +791,96 @@ func bindingHasSubject(doc map[string]any, name, namespace string) bool {
 	return false
 }
 
+// TestHermesReadRBAC_ClusterVisibility pins the cluster-wide observation the
+// default Hermes needs to steward Ethereum nodes and DV pods in other
+// namespaces, and the two resources it must never read cluster-wide: Secrets
+// (wallet/API material) and ConfigMaps (several carry credentials — see the
+// comment on openclaw-monetize-read).
+func TestHermesReadRBAC_ClusterVisibility(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/obol-agent-monetize-rbac.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+	docs := multiDoc(data)
+	readCR := findDocByName(docs, "ClusterRole", "openclaw-monetize-read")
+	if readCR == nil {
+		t.Fatal("no ClusterRole 'openclaw-monetize-read' found")
+	}
+	rules, _ := readCR["rules"].([]any)
+
+	want := []struct{ group, resource, verb string }{
+		{"", "pods", "watch"},
+		{"", "pods/log", "get"},
+		{"", "events", "list"},
+		{"events.k8s.io", "events", "list"},
+		{"", "persistentvolumeclaims", "list"},
+		{"apps", "statefulsets", "list"},
+		{"apps", "statefulsets", "watch"},
+		{"apps", "deployments", "watch"},
+		{"apps", "replicasets", "list"},
+		{"batch", "jobs", "list"},
+	}
+	for _, w := range want {
+		if !hasVerbOnResource(rules, w.group, w.resource, w.verb) {
+			t.Errorf("read ClusterRole missing %q on %q/%s", w.verb, w.group, w.resource)
+		}
+	}
+
+	for _, resource := range []string{"secrets", "configmaps"} {
+		for _, verb := range []string{"get", "list", "watch"} {
+			if hasVerbOnResource(rules, "", resource, verb) {
+				t.Errorf("read ClusterRole must not grant cluster-wide %q on core/%s", verb, resource)
+			}
+		}
+	}
+	for _, r := range rules {
+		rm, _ := r.(map[string]any)
+		if stringSet(rm["resources"])["*"] || stringSet(rm["verbs"])["*"] {
+			t.Errorf("read ClusterRole has wildcard rule %v", rm)
+		}
+	}
+}
+
+// TestNetworkAgentRBAC_BindsHermes guards the per-namespace ConfigMap read
+// that network deployments grant the default Hermes agent. The binding used to
+// name the pre-Hermes obol-agent/agent ServiceAccount, which no longer exists.
+func TestNetworkAgentRBAC_BindsHermes(t *testing.T) {
+	for _, networkName := range []string{"ethereum", "aztec"} {
+		t.Run(networkName, func(t *testing.T) {
+			data, err := ReadEmbeddedNetworkFile(networkName, "templates/agent-rbac.yaml")
+			if err != nil {
+				t.Fatalf("ReadEmbeddedNetworkFile: %v", err)
+			}
+			docs := multiDoc(data)
+
+			role := findDocByName(docs, "Role", "obol-agent-network-role")
+			if role == nil {
+				t.Fatal("no Role 'obol-agent-network-role'")
+			}
+			rules, _ := role["rules"].([]any)
+			if !hasVerbOnResource(rules, "", "configmaps", "get") {
+				t.Error("network Role should grant configmaps get in the network namespace")
+			}
+			for _, verb := range []string{"get", "list", "watch"} {
+				if hasVerbOnResource(rules, "", "secrets", verb) {
+					t.Errorf("network Role must not grant %q on secrets", verb)
+				}
+			}
+
+			rb := findDocByName(docs, "RoleBinding", "obol-agent-access")
+			if rb == nil {
+				t.Fatal("no RoleBinding 'obol-agent-access'")
+			}
+			if !bindingHasSubject(rb, "hermes", "hermes-obol-agent") {
+				t.Error("network RoleBinding missing hermes-obol-agent/hermes subject")
+			}
+			if bindingHasSubject(rb, "obol-agent", "agent") {
+				t.Error("network RoleBinding still names the stale agent/obol-agent ServiceAccount")
+			}
+		})
+	}
+}
+
 func TestX402VerifierRBAC_CanReadAgentAPISecrets(t *testing.T) {
 	data, err := ReadInfrastructureFile("base/templates/x402.yaml")
 	if err != nil {

@@ -1,6 +1,10 @@
 {{- if eq .Release.Name "ethereum-pvcs" }}
-# Scoped RBAC for Obol Agent in this namespace
-# Replaces the previous ClusterRole: admin binding with least-privilege access
+# Scoped RBAC for the default Hermes agent in this network namespace.
+# Cluster-wide read (pods, logs, events, statefulsets, PVCs) comes from the
+# openclaw-monetize-read ClusterRole; this Role adds ConfigMap read, which is
+# not granted cluster-wide because other namespaces' ConfigMaps carry
+# credentials. Network ConfigMaps here are public (client config + the
+# <network>-<id>-metadata endpoints); keys/JWTs live in Secrets, never readable.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -36,6 +40,6 @@ roleRef:
   name: obol-agent-network-role
 subjects:
   - kind: ServiceAccount
-    name: obol-agent
-    namespace: agent
+    name: hermes
+    namespace: hermes-obol-agent
 {{- end }}
