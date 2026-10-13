@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","id":1,"result":{"startingBlock":"0x0","currentBlock":"0x10c8e0","highestBlock":"0x21a4c0","warpChunksAmount":null,"warpChunksProcessed":null,"stages":[{"name":"Headers","block":"0x21a4c0"},{"name":"Bodies","block":"0x10c8e0"}]}}

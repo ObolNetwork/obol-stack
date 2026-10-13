@@ -1,0 +1,8 @@
+{"apiVersion":"v1","kind":"List","items":[
+ {"metadata":{"name":"ethereum-execution-0","labels":{"app.kubernetes.io/name":"execution"}},
+  "status":{"phase":"Running","containerStatuses":[{"ready":true,"restartCount":0,"state":{"running":{}}}]}},
+ {"metadata":{"name":"ethereum-beacon-0","labels":{"app.kubernetes.io/name":"beacon"}},
+  "status":{"phase":"Running","containerStatuses":[{"ready":false,"restartCount":7,"state":{"waiting":{"reason":"CrashLoopBackOff"}}}]}},
+ {"metadata":{"name":"ethereum-snapshotter-6d9f7c-abcde","labels":{"app.kubernetes.io/name":"snapshotter"}},
+  "status":{"phase":"Pending"}}
+]}
