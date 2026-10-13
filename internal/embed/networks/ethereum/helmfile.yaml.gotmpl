@@ -123,6 +123,12 @@ releases:
             enabled: true
             size: {{ if (index .Values "executionStorageSize" | default "") }}{{ index .Values "executionStorageSize" }}{{ else }}{{ if eq .Values.network "mainnet" }}{{ if eq (index .Values "mode" | default "full") "archive" }}4500Gi{{ else }}500Gi{{ end }}{{ else }}{{ if eq (index .Values "mode" | default "full") "archive" }}300Gi{{ else }}100Gi{{ end }}{{ end }}{{ end }}
             existingClaim: execution-{{ .Values.executionClient }}-{{ .Values.network }}
+          # Scraped by the stack's kube-prometheus-stack, which only selects
+          # monitors labelled release=monitoring (values/monitoring.yaml.gotmpl).
+          serviceMonitor:
+            enabled: true
+            labels:
+              release: monitoring
 
       # Consensus client (pinned versions — Renovate-tracked)
       # The upstream chart wires --execution-endpoint and --network automatically.
@@ -149,6 +155,12 @@ releases:
             enabled: true
             size: {{ if (index .Values "consensusStorageSize" | default "") }}{{ index .Values "consensusStorageSize" }}{{ else }}{{ if eq .Values.network "mainnet" }}{{ if eq (index .Values "mode" | default "full") "archive" }}500Gi{{ else }}200Gi{{ end }}{{ else }}{{ if eq (index .Values "mode" | default "full") "archive" }}100Gi{{ else }}50Gi{{ end }}{{ end }}{{ end }}
             existingClaim: consensus-{{ .Values.consensusClient }}-{{ .Values.network }}
+          # Scraped by the stack's kube-prometheus-stack, which only selects
+          # monitors labelled release=monitoring (values/monitoring.yaml.gotmpl).
+          serviceMonitor:
+            enabled: true
+            labels:
+              release: monitoring
 
   # Metadata ConfigMap for frontend discovery
   - name: ethereum-metadata
