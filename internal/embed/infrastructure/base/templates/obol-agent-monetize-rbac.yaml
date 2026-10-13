@@ -19,6 +19,17 @@ metadata:
 ---
 #------------------------------------------------------------------------------
 # ClusterRole - Read-only permissions
+#
+# Cluster-wide observation so Hermes can steward workloads outside its own
+# namespace (local Ethereum nodes in ethereum-<id>, DV pods, monitoring).
+# Deliberately EXCLUDES:
+#   - secrets: wallet keystores, API keys, tunnel tokens. Never readable.
+#   - configmaps: several stack ConfigMaps carry credentials (litellm-config
+#     custom-endpoint api_key, hermes-config LiteLLM master key, erpc-config
+#     upstream URLs with basic auth / paid RPC keys, x402-buyer-auths pre-signed
+#     payment vouchers, dv-pod `prometheus` remote-write token). ConfigMap read
+#     is granted per namespace instead (network templates' agent-rbac.yaml; a
+#     resourceNames-scoped Role in the dv-pod chart).
 #------------------------------------------------------------------------------
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -29,14 +40,20 @@ rules:
     resources: ["serviceoffers", "serviceoffers/status"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
-    resources: ["pods", "services", "endpoints", "namespaces", "nodes"]
+    resources: ["pods", "services", "endpoints", "namespaces", "nodes", "persistentvolumeclaims", "events"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
+  - apiGroups: ["events.k8s.io"]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["apps"]
-    resources: ["deployments"]
-    verbs: ["get", "list"]
+    resources: ["deployments", "statefulsets", "replicasets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
 
 ---
 #------------------------------------------------------------------------------
