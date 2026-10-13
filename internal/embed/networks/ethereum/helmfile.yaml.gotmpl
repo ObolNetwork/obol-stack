@@ -1,3 +1,8 @@
+{{- /* Deployments made by an older obol can name a client that is no longer
+  pinned (ethereumjs). Fail clearly instead of inside the upstream chart. */}}
+{{- if not (has .Values.executionClient (list "reth" "geth" "nethermind" "besu" "erigon")) }}
+{{- fail (printf "execution client %q is no longer supported. Delete this deployment and reinstall with --execution-client reth, geth, nethermind, besu or erigon" .Values.executionClient) }}
+{{- end }}
 repositories:
   - name: ethereum-helm-charts
     url: https://ethpandaops.github.io/ethereum-helm-charts
