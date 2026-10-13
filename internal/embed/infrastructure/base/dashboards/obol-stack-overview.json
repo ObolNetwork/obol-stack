@@ -38,6 +38,18 @@
  },
  "links": [
   {
+   "title": "LLM performance",
+   "url": "/grafana/d/obol-llm",
+   "type": "link",
+   "icon": "dashboard",
+   "tooltip": "LiteLLM TTFT, tokens/s, latency and errors per model and upstream",
+   "targetBlank": false,
+   "keepTime": true,
+   "includeVars": false,
+   "asDropdown": false,
+   "tags": []
+  },
+  {
    "title": "Ethereum node",
    "url": "/grafana/d/obol-eth-node",
    "type": "link",

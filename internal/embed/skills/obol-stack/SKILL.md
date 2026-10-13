@@ -77,6 +77,7 @@ A `403 Forbidden` means the resource is outside your RBAC, not that it is missin
 | Local EL node health (`eth_syncing`, `net_peerCount`) | `http://ethereum-execution.ethereum-<id>.svc.cluster.local:8545` |
 | Local CL node health | `http://ethereum-beacon.ethereum-<id>.svc.cluster.local:5052` — `/eth/v1/node/syncing`, `/eth/v1/node/health`, `/eth/v1/node/peer_count` |
 | Prometheus (all scraped metrics) | `http://monitoring-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090/api/v1/query?query=<promql>` |
+| LLM speed per model and upstream (last 5m) | Prometheus rules `obol:llm_ttft_seconds:p50_5m` / `:p95_5m`, `obol:llm_output_tokens_per_second:mean_5m`, `obol:llm_error_ratio:5m` (labels `model`, `api_base`; TTFT is streaming requests only) |
 | DV pod charon metrics | `http://<release>.<dv-namespace>.svc.cluster.local:3620/metrics` (find the service with `services -n <dv-namespace>`) |
 
 Each network namespace also has a public `ethereum-<id>-metadata` ConfigMap listing its endpoints. Always send JSON-RPC for chain data through eRPC; hit the EL directly only to check that node's own sync/peers. The endpoints above are reachable from the default Hermes agent. Sub-agents run under a NetworkPolicy and can reach only LiteLLM, eRPC, Traefik and the internet.

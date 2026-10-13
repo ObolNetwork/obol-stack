@@ -741,6 +741,55 @@ model_list:
 	t.Fatalf("merged config missing paid route:\n%s", merged)
 }
 
+// Stacks upgraded from before LiteLLM metrics keep their live config (the
+// chart renders it via lookup); the stack-up merge must add the Prometheus
+// settings without touching the operator's other settings, and report a
+// change only once.
+func TestMergeLiteLLMConfigAddsObservabilitySettings(t *testing.T) {
+	old := `
+model_list:
+  - model_name: "qwen3.5:9b"
+    litellm_params:
+      model: "ollama_chat/qwen3.5:9b"
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+litellm_settings:
+  cache: false
+  drop_params: true
+`
+
+	merged, err := mergeLiteLLMConfig(old, old)
+	if err != nil {
+		t.Fatalf("mergeLiteLLMConfig: %v", err)
+	}
+
+	if litellmConfigSemanticallyEqual(old, merged) {
+		t.Fatal("merge did not add the Prometheus settings, so stack up would not restart LiteLLM to pick them up")
+	}
+
+	var got model.LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(merged), &got); err != nil {
+		t.Fatalf("unmarshal merged config: %v\n%s", err, merged)
+	}
+
+	if got.LiteLLMSettings["drop_params"] != true || !hasLiteLLMModel(got, "qwen3.5:9b") {
+		t.Fatalf("merge lost existing config:\n%s", merged)
+	}
+
+	if model.EnsureLiteLLMObservability(&got) {
+		t.Fatalf("merged config is missing Prometheus settings:\n%s", merged)
+	}
+
+	again, err := mergeLiteLLMConfig(merged, merged)
+	if err != nil {
+		t.Fatalf("second merge: %v", err)
+	}
+
+	if !litellmConfigSemanticallyEqual(merged, again) {
+		t.Fatal("second stack up changed the config again (would restart LiteLLM on every up)")
+	}
+}
+
 func TestLiteLLMConfigSemanticEqualIgnoresFormatting(t *testing.T) {
 	a := `model_list:
   - model_name: "paid/*"

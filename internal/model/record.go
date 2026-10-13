@@ -350,6 +350,7 @@ func mapKeys(m map[string]string) []string {
 // writeLiteLLMConfig replaces config.yaml in the ConfigMap wholesale
 // (unlike patchLiteLLMConfig's merge-by-name, reconcile must impose order).
 func writeLiteLLMConfig(kubectlBinary, kubeconfigPath string, litellmConfig *LiteLLMConfig) error {
+	EnsureLiteLLMObservability(litellmConfig)
 	updated, err := yaml.Marshal(litellmConfig)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)

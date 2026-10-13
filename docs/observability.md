@@ -11,6 +11,9 @@ rule, or proposing "let's persist the counter to a PVC."
 - **Grafana** is at `http://obol.stack:8080/grafana/`: anonymous, read-only,
   local-only. Dashboards have stable uids for deep links — see
   [Grafana and dashboards](#grafana-and-dashboards).
+- **LLM performance** (TTFT, tokens/s, latency, errors per model and upstream)
+  comes from LiteLLM's Prometheus callback: dashboard `/grafana/d/obol-llm`,
+  rules `obol:llm_*` — see [LLM performance](#llm-performance).
 - **On-chain settlement TXs are the canonical record for lifetime financial
   state.** Every settled x402 payment leaves an immutable on-chain trace via
   `X-PAYMENT-RESPONSE` (settle tx hash, asset, amount, payer, payee).
@@ -487,6 +490,7 @@ skills — **do not change them**.
 | `obol-stack-overview` | Obol Stack overview | `/grafana/d/obol-stack-overview` |
 | `obol-eth-node` | Ethereum node | `/grafana/d/obol-eth-node?var-namespace=ethereum-<id>` |
 | `obol-charon` | Charon Overview | `/grafana/d/obol-charon?var-cluster_name=<cluster name>` |
+| `obol-llm` | LLM performance | `/grafana/d/obol-llm?var-model=<model>&var-api_base=<upstream>` |
 
 Any link also takes `from`/`to` (`&from=now-24h&to=now`), and `&kiosk` hides
 Grafana's chrome. Prefix with the local ingress URL
@@ -543,6 +547,7 @@ Everything is selected by the label `release: monitoring`
 |---|---|---|
 | x402-verifier | ServiceMonitor | `base/templates/x402.yaml` |
 | x402-buyer | PodMonitor | `base/templates/llm.yaml` |
+| LiteLLM (`:4000/metrics/`) | ServiceMonitor | `base/templates/llm.yaml` |
 | eRPC (`:4001`) | ServiceMonitor | `values/erpc.yaml.gotmpl` |
 | Traefik (`:9100`, `traefik-metrics` Service) | ServiceMonitor | traefik release in `helmfile.yaml` |
 | cloudflared (`:2000`) | PodMonitor | `cloudflared/templates/podmonitor.yaml` |
@@ -590,6 +595,174 @@ Traefik and cloudflared targets.
 
 ---
 
+## LLM performance
+
+Goal: objective numbers for "is this local or remote model viable?" —
+time to first token (TTFT), generation speed, latency and errors per model
+and per upstream, from LiteLLM itself, so every agent request is measured
+without extra tooling.
+
+### How it is wired
+
+- **Callback.** `litellm_settings` in the `litellm-config` ConfigMap turns on
+  LiteLLM's `prometheus` callback (`base/templates/llm.yaml`). Fresh stacks get
+  it from the chart default. Existing stacks keep their live config across
+  upgrades (the chart renders it via `lookup`), so
+  `model.EnsureLiteLLMObservability` (`internal/model/observability.go`) adds
+  the same keys on `obol stack up` (stack-up merge, then one gapless LiteLLM
+  restart) and on every `obol model` write (those hot-apply models without a
+  restart, so the callback starts with the next LiteLLM pod). It never
+  overrides a key the operator set: an existing `callbacks` list gets
+  `prometheus` appended, the other keys are only filled in when absent. The controller and the fork's
+  `/model/new` save path round-trip `litellm_settings` unchanged.
+  `TestLLMTemplateObservabilitySettingsMatchGo` keeps the chart default and the
+  Go copy identical.
+- **Scrape.** ServiceMonitor `llm/litellm` (`release: monitoring`), path
+  `/metrics/`, every 30s. LiteLLM mounts its metrics app at `/metrics`, which
+  answers `/metrics` with a 307 to `/metrics/`. `/metrics` needs the master
+  key by default; the stack sets `require_auth_for_metrics_endpoint: false`
+  rather than handing the admin key to Prometheus. LiteLLM stays ClusterIP
+  with no HTTPRoute, so only in-cluster clients reach it; the output holds
+  model names, upstream URLs and token counts, no keys. (A paid offer with
+  `--upstream litellm` already forwards paid requests with the master key, so
+  its public surface is unchanged.)
+- **Versions.** Works on the pinned fork image (upstream v1.87) and on v1.105:
+  the callback is not licence-gated in either, and both emit the same metric
+  names and label sets with this config. Checked by running both fork
+  sources against fake upstreams, scraping them with Prometheus and evaluating
+  the rules and dashboard queries.
+
+### Metrics and labels
+
+`prometheus_metrics_config` registers only the metrics below; every other
+LiteLLM metric becomes a no-op. `include_labels` trims each one to bounded
+labels. LiteLLM rejects the whole callback (no metrics at all) if a group
+names a label the metric does not have, so the groups use only labels present
+in both v1.87 and v1.105.
+
+| Metric | Type | Labels kept |
+|---|---|---|
+| `litellm_llm_api_time_to_first_token_metric` | histogram (s) | `model`, `requested_model`, `model_id` |
+| `litellm_llm_api_latency_metric` | histogram (s) | same |
+| `litellm_request_total_latency_metric` | histogram (s) | same |
+| `litellm_input_tokens_metric_total`, `litellm_output_tokens_metric_total` | counter | same |
+| `litellm_deployment_total_requests_total`, `litellm_deployment_success_responses_total` | counter | `requested_model`, `litellm_model_name`, `model_id`, `api_base`, `api_provider` |
+| `litellm_deployment_failure_responses_total` | counter | above + `exception_status`, `exception_class` |
+| `litellm_deployment_state` | gauge (0 ok, 1 partial, 2 down) | `litellm_model_name`, `model_id`, `api_base`, `api_provider` |
+| `litellm_llm_api_failed_requests_metric_total` | counter | `model`, `model_id` |
+| `litellm_proxy_failed_requests_metric_total` | counter | `requested_model`, `exception_status`, `exception_class`, `route` |
+
+Dropped everywhere: `hashed_api_key`, `api_key_alias`, `team`, `team_alias`,
+`end_user`, `user`, `user_email`, `client_ip`, `user_agent`
+(`TestLiteLLMObservabilityDropsCallerLabels`).
+
+Label meanings:
+
+- `model` / `litellm_model_name`: the upstream model with the provider
+  prefix stripped (`ollama_chat/qwen3.5:9b` → `qwen3.5:9b`,
+  `openai/paid/qwen3.5:9b` → `paid/qwen3.5:9b`). The dashboard's `model`
+  variable uses these values.
+- `requested_model`: the LiteLLM `model_name` the client asked for.
+- `model_id`: LiteLLM's per-deployment hash. It changes when the entry's
+  params change (including key order when obol rewrites the config), so don't
+  pin queries to it.
+- `api_base`: the upstream URL. Paid `paid/*` models all show the x402-buyer
+  Service; the seller is only visible in the buyer metrics
+  (`obol_x402_buyer_*`, label `upstream`).
+
+The TTFT, latency and token metrics have no `api_base`. Rules and dashboard
+add it by joining on `model_id`:
+
+```promql
+... * on (model_id) group_left (api_base, api_provider)
+  group by (model_id, api_base, api_provider) (litellm_deployment_state)
+```
+
+`litellm_deployment_state` exists once a deployment has served a request, so a
+model shows up after its first call.
+
+Cardinality: series scale with the number of models × 25 buckets for the
+three histograms. On v1.87 a request for an unknown model name creates
+`requested_model` / `model` series with that name (v1.105 folds them into
+`other`); only in-cluster clients and paying buyers of a `--upstream litellm`
+offer can send them.
+
+### What the numbers mean
+
+- **TTFT** (`litellm_llm_api_time_to_first_token_metric`): LiteLLM's upstream
+  call start → first streamed chunk. **Streaming requests only**; LiteLLM
+  records nothing for non-streaming calls. Includes network, upstream queueing
+  and prefill; excludes LiteLLM's own pre-call overhead. Buckets are set by
+  `prometheus_latency_buckets` (0.05 … 10s finely, then up to 600s).
+- **Decode speed (output tok/s)**:
+  `rate(litellm_output_tokens_metric_total) / (rate(litellm_llm_api_latency_metric_sum) - rate(litellm_llm_api_time_to_first_token_metric_sum))`
+  — output tokens per second after the first token, as a window total
+  (token-weighted), not a per-request median. Exact when the model's traffic
+  streams (Hermes does; so does `flows/llm-bench.sh`). Non-streaming requests
+  have no TTFT, so their prefill counts as decode time and pulls the number
+  down. Token counts are the upstream's `usage` (LiteLLM estimates them when a
+  stream carries no usage).
+- **End-to-end tok/s**: `rate(output_tokens) / rate(llm_api_latency_sum)`,
+  prefill included — what a caller sees for a whole answer.
+- Not used: `litellm_deployment_latency_per_output_token`. For streaming
+  requests LiteLLM computes it as TTFT ÷ output tokens, so its inverse is not
+  a generation speed. It is not registered.
+
+### Recording rules
+
+`base/templates/llm-prometheus-rules.yaml` (PrometheusRule `llm/litellm`),
+evaluated every 30s over 5m windows:
+
+| Rule | Labels | Meaning |
+|---|---|---|
+| `obol:llm_ttft_seconds:p50_5m`, `obol:llm_ttft_seconds:p95_5m` | `model`, `api_base`, `api_provider` | TTFT quantiles |
+| `obol:llm_output_tokens_per_second:mean_5m` | `model`, `api_base`, `api_provider` | decode speed as above; absent when idle |
+| `obol:llm_error_ratio:5m` | `litellm_model_name`, `api_base`, `api_provider` | failed / all upstream calls (0 when none failed) |
+
+One-number answers for an agent, e.g. from a pod:
+
+```bash
+curl -s http://monitoring-kube-prometheus-prometheus.monitoring.svc:9090/api/v1/query \
+  --data-urlencode 'query=obol:llm_ttft_seconds:p50_5m{model="qwen3.5:9b"}'
+```
+
+### Dashboard
+
+`/grafana/d/obol-llm` ("LLM performance", linked from the overview). Variables
+`model` and `api_base` (multi-select, All). Panels: a scoreboard table over the
+selected time range (TTFT p50/p95, decode tok/s, e2e tok/s, latency p50, ok
+requests, error ratio per model and upstream); TTFT p50/p95/p99; decode and
+end-to-end tok/s; tokens in/out per second; upstream latency p50/p95; requests
+per second, error ratio, failures by status, gateway failures by requested
+model, deployment state; x402-buyer paid requests, payments and remaining
+authorizations.
+
+Deep link for one model over a run:
+`http://obol.stack:8080/grafana/d/obol-llm?var-model=qwen3.5:9b&from=<ms>&to=<ms>`
+(repeat `var-model=` to compare several; `var-api_base=<url>` narrows to one
+upstream).
+
+### Comparing two models fairly
+
+1. Same prompt, same `max_tokens`, `temperature: 0`, `stream: true`, one
+   request at a time, through LiteLLM:
+   `flows/llm-bench.sh <model-a> <model-b>` (N=20 per model by default; env
+   `N`, `MAX_TOKENS`, `PROMPT`). It sends `WARMUP` untimed requests per model
+   first and prints a dashboard link scoped to the measured window.
+2. Read the scoreboard for that window. Compare **p50 TTFT of warm requests**
+   (local models: the model is loaded; remote: connection reused) and
+   **decode tok/s**. p95 shows tail behaviour; it needs ~20+ requests to mean
+   anything.
+3. Cold start is a separate number: the first request after a model loads
+   (Ollama unloads idle models after a few minutes). Measure it on purpose,
+   e.g. `WARMUP=0 N=1` after the model has been idle, and read that request's
+   TTFT rather than mixing it into warm p50.
+4. Don't compare across different prompts or output lengths: latency scales
+   with output tokens and TTFT with prompt length. Concurrent traffic (an
+   agent working in parallel) queues at local servers and inflates TTFT.
+
+---
+
 ## Cross-references
 
 ### Code
@@ -615,6 +788,8 @@ Traefik and cloudflared targets.
   `confirm_spend_failure_total`, `payment_unsettled_confirmations`) plus
   gauges (`auth_remaining`, `auth_spent`, `active_model_mappings`).
 - `internal/x402/buyer/proxy.go` — `prometheusLabels()` for the buyer side.
+- `internal/model/observability.go` — LiteLLM Prometheus settings and
+  `EnsureLiteLLMObservability` (upgrade path).
 
 ### Infrastructure
 
@@ -623,6 +798,9 @@ Traefik and cloudflared targets.
 - `internal/embed/infrastructure/base/templates/grafana.yaml` — Grafana
   HTTPRoute (obol.stack only) and the dashboard ConfigMaps built from
   `base/dashboards/*.json`.
+- `internal/embed/infrastructure/base/templates/llm.yaml` — LiteLLM
+  config default (Prometheus settings) and ServiceMonitor;
+  `llm-prometheus-rules.yaml` — `obol:llm_*` rules; `dashboards/obol-llm.json`.
 - `internal/embed/infrastructure/base/templates/x402.yaml` — verifier
   Deployment, ServiceMonitor / PodMonitor.
 

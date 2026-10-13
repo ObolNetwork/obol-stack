@@ -9,6 +9,7 @@
 #   /grafana/d/obol-stack-overview
 #   /grafana/d/obol-eth-node?var-namespace=ethereum-<id>
 #   /grafana/d/obol-charon
+#   /grafana/d/obol-llm?var-model=<model>
 
 ---
 # Grafana HTTPRoute. The `hostnames: ["obol.stack"]` restriction keeps
