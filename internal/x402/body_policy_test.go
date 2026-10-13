@@ -156,7 +156,8 @@ func TestVerifier_HandleProxy_LiteLLMBodyRefusedBeforePayment(t *testing.T) {
 		{name: "JSON array", method: http.MethodPost, body: `[{"model":"x"}]`, model: "m", want: http.StatusBadRequest},
 		{name: "empty body", method: http.MethodPost, body: ``, model: "m", want: http.StatusBadRequest},
 		{name: "compressed body", method: http.MethodPost, body: `{}`, contentEncoding: "gzip", model: "m", want: http.StatusBadRequest},
-		{name: "GET", method: http.MethodGet, model: "m", want: http.StatusMethodNotAllowed},
+		// The path allowlist is POST-only, so a GET 404s before the body policy.
+		{name: "GET", method: http.MethodGet, model: "m", want: http.StatusNotFound},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

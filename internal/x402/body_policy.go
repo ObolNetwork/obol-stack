@@ -21,6 +21,18 @@ import (
 // query string and x-litellm-* headers never reach LiteLLM.
 const BodyPolicyLiteLLM = "litellm"
 
+// BodyPolicyAgent marks agent (Hermes) offers. Hermes lets a request pick
+// its own provider/model ("provider" is always honored, "model" when
+// direct_model_requests is on, "model_options" passes through), and the
+// X-Hermes-Session-Id / X-Hermes-Session-Key headers resume another
+// session's history or memory scope. All of that is stripped: the agent
+// runs the model its operator pinned, and each buyer turn stands alone.
+const BodyPolicyAgent = "agent"
+
+// agentModelSelectionFields are the Hermes chat-request fields that choose
+// the provider/model the agent runs.
+var agentModelSelectionFields = []string{"model", "provider", "model_options"}
+
 // upstreamBodyLimit caps how much of a request body the verifier buffers to
 // apply a body policy. Larger bodies are refused (413) before payment.
 const upstreamBodyLimit = 16 << 20
@@ -89,7 +101,10 @@ func isLiteLLMUpstream(offer *monetizeapi.ServiceOffer) bool {
 // bodyPolicyForOffer returns the request-body policy the verifier applies
 // before proxying to the offer's upstream ("" = forward unchanged).
 func bodyPolicyForOffer(offer *monetizeapi.ServiceOffer) string {
-	if isLiteLLMUpstream(offer) {
+	switch {
+	case offer.IsAgent():
+		return BodyPolicyAgent
+	case isLiteLLMUpstream(offer):
 		return BodyPolicyLiteLLM
 	}
 	return ""
@@ -110,15 +125,55 @@ func (e *bodyPolicyError) Error() string { return e.detail }
 // for it — and the upstream (and the asynchronous job broker) only ever see
 // the rewritten body.
 func applyBodyPolicy(rule *RouteRule, r *http.Request) error {
-	if rule.BodyPolicy != BodyPolicyLiteLLM {
-		return nil
+	if err := checkBodyPolicyConfig(rule); err != nil {
+		return err
 	}
-	if strings.TrimSpace(rule.Model) == "" {
+	switch rule.BodyPolicy {
+	case BodyPolicyLiteLLM:
+		return applyLiteLLMBodyPolicy(rule, r)
+	case BodyPolicyAgent:
+		return applyAgentBodyPolicy(r)
+	}
+	return nil
+}
+
+// checkBodyPolicyConfig refuses rules whose body policy can't be applied
+// (a LiteLLM offer with no pinned model) — before the 402, for every request.
+func checkBodyPolicyConfig(rule *RouteRule) error {
+	if rule.BodyPolicy == BodyPolicyLiteLLM && strings.TrimSpace(rule.Model) == "" {
 		return &bodyPolicyError{http.StatusServiceUnavailable, "Offer misconfigured",
 			fmt.Sprintf("This LiteLLM-backed offer has no model configured, so it is not serving requests. "+
 				"The seller must pin one: obol sell update %s -n %s --model <litellm-model>",
 				rule.OfferName, rule.OfferNamespace)}
 	}
+	return nil
+}
+
+// applyAgentBodyPolicy strips buyer model/provider selection and Hermes
+// session headers from an agent chat request.
+func applyAgentBodyPolicy(r *http.Request) error {
+	for name := range r.Header {
+		if strings.HasPrefix(strings.ToLower(name), "x-hermes-") {
+			r.Header.Del(name)
+		}
+	}
+	if r.Method != http.MethodPost {
+		// upstreamPathAllowed only lets POST through; nothing to rewrite.
+		return nil
+	}
+	doc, err := readJSONObjectBody(r)
+	if err != nil {
+		return err
+	}
+	for _, k := range agentModelSelectionFields {
+		delete(doc, k)
+	}
+	r.URL.RawQuery = ""
+	r.URL.ForceQuery = false
+	return setJSONBody(r, doc)
+}
+
+func applyLiteLLMBodyPolicy(rule *RouteRule, r *http.Request) error {
 	if r.Method != http.MethodPost {
 		return &bodyPolicyError{http.StatusMethodNotAllowed, "Method not allowed",
 			"This endpoint only accepts POST with a JSON body."}

@@ -386,15 +386,30 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 			"This path is not part of any published service. The operator's catalog lists every live endpoint.")
 		return
 	}
+	// A payment can arrive under either wire header: X-PAYMENT (v1) or
+	// PAYMENT-SIGNATURE (v2).
+	hadPayment := r.Header.Get("X-PAYMENT") != "" || r.Header.Get("PAYMENT-SIGNATURE") != ""
+	// previewOnly: an unpaid GET/HEAD of a path-restricted offer's root.
+	// It may render the 402 page (the catalog links buyers there) but is
+	// answered by the payment gate alone and never reaches the upstream.
+	previewOnly := false
 	if !upstreamPathAllowed(rule, r.Method, r.URL.EscapedPath()) {
-		writeErrorResponse(w, r, http.StatusNotFound, "No service here",
-			"This path is not part of any published service. The operator's catalog lists every live endpoint.")
-		return
+		if !paywallPreview(rule, r.Method, r.URL.EscapedPath(), hadPayment) {
+			writeErrorResponse(w, r, http.StatusNotFound, "No service here",
+				"This path is not part of any published service. The operator's catalog lists every live endpoint.")
+			return
+		}
+		previewOnly = true
 	}
 	// Body policies (e.g. the seller-pinned LiteLLM model) run before any
 	// gate, so free, auth and paid requests all reach the upstream in the
 	// same shape, and a request we can't serve is refused before a 402.
-	if err := applyBodyPolicy(rule, r); err != nil {
+	if previewOnly {
+		if err := checkBodyPolicyConfig(rule); err != nil {
+			writeBodyPolicyError(w, r, err)
+			return
+		}
+	} else if err := applyBodyPolicy(rule, r); err != nil {
 		writeBodyPolicyError(w, r, err)
 		return
 	}
@@ -470,12 +485,20 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream unavailable", http.StatusInternalServerError)
 		return
 	}
+	if previewOnly {
+		// Unreachable without a payment (the gate answers 402 first);
+		// defense in depth so a preview can never be proxied.
+		proxy = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writeErrorResponse(w, r, http.StatusNotFound, "No service here",
+				"This path is not part of any published service. The operator's catalog lists every live endpoint.")
+		})
+	}
 
 	// Free tier: a paid route with a freeQuota lets a SIWX-verified wallet
 	// ride free until its daily allowance is spent, then falls through to
 	// the normal 402. The wallet is forwarded so upstreams (and the async
 	// broker) still see an owner identity on free-tier calls.
-	if mr.rule.FreeQuota > 0 {
+	if mr.rule.FreeQuota > 0 && !previewOnly {
 		if wallet, err := v.siwx.Authenticate(r, requestHost(r), time.Now()); err == nil &&
 			v.quota.consume(mr.rule.Pattern, wallet, mr.rule.FreeQuota, time.Now()) {
 			r.Header.Set(HeaderVerifiedWallet, wallet)
@@ -515,10 +538,8 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		},
 	}, mr.requirements)
 
-	// A payment can arrive under either wire header: X-PAYMENT (v1) or
-	// PAYMENT-SIGNATURE (v2). Gate the funnel metrics on both, else every
-	// successful v2 payment (the cohort #689 unblocked) goes unmetered.
-	hadPayment := r.Header.Get("X-PAYMENT") != "" || r.Header.Get("PAYMENT-SIGNATURE") != ""
+	// Gate the funnel metrics on both payment headers (hadPayment), else
+	// every successful v2 payment (the cohort #689 unblocked) goes unmetered.
 	tracker := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	middleware(proxy).ServeHTTP(tracker, r)
 
