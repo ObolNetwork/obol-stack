@@ -207,6 +207,7 @@ func routeRulesFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (
 		jobs.Gate = "free"
 		jobs.Price = "0"
 		jobs.Payments = nil
+		jobs.UpstreamPaths = nil // served by the broker, never the upstream
 		jobs.Async = true
 		jobs.BrokerURL = brokerBaseURL()
 		jobs.Description = "Async job status, results, and wallet-scoped listing"
@@ -285,6 +286,7 @@ func routeRuleFromOffer(offer *monetizeapi.ServiceOffer, upstreamAuth string) (R
 		EIP712Name:             primary.EIP712Name,
 		EIP712Version:          primary.EIP712Version,
 		UpstreamAuth:           effectiveUpstreamAuth(offer, upstreamAuth),
+		UpstreamPaths:          upstreamPathsForOffer(offer),
 		UpstreamURL:            upstreamURL,
 		StripPrefix:            stripPrefix,
 		PriceModel:             primary.PriceModel,
