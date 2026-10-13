@@ -9,6 +9,9 @@ image:
 
 metrics:
   address: "0.0.0.0:2000"
+  # PodMonitor (release=monitoring) so Prometheus scrapes cloudflared_* metrics.
+  podMonitor:
+    enabled: true
 
 quickTunnel:
   url: "http://traefik.traefik.svc.cluster.local:80"
