@@ -104,6 +104,9 @@ releases:
             {{- else if eq .Values.executionClient "erigon" }}
             # renovate: datasource=github-releases depName=erigontech/erigon
             tag: v3.7.1
+            {{- else if eq .Values.executionClient "ethereumjs" }}
+            # ethpandaops only publishes master-<sha> builds (no releases).
+            tag: master-b073c3c
             {{- end }}
           {{- if eq .Values.executionClient "reth" }}
           # reth keeps p2p (30303) closed while running post-crash consistency
