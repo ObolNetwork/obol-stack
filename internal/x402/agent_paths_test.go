@@ -1,6 +1,10 @@
 package x402
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -197,5 +201,117 @@ func TestRouteRuleFromOffer_AgentRestrictedToChat(t *testing.T) {
 	}
 	if len(rule.UpstreamPaths) != 1 || rule.UpstreamPaths[0] != "POST /v1/chat/completions" {
 		t.Fatalf("UpstreamPaths = %v", rule.UpstreamPaths)
+	}
+}
+
+// hermesDerivedSessionID mirrors Hermes' _derive_chat_session_id: the
+// session a header-less /v1/chat/completions request lands in.
+func hermesDerivedSessionID(t *testing.T, body map[string]any) string {
+	t.Helper()
+	var system []string
+	firstUser := ""
+	msgs, _ := body["messages"].([]any)
+	for _, m := range msgs {
+		mm, _ := m.(map[string]any)
+		content, _ := mm["content"].(string)
+		switch mm["role"] {
+		case "system":
+			system = append(system, content)
+		case "user":
+			if firstUser == "" {
+				firstUser = content
+			}
+		}
+	}
+	sum := sha256.Sum256([]byte(strings.Join(system, "\n") + "\n" + firstUser))
+	return "api-" + hex.EncodeToString(sum[:])[:16]
+}
+
+// Two buyers (or one buyer twice) sending the same opening turn must not
+// share a Hermes session: every request carries a fresh random request id
+// in the system prompt, behind the verified payer note, so Hermes derives a
+// distinct, unguessable session per request.
+func TestVerifier_HandleProxy_AgentSessionIsolatedPerRequest(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	upstream, got := captureUpstream(t)
+	v := newTestVerifier(t, fac.URL, []RouteRule{hermesRule(upstream.URL)})
+
+	const body = `{"messages":[{"role":"system","content":"be terse"},{"role":"user","content":"hello"}]}`
+	seen := map[string]bool{}
+	for i := 0; i < 3; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/services/bot/v1/chat/completions", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+		req.Header.Set("Idempotency-Key", "same-key")
+		w := httptest.NewRecorder()
+		v.HandleProxy(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status %d (%s)", w.Code, w.Body.String())
+		}
+
+		msgs, _ := got.body["messages"].([]any)
+		if len(msgs) != 4 {
+			t.Fatalf("want payer note + request id + 2 buyer messages, got %v", msgs)
+		}
+		first, _ := msgs[0].(map[string]any)
+		second, _ := msgs[1].(map[string]any)
+		if c, _ := first["content"].(string); first["role"] != "system" || !strings.Contains(c, "0xmockpayer") {
+			t.Fatalf("payer note must stay first, got %v", first)
+		}
+		if c, _ := second["content"].(string); second["role"] != "system" || !strings.HasPrefix(c, "Request id ") {
+			t.Fatalf("request-id system message missing, got %v", second)
+		}
+		if got.header.Get("Idempotency-Key") != "" {
+			t.Fatal("Idempotency-Key must not reach Hermes")
+		}
+		id := hermesDerivedSessionID(t, got.body)
+		if seen[id] {
+			t.Fatalf("Hermes session %s reused across requests", id)
+		}
+		seen[id] = true
+	}
+}
+
+// Session isolation and the payer note ride on the rewritten body, so a
+// streamed agent turn must still flow through chunk by chunk.
+func TestVerifier_HandleProxy_AgentStreamingWithIsolation(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	var upstreamBody map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &upstreamBody)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		for _, c := range []string{"hello", " world"} {
+			_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":"` + c + `"}}]}` + "\n\n"))
+			w.(http.Flusher).Flush()
+		}
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer upstream.Close()
+	v := newTestVerifier(t, fac.URL, []RouteRule{hermesRule(upstream.URL)})
+	srv := httptest.NewServer(http.HandlerFunc(v.HandleProxy))
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/services/bot/v1/chat/completions",
+		strings.NewReader(`{"stream":true,"messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(string(out), `"hello"`) ||
+		!strings.Contains(string(out), `" world"`) || !strings.Contains(string(out), "[DONE]") {
+		t.Fatalf("stream broken: %d %q", resp.StatusCode, out)
+	}
+	msgs, _ := upstreamBody["messages"].([]any)
+	if len(msgs) != 3 || upstreamBody["stream"] != true {
+		t.Fatalf("upstream body = %v", upstreamBody)
+	}
+	if fac.settleCalls.Load() != 1 {
+		t.Fatalf("settle calls = %d, want 1", fac.settleCalls.Load())
 	}
 }

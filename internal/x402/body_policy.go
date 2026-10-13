@@ -2,6 +2,8 @@ package x402
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -157,6 +159,9 @@ func applyAgentBodyPolicy(r *http.Request) error {
 			r.Header.Del(name)
 		}
 	}
+	// Hermes scopes its response cache by API key, which every buyer
+	// shares; a per-request payment makes replaying it pointless anyway.
+	r.Header.Del("Idempotency-Key")
 	if r.Method != http.MethodPost {
 		// upstreamPathAllowed only lets POST through; nothing to rewrite.
 		return nil
@@ -168,9 +173,51 @@ func applyAgentBodyPolicy(r *http.Request) error {
 	for _, k := range agentModelSelectionFields {
 		delete(doc, k)
 	}
+	if err := isolateAgentSession(doc); err != nil {
+		return err
+	}
 	r.URL.RawQuery = ""
 	r.URL.ForceQuery = false
 	return setJSONBody(r, doc)
+}
+
+// isolateAgentSession gives every paid agent request its own Hermes session.
+// Without X-Hermes-Session-Id (stripped above), Hermes' /v1/chat/completions
+// derives the session as sha256(system prompt + "\n" + first user message)
+// (_derive_chat_session_id) and keys the agent's task sandbox, background
+// processes and memory scope on it — so two buyers sending the same opening
+// turn would share one. A leading system message carrying a random request
+// id makes the system prompt, and so the derived session, unique and
+// unguessable per request. (A random X-Hermes-Session-Id is the wrong lever:
+// Hermes then loads history from its DB for that id and discards the
+// buyer's in-body history.) Bodies without a messages array are left for
+// Hermes to reject.
+func isolateAgentSession(doc map[string]json.RawMessage) error {
+	raw, ok := doc["messages"]
+	if !ok {
+		return nil
+	}
+	var messages []json.RawMessage
+	if err := json.Unmarshal(raw, &messages); err != nil {
+		return nil //nolint:nilerr // not an array: Hermes rejects it itself
+	}
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return &bodyPolicyError{http.StatusInternalServerError, "Internal error", "Could not isolate the request."}
+	}
+	note, err := json.Marshal(map[string]string{
+		"role":    "system",
+		"content": "Request id " + hex.EncodeToString(nonce[:]) + " (set by the payment gateway; not part of the conversation).",
+	})
+	if err != nil {
+		return err
+	}
+	merged, err := json.Marshal(append([]json.RawMessage{note}, messages...))
+	if err != nil {
+		return err
+	}
+	doc["messages"] = merged
+	return nil
 }
 
 func applyLiteLLMBodyPolicy(rule *RouteRule, r *http.Request) error {
