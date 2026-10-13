@@ -278,7 +278,7 @@ type ServiceOfferModel struct {
 	Name string `json:"name"`
 	// Runtime serving the model.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Enum=ollama;vllm;tgi
+	// +kubebuilder:validation:Enum=ollama;vllm;tgi;litellm
 	Runtime string `json:"runtime"`
 }
 

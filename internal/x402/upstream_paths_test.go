@@ -11,13 +11,17 @@ import (
 
 func liteLLMRule(upstreamURL string) RouteRule {
 	return RouteRule{
-		Pattern:       "/services/llm/*",
-		Price:         "0.001",
-		OfferType:     "http",
-		UpstreamURL:   upstreamURL,
-		StripPrefix:   "/services/llm",
-		UpstreamAuth:  "Bearer sk-master",
-		UpstreamPaths: liteLLMBuyerPaths,
+		Pattern:        "/services/llm/*",
+		Price:          "0.0001",
+		OfferType:      "http",
+		OfferName:      "llm",
+		OfferNamespace: "llm",
+		UpstreamURL:    upstreamURL,
+		StripPrefix:    "/services/llm",
+		UpstreamAuth:   "Bearer sk-master",
+		UpstreamPaths:  liteLLMBuyerPaths,
+		BodyPolicy:     BodyPolicyLiteLLM,
+		Model:          "qwen3.5:9b",
 	}
 }
 

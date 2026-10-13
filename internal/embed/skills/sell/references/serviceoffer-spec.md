@@ -75,7 +75,7 @@ spec:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `spec.model.name` | string | Yes when `model` is present | Model identifier, for example `qwen3.5:9b` |
-| `spec.model.runtime` | string | Yes when `model` is present | Serving runtime: `ollama`, `vllm`, or `tgi` |
+| `spec.model.runtime` | string | Yes when `model` is present | Serving runtime: `ollama`, `vllm`, `tgi`, or `litellm` (seller-pinned model on an `upstream.service: litellm` http offer) |
 
 ### `spec.upstream`
 

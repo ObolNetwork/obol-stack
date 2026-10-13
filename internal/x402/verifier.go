@@ -227,6 +227,16 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ForwardAuth only sees headers, so it can't apply a body policy (e.g.
+	// pinning the LiteLLM model). Such offers are served by HandleProxy;
+	// approving here would forward the buyer's body untouched with the
+	// upstream credential attached.
+	if rule.BodyPolicy != "" {
+		log.Printf("x402-verifier: rule %q needs a body policy; refusing ForwardAuth request", rule.Pattern)
+		http.Error(w, "this offer is served by the seller gateway only", http.StatusForbidden)
+		return
+	}
+
 	// Declared free carve-out (offer route table, gate: free): allow the
 	// request through, still authenticating it with the upstream when the
 	// offer has upstream auth configured. Identity headers are set to
@@ -379,6 +389,13 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 	if !upstreamPathAllowed(rule, r.Method, r.URL.EscapedPath()) {
 		writeErrorResponse(w, r, http.StatusNotFound, "No service here",
 			"This path is not part of any published service. The operator's catalog lists every live endpoint.")
+		return
+	}
+	// Body policies (e.g. the seller-pinned LiteLLM model) run before any
+	// gate, so free, auth and paid requests all reach the upstream in the
+	// same shape, and a request we can't serve is refused before a 402.
+	if err := applyBodyPolicy(rule, r); err != nil {
+		writeBodyPolicyError(w, r, err)
 		return
 	}
 	// Carry the matched rule so 402 resource.URL builders can map the
@@ -636,6 +653,7 @@ func (v *Verifier) resolvePaidRoute(cfg *PricingConfig, rule *RouteRule) (*match
 			continue
 		}
 		mergeAgentExtras(&req, rule)
+		mergeModelExtra(&req, rule)
 		reqs = append(reqs, req)
 		optLabels = append(optLabels, labelsForPaymentOption(rule, opt))
 		if len(reqs) == 1 {
@@ -654,7 +672,13 @@ func (v *Verifier) resolvePaidRoute(cfg *PricingConfig, rule *RouteRule) (*match
 	if len(reqs) == 0 {
 		return nil, false
 	}
-	extensions = WithBazaar(extensions, rule.OfferType, rule.Model)
+	bazaarType := rule.OfferType
+	if rule.BodyPolicy == BodyPolicyLiteLLM {
+		// A LiteLLM-backed http offer speaks the OpenAI wire format with a
+		// seller-pinned model, exactly like an inference offer.
+		bazaarType = "inference"
+	}
+	extensions = WithBazaar(extensions, bazaarType, rule.Model)
 	return &matchedRoute{
 		rule:         rule,
 		requirements: reqs,
@@ -723,6 +747,19 @@ func mergeAgentExtras(req *x402types.PaymentRequirements, rule *RouteRule) {
 	if rule.AgentRuntime != "" {
 		req.Extra["agentRuntime"] = rule.AgentRuntime
 	}
+}
+
+// mergeModelExtra surfaces the seller-pinned model of a LiteLLM-backed offer
+// as accepts[].extra.model. The buyer can't choose it (the verifier rewrites
+// the request body), so advertising it tells them what they pay for.
+func mergeModelExtra(req *x402types.PaymentRequirements, rule *RouteRule) {
+	if rule.BodyPolicy != BodyPolicyLiteLLM || rule.Model == "" {
+		return
+	}
+	if req.Extra == nil {
+		req.Extra = make(map[string]interface{})
+	}
+	req.Extra["model"] = rule.Model
 }
 
 // buildPaymentDisplay turns the matched rule + chain + asset into pre-formatted

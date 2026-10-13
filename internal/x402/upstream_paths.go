@@ -24,7 +24,7 @@ var liteLLMBuyerPaths = []string{
 // upstreamPathsForOffer returns the exhaustive upstream path list for offers
 // whose injected credential is privileged, or nil when any path may pass.
 func upstreamPathsForOffer(offer *monetizeapi.ServiceOffer) []string {
-	if !offer.IsAgent() && strings.EqualFold(offer.Spec.Upstream.Service, "litellm") {
+	if isLiteLLMUpstream(offer) {
 		return liteLLMBuyerPaths
 	}
 

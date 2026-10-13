@@ -143,9 +143,10 @@ obol model setup custom \
   --endpoint <full_url_with_v1> \
   --model "<model_name_at_endpoint>"
 
-# Step B: Sell it through LiteLLM
+# Step B: Sell it through LiteLLM (pin the model buyers are served)
 obol sell http <name> \
   --upstream litellm \
+  --model "<model_name_at_endpoint>" \
   --port 4000 \
   --namespace llm \
   --per-request <confirmed_price> \
@@ -157,6 +158,8 @@ obol sell http <name> \
   --register-skills natural_language_processing/natural_language_generation/text_completion \
   --register-domains technology/data_science
 ```
+
+`--model` is required with `--upstream litellm` and must be a name from `obol model list`. The seller gateway overwrites the `model` field of every buyer request with it (and drops LiteLLM routing knobs such as `fallbacks`/`extra_body`), so buyers can't pick a different — e.g. BYOK cloud — model at your price. Only `/v1/chat/completions`, `/v1/completions` and `/v1/embeddings` are served. Switch models later without recreating the offer: `obol sell update <name> -n llm --model <other_model>`.
 
 The `--endpoint` must include `/v1` if the upstream is an OpenAI-compatible server (vLLM, TGI, etc.) — LiteLLM does not append it automatically.
 

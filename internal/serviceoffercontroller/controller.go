@@ -719,6 +719,18 @@ func (c *Controller) reconcileDeletingOffer(ctx context.Context, offer *monetize
 }
 
 func (c *Controller) reconcileModel(status *monetizeapi.ServiceOfferStatus, offer *monetizeapi.ServiceOffer) error {
+	// LiteLLM-backed http offers serve whatever model the seller pins in
+	// spec.model.name (the verifier overwrites the buyer's "model"); without
+	// one the verifier refuses every request, so don't publish the offer.
+	if !offer.IsInference() && !offer.IsAgent() && strings.EqualFold(offer.Spec.Upstream.Service, "litellm") {
+		if name := strings.TrimSpace(offer.Spec.Model.Name); name != "" {
+			setCondition(status, "ModelReady", "True", "Pinned", fmt.Sprintf("Seller-pinned LiteLLM model %s", name))
+			return nil
+		}
+		setCondition(status, "ModelReady", "False", "MissingModel",
+			fmt.Sprintf("LiteLLM-backed offers must pin a model; run: obol sell update %s -n %s --model <litellm-model>", offer.Name, offer.Namespace))
+		return nil
+	}
 	if !offer.IsInference() {
 		setCondition(status, "ModelReady", "True", "Skipped", "HTTP offer does not require model preparation")
 		return nil
