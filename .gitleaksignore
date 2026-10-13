@@ -1,0 +1,2 @@
+# OpenClaw->Hermes wallet migration test: a struct field assignment, not a password.
+5b96bc6d6a39350f1811762d925208c066808569:internal/hermes/wallet_migrate_openclaw_test.go:bls-keystore-password:42
