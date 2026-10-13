@@ -28,8 +28,8 @@ import (
 // Bump both together; `go test ./internal/agentskills -run TestPinnedRelease`
 // with OBOL_SKILLS_VERIFY_PIN=1 prints the digest of the pinned tag.
 const (
-	Release       = "v1.9.0"
-	ContentSHA256 = ""
+	Release       = "v1.8.0"
+	ContentSHA256 = "45a34d5ac230bef54233114a78f3cb17f27e2977b7723f235bb3014965b73f06"
 	repoTarball   = "https://codeload.github.com/ObolNetwork/skills/tar.gz/refs/tags/"
 )
 
