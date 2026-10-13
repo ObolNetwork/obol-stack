@@ -21,7 +21,7 @@ Monitor the Kubernetes environment running the Obol Stack. Check pod status, rea
 - Cross-namespace operations (scoped to own namespace only)
 - Creating or modifying resources (read-only)
 - Ethereum RPC queries — use `ethereum-networks`
-- Validator monitoring — use `distributed-validators`
+- Validator monitoring — use the `distributed-validators` skill (opt-in: `obol agent skills add distributed-validators`)
 
 ## Quick Start
 
@@ -100,4 +100,4 @@ Supported types for `describe`: pod, service, deployment, configmap, event, pvc,
 ## See Also
 
 - `ethereum-networks` — blockchain RPC queries via eRPC
-- `distributed-validators` — DVT cluster monitoring via Obol API
+- `distributed-validators` — DVT cluster monitoring via Obol API (opt-in: `obol agent skills add distributed-validators`)

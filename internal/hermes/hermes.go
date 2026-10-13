@@ -16,9 +16,9 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
+	"github.com/ObolNetwork/obol-stack/internal/agentskills"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/dns"
-	obolembed "github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
@@ -1168,7 +1168,8 @@ func syncRuntimeFiles(cfg *config.Config, id string, configData []byte, u *ui.UI
 	if err := os.WriteFile(filepath.Join(targetDir, "config.yaml"), configData, 0o600); err != nil {
 		return fmt.Errorf("failed to write Hermes config: %w", err)
 	}
-	if err := syncObolSkills(cfg, id); err != nil {
+
+	if err := syncObolSkills(cfg, id, u); err != nil {
 		return err
 	}
 	if err := removeLegacyHeartbeat(targetDir); err != nil {
@@ -1185,14 +1186,42 @@ func removeLegacyHeartbeat(hermesHome string) error {
 	return nil
 }
 
-func syncObolSkills(cfg *config.Config, id string) error {
+// SyncSkills re-installs a Hermes instance's skills (built-in plus its
+// opt-in skills) without re-rendering or restarting it; new conversations
+// pick them up.
+func SyncSkills(cfg *config.Config, id string, u *ui.UI) error {
+	home := agentruntime.HomePath(cfg, agentruntime.Hermes, id)
+	if _, err := os.Stat(home); err != nil {
+		return fmt.Errorf("agent %s has no Hermes home at %s (run 'obol stack up' first)", id, home)
+	}
+
+	ensureVolumeWritableFn(cfg, home, u)
+	defer fixRuntimeVolumeOwnershipFn(cfg, home, u)
+
+	return syncObolSkills(cfg, id, u)
+}
+
+// syncObolSkills installs every built-in skill plus the agent's opt-in
+// skills (`obol agent skills add`), and removes skills obol installed before
+// that are no longer in the set (retired or removed). Hand-placed skill
+// directories are left alone.
+func syncObolSkills(cfg *config.Config, id string, u *ui.UI) error {
 	targetDir := filepath.Join(agentruntime.HomePath(cfg, agentruntime.Hermes, id), obolSkillsDirName)
-	if err := os.MkdirAll(targetDir, 0o755); err != nil {
-		return fmt.Errorf("failed to create Obol skills directory: %w", err)
+
+	names, err := agentskills.DefaultAgentSet(cfg, id)
+	if err != nil {
+		return fmt.Errorf("read agent skills: %w", err)
 	}
-	if err := obolembed.CopySkills(targetDir); err != nil {
-		return fmt.Errorf("failed to copy Obol skills: %w", err)
+
+	if err := agentskills.Sync(cfg, targetDir, names); err != nil {
+		if partial, ok := errors.AsType[*agentskills.PartialError](err); ok {
+			u.Warnf("Could not refresh opt-in skills: %v", partial)
+			return nil
+		}
+
+		return fmt.Errorf("failed to sync Obol skills: %w", err)
 	}
+
 	return nil
 }
 

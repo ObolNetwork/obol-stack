@@ -14,8 +14,8 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
+	"github.com/ObolNetwork/obol-stack/internal/agentskills"
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 )
@@ -94,7 +94,7 @@ type SeedOptions struct {
 // (internal/hermes) seeds its own home via a separate path (it does not call
 // this) and must NEVER be routed through SeedHostFiles, or it would silently
 // lose its bundled skills. The reusable seed primitives this is built from
-// (WriteSoul, embed.WriteSkillSubset) deliberately do NOT write the marker, so
+// (WriteSoul, agentskills.Write) deliberately do NOT write the marker, so
 // the objective-only update path — and any future master-side reuse — stays
 // safe; locked by TestMarkerOnlyWrittenBySeedHostFiles.
 //
@@ -102,11 +102,11 @@ type SeedOptions struct {
 // difference between "fresh agent" and "existing agent, skills resynced".
 func SeedHostFiles(cfg *config.Config, name string, skills []string, objective string, opts SeedOptions) (soulWritten bool, err error) {
 	if opts.ExactSkills {
-		if err := syncHostSkillsExact(HostSkillsPath(cfg, name), skills); err != nil {
+		if err := syncHostSkillsExact(cfg, HostSkillsPath(cfg, name), skills); err != nil {
 			return false, fmt.Errorf("sync skills: %w", err)
 		}
 	} else {
-		if err := embed.WriteSkillSubset(HostSkillsPath(cfg, name), skills); err != nil {
+		if err := agentskills.Write(cfg, HostSkillsPath(cfg, name), skills); err != nil {
 			return false, fmt.Errorf("write skills: %w", err)
 		}
 	}
@@ -235,7 +235,7 @@ func writeSoulFileAtomically(path string, body []byte) error {
 	return nil
 }
 
-func syncHostSkillsExact(dst string, names []string) error {
+func syncHostSkillsExact(cfg *config.Config, dst string, names []string) error {
 	if dst == "" {
 		return fmt.Errorf("syncHostSkillsExact: dst is empty")
 	}
@@ -270,7 +270,7 @@ func syncHostSkillsExact(dst string, names []string) error {
 		return err
 	}
 	if len(names) > 0 {
-		if err := embed.WriteSkillSubset(staged, names); err != nil {
+		if err := agentskills.Write(cfg, staged, names); err != nil {
 			return err
 		}
 	}

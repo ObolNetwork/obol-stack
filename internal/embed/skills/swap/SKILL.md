@@ -38,7 +38,7 @@ from QuoterV2 and execution through the agent's remote-signer
 Aerodrome (router `0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43`, Base) often
 has deeper liquidity for long-tail Base pairs — but its ve(3,3) router ABI
 differs; prefer Uniswap V3 for the pairs above and reach for Aerodrome only
-when V3 quotes are bad. See `building-blocks` for Aerodrome details.
+when V3 quotes are bad. See `building-blocks/GUIDE.md` in the `ethereum-reference` skill (opt-in: `obol agent skills add ethereum-reference`) for Aerodrome details.
 
 Before approving or swapping a token contract *not* in this table, run the
 `inspect` skill's `contract.py check <token>` (proxy? verified source?
@@ -48,7 +48,7 @@ Camelot is the major Arbitrum-native DEX, but the recipes here use Uniswap V3
 (same router/quoter ABI on every chain in the table).
 
 Robinhood Chain (4663): no verified DEX deployment in this skill yet — check
-addresses skill references before attempting swaps there.
+`addresses/GUIDE.md` in the `ethereum-reference` skill before attempting swaps there.
 
 ## Recipe: USDC → ETH for gas (Base example)
 
@@ -143,7 +143,7 @@ sh "$RPC" --network $NET call $USDC "balanceOf(address)(uint256)" $ME # USDC lef
 
 - Paying for an x402 service — that's `buy-x402` (no swap needed; it signs
   USDC/OBOL authorizations directly).
-- Moving value BETWEEN chains — that's the `bridging` skill, not swap. This
+- Moving value BETWEEN chains — that's `bridging/GUIDE.md` in the `ethereum-reference` skill, not swap. This
   skill never bridges. USDC on Base and USDC on mainnet are different
   balances; say so if the user conflates them.
 - Anything the user hasn't confirmed. Every swap is user-confirmed, every time.

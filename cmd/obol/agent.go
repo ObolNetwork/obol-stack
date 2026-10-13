@@ -247,6 +247,7 @@ Hermes onboard flow used by the master agent.`,
 				},
 			},
 			agentUpdateCommand(cfg),
+			agentSkillsCommand(cfg),
 			agentWalletCommand(cfg),
 		},
 	}
@@ -269,8 +270,8 @@ list wholesale. Mixing the two is rejected to avoid surprise.
 
 Examples:
   obol agent update quant --model qwen3.5:35b
-  obol agent update quant --skills +building-blocks,-gas
-  obol agent update quant --skills addresses,gas        # replaces the list`,
+  obol agent update quant --skills +ethereum-reference,-swap
+  obol agent update quant --skills ethereum-networks,swap   # replaces the list`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "model", Usage: "Pin a different LiteLLM model"},
 			&cli.StringFlag{Name: "skills", Usage: "Replacement list or +foo,-bar diff"},

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ObolNetwork/obol-stack/internal/agentskills"
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/embed"
 )
 
 func TestValidateName(t *testing.T) {
@@ -120,7 +120,7 @@ func TestSeedHostFiles_FreshAgent(t *testing.T) {
 	cfg := &config.Config{DataDir: dir}
 
 	wrote, err := SeedHostFiles(cfg, "quant",
-		[]string{"addresses", "gas"},
+		[]string{"swap", "inspect"},
 		"You are a chain analyst.",
 		SeedOptions{},
 	)
@@ -139,7 +139,8 @@ func TestSeedHostFiles_FreshAgent(t *testing.T) {
 	if !strings.Contains(string(body), "You are a chain analyst") {
 		t.Error("rendered soul missing operator objective")
 	}
-	for _, skill := range []string{"addresses", "gas"} {
+
+	for _, skill := range []string{"swap", "inspect"} {
 		skillFile := filepath.Join(HostSkillsPath(cfg, "quant"), skill, "SKILL.md")
 		if _, err := os.Stat(skillFile); err != nil {
 			t.Errorf("missing %s: %v", skillFile, err)
@@ -159,7 +160,7 @@ func TestSeedHostFiles_MarkerIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir}
 
-	if _, err := SeedHostFiles(cfg, "quant", []string{"gas"}, "obj v1", SeedOptions{}); err != nil {
+	if _, err := SeedHostFiles(cfg, "quant", []string{"inspect"}, "obj v1", SeedOptions{}); err != nil {
 		t.Fatalf("first seed: %v", err)
 	}
 	marker := HostNoBundledSkillsMarkerPath(cfg, "quant")
@@ -168,7 +169,7 @@ func TestSeedHostFiles_MarkerIsIdempotent(t *testing.T) {
 		t.Fatalf("marker missing after first seed: %v", err)
 	}
 
-	if _, err := SeedHostFiles(cfg, "quant", []string{"gas"}, "obj v2", SeedOptions{OverwriteSoul: true}); err != nil {
+	if _, err := SeedHostFiles(cfg, "quant", []string{"inspect"}, "obj v2", SeedOptions{OverwriteSoul: true}); err != nil {
 		t.Fatalf("second seed: %v", err)
 	}
 	stat2, err := os.Stat(marker)
@@ -183,7 +184,7 @@ func TestSeedHostFiles_MarkerIsIdempotent(t *testing.T) {
 }
 
 // The `.no-bundled-skills` marker must be written ONLY by SeedHostFiles, never
-// by the lower-level seed primitives (WriteSoul, embed.WriteSkillSubset) that
+// by the lower-level seed primitives (WriteSoul, agentskills.Write) that
 // the master/objective-only paths could reuse. SeedHostFiles is the
 // sub-agents-for-sale seam; the master agent (internal/hermes) seeds via those
 // primitives and must keep its ~80 bundled skills. If a future refactor moved
@@ -209,11 +210,11 @@ func TestMarkerOnlyWrittenBySeedHostFiles(t *testing.T) {
 		dir := t.TempDir()
 		cfg := &config.Config{DataDir: dir}
 
-		if err := embed.WriteSkillSubset(HostSkillsPath(cfg, "quant"), []string{"addresses"}); err != nil {
+		if err := agentskills.Write(cfg, HostSkillsPath(cfg, "quant"), []string{"swap"}); err != nil {
 			t.Fatalf("WriteSkillSubset: %v", err)
 		}
 		if _, err := os.Stat(HostNoBundledSkillsMarkerPath(cfg, "quant")); !os.IsNotExist(err) {
-			t.Fatalf("embed.WriteSkillSubset created a .no-bundled-skills marker (err=%v); only SeedHostFiles may", err)
+			t.Fatalf("agentskills.Write created a .no-bundled-skills marker (err=%v); only SeedHostFiles may", err)
 		}
 	})
 
@@ -223,7 +224,7 @@ func TestMarkerOnlyWrittenBySeedHostFiles(t *testing.T) {
 		dir := t.TempDir()
 		cfg := &config.Config{DataDir: dir}
 
-		if _, err := SeedHostFiles(cfg, "quant", []string{"addresses"}, "obj", SeedOptions{}); err != nil {
+		if _, err := SeedHostFiles(cfg, "quant", []string{"swap"}, "obj", SeedOptions{}); err != nil {
 			t.Fatalf("SeedHostFiles: %v", err)
 		}
 		if _, err := os.Stat(HostNoBundledSkillsMarkerPath(cfg, "quant")); err != nil {
@@ -246,7 +247,7 @@ func TestSeedHostFiles_PreservesExistingSoul(t *testing.T) {
 	}
 
 	wrote, err := SeedHostFiles(cfg, "quant",
-		[]string{"addresses"},
+		[]string{"swap"},
 		"This should NOT overwrite",
 		SeedOptions{},
 	)
@@ -279,7 +280,7 @@ func TestSeedHostFiles_MigratesLegacyLowercaseSoul(t *testing.T) {
 	}
 
 	wrote, err := SeedHostFiles(cfg, "quant",
-		[]string{"addresses"},
+		[]string{"swap"},
 		"This should not replace legacy identity",
 		SeedOptions{},
 	)
@@ -311,7 +312,7 @@ func TestSeedHostFiles_OverwriteSoulWhenForced(t *testing.T) {
 	}
 
 	wrote, err := SeedHostFiles(cfg, "quant",
-		[]string{"addresses"},
+		[]string{"swap"},
 		"Replacement objective",
 		SeedOptions{OverwriteSoul: true},
 	)
@@ -333,34 +334,36 @@ func TestSeedHostFiles_ExactSkillsRemovesStaleDirs(t *testing.T) {
 	cfg := &config.Config{DataDir: dir}
 
 	if _, err := SeedHostFiles(cfg, "quant",
-		[]string{"addresses", "gas"},
+		[]string{"swap", "inspect"},
 		"Objective",
 		SeedOptions{},
 	); err != nil {
 		t.Fatalf("initial SeedHostFiles: %v", err)
 	}
-	customPath := filepath.Join(HostSkillsPath(cfg, "quant"), "addresses", "custom.txt")
+
+	customPath := filepath.Join(HostSkillsPath(cfg, "quant"), "swap", "custom.txt")
 	if err := os.WriteFile(customPath, []byte("keep me"), 0o600); err != nil {
 		t.Fatalf("write retained custom file: %v", err)
 	}
 
 	if _, err := SeedHostFiles(cfg, "quant",
-		[]string{"addresses"},
+		[]string{"swap"},
 		"Objective",
 		SeedOptions{ExactSkills: true},
 	); err != nil {
 		t.Fatalf("exact SeedHostFiles: %v", err)
 	}
 
-	if _, err := os.Stat(filepath.Join(HostSkillsPath(cfg, "quant"), "addresses", "SKILL.md")); err != nil {
-		t.Fatalf("expected addresses skill to remain: %v", err)
+	if _, err := os.Stat(filepath.Join(HostSkillsPath(cfg, "quant"), "swap", "SKILL.md")); err != nil {
+		t.Fatalf("expected swap skill to remain: %v", err)
 	}
 	if body, err := os.ReadFile(customPath); err != nil {
 		t.Fatalf("expected retained custom file to survive exact sync: %v", err)
 	} else if string(body) != "keep me" {
 		t.Fatalf("retained custom file changed during exact sync: %q", string(body))
 	}
-	if _, err := os.Stat(filepath.Join(HostSkillsPath(cfg, "quant"), "gas")); !os.IsNotExist(err) {
+
+	if _, err := os.Stat(filepath.Join(HostSkillsPath(cfg, "quant"), "inspect")); !os.IsNotExist(err) {
 		t.Fatalf("expected gas skill dir to be removed, err=%v", err)
 	}
 }
@@ -370,14 +373,14 @@ func TestWriteSoul_DoesNotTouchSkillFiles(t *testing.T) {
 	cfg := &config.Config{DataDir: dir}
 
 	if _, err := SeedHostFiles(cfg, "quant",
-		[]string{"addresses"},
+		[]string{"swap"},
 		"Original objective",
 		SeedOptions{},
 	); err != nil {
 		t.Fatalf("initial SeedHostFiles: %v", err)
 	}
 
-	skillPath := filepath.Join(HostSkillsPath(cfg, "quant"), "addresses", "SKILL.md")
+	skillPath := filepath.Join(HostSkillsPath(cfg, "quant"), "swap", "SKILL.md")
 	before, err := os.ReadFile(skillPath)
 	if err != nil {
 		t.Fatalf("read skill before WriteSoul: %v", err)
@@ -434,21 +437,21 @@ func TestSeedHostFiles_ExactSkillsRollbackOnUnknownSkill(t *testing.T) {
 	cfg := &config.Config{DataDir: dir}
 
 	if _, err := SeedHostFiles(cfg, "quant",
-		[]string{"addresses", "gas"},
+		[]string{"swap", "inspect"},
 		"Objective",
 		SeedOptions{},
 	); err != nil {
 		t.Fatalf("initial SeedHostFiles: %v", err)
 	}
 
-	skillPath := filepath.Join(HostSkillsPath(cfg, "quant"), "addresses", "SKILL.md")
+	skillPath := filepath.Join(HostSkillsPath(cfg, "quant"), "swap", "SKILL.md")
 	before, err := os.ReadFile(skillPath)
 	if err != nil {
 		t.Fatalf("read skill before failed exact sync: %v", err)
 	}
 
 	if _, err := SeedHostFiles(cfg, "quant",
-		[]string{"addresses", "definitely-not-an-embedded-skill"},
+		[]string{"swap", "definitely-not-an-embedded-skill"},
 		"Objective",
 		SeedOptions{ExactSkills: true},
 	); err == nil {
@@ -462,7 +465,8 @@ func TestSeedHostFiles_ExactSkillsRollbackOnUnknownSkill(t *testing.T) {
 	if string(before) != string(after) {
 		t.Fatal("failed exact sync changed existing skill contents")
 	}
-	if _, err := os.Stat(filepath.Join(HostSkillsPath(cfg, "quant"), "gas")); err != nil {
+
+	if _, err := os.Stat(filepath.Join(HostSkillsPath(cfg, "quant"), "inspect")); err != nil {
 		t.Fatalf("failed exact sync should preserve gas skill dir: %v", err)
 	}
 }
@@ -483,7 +487,7 @@ func TestSeedHostFiles_ExactSkillsRejectsSymlinkedSkillsRoot(t *testing.T) {
 	}
 
 	if _, err := SeedHostFiles(cfg, "quant",
-		[]string{"addresses"},
+		[]string{"swap"},
 		"Objective",
 		SeedOptions{ExactSkills: true},
 	); err == nil {
@@ -496,7 +500,7 @@ func TestSeedHostFiles_ExactSkillsRejectsSymlinkedRetainedEntry(t *testing.T) {
 	cfg := &config.Config{DataDir: dir}
 
 	if _, err := SeedHostFiles(cfg, "quant",
-		[]string{"addresses", "gas"},
+		[]string{"swap", "inspect"},
 		"Objective",
 		SeedOptions{},
 	); err != nil {
@@ -507,12 +511,13 @@ func TestSeedHostFiles_ExactSkillsRejectsSymlinkedRetainedEntry(t *testing.T) {
 	if err := os.WriteFile(target, []byte("outside"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(target, filepath.Join(HostSkillsPath(cfg, "quant"), "addresses", "evil-link")); err != nil {
+
+	if err := os.Symlink(target, filepath.Join(HostSkillsPath(cfg, "quant"), "swap", "evil-link")); err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := SeedHostFiles(cfg, "quant",
-		[]string{"addresses"},
+		[]string{"swap"},
 		"Objective",
 		SeedOptions{ExactSkills: true},
 	); err == nil {
@@ -526,7 +531,8 @@ func TestSeedHostFiles_ExactSkillsRejectsSymlinkedRetainedEntry(t *testing.T) {
 	if string(body) != "outside" {
 		t.Fatal("exact skill sync modified external file via retained symlink")
 	}
-	if _, err := os.Stat(filepath.Join(HostSkillsPath(cfg, "quant"), "gas")); err != nil {
+
+	if _, err := os.Stat(filepath.Join(HostSkillsPath(cfg, "quant"), "inspect")); err != nil {
 		t.Fatalf("failed exact sync should preserve gas skill dir after symlink rejection: %v", err)
 	}
 }
