@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -82,6 +83,18 @@ type ForwardAuthConfig struct {
 	// change settlement behaviour; the genuinely-dangerous Traefik ForwardAuth
 	// path leaves this false and still warns if an operator flips VerifyOnly.
 	SettlesInProcess bool
+
+	// SettleOnDelivery makes the in-process settle path (VerifyOnly=false)
+	// settle only when the upstream demonstrably delivered value, not merely
+	// a <400 status (issue #821: an agent whose LLM failed replied 200 with
+	// an empty completion and the buyer was charged). Non-SSE responses are
+	// held (bounded by deliveryBufferCap) and settled only if the body is
+	// non-empty and, when it is chat-completions JSON, carries assistant
+	// content or tool calls. SSE is tapped without delay and settled only if
+	// a content or tool-call delta was delivered. Bodies that are not
+	// chat-shaped fail open (any non-empty body settles). Meant for
+	// chat-shaped routes; generic byte proxies leave it false.
+	SettleOnDelivery bool
 }
 
 // facilitatorVerifyRequest is the JSON body sent to POST /verify and /settle.
@@ -729,12 +742,16 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 			// Payment verified — wrap with settlement interceptor.
 			// SSE settles in finalize() only after the stream completes with
 			// evidence the client received bytes (Write errors / empty body /
-			// canceled context → skip). Non-SSE still settles on WriteHeader
-			// so settle failures can return 503 before the body. Verify ≠ charge.
+			// canceled context → skip). With SettleOnDelivery, non-SSE is held
+			// and judged in finalize() too; otherwise it settles on WriteHeader.
+			// Either way a settle failure can return 503 before the status is
+			// committed. Verify ≠ charge.
 			var interceptor *settlementInterceptor
 			interceptor = &settlementInterceptor{
 				w:           w,
 				deferSettle: !cfg.VerifyOnly,
+				valueCheck:  !cfg.VerifyOnly && cfg.SettleOnDelivery,
+				reportSkip:  reportFailure,
 				settleFunc: func() bool {
 					if cfg.VerifyOnly {
 						return true
@@ -784,6 +801,7 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 							// (if any) are the only signal left.
 							return false
 						}
+						dropUpstreamBodyHeaders(w.Header())
 						hint := "transient facilitator error — retry the same request in a few seconds"
 						if settledOnChain {
 							hint = "the settle tx in X-PAYMENT-RESPONSE may have landed on-chain — verify against the chain before retrying, or you may pay twice"
@@ -803,6 +821,7 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 						if interceptor != nil && interceptor.wroteStatus {
 							return false
 						}
+						dropUpstreamBodyHeaders(w.Header())
 						detail := strings.TrimSpace(strings.TrimSpace(settleResp.ErrorReason) + " " + strings.TrimSpace(settleResp.ErrorMessage))
 						send(w, withPaymentFailure(r, paymentFailure{
 							Reason: "settlement_rejected",
@@ -831,6 +850,17 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 			next.ServeHTTP(interceptor, r)
 			interceptor.finalize(r.Context())
 		})
+	}
+}
+
+// dropUpstreamBodyHeaders removes the upstream's body-describing headers
+// before a settle-failure response replaces the upstream body. ReverseProxy
+// copies them into the header map before WriteHeader, so without this the
+// 503/402 error body would go out under the upstream's Content-Length and
+// Content-Encoding and reach the buyer truncated or undecodable.
+func dropUpstreamBodyHeaders(h http.Header) {
+	for _, k := range []string{"Content-Length", "Content-Encoding", "Content-Range", "Trailer", "ETag", "Last-Modified"} {
+		h.Del(k)
 	}
 }
 
@@ -1179,19 +1209,31 @@ func parsePathOnly(uri string) (string, error) {
 //   - text/event-stream (SSE): settle in finalize() ONLY after the stream
 //     completes. Skip /settle when the client context is canceled, a body
 //     Write fails (broken pipe — Cloudflare/Bankr timeouts often do NOT
-//     cancel r.Context), or zero body bytes were written. Receipt rides
-//     HTTP trailers.
-//   - other responses: settle eagerly on WriteHeader(<400) so a settle
-//     failure can still flip the status to 503 before the body starts
-//     (in-process sell-inference path).
+//     cancel r.Context), or zero body bytes were written. With valueCheck,
+//     also skip when the stream was chat-shaped but never carried a content
+//     or tool-call delta (role-only + [DONE]). Bytes are tapped as they are
+//     written — never held back. Receipt rides HTTP trailers.
+//   - other responses with valueCheck: hold status + body (up to
+//     deliveryBufferCap) and decide in finalize(): a zero-byte body or an
+//     empty chat completion is not settled; otherwise settle BEFORE the status
+//     is committed, so the receipt rides normal headers and a settle failure
+//     can still become a 503. Over the cap the response falls back to the
+//     eager path at that point.
+//   - other responses without valueCheck: settle eagerly on WriteHeader(<400)
+//     so a settle failure can still flip the status to 503 before the body.
 //
 // deferSettle=false keeps the legacy eager path for all content types.
 type settlementInterceptor struct {
 	w              http.ResponseWriter
 	settleFunc     func() bool
 	onFailure      func(statusCode int)
+	reportSkip     func(reason string) // metrics hook for skipped settlements
 	deferSettle    bool
+	valueCheck     bool // settle only on delivered value (issue #821)
 	streamDefer    bool // SSE path: wait for finalize()
+	buffering      bool // non-SSE valueCheck path: status+body held for finalize()
+	buf            bytes.Buffer
+	sseTap         *sseValueTap
 	status         int
 	committed      bool // WriteHeader entered (guards re-entry)
 	wroteStatus    bool // status already sent to the client
@@ -1214,12 +1256,54 @@ func (i *settlementInterceptor) Write(b []byte) (int, error) {
 		return len(b), nil
 	}
 
+	if i.buffering {
+		if i.buf.Len()+len(b) <= deliveryBufferCap {
+			i.buf.Write(b)
+			return len(b), nil
+		}
+		// Too large to hold: a body this big has plainly delivered
+		// content. Settle now (status still uncommitted) and stream on.
+		log.Printf("x402: response exceeds %d-byte delivery buffer, settling before streaming the rest", deliveryBufferCap)
+		i.buffering = false
+		if !i.settleNow() {
+			return len(b), nil
+		}
+		held := i.buf.Bytes()
+		i.buf = bytes.Buffer{}
+		if _, err := i.writeClient(held); err != nil {
+			return 0, err
+		}
+	}
+
+	n, err := i.writeClient(b)
+	if i.sseTap != nil {
+		i.sseTap.feed(b[:n])
+	}
+	return n, err
+}
+
+// writeClient writes body bytes to the client, recording delivery evidence.
+func (i *settlementInterceptor) writeClient(b []byte) (int, error) {
 	n, err := i.w.Write(b)
 	i.bytesWritten += n
 	if err != nil && i.clientWriteErr == nil {
 		i.clientWriteErr = err
 	}
 	return n, err
+}
+
+// settleNow settles before committing the held status. On success it
+// commits the status; on failure settleFunc has already written the error
+// response (or the buyer is gone) and the upstream body is discarded.
+func (i *settlementInterceptor) settleNow() bool {
+	if !i.settleFunc() {
+		i.hijacked = true
+		return false
+	}
+	i.settled = true
+	i.wroteStatus = true
+	i.w.WriteHeader(i.status)
+	return true
 }
 
 func (i *settlementInterceptor) WriteHeader(statusCode int) {
@@ -1245,30 +1329,52 @@ func (i *settlementInterceptor) WriteHeader(statusCode int) {
 		ct := i.w.Header().Get("Content-Type")
 		if strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
 			i.streamDefer = true
+			if i.valueCheck {
+				i.sseTap = &sseValueTap{}
+			}
 			i.w.Header().Set("Trailer", "X-PAYMENT-RESPONSE, PAYMENT-RESPONSE")
 			i.wroteStatus = true
 			i.w.WriteHeader(statusCode)
 			return
+		}
+		// Non-SSE with valueCheck: hold the status and body until finalize
+		// can judge whether the upstream delivered anything. A declared
+		// Content-Length over the cap skips straight to the eager path.
+		if i.valueCheck {
+			if cl, err := strconv.ParseInt(i.w.Header().Get("Content-Length"), 10, 64); err != nil || cl <= deliveryBufferCap {
+				i.buffering = true
+				return
+			}
 		}
 	}
 
 	// Non-SSE (and legacy eager path): settle BEFORE committing status to
 	// the client so settle failures can still return 503 with
 	// X-PAYMENT-RESPONSE. wroteStatus stays false during settleFunc.
-	if !i.settleFunc() {
-		i.hijacked = true
-		return
-	}
-	i.settled = true
-	i.wroteStatus = true
-	i.w.WriteHeader(statusCode)
+	i.settleNow()
 }
 
-// finalize runs after the upstream handler returns. For SSE (streamDefer)
-// this is the only settlement point: success + evidence the client received
-// bytes → settle; cancel / write error / empty body → skip.
+// skip records a settlement skipped for lack of delivery evidence.
+func (i *settlementInterceptor) skip(reason string) {
+	if i.onFailure != nil {
+		i.onFailure(i.status)
+	}
+	if i.reportSkip != nil {
+		i.reportSkip(reason)
+	}
+}
+
+// finalize runs after the upstream handler returns. It is the settlement
+// point for SSE (streamDefer) and for held non-SSE responses (buffering).
 func (i *settlementInterceptor) finalize(ctx context.Context) {
-	if i.settled || i.hijacked || !i.streamDefer {
+	if i.settled || i.hijacked {
+		return
+	}
+	if i.buffering {
+		i.finalizeBuffered()
+		return
+	}
+	if !i.streamDefer {
 		return
 	}
 	if i.status == 0 || i.status >= 400 {
@@ -1276,9 +1382,7 @@ func (i *settlementInterceptor) finalize(ctx context.Context) {
 	}
 	if ctx != nil && ctx.Err() != nil {
 		log.Printf("x402: buyer disconnected before settlement, skipping settlement: %v", ctx.Err())
-		if i.onFailure != nil {
-			i.onFailure(i.status)
-		}
+		i.skip("client_disconnected")
 		return
 	}
 	// Cloudflare / Bankr timeouts often do NOT cancel r.Context. A failed
@@ -1286,17 +1390,21 @@ func (i *settlementInterceptor) finalize(ctx context.Context) {
 	// settling here is the "zombie settlement" bug (charged, UI shows failure).
 	if i.clientWriteErr != nil {
 		log.Printf("x402: client write failed before settlement, skipping settlement: %v (bytesWritten=%d)", i.clientWriteErr, i.bytesWritten)
-		if i.onFailure != nil {
-			i.onFailure(i.status)
-		}
+		i.skip("client_write_failed")
 		return
 	}
 	if i.bytesWritten == 0 {
 		log.Printf("x402: no response body reached the client before settlement, skipping settlement")
-		if i.onFailure != nil {
-			i.onFailure(i.status)
-		}
+		i.skip("upstream_no_value")
 		return
+	}
+	if i.sseTap != nil {
+		i.sseTap.close()
+		if !i.sseTap.delivered() {
+			log.Printf("x402: stream carried no content or tool-call delta (%d bytes), skipping settlement", i.bytesWritten)
+			i.skip("upstream_no_value")
+			return
+		}
 	}
 	if i.settleFunc == nil {
 		return
@@ -1306,7 +1414,36 @@ func (i *settlementInterceptor) finalize(ctx context.Context) {
 	}
 }
 
+// finalizeBuffered decides a held non-SSE response: no value → release it
+// unsettled; otherwise settle first (receipt in headers, or the settle error
+// replaces the response) and then release status + body.
+func (i *settlementInterceptor) finalizeBuffered() {
+	i.buffering = false
+	body := i.buf.Bytes()
+	if judgeBufferedBody(body, i.w.Header()) == deliveryNoValue {
+		log.Printf("x402: upstream returned %d with no delivered content (%d body bytes), skipping settlement", i.status, len(body))
+		i.skip("upstream_no_value")
+		i.w.Header().Set("X-Payment-Settled", "false")
+		i.wroteStatus = true
+		i.w.WriteHeader(i.status)
+		_, _ = i.writeClient(body)
+		return
+	}
+	if !i.settleNow() {
+		return
+	}
+	_, _ = i.writeClient(body)
+}
+
+// Flush forwards to the client only once the status is committed. While a
+// non-SSE response is held (or before any status), flushing would commit an
+// implicit 200 behind settlement's back — httputil.ReverseProxy flushes every
+// ContentLength=-1 response (chunked JSON, not only SSE) before its first
+// body byte, which dropped the receipt headers and the 503-on-settle-failure.
 func (i *settlementInterceptor) Flush() {
+	if !i.committed || i.buffering || i.hijacked {
+		return
+	}
 	if flusher, ok := i.w.(http.Flusher); ok {
 		flusher.Flush()
 	}

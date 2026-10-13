@@ -473,6 +473,7 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 
 	matchedLabels := primaryLabels
 	paymentFailed := false
+	noValue := false
 	middleware := NewForwardAuthMiddleware(ForwardAuthConfig{
 		FacilitatorURL: cfg.FacilitatorURL,
 		// HandleProxy is the in-process seller gateway: it proxies to the real
@@ -481,11 +482,15 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		// per-request) verifyOnly=false warning on this safe path.
 		VerifyOnly:          false,
 		SettlesInProcess:    true,
+		SettleOnDelivery:    settlesOnDelivery(mr.rule, r),
 		Extensions:          mr.extensions,
 		SendPaymentRequired: NewHTMLAwarePaymentRequired(display),
 		OnPaymentMatched:    func(req x402types.PaymentRequirements) { matchedLabels = mr.labelsForMatched(req) },
 		OnPaymentFailure: func(reason string) {
 			paymentFailed = true
+			if reason == "upstream_no_value" {
+				noValue = true
+			}
 			v.metrics.paymentFailureReasons.With(withReason(matchedLabels, reason)).Inc()
 		},
 		// Hand the verified payer to the upstream (client-supplied copies
@@ -512,9 +517,15 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		v.metrics.paymentFailed.With(matchedLabels).Inc()
 	case tracker.status < http.StatusBadRequest && hadPayment:
 		v.metrics.paymentVerified.With(matchedLabels).Inc()
-		if tracker.Header().Get("X-PAYMENT-RESPONSE") != "" {
+		switch {
+		case tracker.Header().Get("X-PAYMENT-RESPONSE") != "":
 			v.metrics.chargedRequests.With(matchedLabels).Inc()
 			v.metrics.lastPaymentSuccess.With(matchedLabels).SetToCurrentTime()
+		case noValue:
+			// Upstream answered <400 but delivered nothing (empty body,
+			// empty completion) — not settled; surface it like an upstream
+			// error so a silently failing agent is visible.
+			v.metrics.upstreamFailedAfterVerify.With(matchedLabels).Inc()
 		}
 	case tracker.status >= http.StatusBadRequest && hadPayment && !paymentFailed:
 		// Payment verified, upstream errored, no settlement — the buyer was
@@ -903,6 +914,38 @@ func buildUpstreamProxy(rule *RouteRule) (http.Handler, error) {
 		},
 	}
 	return proxy, nil
+}
+
+// settlesOnDelivery reports whether a paid request settles only on delivered
+// value (issue #821) rather than on a <400 status. On by default for
+// chat-shaped generation requests — POSTs to inference and agent offers, and
+// to http offers fronting LiteLLM — where an upstream can fail internally and
+// still answer 200 with an empty completion. Generic `sell http` byte proxies
+// keep status-based settlement: their bodies have no shape to judge, and an
+// empty 2xx (e.g. 204 from a write endpoint) can be the legitimate product.
+// Async rules settle at acceptance by design (the broker's 202 is the product).
+func settlesOnDelivery(rule *RouteRule, r *http.Request) bool {
+	if rule == nil || rule.Async || r.Method != http.MethodPost {
+		return false
+	}
+	switch rule.OfferType {
+	case "inference", "agent":
+		return true
+	case "http":
+		return upstreamIsLiteLLM(rule.UpstreamURL)
+	}
+	return false
+}
+
+// upstreamIsLiteLLM matches the in-cluster LiteLLM Service URL the
+// ServiceOffer source synthesizes (http://litellm.<ns>.svc.cluster.local:<port>).
+func upstreamIsLiteLLM(upstreamURL string) bool {
+	u, err := url.Parse(upstreamURL)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "litellm" || strings.HasPrefix(host, "litellm.")
 }
 
 // writeUpstreamProxyError writes a structured JSON error for ReverseProxy
