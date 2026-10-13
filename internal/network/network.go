@@ -301,6 +301,14 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 		return fmt.Errorf("deployment not found: %s\nDirectory: %s", deploymentIdentifier, deploymentDir)
 	}
 
+	// Render from this obol's network files, not the copy made at install,
+	// so pin bumps and template fixes reach existing deployments.
+	if refreshed, err := refreshDeploymentFiles(networkName, deploymentDir); err != nil {
+		u.Warnf("Could not refresh %s/%s network files, syncing the existing copy: %v", networkName, deploymentID, err)
+	} else if !refreshed {
+		u.Warnf("%s is no longer built into obol; syncing the copy from install time", networkName)
+	}
+
 	// Check helmfile exists
 	helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml.gotmpl")
 	if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
