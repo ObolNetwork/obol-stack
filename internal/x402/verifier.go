@@ -219,6 +219,14 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Offers that carry a privileged upstream credential only reach an
+	// allowlisted set of upstream paths; refuse the rest before any
+	// payment challenge so nobody pays for a request that can't be served.
+	if !upstreamPathAllowed(rule, r.Header.Get("X-Forwarded-Method"), uri) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
 	// Declared free carve-out (offer route table, gate: free): allow the
 	// request through, still authenticating it with the upstream when the
 	// offer has upstream auth configured. Identity headers are set to
@@ -364,6 +372,11 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 
 	rule := matchRoute(cfg.Routes, r.URL.Path)
 	if rule == nil {
+		writeErrorResponse(w, r, http.StatusNotFound, "No service here",
+			"This path is not part of any published service. The operator's catalog lists every live endpoint.")
+		return
+	}
+	if !upstreamPathAllowed(rule, r.Method, r.URL.EscapedPath()) {
 		writeErrorResponse(w, r, http.StatusNotFound, "No service here",
 			"This path is not part of any published service. The operator's catalog lists every live endpoint.")
 		return

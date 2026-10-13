@@ -113,8 +113,14 @@ func TestRoutesFromStore(t *testing.T) {
 	if routes[0].StripPrefix != "/services/a" {
 		t.Fatalf("routes[0].StripPrefix = %q, want /services/a", routes[0].StripPrefix)
 	}
+	if len(routes[0].UpstreamPaths) == 0 {
+		t.Fatal("routes[0] injects the LiteLLM master key but has no UpstreamPaths allowlist")
+	}
 	if routes[1].UpstreamAuth != "" {
 		t.Fatalf("routes[1].UpstreamAuth = %q, want empty", routes[1].UpstreamAuth)
+	}
+	if routes[1].UpstreamPaths != nil {
+		t.Fatalf("routes[1].UpstreamPaths = %v, want nil for a non-LiteLLM upstream", routes[1].UpstreamPaths)
 	}
 	if routes[1].UpstreamURL != "http://httpbin.beta.svc.cluster.local:11434" {
 		t.Fatalf("routes[1].UpstreamURL = %q, want httpbin upstream URL", routes[1].UpstreamURL)

@@ -110,6 +110,13 @@ type RouteRule struct {
 	// without exposing the key to buyers.
 	UpstreamAuth string `yaml:"upstreamAuth,omitempty"`
 
+	// UpstreamPaths, when set, is the exhaustive list of upstream sub-paths
+	// (after StripPrefix) this rule may reach. Rules that inject a
+	// privileged UpstreamAuth (the LiteLLM master key) set it so a buyer
+	// can't use the injected credential on admin endpoints such as
+	// /model/new or /key/generate. Matching is exact; see upstreamPathAllowed.
+	UpstreamPaths []string `yaml:"upstreamPaths,omitempty"`
+
 	// UpstreamURL is the in-cluster HTTP base URL for the protected upstream.
 	// The shared seller gateway proxies matched paid routes to this target after
 	// successful payment verification.
