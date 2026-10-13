@@ -240,7 +240,7 @@ func rerootAuthInfo(item map[string]any) map[string]any {
 // spec.routes for these types); every other type maps the route's own path
 // through openAPIRelPathForRoute exactly as the OpenAPI builder does.
 func openAPIRelPathForOfferRoute(offer *monetizeapi.ServiceOffer, routePath string) string {
-	if offer.IsInference() || offer.IsAgent() {
+	if offer.IsInference() || offer.IsAgent() || isLiteLLMHTTPOffer(offer) {
 		return "/v1/chat/completions"
 	}
 	return openAPIRelPathForRoute(routePath)

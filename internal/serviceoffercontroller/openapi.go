@@ -226,7 +226,7 @@ func openAPIPrimaryPathForOffer(offer *monetizeapi.ServiceOffer) string {
 	if offer == nil {
 		return ""
 	}
-	if offer.IsInference() || offer.IsAgent() {
+	if offer.IsInference() || offer.IsAgent() || isLiteLLMHTTPOffer(offer) {
 		return joinOpenAPIPath(offer.EffectivePath(), "/v1/chat/completions")
 	}
 	if rt, ok := primaryPaidRoute(offer); ok {
@@ -278,7 +278,8 @@ func primaryPaidRoute(offer *monetizeapi.ServiceOffer) (monetizeapi.ServiceOffer
 // documented on exactTo in render.go. routePath is the paid route's declared
 // path; callers without a route table pass the implicit catch-all "/*".
 func defaultPaidMethod(offer *monetizeapi.ServiceOffer, routePath string) string {
-	if offer != nil && (offer.IsInference() || offer.IsAgent() || strings.EqualFold(offer.Spec.Type, "fine-tuning")) {
+	if offer != nil && (offer.IsInference() || offer.IsAgent() || isLiteLLMHTTPOffer(offer) ||
+		strings.EqualFold(offer.Spec.Type, "fine-tuning")) {
 		return "POST"
 	}
 	if openAPIRelPathForRoute(routePath) == "" {
@@ -338,6 +339,9 @@ func openAPIPathsForOffer(offer *monetizeapi.ServiceOffer) map[string]map[string
 	// by the OpenAI contract regardless of route carve-outs).
 	if len(offer.Spec.Routes) > 0 && !offer.IsInference() && !offer.IsAgent() {
 		return annotateAsyncPaths(offer, openAPIPathsForRouteTable(offer))
+	}
+	if isLiteLLMHTTPOffer(offer) {
+		return annotateAsyncPaths(offer, openAPIPathsForLiteLLMOffer(offer))
 	}
 	switch {
 	case offer.IsInference(), offer.IsAgent():
@@ -902,4 +906,56 @@ func joinOpenAPIPath(base, rel string) string {
 		return rel
 	}
 	return base + rel
+}
+
+// isLiteLLMHTTPOffer reports whether an http offer sits on the cluster
+// LiteLLM gateway without a route table. The seller gateway only lets such
+// offers reach POST /v1/chat/completions, /v1/completions and
+// /v1/embeddings (and pins the model; internal/x402/body_policy.go), so
+// discovery advertises those OpenAI operations — not GET <root>, which 404s.
+func isLiteLLMHTTPOffer(offer *monetizeapi.ServiceOffer) bool {
+	return offer != nil && !offer.IsInference() && !offer.IsAgent() && len(offer.Spec.Routes) == 0 &&
+		strings.EqualFold(strings.TrimSpace(offer.Spec.Upstream.Service), "litellm")
+}
+
+// openAPIPathsForLiteLLMOffer emits the OpenAI operations a LiteLLM-backed
+// http offer serves. Chat completions keeps the offer's primary operationId
+// (the one docsPath/openapiPath point at); the others get suffixed ids.
+func openAPIPathsForLiteLLMOffer(offer *monetizeapi.ServiceOffer) map[string]map[string]any {
+	modelNote := ""
+	if m := strings.TrimSpace(offer.Spec.Model.Name); m != "" {
+		modelNote = " The seller serves model " + m + "; the request's model field is overwritten with it."
+	}
+	op := func(idSuffix, summary, desc string) map[string]any {
+		o := openAPIOperation(offer, openAPIOperationOptions{
+			summary:     summary,
+			description: offerDescription(offer, desc) + modelNote,
+			requestBody: openAPIJSONRequestBody("", "OpenAI-compatible JSON request payload."),
+			successResponse: openAPIGenericSuccessResponse(
+				"OpenAI-compatible JSON response."),
+		})
+		if idSuffix != "" {
+			o["operationId"] = openAPIOperationID(offer) + idSuffix
+		}
+		return o
+	}
+	chat := openAPIOperation(offer, openAPIOperationOptions{
+		summary:     openAIChatCompletionsSummary(offer),
+		description: offerDescription(offer, "OpenAI-compatible chat completions endpoint.") + modelNote,
+		requestBody: openAPIJSONRequestBody(
+			"#/components/schemas/OpenAIChatCompletionsRequest",
+			"OpenAI Chat Completions request payload.",
+		),
+		successResponse: openAPIJSONSuccessResponse(
+			"#/components/schemas/OpenAIChatCompletionsResponse",
+			"Chat completion (OpenAI-compatible).",
+		),
+	})
+	return map[string]map[string]any{
+		"/v1/chat/completions": {"post": chat},
+		"/v1/completions": {"post": op("-completions",
+			"Text completions — "+offer.Name, "OpenAI-compatible legacy completions endpoint.")},
+		"/v1/embeddings": {"post": op("-embeddings",
+			"Embeddings — "+offer.Name, "OpenAI-compatible embeddings endpoint.")},
+	}
 }
