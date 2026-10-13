@@ -94,10 +94,10 @@ releases:
             tag: v2.7.0
             {{- else if eq .Values.executionClient "geth" }}
             # renovate: datasource=github-releases depName=ethereum/go-ethereum
-            tag: v1.17.7
+            tag: v1.17.8
             {{- else if eq .Values.executionClient "nethermind" }}
             # renovate: datasource=github-releases depName=NethermindEth/nethermind
-            tag: "1.39.3"
+            tag: "2.1.0"
             {{- else if eq .Values.executionClient "besu" }}
             # renovate: datasource=github-releases depName=hyperledger/besu
             tag: "26.9.0"
@@ -135,6 +135,9 @@ releases:
 
       # Consensus client (pinned versions — Renovate-tracked)
       # The upstream chart wires --execution-endpoint and --network automatically.
+      # No builder/relay wiring: blocks are built locally before Gloas (ePBS)
+      # and builder bids arrive over p2p after it. Pins are stable releases
+      # only; lighthouse and grandine are Gloas-ready only in pre-releases.
       - {{ .Values.consensusClient }}:
           enabled: true
           image:
@@ -146,13 +149,13 @@ releases:
             tag: v7.2.1
             {{- else if eq .Values.consensusClient "teku" }}
             # renovate: datasource=github-releases depName=Consensys/teku
-            tag: "26.9.1"
+            tag: "26.10.0"
             {{- else if eq .Values.consensusClient "nimbus" }}
             # renovate: datasource=docker depName=statusim/nimbus-eth2
-            tag: multiarch-v26.5.0
+            tag: multiarch-v26.10.0
             {{- else if eq .Values.consensusClient "lodestar" }}
             # renovate: datasource=github-releases depName=ChainSafe/lodestar
-            tag: v1.49.0
+            tag: v1.50.0
             {{- else if eq .Values.consensusClient "grandine" }}
             # renovate: datasource=docker depName=sifrai/grandine
             tag: "2.0.6"
