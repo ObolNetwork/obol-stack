@@ -377,7 +377,7 @@ obol network add
 
 **Available networks:** ethereum, aztec
 
-**Ethereum options:** `--network` (mainnet, sepolia, hoodi), `--execution-client` (reth, geth, nethermind, besu, erigon, ethereumjs), `--consensus-client` (lighthouse, prysm, teku, nimbus, lodestar, grandine), `--mode` (full, archive), `--since` (partial archive: `merge`, `365d`, a block number)
+**Ethereum options:** `--network` (mainnet, sepolia, hoodi), `--execution-client` (reth, geth, nethermind, besu, erigon), `--consensus-client` (lighthouse, prysm, teku, nimbus, lodestar, grandine), `--mode` (full, archive), `--since` (partial archive: `merge`, `365d`, a block number)
 
 ```bash
 # Hoodi node with a specific client pair
