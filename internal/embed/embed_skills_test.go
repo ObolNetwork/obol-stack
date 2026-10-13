@@ -521,6 +521,96 @@ func TestKubePy_WriteHelpers(t *testing.T) {
 	}
 }
 
+// TestKubePy_NamespaceScoping pins the read-only CLI's API paths: own
+// namespace by default, -n for another namespace, -A cluster-wide, logs query
+// params, and describe refusing Secrets before any API call.
+func TestKubePy_NamespaceScoping(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not installed")
+	}
+
+	destDir := t.TempDir()
+	if err := CopySkills(destDir); err != nil {
+		t.Fatalf("CopySkills: %v", err)
+	}
+
+	kubePy := filepath.Join(destDir, "obol-stack", "scripts", "kube.py")
+	script := `
+import contextlib
+import importlib.util
+import io
+import sys
+import urllib.parse
+
+spec = importlib.util.spec_from_file_location("kube", sys.argv[1])
+kube = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(kube)
+
+calls = []
+kube.load_sa = lambda: ("tok", "hermes-obol-agent")
+kube.make_ssl_context = lambda: None
+def fake_get(path, token, ssl_ctx, quiet=False):
+    calls.append(path)
+    return {"items": [], "metadata": {"name": "x"}}
+kube.api_get = fake_get
+
+class Resp(io.BytesIO):
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+def fake_urlopen(req, context=None, timeout=None):
+    calls.append(req.full_url[len(kube.API_SERVER):])
+    return Resp(b"line\n")
+kube.urllib.request.urlopen = fake_urlopen
+
+def run(*argv):
+    calls.clear()
+    with contextlib.redirect_stdout(io.StringIO()):
+        kube.main(list(argv))
+    return calls[-1]
+
+def expect(got, want):
+    if got != want:
+        raise SystemExit(f"path {got!r} != {want!r}")
+
+expect(run("pods"), "/api/v1/namespaces/hermes-obol-agent/pods")
+expect(run("pods", "-n", "ethereum-abc"), "/api/v1/namespaces/ethereum-abc/pods")
+expect(run("pods", "-A"), "/api/v1/pods")
+expect(run("statefulsets", "-n", "dv"), "/apis/apps/v1/namespaces/dv/statefulsets")
+expect(run("pvcs", "-A"), "/api/v1/persistentvolumeclaims")
+expect(run("deployments", "-A", "-l", "app=x"), "/apis/apps/v1/deployments?labelSelector=app%3Dx")
+expect(run("events", "-A", "--type", "Warning"), "/api/v1/events?fieldSelector=type%3DWarning")
+expect(run("namespaces"), "/api/v1/namespaces")
+expect(run("describe", "statefulset", "beacon", "-n", "ethereum-abc"),
+       "/apis/apps/v1/namespaces/ethereum-abc/statefulsets/beacon")
+
+got = run("logs", "charon-0", "-n", "dv", "-c", "charon", "--since", "10m", "--previous", "--tail", "50")
+path, _, query = got.partition("?")
+expect(path, "/api/v1/namespaces/dv/pods/charon-0/log")
+params = dict(urllib.parse.parse_qsl(query))
+if params != {"tailLines": "50", "container": "charon", "sinceSeconds": "600", "previous": "true"}:
+    raise SystemExit(f"logs params {params!r}")
+
+for argv in (["describe", "secret", "x"], ["pods", "-n", "a", "-A"]):
+    calls.clear()
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            kube.main(argv)
+    except SystemExit as e:
+        if not e.code:
+            raise SystemExit(f"{argv} should fail")
+    else:
+        raise SystemExit(f"{argv} should fail")
+    if calls:
+        raise SystemExit(f"{argv} must not call the API: {calls}")
+`
+
+	cmd := exec.Command("python3", "-c", script, kubePy)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("kube.py behavior test failed:\n%s\n%v", output, err)
+	}
+}
+
 func TestDiscoveryPy_Syntax(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not installed")
