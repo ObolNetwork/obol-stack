@@ -24,6 +24,7 @@ import (
 
 type mockFacilitatorOpts struct {
 	rejectPayment bool
+	settleFail    bool // /settle answers 500 (no tx) → settlement_failed
 }
 
 type mockFacilitator struct {
@@ -56,6 +57,11 @@ func newMockFacilitator(t *testing.T, opts mockFacilitatorOpts) *mockFacilitator
 	mux.HandleFunc("/settle", func(w http.ResponseWriter, r *http.Request) {
 		mf.settleCalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
+		if opts.settleFail {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprintf(w, `{"success":false,"errorReason":"unexpected_error"}`)
+			return
+		}
 		fmt.Fprintf(w, `{"success":true,"transaction":"0xmocktxhash","network":"base-sepolia"}`)
 	})
 
@@ -699,7 +705,22 @@ func TestWriteUpstreamProxyError_Generic(t *testing.T) {
 // HandleProxy's full-duplex mode: without it net/http discards the unread
 // body at the first SSE flush, the proxy's upstream connection is torn down
 // mid-body, and the client sees `unexpected EOF`.
+//
+// It runs for a generic route and for an agent route, where settle-on-delivery
+// (issue #821) taps the stream for content deltas: the tap must not hold back
+// a single byte, and a stream that delivered content must still settle.
 func TestVerifier_HandleProxy_StreamsSSEChunks(t *testing.T) {
+	for _, offerType := range []string{"", "agent"} {
+		name := offerType
+		if name == "" {
+			name = "generic"
+		}
+		t.Run(name, func(t *testing.T) { testHandleProxyStreamsSSEChunks(t, offerType) })
+	}
+}
+
+func testHandleProxyStreamsSSEChunks(t *testing.T, offerType string) {
+	t.Helper()
 	fac := newMockFacilitator(t, mockFacilitatorOpts{})
 
 	const streamStallTimeout = 10 * time.Second
@@ -749,6 +770,7 @@ func TestVerifier_HandleProxy_StreamsSSEChunks(t *testing.T) {
 		Price:       "0.0001",
 		UpstreamURL: upstream.URL,
 		StripPrefix: "/services/demo",
+		OfferType:   offerType,
 	}})
 
 	// Real HTTP server so Flush() actually reaches the wire. Recorder

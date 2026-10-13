@@ -293,6 +293,13 @@ verify-only path):
 - Skip `/settle` when `r.Context()` is canceled, when a body `Write` to the
   client fails (broken pipe — the reliable signal when cancel does not
   propagate), or when zero body bytes were written.
+- Settle only on delivered value for chat-shaped routes (inference, agent,
+  http→LiteLLM POSTs; issue #821): a non-streaming reply is held until it
+  completes and is not settled when the body is empty or the chat completion
+  has no content, reasoning or tool calls; an SSE stream is not settled
+  unless a content, reasoning or tool-call delta went out. Such replies pass through unsettled
+  (`X-Payment-Settled: false` on non-SSE) and count as
+  `reason="upstream_no_value"` / `_upstream_failed_after_verify_total`.
 - Upstream proxy errors after verify return structured JSON with
   `paymentVerified:true`, `paymentSettled:false`, `retriable:false` so buyers
   do not auto-retry storms.
@@ -449,12 +456,13 @@ contributors: if you write a guarded division, the epsilon is `1e-9`.
   `_payment_failure_reasons_total` facets failures by a bounded `reason`
   label (`invalid_payment_header`, `no_matching_requirement`,
   `facilitator_unreachable`, `payment_invalid`, `settlement_failed`,
-  `settlement_rejected` — the set enumerated in
+  `settlement_rejected`, plus the settle-skip reasons `client_disconnected`,
+  `client_write_failed`, `upstream_no_value` — the set enumerated in
   `internal/x402/forwardauth.go`), turning "the buy funnel leaks" into
   "this stage eats the buyers". `_upstream_failed_after_verify_total`
   counts paid requests bounced by the seller's own upstream after the
-  payment verified (never settled) — a seller-side problem, not a
-  payment-flow one.
+  payment verified (never settled), including 2xx replies that delivered
+  no value — a seller-side problem, not a payment-flow one.
 - `internal/x402/verifier.go` — `prometheusLabels()` controls the verifier
   label set; this is the canonical place to add a new bounded label.
 - `internal/x402/buyer/metrics.go` — buyer-side counters

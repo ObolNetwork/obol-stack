@@ -129,6 +129,11 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 		// so a configured VerifyOnly=false is correct by design — suppress the
 		// misleading per-request warning on this path.
 		SettlesInProcess: true,
+		// Settle only when the upstream delivered a completion (issue
+		// #821) — an inference server can answer 200 with an empty body
+		// or an empty completion. Non-chat JSON (embeddings, model lists)
+		// fails open: any non-empty body still settles.
+		SettleOnDelivery: true,
 	}, []x402types.PaymentRequirements{requirement})
 
 	// protect wraps a handler with the payment gate unless the gateway runs
