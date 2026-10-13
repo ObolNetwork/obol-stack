@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -123,6 +124,57 @@ func TestAddLiteLLMModelEntryUpdatesConfigMapAndHotAdds(t *testing.T) {
 	}
 	if auth, _ := fakeAPI.authSeen.Load().(string); auth != "Bearer sk-obol-test" {
 		t.Fatalf("authorization header = %q, want Bearer sk-obol-test", auth)
+	}
+}
+
+// The controller rewrites config.yaml through model.LiteLLMConfig on every
+// first-time purchase; litellm_settings (incl. the Prometheus callback and
+// its metrics config) must come through untouched.
+func TestAddLiteLLMModelEntryPreservesLiteLLMSettings(t *testing.T) {
+	c, fakeAPI := newTestControllerWithLiteLLM("llm")
+	defer fakeAPI.close()
+
+	seed := model.LiteLLMConfig{LiteLLMSettings: map[string]any{"drop_params": true}}
+	model.EnsureLiteLLMObservability(&seed)
+
+	raw, err := yaml.Marshal(&seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cm, err := c.kubeClient.CoreV1().ConfigMaps("llm").Get(context.Background(), "litellm-config", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cm.Data["config.yaml"] = string(raw)
+	if _, err := c.kubeClient.CoreV1().ConfigMaps("llm").Update(context.Background(), cm, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var before model.LiteLLMConfig
+	if err := yaml.Unmarshal(raw, &before); err != nil {
+		t.Fatal(err)
+	}
+
+	c.addLiteLLMModelEntry(context.Background(), "llm", "paid/qwen3.5:9b")
+
+	cm, err = c.kubeClient.CoreV1().ConfigMaps("llm").Get(context.Background(), "litellm-config", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var after model.LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(cm.Data["config.yaml"]), &after); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(after.ModelList) != 1 {
+		t.Fatalf("model not added: %+v", after.ModelList)
+	}
+
+	if !reflect.DeepEqual(before.LiteLLMSettings, after.LiteLLMSettings) {
+		t.Fatalf("litellm_settings changed:\nbefore %#v\nafter  %#v", before.LiteLLMSettings, after.LiteLLMSettings)
 	}
 }
 

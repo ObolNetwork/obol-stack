@@ -806,6 +806,7 @@ func PreferModels(cfg *config.Config, u *ui.UI, names []string) error {
 		return nil
 	}
 	litellmConfig.ModelList = reordered
+	EnsureLiteLLMObservability(&litellmConfig)
 
 	updated, err := yaml.Marshal(&litellmConfig)
 	if err != nil {
@@ -874,6 +875,7 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 	}
 
 	litellmConfig.ModelList = kept
+	EnsureLiteLLMObservability(&litellmConfig)
 
 	updated, err := yaml.Marshal(&litellmConfig)
 	if err != nil {
@@ -1542,6 +1544,10 @@ func patchLiteLLMConfig(kubectlBinary, kubeconfigPath string, entries []ModelEnt
 			litellmConfig.ModelList = append(litellmConfig.ModelList, entry)
 		}
 	}
+
+	// Older stacks' configs predate the Prometheus settings; fill them in
+	// (never overriding operator values) on every model write.
+	EnsureLiteLLMObservability(&litellmConfig)
 
 	// Marshal back to YAML
 	updated, err := yaml.Marshal(&litellmConfig)

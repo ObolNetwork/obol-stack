@@ -1613,6 +1613,10 @@ func mergeLiteLLMConfig(currentRaw, previousRaw string) (string, error) {
 	if len(current.LiteLLMSettings) == 0 && len(previous.LiteLLMSettings) > 0 {
 		current.LiteLLMSettings = previous.LiteLLMSettings
 	}
+	// Existing stacks keep their live config across upgrades (llm.yaml
+	// renders it via lookup), so this is where they gain the Prometheus
+	// settings. A change here makes syncDefaults restart LiteLLM once.
+	model.EnsureLiteLLMObservability(&current)
 
 	merged, err := yaml.Marshal(&current)
 	if err != nil {

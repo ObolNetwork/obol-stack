@@ -106,6 +106,52 @@ data:
     litellm_settings:
       cache: false
       drop_params: true
+      # Prometheus metrics (TTFT, latency, tokens, per-upstream request and
+      # failure counts) at /metrics/, scraped by the litellm ServiceMonitor
+      # below. Must match model.LiteLLMObservabilitySettings(), which adds
+      # the same keys to existing stacks' configs on `obol stack up`
+      # (TestLLMTemplateObservabilitySettingsMatchGo). See
+      # docs/observability.md "LLM performance".
+      callbacks: ["prometheus"]
+      # In-cluster scrape without the master key. LiteLLM is ClusterIP-only;
+      # the metrics carry model names, upstream URLs and token counts, no keys.
+      require_auth_for_metrics_endpoint: false
+      prometheus_latency_buckets: [0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 7.5, 10, 15, 20, 30, 45, 60, 90, 120, 180, 300, 600]
+      # Only these metrics are registered, with per-key/user/team labels
+      # dropped. include_labels must exist on the metric in every LiteLLM
+      # version we ship, or the callback refuses to start.
+      prometheus_metrics_config:
+        - group: obol-latency
+          metrics:
+            - litellm_llm_api_time_to_first_token_metric
+            - litellm_llm_api_latency_metric
+            - litellm_request_total_latency_metric
+          include_labels: [model, requested_model, model_id]
+        - group: obol-tokens
+          metrics:
+            - litellm_input_tokens_metric
+            - litellm_output_tokens_metric
+          include_labels: [model, requested_model, model_id]
+        - group: obol-deployment-requests
+          metrics:
+            - litellm_deployment_total_requests
+            - litellm_deployment_success_responses
+          include_labels: [requested_model, litellm_model_name, model_id, api_base, api_provider]
+        - group: obol-deployment-failures
+          metrics:
+            - litellm_deployment_failure_responses
+          include_labels: [requested_model, litellm_model_name, model_id, api_base, api_provider, exception_status, exception_class]
+        - group: obol-deployment-state
+          metrics:
+            - litellm_deployment_state
+        - group: obol-llm-failures
+          metrics:
+            - litellm_llm_api_failed_requests_metric
+          include_labels: [model, model_id]
+        - group: obol-proxy-failures
+          metrics:
+            - litellm_proxy_failed_requests_metric
+          include_labels: [requested_model, exception_status, exception_class, route]
 {{- end }}
 
 ---
@@ -544,4 +590,28 @@ spec:
   podMetricsEndpoints:
     - port: buyer-http
       path: /metrics
+      interval: 30s
+
+---
+# LiteLLM Prometheus metrics (TTFT, latency, tokens, per-upstream requests
+# and failures; settings in litellm-config above, dashboards and rules in
+# docs/observability.md "LLM performance"). LiteLLM mounts the metrics app
+# at /metrics, which answers /metrics with a 307 to /metrics/ — scrape the
+# final path. No auth: require_auth_for_metrics_endpoint is false, and the
+# Service stays ClusterIP (no HTTPRoute), so only in-cluster clients reach it.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: litellm
+  namespace: llm
+  labels:
+    release: monitoring
+    app: litellm
+spec:
+  selector:
+    matchLabels:
+      app: litellm
+  endpoints:
+    - port: http
+      path: /metrics/
       interval: 30s
