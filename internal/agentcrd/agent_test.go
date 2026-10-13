@@ -436,6 +436,14 @@ func TestSeedHostFiles_ExactSkillsRollbackOnUnknownSkill(t *testing.T) {
 	dir := t.TempDir()
 	cfg := &config.Config{DataDir: dir}
 
+	// Resolve the unknown skill against an empty local source, not the
+	// pinned release (a network fetch into a StateDir-relative path).
+	src := t.TempDir()
+	if err := os.Mkdir(filepath.Join(src, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(agentskills.SourceEnv, src)
+
 	if _, err := SeedHostFiles(cfg, "quant",
 		[]string{"swap", "inspect"},
 		"Objective",

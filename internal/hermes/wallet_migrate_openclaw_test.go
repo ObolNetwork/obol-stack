@@ -39,7 +39,7 @@ func TestRestoreWalletCmd_MigratesOpenClawBackup(t *testing.T) {
 				KeystoreUUID:     oc.KeystoreUUID,
 				CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 				Keystore:         oc.KeystoreJSON,
-				KeystorePassword: oc.Password,
+				KeystorePassword: oc.Password, // gitleaks:allow (test fixture field, not a secret)
 			}},
 		}, passphrase)
 		if err != nil {
