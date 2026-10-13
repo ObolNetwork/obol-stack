@@ -1,0 +1,1342 @@
+{
+ "uid": "obol-llm",
+ "title": "LLM performance",
+ "description": "LiteLLM time to first token, generation speed, latency, tokens and errors per model and upstream; x402-buyer paid upstreams.",
+ "tags": [
+  "obol",
+  "llm"
+ ],
+ "editable": false,
+ "graphTooltip": 1,
+ "id": null,
+ "version": 1,
+ "schemaVersion": 39,
+ "refresh": "30s",
+ "timezone": "browser",
+ "time": {
+  "from": "now-3h",
+  "to": "now"
+ },
+ "timepicker": {},
+ "fiscalYearStartMonth": 0,
+ "liveNow": false,
+ "weekStart": "",
+ "annotations": {
+  "list": [
+   {
+    "builtIn": 1,
+    "datasource": {
+     "type": "grafana",
+     "uid": "-- Grafana --"
+    },
+    "enable": true,
+    "hide": true,
+    "iconColor": "rgba(0, 211, 255, 1)",
+    "name": "Annotations & Alerts",
+    "type": "dashboard"
+   }
+  ]
+ },
+ "links": [
+  {
+   "title": "Obol Stack overview",
+   "url": "/grafana/d/obol-stack-overview",
+   "type": "link",
+   "icon": "dashboard",
+   "tooltip": "",
+   "targetBlank": false,
+   "keepTime": true,
+   "includeVars": false,
+   "asDropdown": false,
+   "tags": []
+  }
+ ],
+ "templating": {
+  "list": [
+   {
+    "name": "model",
+    "label": "Model",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "query": {
+     "query": "label_values(litellm_deployment_total_requests_total, litellm_model_name)",
+     "refId": "PrometheusVariableQueryEditor-VariableQuery"
+    },
+    "definition": "label_values(litellm_deployment_total_requests_total, litellm_model_name)",
+    "refresh": 2,
+    "regex": "",
+    "sort": 1,
+    "includeAll": true,
+    "multi": true,
+    "hide": 0,
+    "current": {
+     "selected": true,
+     "text": [
+      "All"
+     ],
+     "value": [
+      "$__all"
+     ]
+    },
+    "options": [],
+    "allValue": ".*"
+   },
+   {
+    "name": "api_base",
+    "label": "Upstream",
+    "type": "query",
+    "datasource": {
+     "type": "prometheus",
+     "uid": "prometheus"
+    },
+    "query": {
+     "query": "label_values(litellm_deployment_state, api_base)",
+     "refId": "PrometheusVariableQueryEditor-VariableQuery"
+    },
+    "definition": "label_values(litellm_deployment_state, api_base)",
+    "refresh": 2,
+    "regex": "",
+    "sort": 1,
+    "includeAll": true,
+    "multi": true,
+    "hide": 0,
+    "current": {
+     "selected": true,
+     "text": [
+      "All"
+     ],
+     "value": [
+      "$__all"
+     ]
+    },
+    "options": [],
+    "allValue": ".*"
+   }
+  ]
+ },
+ "panels": [
+  {
+   "type": "text",
+   "title": "How to read this",
+   "options": {
+    "mode": "markdown",
+    "content": "Per-model, per-upstream (`api_base`) performance of the LiteLLM gateway. **TTFT** is time to the first streamed token; **decode tok/s** is generation speed after it. To compare models fairly, send the same prompt with `stream: true` through LiteLLM (`flows/llm-bench.sh`), set the time range to the run, and read the scoreboard: compare p50 TTFT of warm requests; the first request after a model loads is the cold-start cost. Recording rules `obol:llm_*` hold 5m one-number answers. Details: `docs/observability.md` \u2192 *LLM performance*."
+   },
+   "id": 1,
+   "gridPos": {
+    "h": 3,
+    "w": 24,
+    "x": 0,
+    "y": 0
+   }
+  },
+  {
+   "type": "row",
+   "title": "Scoreboard (selected time range)",
+   "id": 2,
+   "collapsed": false,
+   "panels": [],
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 3
+   }
+  },
+  {
+   "type": "table",
+   "title": "Models",
+   "description": "One row per model and upstream over the dashboard's time range. TTFT and latency quantiles come from histogram buckets; decode tok/s and e2e tok/s are window totals (see the throughput panels). *ok requests* counts successful upstream calls; *error ratio* is failed / all upstream calls for that deployment.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "histogram_quantile(0.5, sum by (le, model, api_base) (increase(litellm_llm_api_time_to_first_token_metric_bucket{model=~\"$model\"}[$__range]) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"})))",
+     "refId": "A",
+     "legendFormat": "__auto",
+     "range": false,
+     "instant": true,
+     "format": "table"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "histogram_quantile(0.95, sum by (le, model, api_base) (increase(litellm_llm_api_time_to_first_token_metric_bucket{model=~\"$model\"}[$__range]) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"})))",
+     "refId": "B",
+     "legendFormat": "__auto",
+     "range": false,
+     "instant": true,
+     "format": "table"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (model, api_base) (increase(litellm_output_tokens_metric_total{model=~\"$model\"}[$__range]) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"})) / (sum by (model, api_base) ((increase(litellm_llm_api_latency_metric_sum{model=~\"$model\"}[$__range]) - (increase(litellm_llm_api_time_to_first_token_metric_sum{model=~\"$model\"}[$__range]) or increase(litellm_llm_api_latency_metric_sum{model=~\"$model\"}[$__range]) * 0)) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"})) > 0)",
+     "refId": "C",
+     "legendFormat": "__auto",
+     "range": false,
+     "instant": true,
+     "format": "table"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (model, api_base) (increase(litellm_output_tokens_metric_total{model=~\"$model\"}[$__range]) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"})) / (sum by (model, api_base) (increase(litellm_llm_api_latency_metric_sum{model=~\"$model\"}[$__range]) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"})) > 0)",
+     "refId": "D",
+     "legendFormat": "__auto",
+     "range": false,
+     "instant": true,
+     "format": "table"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "histogram_quantile(0.5, sum by (le, model, api_base) (increase(litellm_llm_api_latency_metric_bucket{model=~\"$model\"}[$__range]) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"})))",
+     "refId": "E",
+     "legendFormat": "__auto",
+     "range": false,
+     "instant": true,
+     "format": "table"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (model, api_base) (increase(litellm_llm_api_latency_metric_count{model=~\"$model\"}[$__range]) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"}))",
+     "refId": "F",
+     "legendFormat": "__auto",
+     "range": false,
+     "instant": true,
+     "format": "table"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (model, api_base) (label_replace((sum by (litellm_model_name, api_base) (increase(litellm_deployment_failure_responses_total{litellm_model_name=~\"$model\", api_base=~\"$api_base\"}[$__range])) or sum by (litellm_model_name, api_base) (increase(litellm_deployment_total_requests_total{litellm_model_name=~\"$model\", api_base=~\"$api_base\"}[$__range])) * 0) / clamp_min(sum by (litellm_model_name, api_base) (increase(litellm_deployment_total_requests_total{litellm_model_name=~\"$model\", api_base=~\"$api_base\"}[$__range])), 1e-9), \"model\", \"$1\", \"litellm_model_name\", \"(.*)\"))",
+     "refId": "G",
+     "legendFormat": "__auto",
+     "range": false,
+     "instant": true,
+     "format": "table"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "align": "auto",
+      "filterable": false
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "footer": {
+     "show": false,
+     "reducer": [
+      "sum"
+     ]
+    }
+   },
+   "transformations": [
+    {
+     "id": "merge",
+     "options": {}
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true
+      },
+      "renameByName": {
+       "Value #A": "TTFT p50 (s)",
+       "Value #B": "TTFT p95 (s)",
+       "Value #C": "decode tok/s",
+       "Value #D": "e2e tok/s",
+       "Value #E": "latency p50 (s)",
+       "Value #F": "ok requests",
+       "Value #G": "error ratio"
+      }
+     }
+    }
+   ],
+   "id": 3,
+   "gridPos": {
+    "h": 8,
+    "w": 24,
+    "x": 0,
+    "y": 4
+   }
+  },
+  {
+   "type": "row",
+   "title": "Time to first token",
+   "id": 4,
+   "collapsed": false,
+   "panels": [],
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 12
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "TTFT p50",
+   "description": "Time to first token: LiteLLM's upstream call start \u2192 first streamed chunk (`litellm_llm_api_time_to_first_token_metric`). Recorded for **streaming requests only**. Includes network, queueing and prefill at the upstream; excludes LiteLLM's own pre-call overhead. Quantiles are interpolated from histogram buckets (0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 7.5, 10 s, \u2026).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "histogram_quantile(0.5, sum by (le, model, api_base) (rate(litellm_llm_api_time_to_first_token_metric_bucket{model=~\"$model\"}[$__rate_interval]) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"})))",
+     "refId": "A",
+     "legendFormat": "{{model}} @ {{api_base}}",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "axisSoftMin": 0,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true,
+     "calcs": []
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 5,
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 13
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "TTFT p95",
+   "description": "Time to first token: LiteLLM's upstream call start \u2192 first streamed chunk (`litellm_llm_api_time_to_first_token_metric`). Recorded for **streaming requests only**. Includes network, queueing and prefill at the upstream; excludes LiteLLM's own pre-call overhead. Quantiles are interpolated from histogram buckets (0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 7.5, 10 s, \u2026).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "histogram_quantile(0.95, sum by (le, model, api_base) (rate(litellm_llm_api_time_to_first_token_metric_bucket{model=~\"$model\"}[$__rate_interval]) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"})))",
+     "refId": "A",
+     "legendFormat": "{{model}} @ {{api_base}}",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "axisSoftMin": 0,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true,
+     "calcs": []
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 6,
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 13
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "TTFT p99",
+   "description": "Time to first token: LiteLLM's upstream call start \u2192 first streamed chunk (`litellm_llm_api_time_to_first_token_metric`). Recorded for **streaming requests only**. Includes network, queueing and prefill at the upstream; excludes LiteLLM's own pre-call overhead. Quantiles are interpolated from histogram buckets (0.05, 0.1, 0.2, 0.3, 0.5, 0.75, 1, 1.5, 2, 3, 4, 5, 7.5, 10 s, \u2026).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "histogram_quantile(0.99, sum by (le, model, api_base) (rate(litellm_llm_api_time_to_first_token_metric_bucket{model=~\"$model\"}[$__rate_interval]) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"})))",
+     "refId": "A",
+     "legendFormat": "{{model}} @ {{api_base}}",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "axisSoftMin": 0,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true,
+     "calcs": []
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 7,
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 13
+   }
+  },
+  {
+   "type": "row",
+   "title": "Throughput",
+   "id": 8,
+   "collapsed": false,
+   "panels": [],
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 21
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Decode speed (output tok/s)",
+   "description": "Output tokens per second of decode time, aggregated over the window: `rate(litellm_output_tokens_metric_total) / (rate(litellm_llm_api_latency_metric_sum) - rate(litellm_llm_api_time_to_first_token_metric_sum))`. Token-weighted mean, not a per-request median. Exact for streaming traffic; non-streaming requests have no TTFT, so their prefill counts as decode time and pulls the number down. Token counts are what the upstream reports in `usage` (LiteLLM estimates them when a stream carries no usage).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (model, api_base) (rate(litellm_output_tokens_metric_total{model=~\"$model\"}[$__rate_interval]) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"})) / (sum by (model, api_base) ((rate(litellm_llm_api_latency_metric_sum{model=~\"$model\"}[$__rate_interval]) - (rate(litellm_llm_api_time_to_first_token_metric_sum{model=~\"$model\"}[$__rate_interval]) or rate(litellm_llm_api_latency_metric_sum{model=~\"$model\"}[$__rate_interval]) * 0)) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"})) > 0)",
+     "refId": "A",
+     "legendFormat": "{{model}} @ {{api_base}}",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "axisSoftMin": 0,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "showLegend": true,
+     "calcs": [
+      "mean",
+      "min",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 9,
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 22
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "End-to-end output tok/s",
+   "description": "Output tokens per second of total upstream time (prefill included): `rate(litellm_output_tokens_metric_total) / rate(litellm_llm_api_latency_metric_sum)`. What a caller experiences for a whole response; short answers are dominated by TTFT.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (model, api_base) (rate(litellm_output_tokens_metric_total{model=~\"$model\"}[$__rate_interval]) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"})) / (sum by (model, api_base) (rate(litellm_llm_api_latency_metric_sum{model=~\"$model\"}[$__rate_interval]) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"})) > 0)",
+     "refId": "A",
+     "legendFormat": "{{model}} @ {{api_base}}",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "axisSoftMin": 0,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "table",
+     "placement": "bottom",
+     "showLegend": true,
+     "calcs": [
+      "mean",
+      "min",
+      "max"
+     ]
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 10,
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 22
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Tokens in / out per second",
+   "description": "Prompt (`litellm_input_tokens_metric_total`) and completion (`litellm_output_tokens_metric_total`) tokens per second, successful requests only.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (model, api_base) (rate(litellm_input_tokens_metric_total{model=~\"$model\"}[$__rate_interval]) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"}))",
+     "refId": "A",
+     "legendFormat": "in {{model}} @ {{api_base}}",
+     "range": true,
+     "instant": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (model, api_base) (rate(litellm_output_tokens_metric_total{model=~\"$model\"}[$__rate_interval]) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"}))",
+     "refId": "B",
+     "legendFormat": "out {{model}} @ {{api_base}}",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "axisSoftMin": 0,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true,
+     "calcs": []
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 11,
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 30
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Upstream latency p50 / p95",
+   "description": "Whole upstream call, request sent \u2192 last byte (`litellm_llm_api_latency_metric`), successful requests. Scales with output length, so compare it only across identical prompts.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "histogram_quantile(0.5, sum by (le, model, api_base) (rate(litellm_llm_api_latency_metric_bucket{model=~\"$model\"}[$__rate_interval]) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"})))",
+     "refId": "A",
+     "legendFormat": "p50 {{model}} @ {{api_base}}",
+     "range": true,
+     "instant": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "histogram_quantile(0.95, sum by (le, model, api_base) (rate(litellm_llm_api_latency_metric_bucket{model=~\"$model\"}[$__rate_interval]) * on (model_id) group_left (api_base) group by (model_id, api_base) (litellm_deployment_state{api_base=~\"$api_base\"})))",
+     "refId": "B",
+     "legendFormat": "p95 {{model}} @ {{api_base}}",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "s",
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "axisSoftMin": 0,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true,
+     "calcs": []
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 12,
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 30
+   }
+  },
+  {
+   "type": "row",
+   "title": "Requests and errors",
+   "id": 13,
+   "collapsed": false,
+   "panels": [],
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 38
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Requests per second",
+   "description": "All upstream calls per deployment (`litellm_deployment_total_requests_total`), successful or not.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (litellm_model_name, api_base) (rate(litellm_deployment_total_requests_total{litellm_model_name=~\"$model\", api_base=~\"$api_base\"}[$__rate_interval]))",
+     "refId": "A",
+     "legendFormat": "{{litellm_model_name}} @ {{api_base}}",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "axisSoftMin": 0,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true,
+     "calcs": []
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 14,
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 39
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Error ratio",
+   "description": "Failed / all upstream calls per deployment. Requests LiteLLM rejects before choosing a deployment (unknown model) appear with an empty model and api_base.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "(sum by (litellm_model_name, api_base) (rate(litellm_deployment_failure_responses_total{litellm_model_name=~\"$model\", api_base=~\"$api_base\"}[$__rate_interval])) or sum by (litellm_model_name, api_base) (rate(litellm_deployment_total_requests_total{litellm_model_name=~\"$model\", api_base=~\"$api_base\"}[$__rate_interval])) * 0) / clamp_min(sum by (litellm_model_name, api_base) (rate(litellm_deployment_total_requests_total{litellm_model_name=~\"$model\", api_base=~\"$api_base\"}[$__rate_interval])), 1e-9)",
+     "refId": "A",
+     "legendFormat": "{{litellm_model_name}} @ {{api_base}}",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "percentunit",
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "axisSoftMin": 0,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     },
+     "min": 0
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true,
+     "calcs": []
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 15,
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 39
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Failures by status",
+   "description": "`litellm_deployment_failure_responses_total` by HTTP status and exception class.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (litellm_model_name, api_base, exception_status, exception_class) (rate(litellm_deployment_failure_responses_total{litellm_model_name=~\"$model\", api_base=~\"$api_base\"}[$__rate_interval]))",
+     "refId": "A",
+     "legendFormat": "{{exception_status}} {{exception_class}} {{litellm_model_name}} @ {{api_base}}",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "axisSoftMin": 0,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true,
+     "calcs": []
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 16,
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 39
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Gateway failures by requested model",
+   "description": "Every request that returned an error to the client (`litellm_proxy_failed_requests_metric_total`), by the model name the client asked for. Not filtered by the variables: it has no upstream label.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (requested_model, exception_status, exception_class) (rate(litellm_proxy_failed_requests_metric_total[$__rate_interval]))",
+     "refId": "A",
+     "legendFormat": "{{exception_status}} {{exception_class}} {{requested_model}}",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "axisSoftMin": 0,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true,
+     "calcs": []
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 17,
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 0,
+    "y": 47
+   }
+  },
+  {
+   "type": "table",
+   "title": "Deployments",
+   "description": "Deployments that have served traffic since LiteLLM started, with LiteLLM's health state (0 healthy, 1 partial outage, 2 complete outage).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max by (litellm_model_name, api_base, api_provider) (litellm_deployment_state{litellm_model_name=~\"$model\", api_base=~\"$api_base\"})",
+     "refId": "A",
+     "legendFormat": "__auto",
+     "range": false,
+     "instant": true,
+     "format": "table"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "align": "auto",
+      "filterable": false
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "footer": {
+     "show": false,
+     "reducer": [
+      "sum"
+     ]
+    }
+   },
+   "transformations": [
+    {
+     "id": "merge",
+     "options": {}
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true
+      },
+      "renameByName": {
+       "Value": "state"
+      }
+     }
+    }
+   ],
+   "id": 18,
+   "gridPos": {
+    "h": 8,
+    "w": 12,
+    "x": 12,
+    "y": 47
+   }
+  },
+  {
+   "type": "row",
+   "title": "Paid upstreams (x402-buyer)",
+   "id": 19,
+   "collapsed": false,
+   "panels": [],
+   "gridPos": {
+    "h": 1,
+    "w": 24,
+    "x": 0,
+    "y": 55
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Paid requests per second",
+   "description": "Requests the x402-buyer forwarded to purchased sellers. In LiteLLM these are `paid/*` models whose api_base is the x402-buyer Service, so the seller is only visible here.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (upstream, remote_model) (rate(obol_x402_buyer_requests_total[$__rate_interval]))",
+     "refId": "A",
+     "legendFormat": "{{upstream}} {{remote_model}}",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "axisSoftMin": 0,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true,
+     "calcs": []
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 20,
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 0,
+    "y": 56
+   }
+  },
+  {
+   "type": "timeseries",
+   "title": "Payments",
+   "description": "x402 payments made by the buyer, successful and failed.",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (upstream) (rate(obol_x402_buyer_payment_success_total[$__rate_interval]))",
+     "refId": "A",
+     "legendFormat": "ok {{upstream}}",
+     "range": true,
+     "instant": false
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "sum by (upstream) (rate(obol_x402_buyer_payment_failure_total[$__rate_interval]))",
+     "refId": "B",
+     "legendFormat": "failed {{upstream}}",
+     "range": true,
+     "instant": false
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "reqps",
+     "color": {
+      "mode": "palette-classic"
+     },
+     "custom": {
+      "drawStyle": "line",
+      "lineWidth": 1,
+      "fillOpacity": 10,
+      "showPoints": "never",
+      "spanNulls": false,
+      "axisSoftMin": 0,
+      "stacking": {
+       "mode": "none",
+       "group": "A"
+      }
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "legend": {
+     "displayMode": "list",
+     "placement": "bottom",
+     "showLegend": true,
+     "calcs": []
+    },
+    "tooltip": {
+     "mode": "multi",
+     "sort": "desc"
+    }
+   },
+   "id": 21,
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 8,
+    "y": 56
+   }
+  },
+  {
+   "type": "table",
+   "title": "Pre-signed authorizations",
+   "description": "Remaining and spent pre-signed payment authorizations per purchased model (buyer's live view).",
+   "datasource": {
+    "type": "prometheus",
+    "uid": "prometheus"
+   },
+   "targets": [
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max by (upstream, remote_model, chain) (obol_x402_buyer_auth_remaining)",
+     "refId": "A",
+     "legendFormat": "__auto",
+     "range": false,
+     "instant": true,
+     "format": "table"
+    },
+    {
+     "datasource": {
+      "type": "prometheus",
+      "uid": "prometheus"
+     },
+     "expr": "max by (upstream, remote_model, chain) (obol_x402_buyer_auth_spent)",
+     "refId": "B",
+     "legendFormat": "__auto",
+     "range": false,
+     "instant": true,
+     "format": "table"
+    }
+   ],
+   "fieldConfig": {
+    "defaults": {
+     "unit": "short",
+     "custom": {
+      "align": "auto",
+      "filterable": false
+     }
+    },
+    "overrides": []
+   },
+   "options": {
+    "showHeader": true,
+    "cellHeight": "sm",
+    "footer": {
+     "show": false,
+     "reducer": [
+      "sum"
+     ]
+    }
+   },
+   "transformations": [
+    {
+     "id": "merge",
+     "options": {}
+    },
+    {
+     "id": "organize",
+     "options": {
+      "excludeByName": {
+       "Time": true
+      },
+      "renameByName": {
+       "Value #A": "remaining",
+       "Value #B": "spent"
+      }
+     }
+    }
+   ],
+   "id": 22,
+   "gridPos": {
+    "h": 8,
+    "w": 8,
+    "x": 16,
+    "y": 56
+   }
+  }
+ ]
+}

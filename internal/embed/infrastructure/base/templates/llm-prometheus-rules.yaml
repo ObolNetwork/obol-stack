@@ -1,0 +1,98 @@
+---
+# Recording rules for LiteLLM performance: one-number answers per model and
+# upstream for agents (Hermes, Claude Code) and the obol-llm dashboard.
+# Metric semantics, formulas and caveats: docs/observability.md
+# "LLM performance".
+#
+# LiteLLM's TTFT / latency / token metrics carry model + model_id but no
+# api_base, so every rule joins them on model_id to litellm_deployment_state
+# (labels: litellm_model_name, model_id, api_base, api_provider). That gauge
+# exists once a deployment has served a request; `group by` dedupes it
+# across pods during a rollout.
+#
+# Picked up by kube-prometheus-stack via the `release: monitoring` label.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: litellm
+  namespace: llm
+  labels:
+    release: monitoring
+    app: litellm
+spec:
+  groups:
+    - name: llm.recording
+      interval: 30s
+      rules:
+        # Time to first token (streaming requests only — LiteLLM records no
+        # TTFT for non-streaming calls), measured from LiteLLM's upstream
+        # call start to the first chunk: includes network + queueing +
+        # prefill at the upstream, excludes LiteLLM's own overhead.
+        - record: obol:llm_ttft_seconds:p50_5m
+          expr: |
+            histogram_quantile(0.50,
+              sum by (le, model, api_base, api_provider) (
+                rate(litellm_llm_api_time_to_first_token_metric_bucket[5m])
+                * on (model_id) group_left (api_base, api_provider)
+                  group by (model_id, api_base, api_provider) (litellm_deployment_state)
+              )
+            )
+        - record: obol:llm_ttft_seconds:p95_5m
+          expr: |
+            histogram_quantile(0.95,
+              sum by (le, model, api_base, api_provider) (
+                rate(litellm_llm_api_time_to_first_token_metric_bucket[5m])
+                * on (model_id) group_left (api_base, api_provider)
+                  group by (model_id, api_base, api_provider) (litellm_deployment_state)
+              )
+            )
+
+        # Generation speed: output tokens per second of decode time,
+        # aggregated over the window (total tokens / total decode seconds,
+        # i.e. token-weighted, not a per-request median). Decode time is
+        # upstream latency minus TTFT. Exact when the model's traffic is
+        # streaming (Hermes and flows/llm-bench.sh stream); non-streaming
+        # requests have no TTFT, so their prefill time counts as decode and
+        # pulls the number down. `> 0` drops idle windows instead of
+        # reporting 0 tok/s (a filter, not a div-by-zero floor).
+        - record: obol:llm_output_tokens_per_second:mean_5m
+          expr: |
+            sum by (model, api_base, api_provider) (
+              rate(litellm_output_tokens_metric_total[5m])
+              * on (model_id) group_left (api_base, api_provider)
+                group by (model_id, api_base, api_provider) (litellm_deployment_state)
+            )
+            /
+            (
+              sum by (model, api_base, api_provider) (
+                (
+                  rate(litellm_llm_api_latency_metric_sum[5m])
+                  - (rate(litellm_llm_api_time_to_first_token_metric_sum[5m]) or rate(litellm_llm_api_latency_metric_sum[5m]) * 0)
+                )
+                * on (model_id) group_left (api_base, api_provider)
+                  group by (model_id, api_base, api_provider) (litellm_deployment_state)
+              ) > 0
+            )
+
+        # Failed / total upstream calls per deployment (0 when a deployment
+        # had traffic but no failures). Requests LiteLLM rejects before
+        # picking a deployment (unknown model) carry api_base="" and show up
+        # as their own series.
+        - record: obol:llm_error_ratio:5m
+          expr: |
+            (
+              sum by (litellm_model_name, api_base, api_provider) (
+                rate(litellm_deployment_failure_responses_total[5m])
+              )
+              or
+              sum by (litellm_model_name, api_base, api_provider) (
+                rate(litellm_deployment_total_requests_total[5m])
+              ) * 0
+            )
+            /
+            clamp_min(
+              sum by (litellm_model_name, api_base, api_provider) (
+                rate(litellm_deployment_total_requests_total[5m])
+              ),
+              1e-9
+            )
