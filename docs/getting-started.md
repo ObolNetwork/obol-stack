@@ -253,7 +253,7 @@ This confirms the full inference chain: **Hermes → LiteLLM → Ollama**.
 Network deployment is two stages: **install** saves configuration, **sync** deploys it.
 
 ```bash
-# List available networks
+# Installed deployments, installable types and remote RPCs
 obol network list
 
 # Generate configuration (nothing deployed yet)
@@ -323,17 +323,27 @@ execution clients fall back to their chart-default behavior with a warning.
 Fork-name presets reference mainnet block numbers — use a raw block
 number or a duration on testnets.
 
-Verify:
+Execution and consensus client metrics are scraped by the stack's Prometheus.
+
+### Check sync progress
 
 ```bash
-obol kubectl get all -n ethereum-demo
+obol network status                 # eRPC + every installed node
+obol network status ethereum/demo   # one node
+obol -o json network status ethereum/demo
 ```
 
-Test the Ethereum JSON-RPC endpoint:
+For each ethereum deployment this prints pod state, the execution client's
+`eth_syncing` / head block / peers / version, the beacon node's
+`/eth/v1/node/syncing` (head slot, sync distance, optimistic, `el_offline`) /
+peers / version, and a one-line verdict such as
+`synced`, `syncing` (with a percentage or distance), `el_offline` or
+`unreachable`. The node APIs are reached through short-lived port-forwards;
+they are not published on `obol.stack`. To query them yourself:
 
 ```bash
-curl -s http://obol.stack/ethereum-demo/execution \
-  -X POST -H 'Content-Type: application/json' \
+obol kubectl -n ethereum-demo port-forward svc/ethereum-execution 8545:8545 &
+curl -s http://127.0.0.1:8545 -X POST -H 'Content-Type: application/json' \
   -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
 ```
 
@@ -369,8 +379,7 @@ obol network delete ethereum/demo
 | Endpoint | URL |
 |----------|-----|
 | Frontend | http://obol.stack/ |
-| Ethereum Execution RPC | http://obol.stack/ethereum-{id}/execution |
-| Ethereum Beacon API | http://obol.stack/ethereum-{id}/beacon |
+| Ethereum node status | `obol network status ethereum/{id}` (node APIs are in-cluster only: `ethereum-execution.ethereum-{id}.svc:8545`, `ethereum-beacon.ethereum-{id}.svc:5052`) |
 | eRPC | http://obol.stack/rpc |
 | Cloudflare Tunnel | Run `obol tunnel status` to get the public URL |
 

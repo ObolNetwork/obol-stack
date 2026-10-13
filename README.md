@@ -353,7 +353,7 @@ obol model status      # provider state
 Install and run blockchain networks as isolated deployments. Each installation gets a unique namespace so you can run multiple instances side-by-side. Local nodes are automatically registered as priority upstreams for the stack's RPC gateway.
 
 ```bash
-# List available networks
+# Installed deployments (+ installable types and remote RPCs)
 obol network list
 
 # Install a network (defaults to network name as ID)
@@ -367,6 +367,10 @@ obol network sync
 obol network sync ethereum/mainnet
 obol network sync --all
 
+# Sync progress: EL + CL state and a one-line verdict per node
+obol network status
+obol network status ethereum/mainnet -o json
+
 # Add a remote RPC instead of running a node
 obol network add
 ```
@@ -376,8 +380,9 @@ obol network add
 **Ethereum options:** `--network` (mainnet, sepolia, hoodi), `--execution-client` (reth, geth, nethermind, besu, erigon, ethereumjs), `--consensus-client` (lighthouse, prysm, teku, nimbus, lodestar, grandine), `--mode` (full, archive), `--since` (partial archive: `merge`, `365d`, a block number)
 
 ```bash
-# View installed deployments
-obol kubectl get namespaces | grep -E "ethereum|aztec"
+# Hoodi node with a specific client pair
+obol network install ethereum --network=hoodi --execution-client=geth --consensus-client=teku
+obol network sync ethereum/hoodi
 
 # Delete a deployment
 obol network delete ethereum/mainnet --force

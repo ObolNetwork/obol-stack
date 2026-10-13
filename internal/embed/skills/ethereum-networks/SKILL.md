@@ -40,6 +40,38 @@ To see which networks are connected:
 curl -s http://erpc.erpc.svc.cluster.local/ | python3 -m json.tool
 ```
 
+## Local Node Sync Status
+
+eRPC hides which upstream answered, so to check whether a **local** node
+(installed with `obol network install ethereum`) is synced, query it directly.
+Each node lives in namespace `ethereum-<id>` (the id defaults to the network
+name, e.g. `hoodi`; `obol network list` on the host lists them, and eRPC
+registers it as upstream `local-ethereum-<id>`):
+
+```bash
+EL=http://ethereum-execution.ethereum-<id>.svc.cluster.local:8545
+CL=http://ethereum-beacon.ethereum-<id>.svc.cluster.local:5052
+
+cast rpc eth_syncing --rpc-url "$EL"        # false = EL synced; object = currentBlock/highestBlock
+cast block-number --rpc-url "$EL"
+cast rpc net_peerCount --rpc-url "$EL"
+curl -s "$CL/eth/v1/node/syncing"           # head_slot, sync_distance, is_syncing, is_optimistic, el_offline
+curl -s "$CL/eth/v1/node/peer_count"
+```
+
+Read it the same way `obol network status` does:
+
+| Beacon `/node/syncing` | EL `eth_syncing` | Verdict |
+|---|---|---|
+| `el_offline: true` | any | EL offline — beacon can't reach the execution client |
+| `is_syncing: true` | any | syncing — `sync_distance` slots × 12s behind |
+| `is_optimistic: true` | object | beacon at head, EL still syncing (`currentBlock/highestBlock`) |
+| all false | `false` | synced |
+
+The deployment's network, clients and endpoints are in ConfigMap
+`ethereum-<id>-metadata`. From the host the operator runs
+`obol network status [ethereum/<id>]`.
+
 ## Write Transactions: Protected Routing & Revert Protection
 
 When a signed tx is broadcast (via `ethereum-local-wallet`'s `send-tx`, or
@@ -258,7 +290,7 @@ AND filter, supports `topics[N]`), `--limit N` / `--tail N`, `--count`
 ## Constraints
 
 - **Read-only** — no private keys, no signing, no state changes
-- **Local routing** — always route through eRPC at `http://erpc.erpc.svc.cluster.local/rpc/`, never call external RPC providers
+- **Local routing** — always route through eRPC at `http://erpc.erpc.svc.cluster.local/rpc/`, never call external RPC providers (exception: read-only sync checks against a local node's own in-cluster endpoints, above)
 - **Shell is `sh`, not `bash`** — do not use bashisms like `${var//pattern}`, `${var:offset}`, `[[ ]]`, or arrays. Use POSIX-compatible syntax only
 - **`cast` preferred** — use `rpc.sh` (Foundry cast) for all queries. Fall back to `rpc.py` (Python stdlib) only if cast is unavailable
 - **Always check for null results** — RPC methods like `eth_getTransactionByHash` return `null` for unknown hashes
