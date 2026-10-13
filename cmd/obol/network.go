@@ -9,10 +9,12 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/network"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/validate"
 	"github.com/urfave/cli/v3"
 )
@@ -195,9 +197,12 @@ func buildNetworkInstallCommands(cfg *config.Config) []*cli.Command {
 // ---------------------------------------------------------------------------
 
 // networkListResult is the JSON-serialisable result for `network list`.
+// local_nodes keeps its original meaning (installable network types) for
+// backward compatibility; installed deployments are in deployments.
 type networkListResult struct {
-	LocalNodes []string              `json:"local_nodes"`
-	RPCs       []networkListRPCEntry `json:"rpcs"`
+	Deployments []network.Deployment  `json:"deployments"`
+	LocalNodes  []string              `json:"local_nodes"`
+	RPCs        []networkListRPCEntry `json:"rpcs"`
 }
 
 type networkListRPCEntry struct {
@@ -209,14 +214,20 @@ type networkListRPCEntry struct {
 func networkListCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "list",
-		Usage: "List all networks (local nodes + remote RPCs)",
+		Usage: "List installed local nodes, installable network types and remote RPCs",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 
-			if u.IsJSON() {
-				result := networkListResult{LocalNodes: []string{}, RPCs: []networkListRPCEntry{}}
+			deployments := network.InstalledDeployments(cfg)
 
-				// Collect local nodes (best-effort).
+			if u.IsJSON() {
+				result := networkListResult{
+					Deployments: deployments,
+					LocalNodes:  []string{},
+					RPCs:        []networkListRPCEntry{},
+				}
+
+				// Installable network types (best-effort).
 				if nodes, err := embed.GetAvailableNetworks(); err == nil {
 					result.LocalNodes = nodes
 				}
@@ -239,10 +250,16 @@ func networkListCommand(cfg *config.Config) *cli.Command {
 				return u.JSON(result)
 			}
 
-			// Show local node deployments.
+			// Installed local node deployments.
 			u.Info("Local Nodes:")
-			if err := network.List(cfg, u); err != nil {
-				u.Printf("  (unable to list: %v)\n", err)
+			if len(deployments) == 0 {
+				u.Print("  (none installed — obol network install <type>)")
+			} else {
+				printDeployments(u, deployments)
+			}
+
+			if types, err := embed.GetAvailableNetworks(); err == nil && len(types) > 0 {
+				u.Dim(fmt.Sprintf("  Installable types: %s (obol network install <type> --help)", strings.Join(types, ", ")))
 			}
 
 			u.Blank()
@@ -251,7 +268,7 @@ func networkListCommand(cfg *config.Config) *cli.Command {
 			u.Info("Remote RPCs:")
 			rpcNetworks, err := network.ListRPCNetworks(cfg)
 			if err != nil {
-				u.Printf("  (unable to read eRPC config: %v)\n", err)
+				u.Printf("  (unable to read eRPC config: %v)", err)
 				return nil
 			}
 
@@ -263,12 +280,33 @@ func networkListCommand(cfg *config.Config) *cli.Command {
 					if alias == "" {
 						alias = fmt.Sprintf("chain-%d", net.ChainID)
 					}
-					u.Printf("  %-20s chain=%-8d %d upstream(s)\n", alias, net.ChainID, len(net.Upstreams))
+					u.Printf("  %-20s chain=%-8d %d upstream(s)", alias, net.ChainID, len(net.Upstreams))
 				}
 			}
 
 			return nil
 		},
+	}
+}
+
+// printDeployments renders installed deployments as an aligned table.
+func printDeployments(u *ui.UI, deployments []network.Deployment) {
+	dash := func(s string) string {
+		if s == "" {
+			return "-"
+		}
+		return s
+	}
+
+	u.Printf("  %-26s %-9s %-11s %-11s %s", "DEPLOYMENT", "NETWORK", "EXECUTION", "CONSENSUS", "MODE")
+	for _, d := range deployments {
+		if d.Error != "" {
+			u.Printf("  %-26s (%s)", d.Identifier(), d.Error)
+			continue
+		}
+
+		u.Printf("  %-26s %-9s %-11s %-11s %s", d.Identifier(), dash(d.Network),
+			dash(d.ExecutionClient), dash(d.ConsensusClient), dash(d.Mode))
 	}
 }
 
@@ -488,46 +526,103 @@ Examples:
 }
 
 // ---------------------------------------------------------------------------
-// network status — eRPC health (was: rpc status)
+// network status — eRPC health + live local node sync state
 // ---------------------------------------------------------------------------
+
+// networkStatusResult is the JSON shape of `network status`.
+type networkStatusResult struct {
+	ERPC  networkERPCStatus    `json:"erpc"`
+	Nodes []network.NodeStatus `json:"nodes"`
+}
+
+type networkERPCStatus struct {
+	Pod       string                  `json:"pod"`
+	Upstreams []networkERPCChainCount `json:"upstreams"`
+}
+
+type networkERPCChainCount struct {
+	ChainID   int    `json:"chain_id"`
+	Name      string `json:"name"`
+	Upstreams int    `json:"upstreams"`
+}
 
 func networkStatusCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
-		Name:  "status",
-		Usage: "Show eRPC gateway health and upstream counts",
-		Action: func(_ context.Context, cmd *cli.Command) error {
+		Name:      "status",
+		Usage:     "Show eRPC gateway health and the sync state of installed local nodes",
+		ArgsUsage: "[<network>/<id>]",
+		Description: `Shows eRPC upstreams and, for each installed ethereum deployment, live
+execution (eth_syncing, head block, peers, client version) and consensus
+(/eth/v1/node/syncing, peers, version) state plus a one-line verdict.
+The node APIs are reached through short-lived kubectl port-forwards on the
+stack kubeconfig; nothing is exposed on obol.stack.
+
+Examples:
+  obol network status
+  obol network status ethereum/hoodi
+  obol -o json network status ethereum/hoodi`,
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:  "no-probe",
+				Usage: "Skip live node API probes (eRPC and installed deployments only)",
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
+
+			deployments, err := selectDeployments(network.InstalledDeployments(cfg), cmd.Args().First())
+			if err != nil {
+				return err
+			}
 
 			podStatus, upstreamCounts, err := network.GetERPCStatus(cfg)
 			if err != nil {
 				return fmt.Errorf("failed to get eRPC status: %w", err)
 			}
 
-			u.Printf("eRPC Gateway Status\n")
-			u.Printf("====================\n\n")
-
-			u.Info("Pod:")
-			if podStatus != "" {
-				u.Printf("  %s\n", podStatus)
-			} else {
-				u.Info("  (no pods found)")
+			result := networkStatusResult{
+				ERPC:  networkERPCStatus{Pod: strings.TrimSpace(podStatus), Upstreams: []networkERPCChainCount{}},
+				Nodes: []network.NodeStatus{},
 			}
 
-			u.Printf("\nUpstreams per chain:\n")
-			if len(upstreamCounts) == 0 {
-				u.Info("  (no upstreams configured)")
-			} else {
-				var chainIDs []int
-				for id := range upstreamCounts {
-					chainIDs = append(chainIDs, id)
-				}
+			var chainIDs []int
+			for id := range upstreamCounts {
+				chainIDs = append(chainIDs, id)
+			}
+			sort.Ints(chainIDs)
+			for _, id := range chainIDs {
+				result.ERPC.Upstreams = append(result.ERPC.Upstreams, networkERPCChainCount{
+					ChainID: id, Name: chainIDToName(id), Upstreams: upstreamCounts[id],
+				})
+			}
 
-				sort.Ints(chainIDs)
-
-				for _, id := range chainIDs {
-					name := chainIDToName(id)
-					u.Printf("  %-20s (chain %d): %d upstream(s)\n", name, id, upstreamCounts[id])
+			if cmd.Bool("no-probe") {
+				for _, d := range deployments {
+					result.Nodes = append(result.Nodes, network.NodeStatus{
+						Deployment: d,
+						Pods:       []network.PodStatus{},
+						Verdict:    network.Verdict{State: network.VerdictNotProbed, Summary: "not probed (--no-probe)"},
+					})
 				}
+			} else if len(deployments) > 0 {
+				probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+				defer cancel()
+				result.Nodes = network.NewKubectlNodeProber(cfg).ProbeAll(probeCtx, deployments)
+			}
+
+			if u.IsJSON() {
+				return u.JSON(result)
+			}
+
+			printERPCStatus(u, result.ERPC)
+			for _, n := range result.Nodes {
+				u.Blank()
+				printNodeStatus(u, n)
+			}
+
+			if len(deployments) == 0 {
+				u.Blank()
+				u.Dim("No local nodes installed (obol network install ethereum --help)")
 			}
 
 			return nil
@@ -535,6 +630,147 @@ func networkStatusCommand(cfg *config.Config) *cli.Command {
 	}
 }
 
+// selectDeployments narrows deployments to the one named by arg: an exact
+// "<type>/<id>", its namespace "<type>-<id>", or a type with exactly one
+// deployment. An empty arg selects all.
+func selectDeployments(all []network.Deployment, arg string) ([]network.Deployment, error) {
+	if arg == "" {
+		return all, nil
+	}
+
+	var byType []network.Deployment
+	for _, d := range all {
+		if arg == d.Identifier() || arg == d.Namespace {
+			return []network.Deployment{d}, nil
+		}
+		if arg == d.Type {
+			byType = append(byType, d)
+		}
+	}
+
+	if len(byType) == 1 {
+		return byType, nil
+	}
+
+	ids := make([]string, 0, len(all))
+	for _, d := range all {
+		ids = append(ids, d.Identifier())
+	}
+
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("no network deployment %q: none installed", arg)
+	}
+
+	return nil, fmt.Errorf("no single network deployment matches %q; installed: %s", arg, strings.Join(ids, ", "))
+}
+
+func printERPCStatus(u *ui.UI, st networkERPCStatus) {
+	u.Bold("eRPC gateway")
+	if st.Pod != "" {
+		for line := range strings.SplitSeq(st.Pod, "\n") {
+			u.Printf("  %s", strings.TrimSpace(line))
+		}
+	} else {
+		u.Dim("  (no pods found)")
+	}
+
+	if len(st.Upstreams) == 0 {
+		u.Dim("  (no upstreams configured)")
+		return
+	}
+
+	for _, c := range st.Upstreams {
+		u.Printf("  %-20s (chain %d): %d upstream(s)", c.Name, c.ChainID, c.Upstreams)
+	}
+}
+
+func printNodeStatus(u *ui.UI, n network.NodeStatus) {
+	head := n.Identifier()
+	if n.Network != "" {
+		parts := []string{n.Network}
+		if n.ExecutionClient != "" || n.ConsensusClient != "" {
+			parts = append(parts, n.ExecutionClient+" + "+n.ConsensusClient)
+		}
+		if n.Mode != "" {
+			parts = append(parts, n.Mode)
+		}
+		head += "  (" + strings.Join(parts, " · ") + ")"
+	}
+	u.Bold(head)
+
+	verdict := n.Verdict.State + ": " + n.Verdict.Summary
+	switch n.Verdict.State {
+	case network.VerdictSynced:
+		u.Success(verdict)
+	case network.VerdictSyncing, network.VerdictWaiting, network.VerdictNotProbed, network.VerdictNotSupported:
+		u.Info(verdict)
+	default:
+		u.Warn(verdict)
+	}
+
+	for _, w := range n.Verdict.Warnings {
+		u.Warn(w)
+	}
+
+	if n.Verdict.State == network.VerdictNotProbed || n.Verdict.State == network.VerdictNotSupported {
+		return
+	}
+
+	if n.PodsError != "" {
+		u.Detail("Pods", "(unavailable: "+n.PodsError+")")
+	} else if len(n.Pods) > 0 {
+		var pods []string
+		for _, p := range n.Pods {
+			s := p.Component + " " + p.Phase
+			if p.Ready {
+				s += " ready"
+			} else if p.Reason != "" {
+				s += " " + p.Reason
+			}
+			if p.Restarts > 0 {
+				s += fmt.Sprintf(" (%d restarts)", p.Restarts)
+			}
+			pods = append(pods, s)
+		}
+		u.Detail("Pods", strings.Join(pods, " · "))
+	}
+
+	if el := n.Execution; el != nil {
+		if !el.Reachable {
+			u.Detail("Execution", "unreachable: "+el.Error)
+		} else {
+			line := fmt.Sprintf("head %d", el.HeadBlock)
+			if el.Syncing {
+				line = fmt.Sprintf("syncing %d/%d", el.CurrentBlock, el.HighestBlock)
+			}
+			if el.Peers != nil {
+				line += fmt.Sprintf(" · %d peers", *el.Peers)
+			}
+			if el.ClientVersion != "" {
+				line += " · " + el.ClientVersion
+			}
+			u.Detail("Execution", line)
+		}
+	}
+
+	if cl := n.Consensus; cl != nil {
+		if !cl.Reachable {
+			u.Detail("Consensus", "unreachable: "+cl.Error)
+		} else {
+			line := fmt.Sprintf("head slot %d · distance %d · syncing=%t optimistic=%t el_offline=%t",
+				cl.HeadSlot, cl.SyncDistance, cl.IsSyncing, cl.IsOptimistic, cl.ELOffline)
+			if cl.Peers != nil {
+				line += fmt.Sprintf(" · %d peers", *cl.Peers)
+			}
+			if cl.Version != "" {
+				line += " · " + cl.Version
+			}
+			u.Detail("Consensus", line)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
 // network erpc — durable operator eRPC config that survives stack up (#763).
 // Verbs match sell-info set/reset (host-side intent) + status.
 // ---------------------------------------------------------------------------
