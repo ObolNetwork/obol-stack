@@ -77,6 +77,9 @@ releases:
     createNamespace: true
     chart: traefik/traefik
     version: 39.0.9
+    # The metrics ServiceMonitor below needs the monitoring.coreos.com CRDs.
+    needs:
+      - monitoring/monitoring
     values:
       # Gateway API provider configuration
       - providers:
@@ -133,6 +136,22 @@ releases:
           requests:
             cpu: 100m
             memory: 128Mi
+      # Prometheus metrics: the chart always serves them on the internal
+      # `metrics` entrypoint (:9100, not exposed on the LoadBalancer). A
+      # dedicated ClusterIP metrics Service + ServiceMonitor (labelled
+      # release=monitoring) gets them scraped. disableAPICheck: the CRD is
+      # guaranteed by `needs` above; the check would only break offline
+      # `helm template` renders.
+      - metrics:
+          prometheus:
+            service:
+              enabled: true
+            disableAPICheck: true
+            serviceMonitor:
+              enabled: true
+              interval: 30s
+              additionalLabels:
+                release: monitoring
       # Disable dashboard by default
       - ingressRoute:
           dashboard:
@@ -171,6 +190,8 @@ releases:
     condition: cloudflared.enabled
     needs:
       - traefik/traefik
+      # PodMonitor for the connector's :2000 metrics.
+      - monitoring/monitoring
 
   # Stakater Reloader (restarts workloads on Secret/ConfigMap change)
   - name: reloader

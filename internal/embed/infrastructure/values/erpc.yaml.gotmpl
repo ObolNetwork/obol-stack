@@ -284,15 +284,18 @@ extraPorts: []
 
 # Additional env variables
 
+# Scraped by the stack's kube-prometheus-stack (selects release=monitoring).
+# The chart's Service already exposes the `metrics` port (4001, see the
+# `metrics:` block in config above).
 serviceMonitor:
-  enabled: false
+  enabled: true
   path: /metrics
   namespace: null
   labels:
     release: monitoring
   annotations: {}
-  interval: 1m
+  interval: 30s
   scheme: http
   tlsConfig: {}
-  scrapeTimeout: 30s
+  scrapeTimeout: 10s
   relabelings: []

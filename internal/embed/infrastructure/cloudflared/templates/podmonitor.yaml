@@ -1,0 +1,27 @@
+{{- /*
+Scrape the connector's metrics (--metrics 0.0.0.0:2000, container port
+`metrics`) with the stack's kube-prometheus-stack, which only selects
+monitors labelled release=monitoring. A PodMonitor (not a ServiceMonitor):
+the chart has no Service and doesn't need one. Rendered only when the
+monitoring.coreos.com CRDs exist, so `obol tunnel setup` against a cluster
+without the monitoring release still installs cleanly.
+*/ -}}
+{{- if and .Values.metrics.podMonitor.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PodMonitor") }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: cloudflared
+  labels:
+    app.kubernetes.io/name: cloudflared
+    app.kubernetes.io/part-of: obol-stack
+    release: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: cloudflared
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+{{- end }}

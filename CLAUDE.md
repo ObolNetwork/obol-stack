@@ -55,6 +55,7 @@ Integration tests use `//go:build integration`; skip when prerequisites missing.
 |---|---|---|---|
 | Local only | `["obol.stack"]` | `/` | frontend (obol-frontend ns) |
 | Local only | `["obol.stack"]` | `/rpc` | eRPC (erpc ns) |
+| Local only | `["obol.stack"]` | `/grafana` | Grafana (monitoring ns; anonymous Viewer, dashboards + deep-link uids in `docs/observability.md`) |
 | Public (tunnel) | none | `/services/<name>/*` | x402 ForwardAuth -> upstream |
 | Public (tunnel) | none | `/.well-known/agent-registration.json` | ERC-8004 httpd |
 | Public (tunnel) | none | `/skill.md` | service catalog |
@@ -62,7 +63,7 @@ Integration tests use `//go:build integration`; skip when prerequisites missing.
 | Public (tunnel) | none | `/.well-known/x402` | aggregate x402 discovery fallback (AgentCash/x402scan-style crawlers that don't parse `/openapi.json`'s `x-payment-info`) |
 | Public (tunnel) | tunnel hostname only | `/` | storefront landing page (Next.js) |
 
-**NEVER remove hostname restrictions from frontend or eRPC HTTPRoutes** — exposing the frontend/RPC to the public internet is a critical security flaw.
+**NEVER remove hostname restrictions from frontend, eRPC or Grafana HTTPRoutes** (guarded by `internal/embed/embed_httproute_hostnames_test.go`) — exposing the frontend/RPC to the public internet is a critical security flaw.
 
 **Config**: `Config{ConfigDir, BinDir, DataDir, StateDir}` (`internal/config/config.go:9`). Precedence: `OBOL_CONFIG_DIR` > dev mode (`.workspace/config`) > `XDG_CONFIG_HOME/obol` (falls back to `~/.config/obol`). `OBOL_DEVELOPMENT=true` -> `.workspace/` dirs. Internal obol operations always use `$OBOL_CONFIG_DIR/kubeconfig.yaml`; so do passthroughs, overriding an ambient `KUBECONFIG` (only an explicit `--kubeconfig` arg opts out; see Passthrough bullet below).
 

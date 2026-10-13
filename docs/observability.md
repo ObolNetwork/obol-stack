@@ -7,7 +7,10 @@ rule, or proposing "let's persist the counter to a PVC."
 ## TL;DR
 
 - **Prometheus is for recent operational telemetry**, bounded by TSDB retention
-  (currently 8d in our cluster values).
+  (8d, capped at 4GB, on a 5Gi local-path PVC — `values/monitoring.yaml.gotmpl`).
+- **Grafana** is at `http://obol.stack:8080/grafana/`: anonymous, read-only,
+  local-only. Dashboards have stable uids for deep links — see
+  [Grafana and dashboards](#grafana-and-dashboards).
 - **On-chain settlement TXs are the canonical record for lifetime financial
   state.** Every settled x402 payment leaves an immutable on-chain trace via
   `X-PAYMENT-RESPONSE` (settle tx hash, asset, amount, payer, payee).
@@ -445,6 +448,148 @@ contributors: if you write a guarded division, the epsilon is `1e-9`.
 
 ---
 
+## Grafana and dashboards
+
+Grafana ships in the `monitoring` release (kube-prometheus-stack) and is served
+at **`http://obol.stack:8080/grafana/`** (also `http://obol.stack/grafana/`
+when port 80 is bound). The HTTPRoute (`base/templates/grafana.yaml`) is
+restricted to `hostnames: ["obol.stack"]`, so the Cloudflare tunnel hostname
+never reaches it; `internal/embed/embed_httproute_hostnames_test.go` fails if
+that restriction goes away.
+
+### Settings (and why)
+
+| Setting | Value | Why |
+|---|---|---|
+| `auth.anonymous` | enabled, `org_role = Viewer` | Local-only UI behind the obol.stack hostname: no login wall. |
+| `users.viewers_can_edit` | `true` | Viewers can use Explore and tweak panels; nothing can be saved (provisioned dashboards are read-only, no Grafana PVC). Deprecated upstream but still honoured in Grafana 13. |
+| `auth.disable_login_form`, `auth.basic.enabled = false` | on / off | No credential path at all. The chart still generates a random admin password into Secret `monitoring/monitoring-grafana`; nothing uses or prints it. |
+| `server.serve_from_sub_path`, `root_url` | `true`, `http://obol.stack:8080/grafana/` | Grafana serves `/grafana/...` itself (no Traefik rewrite). The UI uses relative paths, so it works on `:8080` and `:80`; `root_url` only affects absolute links Grafana generates. |
+| `analytics.*`, `news`, `plugins.preinstall_disabled`, `snapshots.external_enabled` | off | No calls to grafana.com / stats / raintank from a local stack. |
+| Datasource | `Prometheus`, uid `prometheus`, default | Dashboards reference `{"type":"prometheus","uid":"prometheus"}`. |
+| Sidecars | dashboards + datasources, namespace `monitoring` only, `rbac.namespaced` | Cluster-wide would grant Grafana read on every ConfigMap and Secret, wallet material included. Basic auth is off, so the sidecars don't call the reload API; Grafana re-reads the dashboards folder every 30s. |
+| Home dashboard | Obol Stack overview | `dashboards.default_home_dashboard_path`. |
+
+Disabled because they are dead on k3s (metrics bound to loopback inside the
+k3s process): the etcd, scheduler, controller-manager and kube-proxy
+ServiceMonitors, rules and dashboards. Also disabled: the 30d apiserver
+SLO/burn-rate rule groups (longer than retention) and the Alertmanager.
+
+### Dashboards and deep links
+
+Obol dashboards live in `internal/embed/infrastructure/base/dashboards/*.json`
+and become ConfigMaps (`grafana_dashboard: "1"`, folder "Obol Stack") in the
+`monitoring` namespace. Their uids are a contract with the front-end and the
+skills — **do not change them**.
+
+| uid | Title | Deep link |
+|---|---|---|
+| `obol-stack-overview` | Obol Stack overview | `/grafana/d/obol-stack-overview` |
+| `obol-eth-node` | Ethereum node | `/grafana/d/obol-eth-node?var-namespace=ethereum-<id>` |
+| `obol-charon` | Charon Overview | `/grafana/d/obol-charon?var-cluster_name=<cluster name>` |
+
+Any link also takes `from`/`to` (`&from=now-24h&to=now`), and `&kiosk` hides
+Grafana's chrome. Prefix with the local ingress URL
+(`stack.LocalIngressURL`, normally `http://obol.stack:8080`).
+
+- **Obol Stack overview**: node CPU / memory / disk (`/` writable layer and
+  `/data`), pods not ready, restarts, CPU and memory per namespace; x402 paid
+  request counts (`x402:revenue:*` rules: counts, not token amounts),
+  settlement rate, failures by reason; eRPC request / failure rate per chain
+  and per-upstream head lag; Traefik requests, 5xx and p95 per service;
+  cloudflared edge connections and tunnel traffic; scrape targets down.
+- **Ethereum node**: EL/CL head, distance behind, peers, finalized epoch,
+  CPU / memory / network per client, PVC sizes and data-dir free space. Clients
+  name metrics differently, so each panel combines the per-client names with
+  `or` and its description lists them. Not uniform across clients:
+  - *EL blocks behind* uses a real sync target only for nethermind and besu
+    (`ethereum_best_known_block_number`); geth (`chain_head_header`), reth
+    (`reth_sync_checkpoint{stage="Headers"}`) and erigon (`sync{stage="headers"}`)
+    use the downloaded-headers height as a proxy.
+  - *CL slots behind* uses the client's wall-clock slot; prysm's
+    `beacon_clock_time_slot` only moves when a block arrives, so it
+    under-reports during a stall.
+  - *Client-reported sync state* exists only for lighthouse, teku, lodestar
+    and besu.
+  For a live verdict from the node APIs use `obol network status`.
+- **Charon Overview**: Obol's published dashboard, adapted from
+  `grafana/dashboards/charon_overview_dashboard.json` in
+  [ObolNetwork/charon-distributed-validator-node](https://github.com/ObolNetwork/charon-distributed-validator-node)
+  (commit `4354ce4`). Changes: uid `obol-charon`, relative time range, Loki
+  link removed, variable defaults cleared, stored minified. Charon sets the
+  `cluster_name` / `cluster_hash` / `cluster_peer` / `cluster_network` labels
+  itself, so it works against the stack Prometheus — **once charon is
+  scraped**: the dv-pod chart's ServiceMonitor must be enabled with
+  `serviceMonitor.labels.release=monitoring` (and dv-pod ≥ 0.21, whose
+  ServiceMonitor targets the `monitoring` port).
+
+kube-prometheus-stack's own dashboards (folder "Kubernetes") are also
+available, e.g. `Kubernetes / Compute Resources / Pod`
+(`/grafana/d/6581e46e4e5c7ba40a07646395ef7b23?var-namespace=<ns>&var-pod=<pod>`)
+and `Namespace (Pods)` (`/grafana/d/85a562078cdf77779eaa1add43ccec1e?var-namespace=<ns>`).
+Those uids are upstream's and may change on a chart bump; prefer the Obol uids.
+
+To add a dashboard: drop `<name>.json` into `base/dashboards/` with a fixed
+`uid`, datasource `{"type":"prometheus","uid":"prometheus"}`, and
+`"editable": false`. A dashboard shipped by another chart must be a ConfigMap
+labelled `grafana_dashboard: "1"` **in the `monitoring` namespace**.
+
+### Scrape targets
+
+Everything is selected by the label `release: monitoring`
+(ServiceMonitor / PodMonitor / PrometheusRule):
+
+| Target | Monitor | Where |
+|---|---|---|
+| x402-verifier | ServiceMonitor | `base/templates/x402.yaml` |
+| x402-buyer | PodMonitor | `base/templates/llm.yaml` |
+| eRPC (`:4001`) | ServiceMonitor | `values/erpc.yaml.gotmpl` |
+| Traefik (`:9100`, `traefik-metrics` Service) | ServiceMonitor | traefik release in `helmfile.yaml` |
+| cloudflared (`:2000`) | PodMonitor | `cloudflared/templates/podmonitor.yaml` |
+| EL / CL clients | ServiceMonitors | `networks/ethereum/helmfile.yaml.gotmpl` |
+| node-exporter, kube-state-metrics, kubelet/cAdvisor, CoreDNS, apiserver, Prometheus, operator, Grafana | ServiceMonitors | kube-prometheus-stack |
+
+Ordering: `traefik`, `cloudflared` and `base` declare
+`needs: [monitoring/monitoring]` so the `monitoring.coreos.com` CRDs exist
+before their monitors apply. The cloudflared PodMonitor additionally renders
+only when the CRD is present, so `obol tunnel setup`'s direct
+`helm upgrade` works on a cluster without monitoring.
+
+### Upgrading from emptyDir (v0.15 / v0.16.0-rc0)
+
+Earlier stacks ran Prometheus on emptyDir with 2d retention. The new
+`storageSpec` changes the Prometheus StatefulSet's `volumeClaimTemplates`,
+which Kubernetes forbids updating in place. prometheus-operator handles this
+on the next `obol stack up`: the update is rejected, the operator deletes the
+StatefulSet and recreates it with the PVC. Prometheus restarts once and the
+old in-memory history (at most 2 days) is lost; Grafana shows a gap.
+(prometheus-operator v0.94.1, `pkg/k8s/statefulset.go` `ForceUpdateStatefulSet`:
+an update rejected with 422 Invalid deletes the StatefulSet for recreation.)
+
+If Prometheus does not come back (e.g. a different operator version that
+doesn't recreate), do it by hand — the operator recreates it within seconds:
+
+```bash
+obol kubectl -n monitoring delete statefulset prometheus-monitoring-kube-prometheus-prometheus
+obol kubectl -n monitoring get pvc   # prometheus-...-db-prometheus-...-0  Bound  5Gi
+```
+
+The TSDB then lives under `$DATA_DIR/monitoring/<pvc-name>/` and survives
+pod restarts and `obol stack down/up`. `local-path` does not enforce the 5Gi
+request; `retentionSize: 4GB` is what bounds disk use.
+
+### Resource budget
+
+Steady-state requests added by Grafana: 25m / 128Mi for Grafana plus 5m / 48Mi
+for the dashboard sidecar (limits 600m / 512Mi); the datasource sidecar runs
+once as an init container. Prometheus keeps 100m / 256Mi (limit 1Gi) and gains
+a 5Gi PVC (4GB used at most). Fewer series are scraped than before
+(etcd / scheduler / controller-manager / kube-proxy targets are gone) and the
+most expensive apiserver rule groups are off, which offsets the new eRPC,
+Traefik and cloudflared targets.
+
+---
+
 ## Cross-references
 
 ### Code
@@ -474,7 +619,10 @@ contributors: if you write a guarded division, the epsilon is `1e-9`.
 ### Infrastructure
 
 - `internal/embed/infrastructure/values/monitoring.yaml.gotmpl` — Prometheus
-  values, including retention and recording rule wiring.
+  and Grafana values, including retention, storage and grafana.ini.
+- `internal/embed/infrastructure/base/templates/grafana.yaml` — Grafana
+  HTTPRoute (obol.stack only) and the dashboard ConfigMaps built from
+  `base/dashboards/*.json`.
 - `internal/embed/infrastructure/base/templates/x402.yaml` — verifier
   Deployment, ServiceMonitor / PodMonitor.
 

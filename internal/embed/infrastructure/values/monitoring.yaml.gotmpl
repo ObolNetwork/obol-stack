@@ -1,3 +1,11 @@
+# kube-prometheus-stack values for the Obol Stack (release `monitoring`).
+#
+# Laptop-sized: one Prometheus on a small local-path PVC, one Grafana with
+# anonymous read-only access served at http://obol.stack:8080/grafana/ (the
+# HTTPRoute lives in base/templates/grafana.yaml and is hostname-restricted
+# to obol.stack — never reachable through the Cloudflare tunnel). No
+# Alertmanager. See docs/observability.md ("Grafana and dashboards").
+
 prometheus:
   enabled: true
   prometheusSpec:
@@ -11,12 +19,28 @@ prometheus:
       matchLabels:
         release: monitoring
     podMonitorNamespaceSelector: {}
-    # Time-based retention is still honored, but retentionSize is the hard
-    # cap that prevents the TSDB from filling the k3d node's writable layer
-    # overnight and triggering DiskPressure → cascading pod evictions.
-    # 2GB on emptyDir is plenty for a local single-node stack.
-    retention: 2d
-    retentionSize: 2GB
+    # 8d keeps the 7d recording rules (x402:revenue:7d_*) honest: increase()
+    # needs samples on both sides of the window edge, so retention must
+    # exceed the longest rule window by a margin (docs/observability.md).
+    # retentionSize is the hard cap (TSDB blocks + WAL) and sits below the
+    # PVC request so the volume never fills; whichever limit is hit first
+    # wins.
+    retention: 8d
+    retentionSize: 4GB
+    # TSDB on a local-path PVC (data under $DATA_DIR/monitoring/<pvc>) so
+    # history survives pod restarts and `obol stack down/up`. Upgrading a
+    # stack whose Prometheus ran on emptyDir changes the StatefulSet's
+    # volumeClaimTemplates (immutable); prometheus-operator resolves that by
+    # deleting and recreating the StatefulSet. The old emptyDir history is
+    # dropped once. See docs/observability.md ("Upgrading from emptyDir").
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 5Gi
     resources:
       requests:
         cpu: 100m
@@ -31,11 +55,151 @@ prometheusOperator:
   tls:
     enabled: false  # Disable TLS secret volume mount (no admission webhook = no cert needed)
 
-grafana:
-  enabled: false  # Enable when we want UI access
-
 alertmanager:
   enabled: false  # Disable to keep the local stack lean
+
+# k3s runs etcd (sqlite/kine on a single k3d server), the scheduler, the
+# controller-manager and kube-proxy inside the k3s process with metrics bound
+# to loopback, so their scrape targets are permanently down. Disabling them
+# drops the dead ServiceMonitors, their always-firing *Down alerts and their
+# empty dashboards.
+kubeEtcd:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeProxy:
+  enabled: false
+
+defaultRules:
+  create: true
+  rules:
+    # No Alertmanager; no Windows nodes.
+    alertmanager: false
+    windows: false
+    # The apiserver SLO/burn-rate groups evaluate 30d windows (meaningless
+    # with 8d retention) and are the most expensive rules in the chart. The
+    # histogram group (latency quantiles) stays for the API server dashboard.
+    kubeApiserverAvailability: false
+    kubeApiserverBurnrate: false
+    kubeApiserverSlos: false
+
+grafana:
+  enabled: true
+  # Default kube-prometheus-stack dashboards (node-exporter, k8s compute
+  # resources, kubelet, CoreDNS, Prometheus, …). Dashboards for disabled
+  # components above are not rendered.
+  defaultDashboardsEnabled: true
+  defaultDashboardsTimezone: browser
+  defaultDashboardsEditable: false
+  # No adminPassword here on purpose: the grafana chart generates a random
+  # one into Secret monitoring/monitoring-grafana (kept across upgrades). It
+  # is never needed — the login form and basic auth are disabled below.
+  testFramework:
+    enabled: false
+  # The dashboard/datasource sidecars only watch the monitoring namespace,
+  # so a namespaced Role is enough. Cluster-wide would grant Grafana read on
+  # every ConfigMap AND Secret in the cluster (wallet material included).
+  rbac:
+    namespaced: true
+  resources:
+    requests:
+      cpu: 25m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 384Mi
+  sidecar:
+    resources:
+      requests:
+        cpu: 5m
+        memory: 48Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      searchNamespace: monitoring
+      resource: configmap
+      # Obol dashboards (base/templates/grafana.yaml) set grafana_folder;
+      # the chart's own dashboards get the annotation below.
+      folderAnnotation: grafana_folder
+      annotations:
+        grafana_folder: Kubernetes
+      provider:
+        foldersFromFilesStructure: true
+        allowUiUpdates: false
+      # Basic auth is off, so the sidecar cannot call Grafana's reload API.
+      # Grafana re-reads the provisioning folder on its own every 30s.
+      skipReload: true
+    datasources:
+      enabled: true
+      defaultDatasourceEnabled: true
+      isDefaultDatasource: true
+      # Stable uid: Obol dashboards reference {"type":"prometheus","uid":"prometheus"}.
+      uid: prometheus
+      resource: configmap
+      # Load the datasource before Grafana starts (no reload API, see above).
+      initDatasources: true
+      skipReload: true
+      # alertmanager.enabled is false; don't provision a dead datasource.
+      alertmanager:
+        enabled: false
+  serviceMonitor:
+    enabled: true
+    # With serve_from_sub_path, /metrics 301s to root_url (obol.stack, which
+    # does not resolve in-cluster); scrape the sub-path directly.
+    path: /grafana/metrics
+    labels:
+      release: monitoring
+  grafana.ini:
+    server:
+      domain: obol.stack
+      # Served under /grafana on the obol.stack HTTPRoute. The UI only uses
+      # relative /grafana/... paths, so it works on any host port (:8080 or
+      # :80); root_url is only used for absolute links Grafana generates.
+      root_url: http://obol.stack:8080/grafana/
+      serve_from_sub_path: true
+      enforce_domain: false
+    # Local-only, read-only dashboards: everyone is an anonymous Viewer.
+    auth:
+      disable_login_form: true
+      disable_signout_menu: true
+    auth.anonymous:
+      enabled: true
+      org_name: Main Org.
+      org_role: Viewer
+    auth.basic:
+      enabled: false
+    users:
+      allow_sign_up: false
+      allow_org_create: false
+      # Lets anonymous Viewers use Explore and tweak panels in the browser
+      # (nothing can be saved: provisioned dashboards are read-only).
+      viewers_can_edit: true
+    dashboards:
+      default_home_dashboard_path: /tmp/dashboards/Obol Stack/obol-stack-overview.json
+    # No phoning home from a local stack.
+    analytics:
+      reporting_enabled: false
+      check_for_updates: false
+      check_for_plugin_updates: false
+      feedback_links_enabled: false
+    news:
+      news_feed_enabled: false
+    plugins:
+      preinstall_disabled: true
+      plugin_admin_enabled: false
+      public_key_retrieval_disabled: true
+    snapshots:
+      external_enabled: false
+    security:
+      disable_gravatar: true
+    log:
+      level: warn
 
 kubeStateMetrics:
   enabled: true
@@ -51,6 +215,12 @@ kube-state-metrics:
 
 nodeExporter:
   enabled: true
+  # Linux-only node (the k3d container); skips the AIX/Darwin dashboards.
+  operatingSystems:
+    aix:
+      enabled: false
+    darwin:
+      enabled: false
 
 prometheus-node-exporter:
   # Pinned — upstream v1.10.2 shipped a multi-arch manifest that fails the
