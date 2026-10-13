@@ -139,11 +139,7 @@ func (p *NodeProber) ProbeAll(ctx context.Context, deployments []Deployment) []N
 
 	var wg sync.WaitGroup
 	for i, d := range deployments {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			out[i] = p.Probe(ctx, d)
-		}()
+		wg.Go(func() { out[i] = p.Probe(ctx, d) })
 	}
 	wg.Wait()
 
@@ -168,24 +164,16 @@ func (p *NodeProber) Probe(ctx context.Context, d Deployment) NodeStatus {
 
 	var wg sync.WaitGroup
 
-	wg.Add(3)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		pods, err := p.Pods(ctx, d.Namespace)
 		if err != nil {
 			st.PodsError = err.Error()
 			return
 		}
 		st.Pods = pods
-	}()
-	go func() {
-		defer wg.Done()
-		st.Execution = p.probeExecution(ctx, d.Namespace)
-	}()
-	go func() {
-		defer wg.Done()
-		st.Consensus = p.probeConsensus(ctx, d.Namespace)
-	}()
+	})
+	wg.Go(func() { st.Execution = p.probeExecution(ctx, d.Namespace) })
+	wg.Go(func() { st.Consensus = p.probeConsensus(ctx, d.Namespace) })
 	wg.Wait()
 
 	st.Verdict = ComputeVerdict(st.Pods, st.Execution, st.Consensus)

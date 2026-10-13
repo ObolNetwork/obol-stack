@@ -667,7 +667,7 @@ func selectDeployments(all []network.Deployment, arg string) ([]network.Deployme
 func printERPCStatus(u *ui.UI, st networkERPCStatus) {
 	u.Bold("eRPC gateway")
 	if st.Pod != "" {
-		for _, line := range strings.Split(st.Pod, "\n") {
+		for line := range strings.SplitSeq(st.Pod, "\n") {
 			u.Printf("  %s", strings.TrimSpace(line))
 		}
 	} else {

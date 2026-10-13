@@ -141,8 +141,8 @@ func forwardedPort(line string) (int, bool) {
 }
 
 func lastLine(s string) string {
-	if i := strings.LastIndex(s, "\n"); i >= 0 {
-		return strings.TrimSpace(s[i+1:])
+	if _, last, ok := strings.CutLast(s, "\n"); ok {
+		return strings.TrimSpace(last)
 	}
 
 	return s

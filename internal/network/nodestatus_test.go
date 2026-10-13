@@ -39,8 +39,6 @@ func rpcResult(t *testing.T, name string) json.RawMessage {
 	return env.Result
 }
 
-func u64(n uint64) *uint64 { return &n }
-
 func TestParseEthSyncing(t *testing.T) {
 	var el ExecutionStatus
 	if err := parseEthSyncing(rpcResult(t, "reth_syncing.json"), &el); err != nil {
@@ -105,10 +103,10 @@ func TestParsePodList(t *testing.T) {
 
 func TestComputeVerdict(t *testing.T) {
 	running := []PodStatus{{Name: "ethereum-execution-0", Component: "execution", Phase: "Running", Ready: true}}
-	elSynced := &ExecutionStatus{Reachable: true, HeadBlock: 21000000, Peers: u64(50)}
-	elSyncing := &ExecutionStatus{Reachable: true, Syncing: true, CurrentBlock: 500, HighestBlock: 1000, Peers: u64(10)}
+	elSynced := &ExecutionStatus{Reachable: true, HeadBlock: 21000000, Peers: new(uint64(50))}
+	elSyncing := &ExecutionStatus{Reachable: true, Syncing: true, CurrentBlock: 500, HighestBlock: 1000, Peers: new(uint64(10))}
 	elDown := &ExecutionStatus{Error: "port-forward: pod is not running"}
-	clSynced := &ConsensusStatus{Reachable: true, HeadSlot: 1750123, Peers: u64(80)}
+	clSynced := &ConsensusStatus{Reachable: true, HeadSlot: 1750123, Peers: new(uint64(80))}
 	clDown := &ConsensusStatus{Error: "connection refused"}
 
 	cases := []struct {
@@ -138,7 +136,7 @@ func TestComputeVerdict(t *testing.T) {
 		{"cl down, el waiting at genesis", running, &ExecutionStatus{Reachable: true}, clDown, VerdictWaiting, "waiting for the beacon node", -1, ""},
 		{"cl down, el syncing", running, elSyncing, clDown, VerdictSyncing, "execution syncing ~50.0%; beacon API unreachable", 50, ""},
 		{"cl down, el has head", running, elSynced, clDown, VerdictDegraded, "beacon API unreachable; execution at block 21000000", -1, ""},
-		{"zero peers warns", running, &ExecutionStatus{Reachable: true, HeadBlock: 1, Peers: u64(0)}, clSynced, VerdictSynced, "synced", 100, "execution client has 0 peers"},
+		{"zero peers warns", running, &ExecutionStatus{Reachable: true, HeadBlock: 1, Peers: new(uint64(0))}, clSynced, VerdictSynced, "synced", 100, "execution client has 0 peers"},
 	}
 
 	for _, c := range cases {
