@@ -150,6 +150,9 @@ grafana:
         enabled: false
   serviceMonitor:
     enabled: true
+    # With serve_from_sub_path, /metrics 301s to root_url (obol.stack, which
+    # does not resolve in-cluster); scrape the sub-path directly.
+    path: /grafana/metrics
     labels:
       release: monitoring
   grafana.ini:

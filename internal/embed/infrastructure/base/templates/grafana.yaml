@@ -1,0 +1,59 @@
+# Grafana routing + Obol dashboards. Grafana itself (Deployment, Service
+# `monitoring-grafana`, datasource uid `prometheus`) comes from the
+# kube-prometheus-stack `monitoring` release (values/monitoring.yaml.gotmpl);
+# only the route and the dashboards are owned here. `base` needs both
+# traefik (Gateway API CRDs) and monitoring (the namespace) in helmfile.yaml.
+#
+# Deep links (stable uids — the front-end and skills link to these; see
+# docs/observability.md "Grafana and dashboards"):
+#   /grafana/d/obol-stack-overview
+#   /grafana/d/obol-eth-node?var-namespace=ethereum-<id>
+#   /grafana/d/obol-charon
+
+---
+# Grafana HTTPRoute. The `hostnames: ["obol.stack"]` restriction keeps
+# Grafana (cluster topology, wallet-adjacent metrics, x402 revenue) off the
+# public cloudflared tunnel — removing it is a critical security regression
+# (see CLAUDE.md "Security: Tunnel Exposure"). Grafana serves from the
+# /grafana sub-path itself (serve_from_sub_path), so no rewrite filter.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: grafana
+  namespace: monitoring
+spec:
+  hostnames:
+    - "obol.stack"
+  parentRefs:
+    - name: traefik-gateway
+      namespace: traefik
+      sectionName: web
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /grafana
+      backendRefs:
+        - name: monitoring-grafana
+          port: 80
+# One ConfigMap per dashboard JSON under base/dashboards/. The Grafana
+# dashboard sidecar watches ConfigMaps labelled grafana_dashboard=1 in the
+# monitoring namespace and files them under the grafana_folder annotation.
+# JSON is inserted verbatim via .Files.Get (never parsed as a template).
+{{- range $path, $_ := .Files.Glob "dashboards/*.json" }}
+{{- $name := base $path | trimSuffix ".json" }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-{{ $name }}
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+    app.kubernetes.io/part-of: obol-stack
+  annotations:
+    grafana_folder: Obol Stack
+data:
+  {{ $name }}.json: |-
+{{ $.Files.Get $path | indent 4 }}
+{{- end }}
