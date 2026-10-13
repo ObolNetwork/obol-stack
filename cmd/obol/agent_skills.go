@@ -31,18 +31,18 @@ func agentSkillsCommand(cfg *config.Config) *cli.Command {
 		Name:  "skills",
 		Usage: "List, add or remove an agent's skills",
 		Description: `Built-in skills (stack operations: selling, buying, wallets, networks) are
-always installed. Opt-in skills come from ObolNetwork/skills ` + agentskills.Release + `, for example
-ethereum-reference (contract addresses, L2s, bridges, gas, standards) and
-distributed-validators.
+always installed, including ethereum-reference (contract addresses, L2s,
+bridges, gas, standards). Opt-in skills come from ObolNetwork/skills ` + agentskills.Release + `,
+for example distributed-validators.
 
 Examples:
   obol agent skills list
   obol agent skills list --available
-  obol agent skills add ethereum-reference
-  obol agent skills remove ethereum-reference
+  obol agent skills add distributed-validators
+  obol agent skills remove distributed-validators
 
 Sub-agents keep their skills in their Agent resource:
-  obol agent update <name> --skills +ethereum-reference`,
+  obol agent update <name> --skills +distributed-validators`,
 		Commands: []*cli.Command{
 			{
 				Name:  "list",

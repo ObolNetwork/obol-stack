@@ -53,14 +53,14 @@ func testCfg(t *testing.T) *config.Config {
 }
 
 func TestWrite_MixesBuiltInAndOptIn(t *testing.T) {
-	fakeRepo(t, "ethereum-reference")
+	fakeRepo(t, "distributed-validators")
 	dst := t.TempDir()
 
-	if err := Write(testCfg(t), dst, []string{"swap", "ethereum-reference"}); err != nil {
+	if err := Write(testCfg(t), dst, []string{"swap", "distributed-validators"}); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
-	for _, p := range []string{"swap/SKILL.md", "ethereum-reference/SKILL.md", "ethereum-reference/references/notes.md"} {
+	for _, p := range []string{"swap/SKILL.md", "distributed-validators/SKILL.md", "distributed-validators/references/notes.md"} {
 		if !exists(filepath.Join(dst, p)) {
 			t.Errorf("missing %s", p)
 		}
@@ -68,7 +68,7 @@ func TestWrite_MixesBuiltInAndOptIn(t *testing.T) {
 }
 
 func TestWrite_UnknownSkillWritesNothing(t *testing.T) {
-	fakeRepo(t, "ethereum-reference")
+	fakeRepo(t, "distributed-validators")
 	dst := t.TempDir()
 
 	err := Write(testCfg(t), dst, []string{"swap", "no-such-skill"})
@@ -88,7 +88,7 @@ func TestWrite_NoPinnedReleaseExplainsOverride(t *testing.T) {
 
 	t.Setenv(SourceEnv, "")
 
-	err := Write(testCfg(t), t.TempDir(), []string{"ethereum-reference"})
+	err := Write(testCfg(t), t.TempDir(), []string{"distributed-validators"})
 	if err == nil || !strings.Contains(err.Error(), SourceEnv) {
 		t.Fatalf("Write = %v; want a hint about %s", err, SourceEnv)
 	}
@@ -126,15 +126,15 @@ func TestSync_RemovesRetiredKeepsHandPlaced(t *testing.T) {
 }
 
 func TestSync_RemovesOptInWhenDropped(t *testing.T) {
-	fakeRepo(t, "ethereum-reference")
+	fakeRepo(t, "distributed-validators")
 	cfg := testCfg(t)
 	dst := t.TempDir()
 
-	if err := Sync(cfg, dst, append(Embedded(), "ethereum-reference")); err != nil {
+	if err := Sync(cfg, dst, append(Embedded(), "distributed-validators")); err != nil {
 		t.Fatalf("Sync with opt-in: %v", err)
 	}
 
-	if !exists(filepath.Join(dst, "ethereum-reference", "SKILL.md")) {
+	if !exists(filepath.Join(dst, "distributed-validators", "SKILL.md")) {
 		t.Fatal("opt-in skill not installed")
 	}
 
@@ -142,7 +142,7 @@ func TestSync_RemovesOptInWhenDropped(t *testing.T) {
 		t.Fatalf("Sync without opt-in: %v", err)
 	}
 
-	if exists(filepath.Join(dst, "ethereum-reference")) {
+	if exists(filepath.Join(dst, "distributed-validators")) {
 		t.Fatal("dropped opt-in skill still installed")
 	}
 }
@@ -150,11 +150,11 @@ func TestSync_RemovesOptInWhenDropped(t *testing.T) {
 // Offline: built-ins still sync, the opt-in copy already there is kept, and
 // the caller gets a PartialError to warn with.
 func TestSync_OfflineKeepsOptInCopy(t *testing.T) {
-	fakeRepo(t, "ethereum-reference")
+	fakeRepo(t, "distributed-validators")
 	cfg := testCfg(t)
 	dst := t.TempDir()
 
-	want := append(Embedded(), "ethereum-reference")
+	want := append(Embedded(), "distributed-validators")
 
 	if err := Sync(cfg, dst, want); err != nil {
 		t.Fatalf("first Sync: %v", err)
@@ -165,11 +165,11 @@ func TestSync_OfflineKeepsOptInCopy(t *testing.T) {
 	err := Sync(cfg, dst, want)
 
 	var partial *PartialError
-	if !errors.As(err, &partial) || !slices.Equal(partial.Skills, []string{"ethereum-reference"}) {
-		t.Fatalf("Sync = %v; want a PartialError for ethereum-reference", err)
+	if !errors.As(err, &partial) || !slices.Equal(partial.Skills, []string{"distributed-validators"}) {
+		t.Fatalf("Sync = %v; want a PartialError for distributed-validators", err)
 	}
 
-	if !exists(filepath.Join(dst, "ethereum-reference", "SKILL.md")) {
+	if !exists(filepath.Join(dst, "distributed-validators", "SKILL.md")) {
 		t.Fatal("existing opt-in copy removed while offline")
 	}
 }
@@ -248,15 +248,15 @@ func TestExtractSkillsTree(t *testing.T) {
 	dst := filepath.Join(t.TempDir(), "skills")
 	data := tarball(t, map[string]string{
 		"skills-1.9.0/README.md":                              "not a skill",
-		"skills-1.9.0/skills/ethereum-reference/SKILL.md":     "x",
-		"skills-1.9.0/skills/ethereum-reference/gas/GUIDE.md": "y",
+		"skills-1.9.0/skills/distributed-validators/SKILL.md":     "x",
+		"skills-1.9.0/skills/distributed-validators/gas/GUIDE.md": "y",
 	})
 
 	if err := extractSkillsTree(bytes.NewReader(data), dst); err != nil {
 		t.Fatal(err)
 	}
 
-	if !exists(filepath.Join(dst, "ethereum-reference", "gas", "GUIDE.md")) || exists(filepath.Join(dst, "README.md")) {
+	if !exists(filepath.Join(dst, "distributed-validators", "gas", "GUIDE.md")) || exists(filepath.Join(dst, "README.md")) {
 		t.Fatal("extracted the wrong files")
 	}
 

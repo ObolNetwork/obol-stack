@@ -89,9 +89,6 @@ python3 "$SKILLS/agent-factory/scripts/factory.py" create aave-risk-monitor \
   --register-name "Aave Risk Monitor"
 ```
 
-Child skills are copied from this agent's own skills. `ethereum-reference` is opt-in:
-if it is missing, ask the operator to run `obol agent skills add ethereum-reference`.
-
 The `--objective` is the child's SOUL — spend real effort here: persona,
 scope, refusal policy, output format, citation rules. One sharp paragraph
 beats a page of vibes.

@@ -114,7 +114,7 @@ When you fetch an agent's URI, the registration JSON follows this schema:
 ## References
 
 - `references/erc8004-registry.md` -- Contract addresses, function signatures, event signatures
-- See also: `standards/GUIDE.md` in the `ethereum-reference` skill for full ERC-8004 spec details (opt-in: `obol agent skills add ethereum-reference`)
+- See also: `standards/GUIDE.md` in the `ethereum-reference` skill for full ERC-8004 spec details
 - See also: `addresses/GUIDE.md` in the `ethereum-reference` skill for verified contract addresses across chains
 
 ## After Discovery: Buying Inference

@@ -270,7 +270,7 @@ list wholesale. Mixing the two is rejected to avoid surprise.
 
 Examples:
   obol agent update quant --model qwen3.5:35b
-  obol agent update quant --skills +ethereum-reference,-swap
+  obol agent update quant --skills +distributed-validators,-swap
   obol agent update quant --skills ethereum-networks,swap   # replaces the list`,
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "model", Usage: "Pin a different LiteLLM model"},

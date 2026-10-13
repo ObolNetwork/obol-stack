@@ -20,7 +20,7 @@ func TestGetEmbeddedSkillNames(t *testing.T) {
 	// Adding one here grows every agent's per-turn context: keep it deliberate.
 	coreSkills := []string{
 		"agent-factory", "buy-x402", "discovery", "ethereum-local-wallet", "ethereum-networks",
-		"inspect", "obol-stack", "sell", "sub-agent-business", "swap",
+		"ethereum-reference", "inspect", "obol-stack", "sell", "sub-agent-business", "swap",
 	}
 
 	sort.Strings(names)
