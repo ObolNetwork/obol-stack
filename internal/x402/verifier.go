@@ -227,6 +227,16 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ForwardAuth only sees headers, so it can't apply a body policy (e.g.
+	// pinning the LiteLLM model). Such offers are served by HandleProxy;
+	// approving here would forward the buyer's body untouched with the
+	// upstream credential attached.
+	if rule.BodyPolicy != "" {
+		log.Printf("x402-verifier: rule %q needs a body policy; refusing ForwardAuth request", rule.Pattern)
+		http.Error(w, "this offer is served by the seller gateway only", http.StatusForbidden)
+		return
+	}
+
 	// Declared free carve-out (offer route table, gate: free): allow the
 	// request through, still authenticating it with the upstream when the
 	// offer has upstream auth configured. Identity headers are set to
@@ -376,9 +386,31 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 			"This path is not part of any published service. The operator's catalog lists every live endpoint.")
 		return
 	}
+	// A payment can arrive under either wire header: X-PAYMENT (v1) or
+	// PAYMENT-SIGNATURE (v2).
+	hadPayment := r.Header.Get("X-PAYMENT") != "" || r.Header.Get("PAYMENT-SIGNATURE") != ""
+	// previewOnly: an unpaid GET/HEAD of a path-restricted offer's root.
+	// It may render the 402 page (the catalog links buyers there) but is
+	// answered by the payment gate alone and never reaches the upstream.
+	previewOnly := false
 	if !upstreamPathAllowed(rule, r.Method, r.URL.EscapedPath()) {
-		writeErrorResponse(w, r, http.StatusNotFound, "No service here",
-			"This path is not part of any published service. The operator's catalog lists every live endpoint.")
+		if !paywallPreview(rule, r.Method, r.URL.EscapedPath(), hadPayment) {
+			writeErrorResponse(w, r, http.StatusNotFound, "No service here",
+				"This path is not part of any published service. The operator's catalog lists every live endpoint.")
+			return
+		}
+		previewOnly = true
+	}
+	// Body policies (e.g. the seller-pinned LiteLLM model) run before any
+	// gate, so free, auth and paid requests all reach the upstream in the
+	// same shape, and a request we can't serve is refused before a 402.
+	if previewOnly {
+		if err := checkBodyPolicyConfig(rule); err != nil {
+			writeBodyPolicyError(w, r, err)
+			return
+		}
+	} else if err := applyBodyPolicy(rule, r); err != nil {
+		writeBodyPolicyError(w, r, err)
 		return
 	}
 	// Carry the matched rule so 402 resource.URL builders can map the
@@ -453,12 +485,20 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream unavailable", http.StatusInternalServerError)
 		return
 	}
+	if previewOnly {
+		// Unreachable without a payment (the gate answers 402 first);
+		// defense in depth so a preview can never be proxied.
+		proxy = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writeErrorResponse(w, r, http.StatusNotFound, "No service here",
+				"This path is not part of any published service. The operator's catalog lists every live endpoint.")
+		})
+	}
 
 	// Free tier: a paid route with a freeQuota lets a SIWX-verified wallet
 	// ride free until its daily allowance is spent, then falls through to
 	// the normal 402. The wallet is forwarded so upstreams (and the async
 	// broker) still see an owner identity on free-tier calls.
-	if mr.rule.FreeQuota > 0 {
+	if mr.rule.FreeQuota > 0 && !previewOnly {
 		if wallet, err := v.siwx.Authenticate(r, requestHost(r), time.Now()); err == nil &&
 			v.quota.consume(mr.rule.Pattern, wallet, mr.rule.FreeQuota, time.Now()) {
 			r.Header.Set(HeaderVerifiedWallet, wallet)
@@ -503,10 +543,8 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 		},
 	}, mr.requirements)
 
-	// A payment can arrive under either wire header: X-PAYMENT (v1) or
-	// PAYMENT-SIGNATURE (v2). Gate the funnel metrics on both, else every
-	// successful v2 payment (the cohort #689 unblocked) goes unmetered.
-	hadPayment := r.Header.Get("X-PAYMENT") != "" || r.Header.Get("PAYMENT-SIGNATURE") != ""
+	// Gate the funnel metrics on both payment headers (hadPayment), else
+	// every successful v2 payment (the cohort #689 unblocked) goes unmetered.
 	tracker := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	middleware(proxy).ServeHTTP(tracker, r)
 
@@ -647,6 +685,7 @@ func (v *Verifier) resolvePaidRoute(cfg *PricingConfig, rule *RouteRule) (*match
 			continue
 		}
 		mergeAgentExtras(&req, rule)
+		mergeModelExtra(&req, rule)
 		reqs = append(reqs, req)
 		optLabels = append(optLabels, labelsForPaymentOption(rule, opt))
 		if len(reqs) == 1 {
@@ -665,7 +704,13 @@ func (v *Verifier) resolvePaidRoute(cfg *PricingConfig, rule *RouteRule) (*match
 	if len(reqs) == 0 {
 		return nil, false
 	}
-	extensions = WithBazaar(extensions, rule.OfferType, rule.Model)
+	bazaarType := rule.OfferType
+	if rule.BodyPolicy == BodyPolicyLiteLLM {
+		// A LiteLLM-backed http offer speaks the OpenAI wire format with a
+		// seller-pinned model, exactly like an inference offer.
+		bazaarType = "inference"
+	}
+	extensions = WithBazaar(extensions, bazaarType, rule.Model)
 	return &matchedRoute{
 		rule:         rule,
 		requirements: reqs,
@@ -734,6 +779,19 @@ func mergeAgentExtras(req *x402types.PaymentRequirements, rule *RouteRule) {
 	if rule.AgentRuntime != "" {
 		req.Extra["agentRuntime"] = rule.AgentRuntime
 	}
+}
+
+// mergeModelExtra surfaces the seller-pinned model of a LiteLLM-backed offer
+// as accepts[].extra.model. The buyer can't choose it (the verifier rewrites
+// the request body), so advertising it tells them what they pay for.
+func mergeModelExtra(req *x402types.PaymentRequirements, rule *RouteRule) {
+	if rule.BodyPolicy != BodyPolicyLiteLLM || rule.Model == "" {
+		return
+	}
+	if req.Extra == nil {
+		req.Extra = make(map[string]interface{})
+	}
+	req.Extra["model"] = rule.Model
 }
 
 // buildPaymentDisplay turns the matched rule + chain + asset into pre-formatted

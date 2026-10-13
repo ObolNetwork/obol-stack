@@ -339,6 +339,34 @@ poll_step_grep() {
     fail "$desc — pattern '$pattern' not found after $((max * delay))s"
 }
 
+# Stand-in upstream for flows that need an arbitrary in-cluster HTTP service:
+# the demo-server "hello" echo backend (Deployment + Service <name>:8080 in
+# namespace demo, image already used by `obol sell demo`). It answers GET on
+# ANY path with a JSON proof-of-payment echo ("You've successfully paid ...",
+# echo.path = the path it was asked for) and GET /health with 200 "ok".
+# `obol sell demo` also publishes its own offer at /services/<name>; flows
+# point their OWN offer (in namespace demo) at the Service and delete both on
+# exit with delete_hello_upstream. Do not use litellm as a stand-in: offers on
+# the litellm upstream only reach POST chat/completions/embeddings and pin a
+# seller-chosen model.
+HELLO_UPSTREAM_NS="demo"
+HELLO_UPSTREAM_PORT=8080
+deploy_hello_upstream() {
+    local name="$1"
+    "$OBOL" sell demo hello \
+        --name "$name" \
+        --network "$CHAIN" \
+        --token USDC \
+        --price 0.001 \
+        --pay-to "$SELLER_WALLET" 2>&1
+}
+delete_hello_upstream() {
+    local name="$1"
+    "$OBOL" sell delete "$name" --namespace "$HELLO_UPSTREAM_NS" --force >/dev/null 2>&1 || true
+    "$OBOL" kubectl delete deployment,service "$name" -n "$HELLO_UPSTREAM_NS" \
+        --ignore-not-found >/dev/null 2>&1 || true
+}
+
 # Kill background process and wait
 cleanup_pid() {
     local pid="$1"

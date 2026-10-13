@@ -569,6 +569,9 @@ spec:
     namespace: llm
     port: 4000
     healthPath: /health/readiness
+  model:
+    name: "$OBOL_LLM_MODEL"
+    runtime: litellm
   payment:
     network: base-sepolia
     payTo: "$ALICE_WALLET"

@@ -639,7 +639,11 @@ Use --no-register to skip the on-chain registration step.
 
 Examples:
   obol sell http my-cool-api --upstream my-svc.my-namespace.svc.cluster.local --port 8080 --pay-to 0x... --price 0.01 --network base
-  obol sell http my-cool-api --upstream my-svc --port 8080 --pay-to 0x... --price 0.01 --network base --no-register`,
+  obol sell http my-cool-api --upstream my-svc --port 8080 --pay-to 0x... --price 0.01 --network base --no-register
+  obol sell http my-llm --upstream litellm --port 4000 --namespace llm --model qwen3.5:9b --pay-to 0x... --price 0.001
+
+With --upstream litellm the seller picks the model: --model is required and the
+gateway overwrites the model field of every buyer request with it.`,
 		Flags: append([]cli.Flag{
 			payToFlag("Payment recipient address"),
 			&cli.StringFlag{
@@ -678,6 +682,12 @@ Examples:
 			&cli.StringFlag{
 				Name:  "upstream",
 				Usage: "Upstream service name",
+			},
+			&cli.StringFlag{
+				Name: "model",
+				Usage: "LiteLLM model_name this offer serves (required with --upstream litellm). " +
+					"The seller gateway overwrites the buyer's model field with it; change it later " +
+					"with 'obol sell update <name> --model'",
 			},
 			&cli.IntFlag{
 				Name:  "port",
@@ -816,6 +826,10 @@ Examples:
 
 				ns := cmd.String("namespace")
 
+				if err := checkFromJSONLiteLLMModel(spec); err != nil {
+					return err
+				}
+
 				manifest := map[string]interface{}{
 					"apiVersion": "obol.org/v1alpha1",
 					"kind":       "ServiceOffer",
@@ -890,6 +904,18 @@ Examples:
 				return fmt.Errorf("upstream port required: use --port <port-number>\n\n  Example: obol sell http %s --upstream my-svc --port 8080 --pay-to 0x... --network base-sepolia --price 0.001", name)
 			}
 
+			// LiteLLM-backed offers serve a seller-pinned model: the gateway
+			// overwrites the buyer's "model", so the seller must name it.
+			var configuredModels []string
+			var modelListErr error
+			if isLiteLLMUpstreamName(cmd.String("upstream")) && strings.TrimSpace(cmd.String("model")) != "" {
+				configuredModels, modelListErr = configuredLiteLLMModels(cfg, u)
+			}
+			pinnedModel, err := checkSellHTTPModel(cmd.String("upstream"), cmd.String("model"), configuredModels, modelListErr)
+			if err != nil {
+				return err
+			}
+
 			// Build the payment block(s): multi-currency via --accept, else
 			// the singular --chain/--token/--price flags. chainName/wallet are
 			// re-pointed at the primary option so registration lands on it.
@@ -925,6 +951,9 @@ Examples:
 					"healthPath": healthPath,
 				},
 				"payment": paymentBlock,
+			}
+			if pinnedModel != "" {
+				spec["model"] = liteLLMModelSpec(pinnedModel)
 			}
 			if paymentsList != nil {
 				spec["payments"] = paymentsList
@@ -2847,7 +2876,7 @@ route down immediately (equivalent to --grace 0).`,
 func sellUpdateCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:      "update",
-		Usage:     "Update pricing or wallet on an existing ServiceOffer in place",
+		Usage:     "Update pricing, wallet or served model on an existing ServiceOffer in place",
 		ArgsUsage: "<name>",
 		// See sell http: keep one --accept value intact (no cli/v3 "," split)
 		// so multi-currency updates parse. parseAcceptKV splits internally.
@@ -2863,6 +2892,7 @@ Examples:
   obol sell update my-api -n llm --per-request 0.002
   obol sell update my-api -n llm --per-mtok 5.0
   obol sell update my-api -n llm --wallet 0xNew... --network base
+  obol sell update my-llm -n llm --model qwen3.5:27b   # LiteLLM-backed offers only
   obol sell update my-api -n llm --accept token=USDC,network=base,price=1 --accept token=OBOL,network=ethereum,price=10`,
 		Flags: append([]cli.Flag{
 			&cli.StringFlag{
@@ -2893,6 +2923,10 @@ Examples:
 				Name:  "per-hour",
 				Usage: "New per-compute-hour price in the selected payment token",
 			},
+			&cli.StringFlag{
+				Name:  "model",
+				Usage: "New LiteLLM model_name to serve (offers on the litellm upstream only); buyers' model field is overwritten with it",
+			},
 		}, acceptFlags()...),
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -2906,8 +2940,21 @@ Examples:
 			}
 			ns := cmd.String("namespace")
 
-			if _, err := kubectlOutput(cfg, "get", "serviceoffers.obol.org", name, "-n", ns, "-o", "name"); err != nil {
+			offerJSON, err := kubectlOutput(cfg, "get", "serviceoffers.obol.org", name, "-n", ns, "-o", "json")
+			if err != nil {
 				return fmt.Errorf("ServiceOffer %s/%s not found: %w", ns, name, err)
+			}
+
+			var modelPatch map[string]any
+			if cmd.IsSet("model") {
+				var offer monetizeapi.ServiceOffer
+				if err := json.Unmarshal([]byte(offerJSON), &offer); err != nil {
+					return fmt.Errorf("parse ServiceOffer %s/%s: %w", ns, name, err)
+				}
+				configured, listErr := configuredLiteLLMModels(cfg, u)
+				if modelPatch, err = sellUpdateModelPatch(&offer, cmd.String("model"), configured, listErr); err != nil {
+					return err
+				}
 			}
 
 			wallet := strings.TrimSpace(cmd.String("pay-to"))
@@ -2947,18 +2994,21 @@ Examples:
 				// change: swallow the "nothing to update" error when listing
 				// flags are present, and start from an empty spec patch.
 				if err != nil {
-					if cmd.Int("weight") != 0 || strings.TrimSpace(cmd.String("category")) != "" {
+					if cmd.Int("weight") != 0 || strings.TrimSpace(cmd.String("category")) != "" || modelPatch != nil {
 						p = map[string]any{"spec": map[string]any{}}
 					} else {
-						return err
+						return fmt.Errorf("%w / --model", err)
 					}
 				}
 				patch = p
 			}
 
-			// Listing flags (weight/category) layer onto whichever patch we built.
+			// Listing flags (weight/category) and --model layer onto whichever patch we built.
 			if spec, ok := patch["spec"].(map[string]any); ok {
 				applyListingFlags(cmd, spec)
+				if modelPatch != nil {
+					spec["model"] = modelPatch
+				}
 			}
 			patchBytes, err := json.Marshal(patch)
 			if err != nil {
@@ -2979,6 +3029,9 @@ Examples:
 			}
 
 			u.Successf("ServiceOffer %s/%s updated", ns, name)
+			if modelPatch != nil {
+				u.Infof("Buyers are now served model %s.", modelPatch["name"])
+			}
 			u.Info("The controller will reconcile the new payment config.")
 			u.Infof("Check status: obol sell status %s -n %s", name, ns)
 			return nil

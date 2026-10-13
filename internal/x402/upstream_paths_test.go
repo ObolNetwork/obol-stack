@@ -11,13 +11,17 @@ import (
 
 func liteLLMRule(upstreamURL string) RouteRule {
 	return RouteRule{
-		Pattern:       "/services/llm/*",
-		Price:         "0.001",
-		OfferType:     "http",
-		UpstreamURL:   upstreamURL,
-		StripPrefix:   "/services/llm",
-		UpstreamAuth:  "Bearer sk-master",
-		UpstreamPaths: liteLLMBuyerPaths,
+		Pattern:        "/services/llm/*",
+		Price:          "0.0001",
+		OfferType:      "http",
+		OfferName:      "llm",
+		OfferNamespace: "llm",
+		UpstreamURL:    upstreamURL,
+		StripPrefix:    "/services/llm",
+		UpstreamAuth:   "Bearer sk-master",
+		UpstreamPaths:  liteLLMBuyerPaths,
+		BodyPolicy:     BodyPolicyLiteLLM,
+		Model:          "qwen3.5:9b",
 	}
 }
 
@@ -56,6 +60,11 @@ func TestUpstreamPathAllowed(t *testing.T) {
 		{"inference bare base", inference, http.MethodPost, "/services/llm", true},
 		{"inference bare base GET", inference, http.MethodGet, "/services/llm", false},
 		{"no allowlist", RouteRule{StripPrefix: "/services/x"}, http.MethodGet, "/services/x/anything/../at%2Fall", true},
+		// Entries are method-scoped: LiteLLM's buyer endpoints are POST-only.
+		{"chat GET", rule, http.MethodGet, "/services/llm/v1/chat/completions", false},
+		{"chat unknown method", rule, "", "/services/llm/v1/chat/completions", false},
+		{"embeddings DELETE", rule, http.MethodDelete, "/services/llm/v1/embeddings", false},
+		{"unscoped entry any method", RouteRule{StripPrefix: "/s", UpstreamPaths: []string{"/x"}}, http.MethodPatch, "/s/x", true},
 	}
 
 	for _, tc := range cases {
@@ -83,6 +92,9 @@ func TestUpstreamPathsForOffer(t *testing.T) {
 	}
 	if got := upstreamPathsForOffer(offer("httpbin", "http")); got != nil {
 		t.Fatalf("non-litellm offer got allowlist %v", got)
+	}
+	if got := upstreamPathsForOffer(offer("", "agent")); len(got) != 1 || got[0] != "POST /v1/chat/completions" {
+		t.Fatalf("agent offer allowlist = %v, want only POST /v1/chat/completions", got)
 	}
 }
 

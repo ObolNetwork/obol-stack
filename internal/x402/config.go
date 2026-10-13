@@ -117,6 +117,12 @@ type RouteRule struct {
 	// /model/new or /key/generate. Matching is exact; see upstreamPathAllowed.
 	UpstreamPaths []string `yaml:"upstreamPaths,omitempty"`
 
+	// BodyPolicy names the request-body rewrite HandleProxy applies before
+	// payment ("" = forward unchanged). BodyPolicyLiteLLM pins the JSON
+	// "model" to Model so the seller, not the buyer, picks the model; see
+	// applyBodyPolicy.
+	BodyPolicy string `yaml:"bodyPolicy,omitempty"`
+
 	// UpstreamURL is the in-cluster HTTP base URL for the protected upstream.
 	// The shared seller gateway proxies matched paid routes to this target after
 	// successful payment verification.

@@ -1499,13 +1499,23 @@ func skillMarkdownTryIt(offer *monetizeapi.ServiceOffer, endpoint string) []stri
 	if rt, ok := primaryPaidRoute(offer); ok {
 		target = endpoint + openAPIRelPathForRoute(rt.Path)
 	}
+	chatExample := ""
+	if isLiteLLMHTTPOffer(offer) {
+		// Only POST chat/completions/embeddings are served; probe with a POST.
+		target = buyprompts.ChatCompletionsURL(endpoint)
+		chatExample = buyprompts.ChatExample(endpoint, catalogModelName(offer), "")
+	}
+	probe := fmt.Sprintf("curl -i %s", target)
+	if chatExample != "" {
+		probe = fmt.Sprintf("curl -i -X POST %s -H 'Content-Type: application/json' -d '{\"messages\":[]}'", target)
+	}
 	lines := []string{
 		"#### Try it",
 		"",
 		"Probe the price (no payment; the `402` body carries the signable `accepts[]` requirements):",
 		"",
 		"```bash",
-		fmt.Sprintf("curl -i %s", target),
+		probe,
 		"```",
 		"",
 	}
@@ -1514,6 +1524,9 @@ func skillMarkdownTryIt(offer *monetizeapi.ServiceOffer, endpoint string) []stri
 		URL:   target,
 		Model: catalogModelName(offer),
 	})
+	if chatExample != "" {
+		block.Example = chatExample
+	}
 	if block.Example != "" {
 		// inference/agent: OpenAI-style chat-completions with the real model id.
 		lines = append(lines,
@@ -2137,6 +2150,8 @@ func offerCallHint(offer *monetizeapi.ServiceOffer, endpoint string) string {
 	switch {
 	case offer.IsInference(), offer.IsAgent():
 		return fmt.Sprintf("`POST %s/v1/chat/completions` — OpenAI-compatible chat completions (supports `stream: true`)", endpoint)
+	case isLiteLLMHTTPOffer(offer):
+		return fmt.Sprintf("`POST %s/v1/chat/completions` (also `/v1/completions`, `/v1/embeddings`) — OpenAI-compatible; the seller pins the model", endpoint)
 	case strings.EqualFold(offer.Spec.Type, "fine-tuning"):
 		return fmt.Sprintf("`POST %s` — multipart fine-tuning job (operator-defined payload)", endpoint)
 	default:

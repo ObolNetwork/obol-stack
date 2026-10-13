@@ -237,6 +237,7 @@ spec:
                     - ollama
                     - vllm
                     - tgi
+                    - litellm
                     type: string
                 required:
                 - name

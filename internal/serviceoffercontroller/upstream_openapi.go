@@ -49,7 +49,10 @@ var tryUpstreamOpenAPI = fetchUpstreamOpenAPI
 // for every other offer a nil is a transient miss. upstreamOpenAPICache.refresh
 // relies on that distinction to decide what it may cache.
 func offerHasProbeableUpstream(offer *monetizeapi.ServiceOffer) bool {
+	// LiteLLM's own document lists its admin API (/model/new, /key/...),
+	// none of which an offer serves; discovery uses the fixed OpenAI shape.
 	return offer != nil && !offer.IsAgent() && !offer.IsInference() &&
+		!strings.EqualFold(strings.TrimSpace(offer.Spec.Upstream.Service), "litellm") &&
 		strings.TrimSpace(offer.Spec.Upstream.Service) != ""
 }
 
