@@ -6,8 +6,8 @@
 # classes (NO implicit paid catch-all), so the live verifier's per-route
 # enforcement can be observed end-to-end:
 #
-#   free  /health/readiness      -> 200 without payment (gate=free proxied)
-#   paid  /v1/chat/completions   -> 402 without payment (gate=paid, gate
+#   free  /health                -> 200 without payment (gate=free proxied)
+#   paid  /paid                  -> 402 without payment (gate=paid, gate
 #                                    answers before ever touching upstream)
 #   undeclared /nope             -> fails closed (NOT 200 — the live
 #                                    HandleProxy path 404s an unmatched path)
@@ -21,9 +21,11 @@
 # not materialize in this environment we skip rather than fail, keeping the
 # gate-class coverage (the primary #717 surface) hard-asserted.
 #
-# Self-contained: its own throwaway offer on the always-present litellm
-# Service (never mutates the shared flow-qwen fixture that flow-08/09 rely
-# on). gate=free/paid need no facilitator/anvil — only the baseline stack.
+# Self-contained: its own throwaway offer on a throwaway demo-server hello
+# echo backend (deploy_hello_upstream in lib.sh; never mutates the shared
+# flow-qwen fixture that flow-08/09 rely on). litellm can't stand in: offers
+# on it only reach POST chat/completions/embeddings. gate=free/paid need no
+# facilitator/anvil — only the baseline stack.
 source "$(dirname "$0")/lib.sh"
 
 require_tool python3
@@ -33,9 +35,10 @@ refresh_obol_ingress_env
 INGRESS_URL="${OBOL_INGRESS_URL%/}"
 
 OFFER_NAME="flow21-routes"
-OFFER_NS="llm"
-FREE_PATH="/health/readiness"
-PAID_PATH="/v1/chat/completions"
+UPSTREAM_NAME="flow21-upstream"
+OFFER_NS="$HELLO_UPSTREAM_NS"
+FREE_PATH="/health"
+PAID_PATH="/paid"
 BASE="$INGRESS_URL/services/$OFFER_NAME"
 BOUND_HOST="flow21-routes.smoke.test.invalid"
 
@@ -43,6 +46,7 @@ PF_PID=""
 cleanup() {
     [ -n "$PF_PID" ] && cleanup_pid "$PF_PID"
     "$OBOL" sell delete "$OFFER_NAME" --namespace "$OFFER_NS" --force >/dev/null 2>&1 || true
+    delete_hello_upstream "$UPSTREAM_NAME"
 }
 trap cleanup EXIT
 
@@ -52,6 +56,10 @@ trap cleanup EXIT
 "$OBOL" sell delete "$OFFER_NAME" --namespace "$OFFER_NS" --force >/dev/null 2>&1 || true
 sleep 1
 
+run_step_grep "Stand-in upstream $UPSTREAM_NAME deployed (demo-server hello echo)" \
+    "Demo backend .*deployed|ServiceOffer .*$UPSTREAM_NAME" \
+    deploy_hello_upstream "$UPSTREAM_NAME"
+
 run_step_grep "sell http $OFFER_NAME declares free+paid route table" \
     "ServiceOffer.*created|ServiceOffer.*updated|agent will reconcile" \
     "$OBOL" sell http "$OFFER_NAME" \
@@ -59,8 +67,8 @@ run_step_grep "sell http $OFFER_NAME declares free+paid route table" \
     --chain "$CHAIN" \
     --price 0.001 \
     --namespace "$OFFER_NS" \
-    --upstream litellm \
-    --port 4000 \
+    --upstream "$UPSTREAM_NAME" \
+    --port "$HELLO_UPSTREAM_PORT" \
     --health-path "$FREE_PATH" \
     --no-register \
     --route "path=$FREE_PATH,gate=free" \

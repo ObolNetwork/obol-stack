@@ -19,8 +19,9 @@
 #
 # Needs only the baseline stack + the default agent's remote-signer (both
 # provisioned by flow-04) — no anvil, no facilitator, no tunnel. The offer's
-# upstream is the already-running litellm Service so this flow deploys
-# nothing of its own.
+# upstream is the demo-server hello echo backend (deploy_hello_upstream in
+# lib.sh), which answers GET on any path; litellm can't stand in (offers on
+# it only reach POST chat/completions/embeddings).
 source "$(dirname "$0")/lib.sh"
 
 require_tool python3
@@ -30,8 +31,9 @@ refresh_obol_ingress_env
 INGRESS_URL="${OBOL_INGRESS_URL%/}"
 
 OFFER_NAME="flow19-siwx"
-OFFER_NS="llm"
-ROUTE_PATH="/health/readiness"
+UPSTREAM_NAME="flow19-upstream"
+OFFER_NS="$HELLO_UPSTREAM_NS"
+ROUTE_PATH="/whoami"
 OFFER_URL="$INGRESS_URL/services/$OFFER_NAME$ROUTE_PATH"
 BUY_PY="$OBOL_ROOT/internal/embed/skills/buy-x402/scripts/buy.py"
 
@@ -39,6 +41,7 @@ PF_PID=""
 cleanup() {
     [ -n "$PF_PID" ] && cleanup_pid "$PF_PID"
     "$OBOL" sell delete "$OFFER_NAME" --namespace "$OFFER_NS" --force >/dev/null 2>&1 || true
+    delete_hello_upstream "$UPSTREAM_NAME"
 }
 trap cleanup EXIT
 
@@ -57,6 +60,10 @@ fi
 "$OBOL" sell delete "$OFFER_NAME" --namespace "$OFFER_NS" --force >/dev/null 2>&1 || true
 sleep 1
 
+run_step_grep "Stand-in upstream $UPSTREAM_NAME deployed (demo-server hello echo)" \
+    "Demo backend .*deployed|ServiceOffer .*$UPSTREAM_NAME" \
+    deploy_hello_upstream "$UPSTREAM_NAME"
+
 run_step_grep "sell http $OFFER_NAME declares path=$ROUTE_PATH,gate=auth" \
     "ServiceOffer.*created|ServiceOffer.*updated|agent will reconcile" \
     "$OBOL" sell http "$OFFER_NAME" \
@@ -64,9 +71,9 @@ run_step_grep "sell http $OFFER_NAME declares path=$ROUTE_PATH,gate=auth" \
     --chain "$CHAIN" \
     --price 0.001 \
     --namespace "$OFFER_NS" \
-    --upstream litellm \
-    --port 4000 \
-    --health-path "$ROUTE_PATH" \
+    --upstream "$UPSTREAM_NAME" \
+    --port "$HELLO_UPSTREAM_PORT" \
+    --health-path /health \
     --no-register \
     --route "path=$ROUTE_PATH,gate=auth"
 
@@ -156,8 +163,8 @@ export REMOTE_SIGNER_URL="http://localhost:${PF_PORT}"
 # ═════════════════════════════════════════════════════════════════
 step "buy.py siwx --fetch: sign the EIP-4361 challenge and GET the gated route"
 fetch_out=$(python3 "$BUY_PY" siwx "$OFFER_URL" --fetch 2>&1) || true
-if echo "$fetch_out" | grep -q '^HTTP 200'; then
-    pass "SIWX sign-in + fetch: HTTP 200 (upstream body served)"
+if echo "$fetch_out" | grep -q '^HTTP 200' && echo "$fetch_out" | grep -q "\"path\": *\"$ROUTE_PATH\""; then
+    pass "SIWX sign-in + fetch: HTTP 200 (upstream echoed $ROUTE_PATH)"
 else
     fail "buy.py siwx --fetch did not return HTTP 200 — ${fetch_out:0:300}"
 fi

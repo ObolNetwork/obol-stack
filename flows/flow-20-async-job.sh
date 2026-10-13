@@ -24,21 +24,21 @@
 # product (a Kubernetes CR + sidecar auth pool) and has no equivalent for
 # an arbitrary paid HTTP route, so it does not apply to this offer.
 #
-# Upstream: the "litellm" ClusterIP Service in namespace llm (port 4000) is
-# the inference gateway deployed unconditionally as base infra whether the
-# stack serves inference locally (ollama backend) or via a remote endpoint
-# (OBOL_LLM_ENDPOINT). Its GET /health/readiness probe is unauthenticated,
-# needs no request body, and returns a deterministic 200 JSON — exactly what
-# a job-broker replay (any method, no body) wants. We deliberately do NOT use
-# the "ollama" Service: it only has a live backend when the stack runs a
-# *host* ollama daemon, which is absent under remote-inference smoke runs, so
-# an ollama-upstream offer never reaches UpstreamHealthy/Ready there. The
-# ServiceOffer's upstream namespace is always the offer's own --namespace, so
-# the offer is created in "llm" alongside litellm (same as flow-06/flow-19).
+# Upstream: the demo-server hello echo backend (deploy_hello_upstream in
+# lib.sh — Deployment + Service in namespace demo, the image `obol sell demo`
+# already ships). It answers GET on any path with a deterministic JSON echo
+# that names the path it served, needs no request body, and has no backend
+# dependency (ollama/remote inference) — exactly what a job-broker replay
+# wants, and it lets §8 assert the result body really came from the upstream.
+# litellm can't stand in: offers on it only reach POST chat/completions/
+# embeddings. The ServiceOffer's upstream namespace is always the offer's own
+# --namespace, so the offer is created in "demo" alongside the backend.
 source "$(dirname "$0")/lib.sh"
 
 OFFER_NAME="flow-async"
-NS="llm"
+UPSTREAM_NAME="flow20-upstream"
+NS="$HELLO_UPSTREAM_NS"
+JOB_PATH="/report"
 FACILITATOR_PORT="${FACILITATOR_PORT:-4040}"
 FACILITATOR_URL="http://localhost:$FACILITATOR_PORT"
 
@@ -90,11 +90,16 @@ BUYER_ADDR=$(printf '%s' "$BUYER_NEW" | python3 -c "import json,sys;print(json.l
 # §2: own offer + cleanup trap.
 cleanup() {
     "$OBOL" sell delete "$OFFER_NAME" --namespace "$NS" --force >/dev/null 2>&1 || true
+    delete_hello_upstream "$UPSTREAM_NAME"
 }
 trap cleanup EXIT
 
 "$OBOL" sell delete "$OFFER_NAME" --namespace "$NS" --force >/dev/null 2>&1 || true
 sleep 2
+
+run_step_grep "Stand-in upstream $UPSTREAM_NAME deployed (demo-server hello echo)" \
+    "Demo backend .*deployed|ServiceOffer .*$UPSTREAM_NAME" \
+    deploy_hello_upstream "$UPSTREAM_NAME"
 
 run_step_grep "sell http $OFFER_NAME --async" \
     "ServiceOffer.*created|ServiceOffer.*updated|agent will reconcile" \
@@ -103,9 +108,9 @@ run_step_grep "sell http $OFFER_NAME --async" \
     --network "$CHAIN" \
     --price "0.001" \
     --namespace "$NS" \
-    --upstream litellm \
-    --port 4000 \
-    --health-path /health/readiness \
+    --upstream "$UPSTREAM_NAME" \
+    --port "$HELLO_UPSTREAM_PORT" \
+    --health-path /health \
     --no-register \
     --async \
     --job-ttl 15m
@@ -115,7 +120,7 @@ poll_step_grep "ServiceOffer $OFFER_NAME Ready" "$OFFER_NAME.*True" 48 5 \
 
 refresh_obol_ingress_env
 BASE_URL="${OBOL_INGRESS_URL%/}"
-TARGET_PATH="/services/$OFFER_NAME/health/readiness"
+TARGET_PATH="/services/$OFFER_NAME$JOB_PATH"
 TARGET_URL="$BASE_URL$TARGET_PATH"
 
 # §3: unauthenticated submit → 402 with the same accepts[] shape flow-08
@@ -268,8 +273,9 @@ result_status=$($CURL_OBOL -sS -o /dev/null -w '%{http_code}' --max-time 10 \
     -H "Authorization: Bearer $JOB_TOKEN" "$BASE_URL$RESULT_PATH" 2>&1) || true
 result_body=$($CURL_OBOL -sS --max-time 10 \
     -H "Authorization: Bearer $JOB_TOKEN" "$BASE_URL$RESULT_PATH" 2>&1) || true
-if [ "$result_status" = "200" ] && [ -n "$result_body" ]; then
-    pass "jobToken result: 200, upstream litellm /health/readiness body: ${result_body:0:120}"
+if [ "$result_status" = "200" ] && echo "$result_body" | grep -q "successfully paid" \
+    && echo "$result_body" | grep -q "\"path\": *\"$JOB_PATH\""; then
+    pass "jobToken result: 200, upstream echo of $JOB_PATH: ${result_body:0:120}"
 else
     fail "jobToken result fetch failed (status=$result_status) — ${result_body:0:300}"
 fi
