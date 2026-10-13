@@ -159,7 +159,7 @@ obol sell http <name> \
   --register-domains technology/data_science
 ```
 
-`--model` is required with `--upstream litellm` and must be a name from `obol model list`. The seller gateway overwrites the `model` field of every buyer request with it (and drops LiteLLM routing knobs such as `fallbacks`/`extra_body`), so buyers can't pick a different — e.g. BYOK cloud — model at your price. Only `/v1/chat/completions`, `/v1/completions` and `/v1/embeddings` are served. Switch models later without recreating the offer: `obol sell update <name> -n llm --model <other_model>`.
+`--model` is required with `--upstream litellm` and must be a name from `obol model list`. The seller gateway overwrites the `model` field of every buyer request with it (and drops LiteLLM routing knobs such as `fallbacks`/`extra_body`), so buyers can't pick a different — e.g. BYOK cloud — model at your price. Only `/v1/chat/completions`, `/v1/completions` and `/v1/embeddings` are served, and `n`/`best_of` are dropped so each paid request yields one completion. `max_tokens` is NOT capped: price per request for the longest answer the model may give (or use `--per-mtok`). Switch models later without recreating the offer: `obol sell update <name> -n llm --model <other_model>`.
 
 The `--endpoint` must include `/v1` if the upstream is an OpenAI-compatible server (vLLM, TGI, etc.) — LiteLLM does not append it automatically.
 

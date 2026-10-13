@@ -35,6 +35,11 @@ const BodyPolicyAgent = "agent"
 // the provider/model the agent runs.
 var agentModelSelectionFields = []string{"model", "provider", "model_options"}
 
+// multiCompletionFields multiply the work behind one paid request (n
+// choices, best_of server-side candidates). Offers charge a flat price per
+// request, so they are dropped: every request yields one completion.
+var multiCompletionFields = []string{"n", "best_of"}
+
 // upstreamBodyLimit caps how much of a request body the verifier buffers to
 // apply a body policy. Larger bodies are refused (413) before payment.
 const upstreamBodyLimit = 16 << 20
@@ -47,7 +52,7 @@ var liteLLMCommonFields = []string{"model", "user"}
 var liteLLMSamplingFields = []string{
 	"frequency_penalty", "presence_penalty", "repetition_penalty",
 	"logit_bias", "logprobs", "top_logprobs",
-	"max_tokens", "max_completion_tokens", "n", "seed", "stop",
+	"max_tokens", "max_completion_tokens", "seed", "stop",
 	"stream", "stream_options", "temperature", "top_p", "top_k", "min_p",
 }
 
@@ -58,7 +63,7 @@ var liteLLMChatFields = []string{
 	"prediction", "web_search_options", "verbosity",
 }
 
-var liteLLMCompletionFields = []string{"prompt", "best_of", "echo", "suffix"}
+var liteLLMCompletionFields = []string{"prompt", "echo", "suffix"}
 
 var liteLLMEmbeddingFields = []string{"input", "encoding_format", "dimensions"}
 
@@ -171,6 +176,9 @@ func applyAgentBodyPolicy(r *http.Request) error {
 		return err
 	}
 	for _, k := range agentModelSelectionFields {
+		delete(doc, k)
+	}
+	for _, k := range multiCompletionFields {
 		delete(doc, k)
 	}
 	if err := isolateAgentSession(doc); err != nil {

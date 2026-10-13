@@ -236,7 +236,7 @@ func TestVerifier_HandleProxy_AgentSessionIsolatedPerRequest(t *testing.T) {
 	upstream, got := captureUpstream(t)
 	v := newTestVerifier(t, fac.URL, []RouteRule{hermesRule(upstream.URL)})
 
-	const body = `{"messages":[{"role":"system","content":"be terse"},{"role":"user","content":"hello"}]}`
+	const body = `{"messages":[{"role":"system","content":"be terse"},{"role":"user","content":"hello"}],"n":5}`
 	seen := map[string]bool{}
 	for i := 0; i < 3; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/services/bot/v1/chat/completions", strings.NewReader(body))
@@ -260,6 +260,9 @@ func TestVerifier_HandleProxy_AgentSessionIsolatedPerRequest(t *testing.T) {
 		}
 		if c, _ := second["content"].(string); second["role"] != "system" || !strings.HasPrefix(c, "Request id ") {
 			t.Fatalf("request-id system message missing, got %v", second)
+		}
+		if _, ok := got.body["n"]; ok {
+			t.Fatal("n must be dropped")
 		}
 		if got.header.Get("Idempotency-Key") != "" {
 			t.Fatal("Idempotency-Key must not reach Hermes")

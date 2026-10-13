@@ -65,10 +65,10 @@ func TestVerifier_HandleProxy_LiteLLMPinsSellerModel(t *testing.T) {
 			body: `{"model":"claude-opus","messages":[{"role":"user","content":"hi"}],"temperature":0.2,` +
 				`"fallbacks":["gpt-5"],"context_window_fallbacks":[{"qwen3.5:9b":["gpt-5"]}],` +
 				`"extra_body":{"model":"o1-pro"},"custom_llm_provider":"anthropic","metadata":{"tags":["x"]},` +
-				`"user_config":{"model_list":[]},"api_base":"http://evil"}`,
+				`"user_config":{"model_list":[]},"api_base":"http://evil","n":8}`,
 			wantPath: "/v1/chat/completions",
 			keep:     []string{"messages", "temperature"},
-			drop:     []string{"fallbacks", "context_window_fallbacks", "extra_body", "custom_llm_provider", "metadata", "user_config", "api_base"},
+			drop:     []string{"fallbacks", "context_window_fallbacks", "extra_body", "custom_llm_provider", "metadata", "user_config", "api_base", "n"},
 		},
 		{
 			name:     "chat without v1, model missing",
@@ -88,9 +88,10 @@ func TestVerifier_HandleProxy_LiteLLMPinsSellerModel(t *testing.T) {
 		{
 			name:     "legacy completions, duplicate model keys",
 			path:     "/services/llm/v1/completions",
-			body:     `{"model":"qwen3.5:9b","prompt":"hi","model":"gpt-5"}`,
+			body:     `{"model":"qwen3.5:9b","prompt":"hi","model":"gpt-5","n":4,"best_of":16}`,
 			wantPath: "/v1/completions",
 			keep:     []string{"prompt"},
+			drop:     []string{"n", "best_of"},
 		},
 	}
 
