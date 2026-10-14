@@ -751,6 +751,9 @@ gateway overwrites the model field of every buyer request with it.`,
 				if err := checkFromJSONLiteLLMModel(spec); err != nil {
 					return err
 				}
+				if err := checkServiceOfferListCaps(spec); err != nil {
+					return err
+				}
 
 				manifest := map[string]interface{}{
 					"apiVersion": "obol.org/v1alpha1",
@@ -4629,6 +4632,9 @@ func sellOfferStorePath(cfg *config.Config, namespace, name string) string {
 // whether at least one route charges — an all-free table is legal but
 // almost certainly a mistake, so the caller warns.
 func parseRouteFlags(vals []string) (routes []map[string]any, hasPaid bool, err error) {
+	if len(vals) > monetizeapi.MaxServiceOfferRoutes {
+		return nil, false, fmt.Errorf("--route given %d times: an offer supports at most %d routes", len(vals), monetizeapi.MaxServiceOfferRoutes)
+	}
 	routes = make([]map[string]any, 0, len(vals))
 	for _, val := range vals {
 		route := map[string]any{}
@@ -4738,6 +4744,25 @@ func preflightOfferPathCollision(cfg *config.Config, manifest map[string]any) er
 		return nil //nolint:nilerr // best-effort preflight; the apply surfaces real errors
 	}
 	return offerPathCollisionInList([]byte(out), ns, name, path, hostname)
+}
+
+// checkServiceOfferListCaps rejects a --from-json spec whose payments or
+// routes list exceeds the CRD's maxItems cap, so the user gets a named
+// error before the apiserver's schema rejection.
+func checkServiceOfferListCaps(spec map[string]any) error {
+	caps := []struct {
+		field string
+		max   int
+	}{
+		{"payments", monetizeapi.MaxServiceOfferPayments},
+		{"routes", monetizeapi.MaxServiceOfferRoutes},
+	}
+	for _, c := range caps {
+		if items, ok := spec[c.field].([]any); ok && len(items) > c.max {
+			return fmt.Errorf("spec.%s has %d entries: an offer supports at most %d", c.field, len(items), c.max)
+		}
+	}
+	return nil
 }
 
 // reservedRoutePathCollision checks spec["routes"] against the route-level

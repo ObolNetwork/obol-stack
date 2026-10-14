@@ -132,7 +132,10 @@ type ServiceOfferSpec struct {
 	// x402 verifier's 402 accepts[] array: the buyer picks one option and
 	// the verifier settles whichever was used. payments[0] is the primary
 	// option and MUST equal spec.payment. Empty means a single-payment
-	// offer described by spec.payment alone. See EffectivePayments.
+	// offer described by spec.payment alone. See EffectivePayments. At most
+	// 16 options (MaxServiceOfferPayments); the cap also bounds the
+	// apiserver's CEL cost estimate for the per-item price rules.
+	// +kubebuilder:validation:MaxItems=16
 	Payments []ServiceOfferPayment `json:"payments,omitempty"`
 
 	// Listing controls how the offer is presented on the public storefront
@@ -146,7 +149,7 @@ type ServiceOfferSpec struct {
 	// x402 verifier's route rules and for discovery surfaces (openapi,
 	// skill.md, services.json, buy prompts). Empty means the pre-route-table
 	// behavior: one paid catch-all covering everything under the offer path.
-	// See EffectiveRoutes.
+	// See EffectiveRoutes. At most 128 entries (MaxServiceOfferRoutes).
 	// +kubebuilder:validation:MaxItems=128
 	Routes []ServiceOfferRoute `json:"routes,omitempty"`
 
@@ -381,6 +384,17 @@ type ServiceOfferLimits struct {
 	// +kubebuilder:validation:Minimum=0
 	RPS int64 `json:"rps,omitempty"`
 }
+
+// List caps mirrored from the kubebuilder MaxItems markers on
+// ServiceOfferSpec so the CLI can reject oversized lists before they reach
+// the apiserver. TestServiceOfferListCapsMatchCRD (internal/embed) keeps
+// them in step with the generated CRD.
+const (
+	// MaxServiceOfferPayments caps spec.payments (accepted payment options).
+	MaxServiceOfferPayments = 16
+	// MaxServiceOfferRoutes caps spec.routes (route-table entries).
+	MaxServiceOfferRoutes = 128
+)
 
 // Gate classes for ServiceOfferRoute.
 const (

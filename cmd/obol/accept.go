@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	"github.com/ObolNetwork/obol-stack/internal/validate"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
@@ -244,6 +245,9 @@ func (o acceptOption) paymentMap(maxTimeout int64) map[string]any {
 func buildAcceptPayments(accepts []string, defaultPayTo string) ([]map[string]any, error) {
 	if len(accepts) == 0 {
 		return nil, nil
+	}
+	if len(accepts) > monetizeapi.MaxServiceOfferPayments {
+		return nil, fmt.Errorf("--accept given %d times: an offer supports at most %d payment options", len(accepts), monetizeapi.MaxServiceOfferPayments)
 	}
 	payments := make([]map[string]any, 0, len(accepts))
 	seen := map[string]string{}

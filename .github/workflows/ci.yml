@@ -35,6 +35,7 @@ jobs:
       storefront: ${{ steps.filter.outputs.storefront }}
       frontend: ${{ steps.filter.outputs.frontend }}
       obolup: ${{ steps.filter.outputs.obolup }}
+      crds: ${{ steps.filter.outputs.crds }}
       lint_base: ${{ steps.filter.outputs.lint_base }}
     steps:
       - name: Checkout
@@ -51,7 +52,7 @@ jobs:
         run: |
           set -euo pipefail
           all() {
-            for k in go charts storefront frontend obolup; do echo "$k=true"; done >> "$GITHUB_OUTPUT"
+            for k in go charts storefront frontend obolup crds; do echo "$k=true"; done >> "$GITHUB_OUTPUT"
             echo "lint_base=${1:-}" >> "$GITHUB_OUTPUT"
             echo "running every job: $2"
             exit 0
@@ -93,6 +94,9 @@ jobs:
             echo "storefront=$(has '^(web/public-storefront/|Dockerfile\.public-storefront$)')"
             echo "frontend=$(has '^web/frontend/')"
             echo "obolup=$(has '^obolup\.sh$')"
+            # CRD sources (Go types), the embedded manifests, and the
+            # apiserver version / k3d pin the crd-apply job reads.
+            echo "crds=$(has '^internal/(monetizeapi/|embed/(infrastructure|networks)/|embed/k3d-config\.yaml$|tools/manifest\.yaml$)')"
             echo "lint_base=$lint_base"
           } | tee -a "$GITHUB_OUTPUT"
 
@@ -252,6 +256,81 @@ jobs:
           helm lint internal/embed/networks/ethereum
           helm lint internal/embed/networks/aztec
 
+  # Offline checks cannot see the apiserver's CEL cost budget: a CRD whose
+  # rule cost exceeds it renders, lints and unit-tests clean, then fails to
+  # apply on a live cluster. Apply every embedded CRD to a real k3s apiserver,
+  # same image as `obol stack up` (internal/embed/k3d-config.yaml).
+  crd-apply:
+    name: Embedded CRDs apply to a real kube-apiserver
+    needs: changes
+    if: needs.changes.outputs.crds == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install pinned k3d
+        run: |
+          set -euo pipefail
+          # Version + checksum from the obol tool manifest (same pin as obolup.sh).
+          version="$(yq '.tools[] | select(.name == "k3d") | .version' internal/tools/manifest.yaml)"
+          sha="$(yq '.tools[] | select(.name == "k3d") | .assets["linux/amd64"].sha256' internal/tools/manifest.yaml)"
+          curl -fsSL -o "$RUNNER_TEMP/k3d" "https://github.com/k3d-io/k3d/releases/download/v${version}/k3d-linux-amd64"
+          echo "${sha}  $RUNNER_TEMP/k3d" | sha256sum -c -
+          sudo install -m 0755 "$RUNNER_TEMP/k3d" /usr/local/bin/k3d
+          k3d version
+
+      - name: Create k3s cluster
+        run: |
+          set -euo pipefail
+          # k3d-config.yaml carries {{...}} placeholders, so read the image
+          # line directly rather than parsing it as YAML.
+          image="$(sed -n 's/^image:[[:space:]]*//p' internal/embed/k3d-config.yaml)"
+          if [ -z "$image" ]; then
+            echo "::error::no image: line in internal/embed/k3d-config.yaml"
+            exit 1
+          fi
+          echo "k3s image: $image"
+          k3d cluster create crd-apply \
+            --image "$image" \
+            --no-lb \
+            --k3s-arg '--disable=traefik@server:*' \
+            --k3s-arg '--disable=metrics-server@server:*' \
+            --wait --timeout 300s
+          kubectl version
+
+      - name: Apply embedded CRDs (server-side dry-run, then for real)
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(grep -rlE --include='*.yaml' --include='*.yml' \
+            '^kind:[[:space:]]*CustomResourceDefinition' internal/embed | sort)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::no CustomResourceDefinition manifests found under internal/embed"
+            exit 1
+          fi
+          failed=0
+          for f in "${files[@]}"; do
+            if grep -q '{{' "$f"; then
+              echo "::error file=$f::templated CRD manifest; render it before applying (extend this job)"
+              failed=1
+              continue
+            fi
+            echo "--- $f"
+            # The dry-run runs full CRD validation (incl. CEL cost estimation)
+            # and reports every problem; the real apply then lets us wait for
+            # the CRD to become Established.
+            if ! kubectl apply --server-side --dry-run=server -f "$f"; then
+              echo "::error file=$f::kube-apiserver rejected this CRD"
+              failed=1
+              continue
+            fi
+            kubectl apply --server-side -f "$f"
+          done
+          [ "$failed" -eq 0 ] || exit 1
+          kubectl wait --for condition=Established --timeout=60s crd --all
+          kubectl get crd
+
   storefront:
     name: Public storefront (lint, typecheck, build)
     needs: changes
@@ -359,7 +438,7 @@ jobs:
   lint-test:
     name: lint-test
     if: always()
-    needs: [changes, go, golangci-lint, charts, storefront, frontend, shellcheck]
+    needs: [changes, go, golangci-lint, charts, crd-apply, storefront, frontend, shellcheck]
     runs-on: ubuntu-latest
     steps:
       - name: Check job results
