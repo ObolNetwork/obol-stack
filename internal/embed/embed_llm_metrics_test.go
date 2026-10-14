@@ -161,3 +161,26 @@ func checkDatasources(t *testing.T, file string, v any) {
 		}
 	}
 }
+
+// grafana chart >=13.x renders the init-sc-datasources container's METHOD
+// from sidecar.datasources.watchMethod. WATCH never exits, so with
+// initDatasources the Grafana pod sits in Init forever (v0.16.0-rc1).
+func TestGrafanaInitDatasourcesUsesList(t *testing.T) {
+	data, err := ReadInfrastructureFile("values/monitoring.yaml.gotmpl")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	docs := multiDoc(data)
+	if len(docs) != 1 {
+		t.Fatalf("monitoring values: got %d YAML docs, want 1", len(docs))
+	}
+
+	if got := nested(docs[0], "grafana", "sidecar", "datasources", "initDatasources"); got != true {
+		t.Skipf("initDatasources = %v; watchMethod only matters for the init container", got)
+	}
+
+	if got := nested(docs[0], "grafana", "sidecar", "datasources", "watchMethod"); got != "LIST" {
+		t.Fatalf("grafana.sidecar.datasources.watchMethod = %v, want LIST (WATCH blocks the init container forever)", got)
+	}
+}

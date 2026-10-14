@@ -144,6 +144,10 @@ grafana:
       resource: configmap
       # Load the datasource before Grafana starts (no reload API, see above).
       initDatasources: true
+      # grafana chart >=13.x takes the init container's METHOD from watchMethod
+      # (default WATCH, which never exits, so Grafana never starts). LIST loads
+      # once and exits.
+      watchMethod: LIST
       skipReload: true
       # alertmanager.enabled is false; don't provision a dead datasource.
       alertmanager:

@@ -247,6 +247,40 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 }
 
 func Sync(cfg *config.Config, id string, u *ui.UI) error {
+	if err := syncDeployment(cfg, id, u); err != nil {
+		return err
+	}
+
+	u.Blank()
+	u.Success("Hermes installed successfully!")
+	u.Detail("Namespace", agentruntime.Namespace(agentruntime.Hermes, id))
+	u.Detail("URL", "http://"+agentruntime.Hostname(agentruntime.Hermes, id))
+	printDashboardAccessGuidance(u, id)
+	u.Blank()
+	u.Dim("[Optional] Port-forward fallback:")
+	u.Printf("  obol kubectl -n %s port-forward svc/%s %d:%d",
+		agentruntime.Namespace(agentruntime.Hermes, id),
+		agentruntime.Describe(agentruntime.Hermes).ServiceName,
+		agentruntime.Describe(agentruntime.Hermes).DefaultPort,
+		agentruntime.Describe(agentruntime.Hermes).DefaultPort,
+	)
+
+	return nil
+}
+
+// syncModels re-syncs an existing deployment after a model change. It skips
+// Sync's install banner: the agent is already installed and reachable.
+func syncModels(cfg *config.Config, id string, u *ui.UI) error {
+	if err := syncDeployment(cfg, id, u); err != nil {
+		return err
+	}
+
+	u.Successf("Hermes agent hermes/%s updated", id)
+
+	return nil
+}
+
+func syncDeployment(cfg *config.Config, id string, u *ui.UI) error {
 	deploymentDir := DeploymentPath(cfg, id)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
 		return fmt.Errorf("deployment not found: hermes/%s\nDirectory: %s", id, deploymentDir)
@@ -302,20 +336,6 @@ func Sync(cfg *config.Config, id string, u *ui.UI) error {
 
 	// Publish wallet-metadata ConfigMap for the frontend (namespace now exists).
 	applyWalletMetadataConfigMap(cfg, id, deploymentDir)
-
-	u.Blank()
-	u.Success("Hermes installed successfully!")
-	u.Detail("Namespace", agentruntime.Namespace(agentruntime.Hermes, id))
-	u.Detail("URL", "http://"+agentruntime.Hostname(agentruntime.Hermes, id))
-	printDashboardAccessGuidance(u, id)
-	u.Blank()
-	u.Dim("[Optional] Port-forward fallback:")
-	u.Printf("  obol kubectl -n %s port-forward svc/%s %d:%d",
-		agentruntime.Namespace(agentruntime.Hermes, id),
-		agentruntime.Describe(agentruntime.Hermes).ServiceName,
-		agentruntime.Describe(agentruntime.Hermes).DefaultPort,
-		agentruntime.Describe(agentruntime.Hermes).DefaultPort,
-	)
 
 	return nil
 }
@@ -547,7 +567,7 @@ func SyncDefaultModels(cfg *config.Config, u *ui.UI) error {
 
 var (
 	setupDefaultForModelSync = SetupDefault
-	syncDefaultForModelSync  = Sync
+	syncDefaultForModelSync  = syncModels
 )
 
 var hermesDeploymentInstalledForOnboard = hermesDeploymentInstalled

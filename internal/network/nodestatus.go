@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -484,7 +486,11 @@ func podWarnings(pods []PodStatus) []string {
 	for _, p := range pods {
 		if !p.Ready && (p.Reason != "" || p.Restarts > 0) {
 			msg := fmt.Sprintf("%s pod %s not ready", p.Component, p.Name)
-			if p.Reason != "" {
+			switch p.Reason {
+			case "":
+			case "OOMKilled":
+				msg += " (OOMKilled: out of memory — check host memory and the pod's limits)"
+			default:
 				msg += " (" + p.Reason + ")"
 			}
 			if p.Restarts > 0 {
@@ -527,7 +533,7 @@ func jsonRPC(ctx context.Context, client *http.Client, base, method string) (jso
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", method, err)
+		return nil, fmt.Errorf("%s: %w", method, transportError(err))
 	}
 	defer resp.Body.Close()
 
@@ -566,13 +572,29 @@ func httpGet(ctx context.Context, client *http.Client, url string) (int, []byte,
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, nil, err
+		return 0, nil, transportError(err)
 	}
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 
 	return resp.StatusCode, body, nil
+}
+
+// transportError drops the request URL (an ephemeral port-forward address
+// that means nothing to the user) and names the usual cause of a dropped
+// connection: the pod behind the forward is starting or restarting.
+func transportError(err error) error {
+	if uerr, ok := errors.AsType[*url.Error](err); ok {
+		err = uerr.Err
+	}
+
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) {
+		return errors.New("not answering (pod starting or restarting?)")
+	}
+
+	return err
 }
 
 func hexQuantity(raw json.RawMessage) (uint64, error) {

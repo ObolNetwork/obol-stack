@@ -39,3 +39,33 @@ func TestSelectDeployments(t *testing.T) {
 		t.Error("no deployments: want error")
 	}
 }
+
+func TestNetworkStatusFormatting(t *testing.T) {
+	if got := erpcPodLine("erpc-7c9cb85d44-5wbwt   Running   true   0", false); got != "pod Running · ready" {
+		t.Errorf("erpcPodLine = %q", got)
+	}
+
+	if got := erpcPodLine("erpc-7c9cb85d44-5wbwt   Running   false   3", true); got != "pod Running · not ready · 3 restarts (erpc-7c9cb85d44-5wbwt)" {
+		t.Errorf("erpcPodLine verbose = %q", got)
+	}
+
+	if got := shortClientVersion("reth/v2.7.0-3d592ec/x86_64-unknown-linux-gnu"); got != "reth/v2.7.0-3d592ec" {
+		t.Errorf("shortClientVersion = %q", got)
+	}
+
+	if got := shortClientVersion("Lighthouse/v8.0.0"); got != "Lighthouse/v8.0.0" {
+		t.Errorf("shortClientVersion short = %q", got)
+	}
+
+	ready := network.PodStatus{Component: "execution", Ready: true}
+	oom := network.PodStatus{Component: "beacon", Reason: "OOMKilled", Restarts: 9}
+	pending := network.PodStatus{Component: "beacon", Phase: "Pending"}
+
+	if podsNeedLine([]network.PodStatus{ready, oom}) {
+		t.Error("podsNeedLine: OOMKilled pod is already reported as a warning")
+	}
+
+	if !podsNeedLine([]network.PodStatus{ready, pending}) {
+		t.Error("podsNeedLine: a pending pod with no reason has no warning")
+	}
+}

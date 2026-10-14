@@ -289,3 +289,36 @@ func TestNodeProber_ForwardFailureDegrades(t *testing.T) {
 		t.Fatalf("consensus error lost kubectl detail: %q", st.Consensus.Error)
 	}
 }
+
+// A pod restarting behind the port-forward surfaces as EOF on the ephemeral
+// 127.0.0.1:<port> URL; neither the URL nor the bare EOF should reach the user.
+func TestProbeBeaconAPI_DroppedConnectionHidesForwardURL(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+
+		conn.Close()
+	}))
+	defer srv.Close()
+
+	cl := &ConsensusStatus{}
+	ProbeBeaconAPI(context.Background(), srv.Client(), srv.URL, cl)
+
+	if cl.Reachable {
+		t.Fatal("reachable = true for a dropped connection")
+	}
+
+	if strings.Contains(cl.Error, "127.0.0.1") || !strings.Contains(cl.Error, "not answering") {
+		t.Fatalf("error = %q, want a plain 'not answering' without the forward URL", cl.Error)
+	}
+}
+
+func TestPodWarnings_OOMKilledNamesTheCause(t *testing.T) {
+	got := podWarnings([]PodStatus{{Name: "ethereum-beacon-0", Component: "beacon", Phase: "Running", Reason: "OOMKilled", Restarts: 9}})
+	if len(got) != 1 || !strings.Contains(got[0], "out of memory") || !strings.Contains(got[0], "9 restarts") {
+		t.Fatalf("podWarnings = %q", got)
+	}
+}
