@@ -1,6 +1,6 @@
 ---
 name: security-review-fe
-description: Security review for obol-stack-front-end PRs. Use when reviewing auth, API routes, marketplace/sell flows, tunnel exposure, or before reporting vulnerabilities. Minimises false positives by scoping to real attack surfaces.
+description: Security review for Obol Stack dashboard (web/frontend) PRs. Use when reviewing auth, API routes, marketplace/sell flows, tunnel exposure, or before reporting vulnerabilities. Minimises false positives by scoping to real attack surfaces.
 ---
 
 # Frontend security review (obol-stack-front-end)
@@ -20,7 +20,7 @@ description: Security review for obol-stack-front-end PRs. Use when reviewing au
 3. **Tunnel / Traefik exposure**
    - This app is usually **local-only** (`hostnames: ["obol.stack"]` on stack routes)
    - Do not add routes that expose admin surfaces on the Cloudflare tunnel hostname
-   - x402-gated `/services/*` is stack-side, not this repo — flag only if FE adds public proxies
+   - x402-gated `/services/*` is stack-side (Go, outside web/frontend) — flag only if FE adds public proxies
 
 4. **Sell / wallet flows**
    - `pay-to` addresses validated as `0x` + 40 hex
@@ -38,7 +38,7 @@ description: Security review for obol-stack-front-end PRs. Use when reviewing au
 | Missing auth on read-only cluster metrics              | Dashboard assumes trusted local operator + kubeconfig                            |
 | `dangerouslySetInnerHTML` in docs/skills               | Only if unsanitized user HTML — DOMPurify paths are OK                           |
 | Dependency CVEs without exploit path in browser bundle | Track via Dependabot; don't block PR on transitive dev-only CVEs unless critical |
-| ERC-8004 / x402 protocol design                        | Belongs in obol-stack, not this repo                                             |
+| ERC-8004 / x402 protocol design                        | Belongs in the Go stack code, not web/frontend                                             |
 
 ## Checklist (PR comment template)
 
@@ -52,4 +52,4 @@ description: Security review for obol-stack-front-end PRs. Use when reviewing au
 
 ## Reporting
 
-Valid issues → security@obol.tech per `.github/SECURITY.md`. Invalid scanner noise → close with "out of scope" referencing table above.
+Valid issues → security@obol.tech. Invalid scanner noise → close with "out of scope" referencing table above.

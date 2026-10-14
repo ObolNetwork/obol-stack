@@ -1079,6 +1079,9 @@ type localImage struct {
 	tag        string // e.g. "ghcr.io/obolnetwork/x402-verifier:latest"
 	dockerfile string // relative to project root or absolute path
 	contextDir string // relative to project root or absolute path (empty = project root)
+	// buildArgs returns extra `--build-arg K=V` values, resolved at build
+	// time (contextDir is the absolute build context). Optional.
+	buildArgs func(contextDir string) []string
 }
 
 // localImages lists images that we build from source in this repo and import
@@ -1092,6 +1095,40 @@ var baseLocalImages = []localImage{
 	{tag: "ghcr.io/obolnetwork/job-broker:latest", dockerfile: "Dockerfile.job-broker"},
 	{tag: "ghcr.io/obolnetwork/demo-server:latest", dockerfile: "Dockerfile.demo-server"},
 	{tag: "ghcr.io/obolnetwork/obol-stack-public-storefront:latest", dockerfile: "Dockerfile.public-storefront"},
+	// The operator dashboard (obol.stack). Own build context so its
+	// .dockerignore applies and the Go tree isn't uploaded.
+	{
+		tag:        "ghcr.io/obolnetwork/obol-stack-front-end:latest",
+		dockerfile: "web/frontend/Dockerfile",
+		contextDir: "web/frontend",
+		buildArgs:  frontendBuildArgs,
+	},
+}
+
+// frontendBuildArgs bakes the WalletConnect project ID into the Next.js
+// client bundle (it is public by design). Resolution matches
+// web/frontend/scripts/build-frontend-image.sh: NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID,
+// then WALLET_CONNECT_PROJECT_ID, then web/frontend/.env.local. Without one
+// the image still builds with the wallet UI disabled.
+func frontendBuildArgs(contextDir string) []string {
+	id := strings.TrimSpace(os.Getenv("NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID"))
+	if id == "" {
+		id = strings.TrimSpace(os.Getenv("WALLET_CONNECT_PROJECT_ID"))
+	}
+	if id == "" {
+		if data, err := os.ReadFile(filepath.Join(contextDir, ".env.local")); err == nil {
+			for _, line := range strings.Split(string(data), "\n") {
+				key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+				if ok && (key == "NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID" || key == "WALLET_CONNECT_PROJECT_ID") {
+					id = strings.Trim(strings.TrimSpace(value), `"'`)
+				}
+			}
+		}
+	}
+	if id == "" {
+		return nil
+	}
+	return []string{"NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=" + id}
 }
 
 func devPreloadImages() []string {
@@ -1110,8 +1147,9 @@ func devPreloadImages() []string {
 //   - "img1,img2,…"              → force-rebuild only the named images; match is
 //     against the short name (last path component before the colon, e.g.
 //     "x402-verifier" from "ghcr.io/obolnetwork/x402-verifier:latest").
-//     "public-storefront" is accepted as an alias for the published image name
-//     "obol-stack-public-storefront".
+//     "public-storefront" and "frontend" are accepted as aliases for the
+//     published image names "obol-stack-public-storefront" and
+//     "obol-stack-front-end".
 func forceRebuildSet() func(tag string) bool {
 	raw := strings.TrimSpace(os.Getenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES"))
 	switch strings.ToLower(raw) {
@@ -1145,8 +1183,11 @@ func localImageShortName(tag string) string {
 }
 
 func localImageRebuildAlias(name string) string {
-	if name == "obol-stack-public-storefront" {
+	switch name {
+	case "obol-stack-public-storefront":
 		return "public-storefront"
+	case "obol-stack-front-end":
+		return "frontend"
 	}
 	return name
 }
@@ -1319,11 +1360,13 @@ func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 			if u != nil {
 				u.Infof("Building %s from %s", imgTag, img.dockerfile)
 			}
-			buildCmd := exec.Command("docker", "build",
-				"-f", dockerfilePath,
-				"-t", imgTag,
-				contextDir,
-			)
+			buildArgs := []string{"build", "-f", dockerfilePath, "-t", imgTag}
+			if img.buildArgs != nil {
+				for _, arg := range img.buildArgs(contextDir) {
+					buildArgs = append(buildArgs, "--build-arg", arg)
+				}
+			}
+			buildCmd := exec.Command("docker", append(buildArgs, contextDir)...)
 			buildCmd.Stdout = os.Stdout
 			buildCmd.Stderr = os.Stderr
 			if err := buildCmd.Run(); err != nil {

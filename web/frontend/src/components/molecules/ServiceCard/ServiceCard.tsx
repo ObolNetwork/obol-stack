@@ -270,7 +270,6 @@ function pluralizeSales(n: number): string {
 function agentDisplayName(link: ServiceOfferAgentLink): string {
   if (link.runtime === 'hermes' && link.id === 'obol-agent')
     return 'Stack agent';
-  if (link.runtime === 'openclaw' && link.id === 'default') return 'OpenClaw';
   return link.id;
 }
 

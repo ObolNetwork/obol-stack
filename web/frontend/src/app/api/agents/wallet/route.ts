@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { AgentClient } from '@/lib/services/agents';
 import { rejectCrossOriginCredentialRead } from '@/lib/middleware/origin-check';
 import type { AgentInstance, AgentRuntime } from '@/types/agent';
-import type { WalletMetadata } from '@/types/openclaw';
+import type { WalletMetadata } from '@/types/wallet';
 
 export async function GET(request: NextRequest) {
   const csrfReject = rejectCrossOriginCredentialRead(request);
@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  if (runtime !== 'hermes' && runtime !== 'openclaw') {
+  if (runtime !== 'hermes') {
     return NextResponse.json(
       { error: `Unsupported runtime '${runtime}'` },
       { status: 400 }

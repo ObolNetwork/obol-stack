@@ -16,7 +16,6 @@ export const config = {
   erpcBaseUrl:
     process.env.ERPC_BASE_URL || 'http://erpc.erpc.svc.cluster.local',
   agentIngressBaseDomain: process.env.AGENT_INGRESS_BASE_DOMAIN || 'obol.stack',
-  openclawUrl: process.env.OPENCLAW_URL || `http://localhost:18789`,
   isInCluster: !!process.env.KUBERNETES_SERVICE_HOST,
   commitSha: process.env.NEXT_PUBLIC_COMMIT_SHA || 'local',
   tagVersion: process.env.NEXT_PUBLIC_TAG_VERSION || 'local',

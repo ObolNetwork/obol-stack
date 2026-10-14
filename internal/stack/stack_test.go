@@ -1122,6 +1122,52 @@ func TestForceRebuildSet_PublicStorefrontAlias(t *testing.T) {
 	}
 }
 
+func TestForceRebuildSet_FrontendAlias(t *testing.T) {
+	t.Setenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES", "frontend")
+
+	shouldForceRebuild := forceRebuildSet()
+	if !shouldForceRebuild("ghcr.io/obolnetwork/obol-stack-front-end:dev-abc") {
+		t.Fatal("frontend alias should rebuild obol-stack-front-end")
+	}
+	if shouldForceRebuild("ghcr.io/obolnetwork/obol-stack-public-storefront:dev-abc") {
+		t.Fatal("frontend alias should not rebuild the public storefront")
+	}
+}
+
+func TestBaseLocalImages_FrontendBuiltFromWebFrontend(t *testing.T) {
+	for _, img := range baseLocalImages {
+		if localImageShortName(img.tag) != "obol-stack-front-end" {
+			continue
+		}
+		if img.contextDir != "web/frontend" || img.dockerfile != "web/frontend/Dockerfile" {
+			t.Fatalf("front-end must build from web/frontend, got dockerfile=%q context=%q", img.dockerfile, img.contextDir)
+		}
+		return
+	}
+	t.Fatal("obol-stack-front-end missing from baseLocalImages")
+}
+
+func TestFrontendBuildArgs_WalletConnectResolution(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID", "")
+	t.Setenv("WALLET_CONNECT_PROJECT_ID", "")
+	if got := frontendBuildArgs(dir); got != nil {
+		t.Fatalf("no project id configured: got %v, want nil", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, ".env.local"), []byte("FOO=bar\nWALLET_CONNECT_PROJECT_ID=\"from-file\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := frontendBuildArgs(dir); len(got) != 1 || got[0] != "NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=from-file" {
+		t.Fatalf(".env.local: got %v", got)
+	}
+
+	t.Setenv("WALLET_CONNECT_PROJECT_ID", "from-env")
+	if got := frontendBuildArgs(dir); len(got) != 1 || got[0] != "NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=from-env" {
+		t.Fatalf("env: got %v", got)
+	}
+}
+
 func TestBuildAndImportLocalImages_SkipsK3dImportWhenCacheIsValid(t *testing.T) {
 	root := t.TempDir()
 	cfgDir := filepath.Join(root, "config")

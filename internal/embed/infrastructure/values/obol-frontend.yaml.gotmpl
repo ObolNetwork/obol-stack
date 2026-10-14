@@ -1,5 +1,10 @@
 {{- $network := .Values.network -}}
 {{- $publicDomain := env "STACK_PUBLIC_DOMAIN" | default "obol.stack" -}}
+{{- /* Stack-owned image: the placeholder is rewritten before helmfile renders this file. */ -}}
+{{- $frontendImage := "ghcr.io/obolnetwork/obol-stack-front-end:__OBOL_IMAGE__" -}}
+{{- $frontendParts := splitn ":" 2 $frontendImage -}}
+{{- $frontendRepo := $frontendParts._0 -}}
+{{- $frontendTag := $frontendParts._1 -}}
 
 replicaCount: 1
 
@@ -59,12 +64,15 @@ image:
     - name: BASE_SEPOLIA_OBOL_FAUCET_AMOUNT
       value: {{ env "BASE_SEPOLIA_OBOL_FAUCET_AMOUNT" | default "5 OBOL" | quote }}
 
-  repository: obolnetwork/obol-stack-front-end
+  # Built from web/frontend in this repo (docker-publish-frontend.yml) and
+  # pinned like the other stack-owned images: CopyInfrastructure rewrites the
+  # placeholder in $frontendImage to the release short-SHA tag + registry
+  # digest, or to the local :dev-<sha> build under OBOL_DEVELOPMENT
+  # (internal/images, internal/defaults). obol-app renders
+  # "<repository>:<tag>", so split the resolved ref at the tag colon.
+  repository: {{ $frontendRepo | quote }}
   pullPolicy: IfNotPresent
-  # Digest-pinned: tag is informational, sha256 is authoritative. Eliminates
-  # the mutable-tag attack surface called out by the v0.10.0-rc2 supply-chain
-  # review. Multi-arch index digest for v0.1.29-rc0 (linux/amd64 + linux/arm64).
-  tag: "v0.1.29-rc0@sha256:b3385e11eee35d982ee54a2e538c49c6a0f6ecfcf7d1aa895e123a25ae0bccde"
+  tag: {{ $frontendTag | quote }}
 
 # Roll the pod when obol-frontend-secrets changes (secretKeyRef env is only
 # resolved at container start). obol-app only exposes pod-template

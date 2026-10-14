@@ -3,7 +3,9 @@ name: obol-stack-front-end-dev
 description: Local development and QA for the Obol Stack Next.js dashboard. Use when working on marketplace, sell/buy UX, agent cards, API routes, Playwright, or deploying the dev image to a k3d cluster.
 ---
 
-# obol-stack-front-end development
+# obol-stack-front-end development (`web/frontend`)
+
+Run commands from `web/frontend` in the obol-stack repo.
 
 ## Quick commands
 
@@ -38,16 +40,15 @@ From the Mac host when the cluster is up: `http://obol.stack:8080` (Traefik). In
 
 ## Deploy dev image to k3d
 
-When the stack has dev registries (`OBOL_DEVELOPMENT=true`):
+`OBOL_DEVELOPMENT=true obol stack up` builds `web/frontend` as `ghcr.io/obolnetwork/obol-stack-front-end:dev-<sha>` and imports it (uncommitted changes: `OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=frontend`). Faster loop, from the repo root:
 
 ```bash
-# from obol-stack repo
-FRONTEND_DIR=../obol-stack-front-end just dev-frontend-rebuild
-k3d image import localhost:54103/obol-stack-front-end:dev -c <cluster-name>
-obol kubectl rollout restart deployment/obol-frontend-obol-app -n obol-frontend
+just dev-frontend          # build → k3d image import → rollout restart
+just dev-frontend-rebuild  # same, docker build --no-cache
+just dev-frontend-reset    # obol stack up (restore the pinned image)
 ```
 
-`obol stack up` may revert the deployment pin — re-import after stack upgrades.
+On a dev stack `just dev-frontend` reuses the pinned dev tag, so `obol stack up` keeps your build; on a release stack it repoints the deployment at `:dev` until the next `obol stack up`.
 
 ## Key directories
 
@@ -70,5 +71,5 @@ E2E: `pnpm run test:e2e:chromium` — mocks `/api/dashboard` and `/api/marketpla
 
 - pnpm only; commit `pnpm-lock.yaml`, not `package-lock.json`
 - Mutating API routes: use `rejectCrossOrigin` from `src/lib/middleware/origin-check.ts`
-- Secret scan: `pnpm run scan:secrets` (gitleaks) — same as CI
-- Plans / design notes → `plans/`; user docs → coordinate with obol-stack-docs
+- Secret scan: repo-root gitleaks workflow (`.gitleaks.toml`)
+- Plans / design notes → repo-root `plans/` (gitignored); user docs → `docs/` or obol-stack-docs

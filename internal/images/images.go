@@ -55,6 +55,7 @@ var Managed = []string{
 	"ghcr.io/obolnetwork/job-broker",
 	"ghcr.io/obolnetwork/demo-server",
 	"ghcr.io/obolnetwork/obol-stack-public-storefront",
+	"ghcr.io/obolnetwork/obol-stack-front-end",
 }
 
 // Resolve returns the fully-qualified image reference for a managed repo.
@@ -97,9 +98,18 @@ func StampIdentity() string {
 	return "sha:" + commit
 }
 
-// RewriteTree walks a directory of YAML files and rewrites every managed
-// image reference via resolve. resolve receives the bare repository
-// (e.g. "ghcr.io/obolnetwork/x402-verifier") and returns the full ref.
+// isYAMLFile reports whether RewriteTree scans name: *.yaml / *.yml, plus
+// helmfile-templated *.yaml.gotmpl values files (the front-end's obol-app
+// values pin its image there).
+func isYAMLFile(name string) bool {
+	lower := strings.TrimSuffix(strings.ToLower(name), ".gotmpl")
+	return strings.HasSuffix(lower, ".yaml") || strings.HasSuffix(lower, ".yml")
+}
+
+// RewriteTree walks a directory of YAML files (including *.yaml.gotmpl) and
+// rewrites every managed image reference via resolve. resolve receives the
+// bare repository (e.g. "ghcr.io/obolnetwork/x402-verifier") and returns the
+// full ref.
 func RewriteTree(root string, resolve func(repo string) string) error {
 	if resolve == nil {
 		return fmt.Errorf("images.RewriteTree: nil resolve func")
@@ -112,8 +122,7 @@ func RewriteTree(root string, resolve func(repo string) string) error {
 		if d.IsDir() {
 			return nil
 		}
-		ext := strings.ToLower(filepath.Ext(d.Name()))
-		if ext != ".yaml" && ext != ".yml" {
+		if !isYAMLFile(d.Name()) {
 			return nil
 		}
 		data, err := os.ReadFile(path)

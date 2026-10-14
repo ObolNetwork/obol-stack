@@ -13,17 +13,6 @@ import {
 } from './agent-runtime.ts';
 
 describe('agent runtime URL helpers', () => {
-  it('builds the legacy OpenClaw dashboard deeplink', () => {
-    assert.equal(
-      getAgentDashboardUrl('default', 'openclaw'),
-      'http://openclaw-default.obol.stack'
-    );
-    assert.equal(
-      getAgentDashboardUrl('obol-agent', 'openclaw'),
-      'http://openclaw-obol-agent.obol.stack'
-    );
-  });
-
   it('builds Hermes dashboard deeplinks for the default obol-agent and named agents', () => {
     const cases = [
       {
@@ -59,40 +48,25 @@ describe('agent runtime URL helpers', () => {
     );
   });
 
-  it('keeps Hermes and OpenClaw namespace parsing distinct', () => {
+  it('parses Hermes namespaces and rejects unrelated ones', () => {
     assert.equal(getRuntimeFromNamespace('hermes-obol-agent'), 'hermes');
-    assert.equal(getRuntimeFromNamespace('openclaw-obol-agent'), 'openclaw');
     assert.equal(getRuntimeFromNamespace('obol-agent'), null);
+    assert.equal(getRuntimeFromNamespace('llm'), null);
 
     assert.equal(
       getAgentIdFromNamespace('hermes-obol-agent', 'hermes'),
       'obol-agent'
     );
-    assert.equal(
-      getAgentIdFromNamespace('openclaw-research-agent', 'openclaw'),
-      'research-agent'
-    );
   });
 
-  it('builds in-cluster service URLs for both runtimes', () => {
+  it('builds in-cluster service URLs', () => {
     assert.equal(
       getAgentServiceUrl({
         id: 'obol-agent',
         runtime: 'hermes',
         isInCluster: true,
-        openclawLocalUrl: 'http://localhost:18789',
       }),
       'http://hermes.hermes-obol-agent.svc.cluster.local:8642'
-    );
-
-    assert.equal(
-      getAgentServiceUrl({
-        id: 'default',
-        runtime: 'openclaw',
-        isInCluster: true,
-        openclawLocalUrl: 'http://localhost:18789',
-      }),
-      'http://openclaw.openclaw-default.svc.cluster.local:18789'
     );
   });
 
@@ -102,7 +76,6 @@ describe('agent runtime URL helpers', () => {
         id: 'obol-agent',
         runtime: 'hermes',
         isInCluster: false,
-        openclawLocalUrl: 'http://localhost:18789',
       }),
       'http://localhost:8642'
     );
@@ -112,20 +85,9 @@ describe('agent runtime URL helpers', () => {
         id: 'obol-agent',
         runtime: 'hermes',
         isInCluster: false,
-        openclawLocalUrl: 'http://localhost:18789',
         hermesLocalUrl: 'http://localhost:9000',
       }),
       'http://localhost:9000'
-    );
-
-    assert.equal(
-      getAgentServiceUrl({
-        id: 'obol-agent',
-        runtime: 'openclaw',
-        isInCluster: false,
-        openclawLocalUrl: 'http://localhost:18789',
-      }),
-      'http://localhost:18789'
     );
   });
 
@@ -134,19 +96,11 @@ describe('agent runtime URL helpers', () => {
       getAgentNamespace('obol-agent', 'hermes'),
       `${AGENT_RUNTIME_CONFIG.hermes.namespacePrefix}obol-agent`
     );
-    assert.equal(
-      getAgentNamespace('obol-agent', 'openclaw'),
-      `${AGENT_RUNTIME_CONFIG.openclaw.namespacePrefix}obol-agent`
-    );
   });
 
-  it('marks only default runtime agents as sell-capable', () => {
+  it('marks only the default agent as sell-capable', () => {
     assert.equal(
       isDefaultSellAgent({ runtime: 'hermes', id: 'obol-agent' }),
-      true
-    );
-    assert.equal(
-      isDefaultSellAgent({ runtime: 'openclaw', id: 'default' }),
       true
     );
     assert.equal(
@@ -154,7 +108,7 @@ describe('agent runtime URL helpers', () => {
       false
     );
     assert.equal(
-      isDefaultSellAgent({ runtime: 'openclaw', id: 'obol-agent' }),
+      isDefaultSellAgent({ runtime: 'hermes', id: 'default' }),
       false
     );
   });

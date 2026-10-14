@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { OpenClawClient } from '@/lib/services/openclaw';
+import { AgentClient } from '@/lib/services/agents';
 
 /**
  * GET /api/tunnel
@@ -8,7 +8,7 @@ import { OpenClawClient } from '@/lib/services/openclaw';
  */
 export async function GET() {
   try {
-    const client = new OpenClawClient();
+    const client = new AgentClient();
     const tunnelURL = await client.getTunnelURL();
 
     return NextResponse.json({ tunnelURL });

@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { OpenClawClient } from '@/lib/services/openclaw';
+import { AgentClient } from '@/lib/services/agents';
 import { config } from '@/lib/config/environment';
 
 /**
@@ -13,7 +13,7 @@ export async function GET() {
 
   if (!obolVersion) {
     try {
-      const client = new OpenClawClient();
+      const client = new AgentClient();
       obolVersion = await client.getObolStackVersion();
     } catch (error) {
       console.error('[Version] Error fetching Obol stack version:', error);

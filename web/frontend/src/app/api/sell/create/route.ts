@@ -15,7 +15,6 @@ export const dynamic = 'force-dynamic';
 const ALLOWED_NAMESPACES = new Set<string>(['demo', 'llm']);
 const ALLOWED_NAMESPACE_PATTERNS = [
   /^hermes-[a-z0-9-]+$/,
-  /^openclaw-[a-z0-9-]+$/,
   /^agent-[a-z0-9-]+$/,
 ];
 
@@ -92,7 +91,7 @@ export async function POST(request: NextRequest) {
     if (!isAllowedNamespace(targetNamespace)) {
       return NextResponse.json(
         {
-          error: `Namespace "${targetNamespace}" is not allowed (allowed: demo, llm, hermes-*, openclaw-*, agent-*).`,
+          error: `Namespace "${targetNamespace}" is not allowed (allowed: demo, llm, hermes-*, agent-*).`,
         },
         { status: 400 }
       );

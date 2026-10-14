@@ -36,7 +36,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (runtime !== 'hermes' && runtime !== 'openclaw') {
+    if (runtime !== 'hermes') {
       return NextResponse.json(
         { error: `Unsupported runtime '${runtime}'` },
         { status: 400 }

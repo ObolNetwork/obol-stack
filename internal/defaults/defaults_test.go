@@ -65,6 +65,21 @@ func TestCopyInfrastructure_DevModeRewritesManagedImages(t *testing.T) {
 	if strings.Contains(string(llmData), buyer+":"+devTag+"@sha256:") {
 		t.Errorf("dev mode left orphan @sha256 on x402-buyer")
 	}
+
+	// The front-end pin lives in a helmfile .yaml.gotmpl values file; dev
+	// mode must point it at the locally-built web/frontend image too.
+	frontendPath := filepath.Join(cfg.ConfigDir, "defaults", "values", "obol-frontend.yaml.gotmpl")
+	frontendData, err := os.ReadFile(frontendPath)
+	if err != nil {
+		t.Fatalf("read obol-frontend values: %v", err)
+	}
+	frontend := "ghcr.io/obolnetwork/obol-stack-front-end"
+	if !strings.Contains(string(frontendData), frontend+":"+devTag) {
+		t.Errorf("dev mode did not rewrite %s to :%s", frontend, devTag)
+	}
+	if strings.Contains(string(frontendData), images.PlaceholderTag) {
+		t.Errorf("dev mode left placeholder in %s", frontendPath)
+	}
 }
 
 func TestDevImageTag_Format(t *testing.T) {

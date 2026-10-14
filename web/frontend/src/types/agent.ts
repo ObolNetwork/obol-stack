@@ -1,4 +1,4 @@
-export type AgentRuntime = 'hermes' | 'openclaw';
+export type AgentRuntime = 'hermes';
 
 export interface AgentInstance {
   id: string;

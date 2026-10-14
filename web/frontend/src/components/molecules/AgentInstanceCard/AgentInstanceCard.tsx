@@ -15,7 +15,6 @@ import {
 } from '../../../hooks/useAgents';
 import type { AgentInstance } from '@/types/agent';
 import { truncateAddress } from '@/utils/address';
-import { palette } from '@/lib/ui/theme';
 
 function displayModelName(raw: string): string {
   return raw.replace(/^openai\//, '');
@@ -33,14 +32,11 @@ function displayInstanceName(instance: AgentInstance): string {
   if (instance.runtime === 'hermes' && instance.id === 'obol-agent') {
     return 'Stack agent';
   }
-  if (instance.runtime === 'openclaw' && instance.id === 'default') {
-    return 'OpenClaw';
-  }
   return instance.id;
 }
 
 function runtimeLabel(instance: AgentInstance): string {
-  return instance.runtime === 'hermes' ? 'Hermes' : 'OpenClaw';
+  return instance.runtime === 'hermes' ? 'Hermes' : 'Agent';
 }
 
 interface AgentInstanceCardProps {
@@ -85,16 +81,6 @@ const RuntimeBadge = styled(Text, {
   whiteSpace: 'nowrap',
   textTransform: 'uppercase',
   letterSpacing: '0.04em',
-
-  variants: {
-    tone: {
-      violet: {
-        color: palette.lavender,
-        backgroundColor: 'rgba(145,103,228,0.12)',
-        border: '1px solid rgba(145,103,228,0.34)',
-      },
-    },
-  },
 });
 
 // Row that carries the Model Details toggle and the Sell CTA; indented to
@@ -296,11 +282,7 @@ export function AgentInstanceCard({
       <HeaderRow>
         <Identicon seed={identiconSeed} size={26} rounded={6} />
         <InstanceName>{displayInstanceName(instance)}</InstanceName>
-        <RuntimeBadge
-          tone={instance.runtime === 'openclaw' ? 'violet' : undefined}
-        >
-          {runtimeLabel(instance)}
-        </RuntimeBadge>
+        <RuntimeBadge>{runtimeLabel(instance)}</RuntimeBadge>
         <Box css={{ flex: 1 }} />
         <Flex css={{ alignItems: 'center', gap: '$xxs' }}>
           <StatusPill

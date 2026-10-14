@@ -19,8 +19,6 @@ function displayInstanceName(instance: {
 }): string {
   if (instance.runtime === 'hermes' && instance.id === 'obol-agent')
     return 'Stack agent';
-  if (instance.runtime === 'openclaw' && instance.id === 'default')
-    return 'OpenClaw';
   return instance.id;
 }
 

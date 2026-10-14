@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Decide how an image group (IMAGE_GROUP=x402|storefront, default x402) is
+# Decide how an image group (IMAGE_GROUP=x402|storefront|frontend, default x402) is
 # published for the current commit:
 #
 #   skip   images already exist at :<short-sha> (never mutate a published tag)
@@ -10,12 +10,15 @@
 # Image inputs. x402: the in-module packages the image binaries compile (go
 # list -deps, test files excluded — .dockerignore drops them), plus
 # go.mod/go.sum, the Dockerfile and the bake file. storefront: its app dir and
-# Dockerfile. .git is not in either build context and no version is baked in,
-# so the commit itself does not change image bytes.
+# Dockerfile. frontend: web/frontend (its own build context) minus docs/e2e.
+# .git is not in any build context and no version is baked in, so the commit
+# itself does not change image bytes (the front-end bakes in the commit it was
+# BUILT from as display metadata; a retagged image keeps that commit, which is
+# still the source it was built from).
 #
 #   .github/scripts/image-plan.sh
 #
-# Env: IMAGE_GROUP (x402|storefront); FORCE_BUILD=true always builds; LOOKBACK (default 30) first-parent
+# Env: IMAGE_GROUP (x402|storefront|frontend); FORCE_BUILD=true always builds; LOOKBACK (default 30) first-parent
 # commits searched for reusable images. Writes mode= and source= to
 # $GITHUB_OUTPUT when set.
 set -euo pipefail
@@ -63,6 +66,18 @@ case "${GROUP}" in
         ;;
     storefront)
         inputs=(web/public-storefront Dockerfile.public-storefront .dockerignore)
+        ;;
+    frontend)
+        # Own build context (web/frontend, its Dockerfile + .dockerignore).
+        # Docs, agent tooling and Playwright specs never reach the image.
+        inputs=(
+            web/frontend
+            ':(exclude,glob)web/frontend/**/*.md'
+            ':(exclude)web/frontend/e2e'
+            ':(exclude)web/frontend/docs'
+            ':(exclude)web/frontend/.agents'
+            ':(exclude)web/frontend/.claude'
+        )
         ;;
     *)
         echo "unknown IMAGE_GROUP ${GROUP}" >&2

@@ -9,7 +9,6 @@ import { CopyButton } from '../atoms/CopyButton';
 import { WalletBalanceList } from '../molecules/WalletBalanceList';
 import {
   useAgentStatus,
-  useTunnelURL,
   useAgentWalletMetadata,
 } from '../../hooks/useAgents';
 import { useWalletAssetBalances } from '../../hooks/useWalletAssetBalances';
@@ -21,13 +20,11 @@ import { formatUptime } from '@/lib/utils/format-uptime';
 function displayInstanceName(instance: AgentInstance): string {
   if (instance.runtime === 'hermes' && instance.id === 'obol-agent')
     return 'Stack agent';
-  if (instance.runtime === 'openclaw' && instance.id === 'default')
-    return 'OpenClaw';
   return instance.id;
 }
 
 function runtimeLabel(instance: AgentInstance): string {
-  return instance.runtime === 'hermes' ? 'Hermes' : 'OpenClaw';
+  return instance.runtime === 'hermes' ? 'Hermes' : 'Agent';
 }
 
 function withCurrentIngressPort(rawUrl: string): string {
@@ -197,7 +194,6 @@ export function HomeAgentCard({
 }: HomeAgentCardProps) {
   const { status, loading } = useAgentStatus(instance);
   const { metadata } = useAgentWalletMetadata(instance);
-  const { tunnelURL } = useTunnelURL();
 
   const primaryAddress = metadata?.addresses?.[0]?.address ?? null;
   const { balances } = useWalletAssetBalances(primaryAddress);
@@ -233,12 +229,9 @@ export function HomeAgentCard({
 
   const hasRequests = typeof requests24h === 'number' && requests24h > 0;
 
-  const dashboardBaseUrl =
-    instance.runtime === 'openclaw'
-      ? tunnelURL || `http://${instance.hostname}`
-      : instance.dashboardHostname
-        ? `http://${instance.dashboardHostname}`
-        : null;
+  const dashboardBaseUrl = instance.dashboardHostname
+    ? `http://${instance.dashboardHostname}`
+    : null;
   const dashboardUrl = dashboardBaseUrl
     ? withCurrentIngressPort(dashboardBaseUrl)
     : null;

@@ -42,8 +42,9 @@ done
 if [[ "${failed}" -ne 0 ]]; then
     echo "" >&2
     echo "Release gate failed: images for commit ${SHORT_SHA} are not published." >&2
-    echo "  docker-publish-x402.yml and docker-publish-storefront.yml publish (or" >&2
-    echo "  retag) images for every main commit; one may still be running, or the" >&2
+    echo "  docker-publish-x402.yml, docker-publish-storefront.yml and" >&2
+    echo "  docker-publish-frontend.yml publish (or retag) images for every main" >&2
+    echo "  commit; one may still be running, or the" >&2
     echo "  commit is not on main. Fix:" >&2
     echo "    gh workflow run <workflow> --ref ${SHORT_SHA}" >&2
     echo "  Wait for the build, then re-tag / re-run the release." >&2

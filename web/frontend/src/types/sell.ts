@@ -68,7 +68,7 @@ export interface ServiceOfferUpstream {
 }
 
 export interface ServiceOfferAgentLink {
-  runtime: 'hermes' | 'openclaw';
+  runtime: 'hermes';
   id: string;
   namespace: string;
 }

@@ -1,8 +1,8 @@
 # Release images (stack-owned)
 
 Stack-owned container images (`x402-verifier`, `serviceoffer-controller`,
-`x402-buyer`, `job-broker`, `demo-server`, storefront) are **not** digest-pinned
-in git.
+`x402-buyer`, `job-broker`, `demo-server`, public storefront, operator
+front-end) are **not** digest-pinned in git.
 
 ## Policy
 
@@ -13,16 +13,19 @@ in git.
 | Unknown / dirty build | `repo:latest` |
 
 - Short-SHA tags are published for **every** `main` push by
-  `docker-publish-x402.yml` (five Go images) and `docker-publish-storefront.yml`
-  (public storefront). `.github/scripts/image-plan.sh` decides per commit and
+  `docker-publish-x402.yml` (five Go images), `docker-publish-storefront.yml`
+  (public storefront) and `docker-publish-frontend.yml` (operator dashboard,
+  `web/frontend`). `.github/scripts/image-plan.sh` decides per commit and
   image group: **skip** if
   the commit already has images, **retag** (copy manifests byte-for-byte, same
   digests) when no image input changed since the nearest published ancestor,
   otherwise **build** (bake → `docker-bake.hcl` / `Dockerfile.x402`). Image
   inputs = in-module packages the five binaries compile (`go list -deps`, no
   tests) + `go.mod`/`go.sum` + Dockerfile/bake/`.dockerignore`; storefront
-  inputs = `web/public-storefront/` + its Dockerfile. Tags never rebuild: x402
-  ignores `v*`, storefront only copies the commit's image to semver tags, so a
+  inputs = `web/public-storefront/` + its Dockerfile; front-end inputs =
+  `web/frontend/` (its own build context) minus docs/e2e/agent tooling. Tags
+  never rebuild: x402 ignores `v*`, storefront and front-end only copy the
+  commit's image to semver tags, so a
   release never overwrites its commit's short-SHA tags. The release gate checks
   every image in `.github/scripts/lib-ghcr.sh` (= `internal/images.Managed`).
 - CI builds all five pure-Go images in **one bake job**: shared builder stage,
@@ -30,7 +33,9 @@ in git.
 - The CLI embeds the same short SHA via goreleaser ldflags
   (`version.GitCommit`).
 - `internal/images.Resolve` is the single policy. Embedded templates use the
-  placeholder `:__OBOL_IMAGE__`; `CopyInfrastructure` rewrites it at apply time.
+  placeholder `:__OBOL_IMAGE__`; `CopyInfrastructure` rewrites it at apply time
+  (`*.yaml` and helmfile `*.yaml.gotmpl` values, e.g. the front-end's obol-app
+  values, which split the resolved ref into `repository`/`tag`).
 - Digests are **not committed to git**. On first resolve for a given
   `repo:short-sha`, the multi-arch index digest is fetched from GHCR and
   **persisted** under `$OBOL_CONFIG_DIR/image-digests.json`. Later applies with
@@ -51,7 +56,7 @@ in git.
 ## Release train
 
 ```text
-merge to main → docker-publish-x402 builds or retags :shortsha (retag ≈ 1 min) → smoke → tag on main
+merge to main → docker-publish-{x402,storefront,frontend} build or retag :shortsha (retag ≈ 1 min) → smoke → tag on main
 ```
 
 No repin PR. No `release-prep` workflow.
@@ -70,7 +75,7 @@ If the gate fails, the publish run for that commit is still in progress or
 failed, or the commit is not on main. Re-run it (reuses/retags when possible):
 
 ```bash
-gh workflow run docker-publish-x402.yml --ref <commit-or-main>
+gh workflow run docker-publish-x402.yml --ref <commit-or-main>   # or -storefront / -frontend
 ```
 
 ## Why not digests in git?

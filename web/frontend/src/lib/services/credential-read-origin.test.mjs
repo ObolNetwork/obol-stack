@@ -15,7 +15,7 @@ describe('credential read API routes', () => {
       const guardIndex = source.indexOf('rejectCrossOriginCredentialRead');
       assert.notEqual(guardIndex, -1);
 
-      const clientIndex = source.search(/new (AgentClient|OpenClawClient)\(/);
+      const clientIndex = source.search(/new AgentClient\(/);
       assert.notEqual(clientIndex, -1);
       assert.ok(
         guardIndex < clientIndex,

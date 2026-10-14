@@ -25,7 +25,7 @@ describe('dashboard token URLs', () => {
     for (const file of ['src/hooks/useAgents.ts']) {
       const source = await readFile(resolve(process.cwd(), file), 'utf8');
       assert.equal(
-        /\/api\/(?:agents|openclaw)\/token/.test(source),
+        /\/api\/agents\/token/.test(source),
         false,
         `${file} must not fetch dashboard tokens for links`
       );

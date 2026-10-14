@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import type { AddressBalance } from '@/types/openclaw';
+import type { AddressBalance } from '@/types/wallet';
 
 const ERPC_URL = process.env.NEXT_PUBLIC_ERPC_URL ?? 'https://obol.stack/rpc';
 const NETWORK_PRIORITY = ['mainnet', 'sepolia', 'hoodi'];

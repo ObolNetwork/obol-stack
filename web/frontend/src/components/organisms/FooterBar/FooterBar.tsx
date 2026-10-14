@@ -105,7 +105,7 @@ export function FooterBar({ className }: FooterBarProps) {
             target="_blank"
             rel="noopener noreferrer"
             aria-label={`Front-end tag ${uiLabel}`}
-            href={releaseHref('obol-stack-front-end', uiLabel)}
+            href={releaseHref('obol-stack', uiLabel)}
             css={{
               fontSize: '$3',
               color: '$obolGreen',
@@ -119,7 +119,7 @@ export function FooterBar({ className }: FooterBarProps) {
               target="_blank"
               rel="noopener noreferrer"
               aria-label="Front-end commit"
-              href={`https://github.com/ObolNetwork/obol-stack-front-end/commit/${frontendCommit}`}
+              href={`https://github.com/ObolNetwork/obol-stack/commit/${frontendCommit}`}
               css={{
                 fontSize: '$3',
                 color: '$obolGreen',

@@ -231,6 +231,47 @@ func TestEmbeddedImages_CloudflaredHelmTagIsDigestPinned(t *testing.T) {
 	}
 }
 
+// TestEmbeddedImages_FrontendUsesPlaceholder: the front-end is built from
+// web/frontend and pinned like the other stack-owned images. Its obol-app
+// values file (helmfile .gotmpl, split repository/tag) must carry the full
+// placeholder ref so images.RewriteTree can rewrite it — never a git digest
+// or the legacy Docker Hub ref.
+func TestEmbeddedImages_FrontendUsesPlaceholder(t *testing.T) {
+	const repo = "ghcr.io/obolnetwork/obol-stack-front-end"
+	managed := false
+	for _, r := range images.Managed {
+		if r == repo {
+			managed = true
+		}
+	}
+	if !managed {
+		t.Fatalf("%s must be in images.Managed", repo)
+	}
+
+	data, err := ReadInfrastructureFile("values/obol-frontend.yaml.gotmpl")
+	if err != nil {
+		t.Fatalf("read obol-frontend values: %v", err)
+	}
+	if !bytes.Contains(data, []byte(repo+":"+images.PlaceholderTag)) {
+		t.Errorf("obol-frontend values must pin %s:%s", repo, images.PlaceholderTag)
+	}
+	if bytes.Contains(data, []byte("@sha256:")) {
+		t.Error("obol-frontend values must not embed a digest in git")
+	}
+	if regexp.MustCompile(`(?m)^\s*repository:\s*"?obolnetwork/`).Match(data) {
+		t.Error("obol-frontend values still reference the Docker Hub image")
+	}
+
+	// obol-app renders "<repository>:<tag>": the split must round-trip.
+	_, doc := renderHelmfileGotmpl(t, "values/obol-frontend.yaml.gotmpl")
+	if got := nested(doc, "image", "repository"); got != repo {
+		t.Errorf("image.repository = %v, want %s", got, repo)
+	}
+	if got := nested(doc, "image", "tag"); got != images.PlaceholderTag {
+		t.Errorf("image.tag = %v, want %s", got, images.PlaceholderTag)
+	}
+}
+
 func TestEmbeddedLiteLLMConfigUsesWritableRuntimeCopy(t *testing.T) {
 	data, err := ReadInfrastructureFile("base/templates/llm.yaml")
 	if err != nil {

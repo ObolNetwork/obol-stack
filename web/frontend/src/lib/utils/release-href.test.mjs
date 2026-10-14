@@ -6,8 +6,8 @@ describe('release-href', async () => {
 
   it('links real release tags to the tag page', () => {
     assert.equal(
-      releaseHref('obol-stack-front-end', 'v0.1.28-rc3'),
-      'https://github.com/ObolNetwork/obol-stack-front-end/releases/tag/v0.1.28-rc3'
+      releaseHref('obol-stack', 'v0.1.28-rc3'),
+      'https://github.com/ObolNetwork/obol-stack/releases/tag/v0.1.28-rc3'
     );
   });
 
@@ -25,19 +25,19 @@ describe('release-href', async () => {
     // 'unknown'— obol-stack-config carried no obolVersion
     for (const label of ['local', 'dev', 'unknown', '']) {
       assert.equal(
-        releaseHref('obol-stack-front-end', label),
-        'https://github.com/ObolNetwork/obol-stack-front-end/releases',
+        releaseHref('obol-stack', label),
+        'https://github.com/ObolNetwork/obol-stack/releases',
         `expected releases index for ${JSON.stringify(label)}`
       );
     }
   });
 
   it('falls back for git-describe stamps from non-tag CI builds', () => {
-    // build-push-deploy.yml uses `git describe --tags --always --dirty` for
+    // the old front-end repo's CI used `git describe --tags --always --dirty` for
     // every push that is not a tag, so :latest and :next carry this shape.
     assert.equal(
-      releaseHref('obol-stack-front-end', 'v0.1.28-rc3-14-gabc1234'),
-      'https://github.com/ObolNetwork/obol-stack-front-end/releases'
+      releaseHref('obol-stack', 'v0.1.28-rc3-14-gabc1234'),
+      'https://github.com/ObolNetwork/obol-stack/releases'
     );
     assert.equal(isReleaseTag('v0.1.28-rc3-14-gabc1234'), false);
     assert.equal(isReleaseTag('v0.1.28-rc3'), true);

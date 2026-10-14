@@ -167,14 +167,11 @@ function displayInstanceName(instance: AgentInstance): string {
   if (instance.runtime === 'hermes' && instance.id === 'obol-agent') {
     return 'Stack agent';
   }
-  if (instance.runtime === 'openclaw' && instance.id === 'default') {
-    return 'OpenClaw';
-  }
   return instance.id;
 }
 
 function runtimeLabel(instance: AgentInstance): string {
-  return instance.runtime === 'hermes' ? 'Hermes' : 'OpenClaw';
+  return instance.runtime === 'hermes' ? 'Hermes' : 'Agent';
 }
 
 export function AgentChatSidebar({

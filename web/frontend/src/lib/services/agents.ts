@@ -5,7 +5,7 @@ import type {
   AgentInstanceHealth,
   AgentRuntime,
 } from '@/types/agent';
-import type { WalletMetadata } from '@/types/openclaw';
+import type { WalletMetadata } from '@/types/wallet';
 import { config } from '@/lib/config/environment';
 import {
   DEFAULT_AGENT_ID,
@@ -28,20 +28,7 @@ const RUNTIME_CONFIG = {
     secretKey: 'API_SERVER_KEY',
     port: 8642,
   },
-  openclaw: {
-    namespacePrefix: 'openclaw-',
-    serviceName: 'openclaw',
-    configMapName: 'openclaw-config',
-    secretName: '',
-    secretKey: 'OPENCLAW_GATEWAY_TOKEN',
-    port: 18789,
-  },
 } as const;
-
-const RUNTIME_ORDER: Record<AgentRuntime, number> = {
-  hermes: 0,
-  openclaw: 1,
-};
 
 type RuntimeDescriptor = (typeof RUNTIME_CONFIG)[AgentRuntime];
 
@@ -64,9 +51,6 @@ export class AgentClient {
     if (namespace.startsWith(RUNTIME_CONFIG.hermes.namespacePrefix)) {
       return 'hermes';
     }
-    if (namespace.startsWith(RUNTIME_CONFIG.openclaw.namespacePrefix)) {
-      return 'openclaw';
-    }
     return null;
   }
 
@@ -86,14 +70,11 @@ export class AgentClient {
       runtime,
       namespace,
       hostname: `${namespace}.${config.agentIngressBaseDomain}`,
-      dashboardHostname:
-        runtime === 'hermes'
-          ? getAgentDashboardHostname(
-              id,
-              runtime,
-              config.agentIngressBaseDomain
-            )
-          : undefined,
+      dashboardHostname: getAgentDashboardHostname(
+        id,
+        runtime,
+        config.agentIngressBaseDomain
+      ),
       status: 'unknown',
     };
   }
@@ -138,14 +119,11 @@ export class AgentClient {
     );
   }
 
-  /** Master Hermes (`hermes-<id>`), OpenClaw (`openclaw-<id>`), or sub-agent (`agent-<id>`). */
+  /** Master Hermes (`hermes-<id>`) or sub-agent (`agent-<id>`). */
   public resolveInstance(
-    runtime: AgentRuntime,
+    _runtime: AgentRuntime,
     id: string
   ): AgentInstance | null {
-    if (runtime === 'openclaw') {
-      return this.instanceFromNamespace(`openclaw-${id}`);
-    }
     if (id === DEFAULT_AGENT_ID) {
       return this.instanceFromNamespace(`hermes-${id}`);
     }
@@ -190,11 +168,6 @@ export class AgentClient {
         b.runtime === 'hermes' && b.id === DEFAULT_AGENT_ID ? -1 : 0;
       if (aDefault !== bDefault) {
         return aDefault - bDefault;
-      }
-
-      const runtimeCmp = RUNTIME_ORDER[a.runtime] - RUNTIME_ORDER[b.runtime];
-      if (runtimeCmp !== 0) {
-        return runtimeCmp;
       }
 
       return a.id.localeCompare(b.id);
@@ -302,9 +275,6 @@ export class AgentClient {
   public async getGatewayToken(
     instance: AgentInstance
   ): Promise<string | null> {
-    if (instance.runtime === 'openclaw') {
-      return this.getOpenClawGatewayToken(instance.namespace);
-    }
     return this.getHermesAPIServerKey(instance.namespace);
   }
 
@@ -384,6 +354,23 @@ export class AgentClient {
     }
   }
 
+  /**
+   * Running Obol CLI version from obol-stack-config.
+   * Written by the CLI during `obol stack up` / tunnel sync.
+   */
+  public async getObolStackVersion(): Promise<string | null> {
+    try {
+      const response = await this.coreV1Api.readNamespacedConfigMap({
+        name: 'obol-stack-config',
+        namespace: 'obol-frontend',
+      });
+      const version = response.data?.['obolVersion']?.trim();
+      return version || null;
+    } catch {
+      return null;
+    }
+  }
+
   private async checkHealth(instance: AgentInstance): Promise<boolean> {
     if (instance.isSubAgent) {
       const podInfo = await this.getPodInfo(instance);
@@ -400,32 +387,6 @@ export class AgentClient {
       return api.reachable;
     } catch {
       return false;
-    }
-  }
-
-  private async getOpenClawGatewayToken(
-    namespace: string
-  ): Promise<string | null> {
-    try {
-      const response = await this.coreV1Api.listNamespacedSecret({
-        namespace,
-        labelSelector: 'app.kubernetes.io/name=openclaw',
-      });
-
-      if (!response.items || response.items.length === 0) {
-        return null;
-      }
-
-      const secret = response.items[0];
-      const tokenBase64 = secret.data?.[RUNTIME_CONFIG.openclaw.secretKey];
-      if (!tokenBase64) {
-        return null;
-      }
-
-      return Buffer.from(tokenBase64, 'base64').toString('utf-8');
-    } catch (error) {
-      console.error(`Failed to get OpenClaw token for ${namespace}:`, error);
-      return null;
     }
   }
 
@@ -459,25 +420,6 @@ export class AgentClient {
         name: this.descriptor(instance.runtime).configMapName,
         namespace: instance.namespace,
       });
-
-      if (instance.runtime === 'openclaw') {
-        const configData = response.data?.['openclaw.json'];
-        if (!configData) {
-          return {};
-        }
-
-        const parsed = JSON.parse(configData);
-        const model = parsed?.agents?.defaults?.model?.primary;
-        const providers = parsed?.models?.providers
-          ? Object.keys(parsed.models.providers)
-          : [];
-
-        return {
-          model,
-          provider:
-            providers.length === 1 ? providers[0] : inferProvider(model ?? ''),
-        };
-      }
 
       const configData = response.data?.['config.yaml'];
       if (!configData) {

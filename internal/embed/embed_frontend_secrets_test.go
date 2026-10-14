@@ -36,7 +36,15 @@ func renderHelmfileGotmpl(t *testing.T, path string) (string, map[string]any) {
 			}
 			return v
 		},
-		"quote":  func(v any) string { return fmt.Sprintf("%q", fmt.Sprint(v)) },
+		"quote": func(v any) string { return fmt.Sprintf("%q", fmt.Sprint(v)) },
+		// sprig splitn: map of _0.._n-1.
+		"splitn": func(sep string, n int, s string) map[string]string {
+			out := map[string]string{}
+			for i, part := range strings.SplitN(s, sep, n) {
+				out[fmt.Sprintf("_%d", i)] = part
+			}
+			return out
+		},
 		"toYaml": func(v any) string { b, _ := yaml.Marshal(v); return strings.TrimSuffix(string(b), "\n") },
 		"nindent": func(n int, s string) string {
 			pad := strings.Repeat(" ", n)

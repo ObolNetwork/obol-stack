@@ -5,13 +5,15 @@
 # The WalletConnect project ID must be present at *build time* because
 # NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID is inlined into the Next.js client
 # bundle. This script owns the resolution + --build-arg wiring so that callers
-# (local dev, obol-stack's justfile, CI) don't have to reimplement it.
+# (`just dev-frontend` in the repo root, ad-hoc local builds) don't have to
+# reimplement it. `obol stack up` (internal/stack frontendBuildArgs) mirrors the
+# same resolution; docker-publish-frontend.yml passes the repo secret.
 #
 # Resolution order for the WalletConnect project ID:
 #   1. $NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID
 #   2. $WALLET_CONNECT_PROJECT_ID
-#   3. <repo>/.env.local  (NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID= or
-#                          WALLET_CONNECT_PROJECT_ID=)
+#   3. web/frontend/.env.local  (NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID= or
+#                               WALLET_CONNECT_PROJECT_ID=)
 # If none resolve, the image still builds but the wallet UI is disabled
 # (see isWalletConnectConfigured() in src/lib/config/wagmi.ts).
 #
@@ -21,8 +23,8 @@
 #
 # Examples:
 #   scripts/build-frontend-image.sh
-#   scripts/build-frontend-image.sh --tag obolnetwork/obol-stack-front-end:dev
-#   scripts/build-frontend-image.sh --tag localhost:54103/obol-stack-front-end:dev --no-cache --push
+#   scripts/build-frontend-image.sh --tag ghcr.io/obolnetwork/obol-stack-front-end:dev
+#   scripts/build-frontend-image.sh --tag ghcr.io/obolnetwork/obol-stack-front-end:dev --no-cache
 
 set -euo pipefail
 

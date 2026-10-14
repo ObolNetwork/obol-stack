@@ -7,7 +7,7 @@ import type {
   AgentRuntime,
 } from '@/types/agent';
 import type { AgentRegistrationRef } from '@/lib/services/agent-registration';
-import type { WalletMetadata } from '@/types/openclaw';
+import type { WalletMetadata } from '@/types/wallet';
 
 export function useAgentInstances() {
   const [instances, setInstances] = useState<AgentInstance[]>([]);
@@ -221,5 +221,5 @@ export function useAgentRegistration() {
 export function isSupportedAgentRuntime(
   runtime: string | null
 ): runtime is AgentRuntime {
-  return runtime === 'hermes' || runtime === 'openclaw';
+  return runtime === 'hermes';
 }
