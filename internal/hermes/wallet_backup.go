@@ -44,36 +44,11 @@ var readHostKeystoreFileFn = os.ReadFile
 // wallet. Instance names and namespace scoping are not part of the backup
 // payload, so it restores into any instance (also v0.15 OpenClaw backups).
 func BackupWalletCmd(cfg *config.Config, id string, opts BackupWalletOptions, u *ui.UI) error {
-	deployDir := DeploymentPath(cfg, id)
-
-	wallet, err := ReadWalletMetadata(deployDir)
+	backup, _, err := BuildHostWalletBackup(cfg, HermesHostWallet(cfg, id))
 	if err != nil {
-		return fmt.Errorf("no wallet found for instance %q: %w", id, err)
+		return err
 	}
-
-	keystorePath := filepath.Join(agentruntime.KeystoreVolumePath(cfg, agentruntime.Hermes, id), wallet.KeystoreUUID+".json")
-	keystoreData, err := readKeystoreFileForBackup(cfg, keystorePath)
-	if err != nil {
-		return fmt.Errorf("failed to read keystore file: %w", err)
-	}
-
-	password, err := walletbackup.ReadKeystorePassword(deployDir)
-	if err != nil {
-		return fmt.Errorf("failed to read keystore password: %w", err)
-	}
-
-	backup := &walletbackup.File{
-		Version:  walletbackup.Version,
-		Instance: id,
-		Wallets: []walletbackup.Wallet{{
-			Address:          wallet.Address,
-			PublicKey:        wallet.PublicKey,
-			KeystoreUUID:     wallet.KeystoreUUID,
-			CreatedAt:        wallet.CreatedAt,
-			Keystore:         json.RawMessage(keystoreData),
-			KeystorePassword: password,
-		}},
-	}
+	wallet := backup.Wallets[0]
 
 	passphrase, err := walletbackup.PromptPassphrase(opts.Passphrase, opts.HasPassFlag, u)
 	if err != nil {
@@ -209,22 +184,6 @@ func decodeHermesWalletRestoreInput(raw []byte, opts RestoreWalletOptions, id st
 		}
 	}
 	return backupFromRawV3Keystore(raw, keystorePassword, id)
-}
-
-func readKeystoreFileForBackup(cfg *config.Config, keystorePath string) ([]byte, error) {
-	data, err := readHostKeystoreFileFn(keystorePath)
-	if err == nil {
-		return data, nil
-	}
-	if !os.IsPermission(err) || !isK3dBackend(cfg) {
-		return nil, err
-	}
-
-	data, fallbackErr := k3dNodeExecOutputFn(cfg, keystorePath, "cat {}")
-	if fallbackErr != nil {
-		return nil, fmt.Errorf("%w; k3d node read fallback failed: %v", err, fallbackErr)
-	}
-	return data, nil
 }
 
 func isK3dBackend(cfg *config.Config) bool {

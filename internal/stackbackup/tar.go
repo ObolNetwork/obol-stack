@@ -43,6 +43,13 @@ func (w *archiveWriter) Close() error {
 	return errors.Join(terr, gerr, ferr)
 }
 
+// skippedEntry is a source path addTree left out of the archive, with the
+// human-readable reason.
+type skippedEntry struct {
+	path   string
+	reason string
+}
+
 // addBytes writes a single regular file entry.
 func (w *archiveWriter) addBytes(name string, data []byte, mode int64) error {
 	hdr := &tar.Header{
@@ -60,12 +67,12 @@ func (w *archiveWriter) addBytes(name string, data []byte, mode int64) error {
 
 // addTree walks srcDir and adds every entry under prefix (e.g. "config").
 // skip filters by srcDir-relative path; symlinks are preserved as symlinks;
-// irregular files (sockets, devices) and unreadable entries are skipped with
-// a warning rather than failing the whole export.
-func (w *archiveWriter) addTree(srcDir, prefix string, skip func(rel string) bool) (warnings []string, err error) {
+// irregular files (sockets, devices) and unreadable entries are skipped and
+// returned (for the caller to report) rather than failing the whole export.
+func (w *archiveWriter) addTree(srcDir, prefix string, skip func(rel string) bool) (skipped []skippedEntry, err error) {
 	err = filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			warnings = append(warnings, fmt.Sprintf("skipping %s: %v", path, walkErr))
+			skipped = append(skipped, skippedEntry{path, fmt.Sprintf("skipping %s: %v", path, walkErr)})
 			if d != nil && d.IsDir() {
 				return fs.SkipDir
 			}
@@ -87,7 +94,7 @@ func (w *archiveWriter) addTree(srcDir, prefix string, skip func(rel string) boo
 
 		info, infoErr := d.Info()
 		if infoErr != nil {
-			warnings = append(warnings, fmt.Sprintf("skipping %s: %v", path, infoErr))
+			skipped = append(skipped, skippedEntry{path, fmt.Sprintf("skipping %s: %v", path, infoErr)})
 			return nil
 		}
 
@@ -100,7 +107,7 @@ func (w *archiveWriter) addTree(srcDir, prefix string, skip func(rel string) boo
 		case info.Mode()&os.ModeSymlink != 0:
 			target, linkErr := os.Readlink(path)
 			if linkErr != nil {
-				warnings = append(warnings, fmt.Sprintf("skipping symlink %s: %v", path, linkErr))
+				skipped = append(skipped, skippedEntry{path, fmt.Sprintf("skipping symlink %s: %v", path, linkErr)})
 				return nil
 			}
 			hdr, _ := tar.FileInfoHeader(info, target)
@@ -109,7 +116,7 @@ func (w *archiveWriter) addTree(srcDir, prefix string, skip func(rel string) boo
 		case info.Mode().IsRegular():
 			f, openErr := os.Open(path)
 			if openErr != nil {
-				warnings = append(warnings, fmt.Sprintf("skipping %s: %v", path, openErr))
+				skipped = append(skipped, skippedEntry{path, fmt.Sprintf("skipping %s: %v", path, openErr)})
 				return nil
 			}
 			defer f.Close()
@@ -121,11 +128,11 @@ func (w *archiveWriter) addTree(srcDir, prefix string, skip func(rel string) boo
 			_, copyErr := io.Copy(w.tw, f)
 			return copyErr
 		default:
-			warnings = append(warnings, fmt.Sprintf("skipping irregular file %s (%s)", path, info.Mode()))
+			skipped = append(skipped, skippedEntry{path, fmt.Sprintf("skipping irregular file %s (%s)", path, info.Mode())})
 			return nil
 		}
 	})
-	return warnings, err
+	return skipped, err
 }
 
 // readArchiveManifest opens the archive and returns its manifest without

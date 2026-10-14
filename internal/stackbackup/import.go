@@ -26,6 +26,11 @@ type ImportOptions struct {
 	SkipCluster bool
 	ClusterOnly bool
 	SkipSync    bool
+	// Passphrase decrypts the archive's wallets/ backups when a keystore
+	// must be re-materialised from them. HasPassFlag means it was given
+	// (even empty); otherwise a terminal is prompted when needed.
+	Passphrase  string
+	HasPassFlag bool
 	// StackUp brings the restored stack's cluster up with the full
 	// `obol stack up` path (state replay included). Injected by the CLI —
 	// internal/stack imports this package. When nil, Import prints the
@@ -88,16 +93,33 @@ func Import(cfg *config.Config, opts ImportOptions, u *ui.UI) error {
 			u.Infof("Re-pointed %d config file(s) from %s to this host's paths", n, manifest.ConfigDir)
 		}
 		u.Success("Host state restored (config + agent data)")
-		if w := manifest.component("wallets"); w != nil && w.Included {
-			u.Detail("Wallets", "restored inside agent data dirs; portable copies remain in the archive under wallets/")
-		}
 	} else if err := extractScratchOnly(opts.Input, scratch); err != nil {
 		return err
 	}
 
+	// Every mode: a keystore the data/ copy did not bring back (export could
+	// not read the host dir) is re-materialised from wallets/ before any
+	// remote-signer starts on it.
+	wallets := restoreWalletKeystores(cfg, filepath.Join(scratch, walletsDir), opts, u)
+	printWalletRestores(wallets, u)
+
 	if opts.SkipCluster {
 		u.Info("Skipping cluster restore (--skip-cluster)")
+		if hasWrittenWallet(wallets) {
+			u.Print("  The remote-signer picks restored keystores up when the stack starts ('obol stack up').")
+		}
 		return nil
+	}
+
+	// Remember whether this import brought the cluster up: a remote-signer
+	// that was already running must be restarted to load a keystore written
+	// under it.
+	startedHere := false
+	if up := opts.StackUp; up != nil {
+		opts.StackUp = func() error {
+			startedHere = true
+			return up()
+		}
 	}
 
 	clusterDir := filepath.Join(scratch, "cluster")
@@ -123,6 +145,10 @@ func Import(cfg *config.Config, opts ImportOptions, u *ui.UI) error {
 			// release exists.
 			_ = agentsync.SyncInstances(cfg, u, agentsync.Options{})
 		}
+	}
+
+	if !startedHere {
+		restartSignersForRestoredKeystores(cfg, wallets, u)
 	}
 
 	u.Blank()

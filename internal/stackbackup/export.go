@@ -10,7 +10,6 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentidentity"
 	"github.com/ObolNetwork/obol-stack/internal/config"
-	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
@@ -45,9 +44,9 @@ func Export(cfg *config.Config, opts ExportOptions, u *ui.UI) (string, error) {
 
 	// Resolve the wallet passphrase up front so the interactive prompt does
 	// not interrupt long-running copy work.
-	hermesWallets := hermes.FindInstancesWithWallets(cfg)
+	wallets := hostWallets(cfg)
 	passphrase := opts.Passphrase
-	if len(hermesWallets) > 0 && !opts.HasPassFlag {
+	if len(wallets) > 0 && !opts.HasPassFlag {
 		var err error
 		passphrase, err = walletbackup.PromptPassphrase(opts.Passphrase, opts.HasPassFlag, u)
 		if err != nil {
@@ -82,11 +81,17 @@ func Export(cfg *config.Config, opts ExportOptions, u *ui.UI) (string, error) {
 	}
 
 	// Component: wallets (portable, individually encryptable).
-	walletNotes := exportWallets(cfg, filepath.Join(staging, "wallets"), hermesWallets, passphrase, u)
+	walletResults := exportWallets(cfg, filepath.Join(staging, walletsDir), wallets, passphrase, u)
+	walletsCaptured := 0
+	for _, r := range walletResults {
+		if r.err == nil {
+			walletsCaptured++
+		}
+	}
 	manifest.Components = append(manifest.Components, Component{
 		Name:     "wallets",
-		Included: len(walletNotes) > 0,
-		Notes:    walletNotes,
+		Included: walletsCaptured > 0,
+		Notes:    walletNotes(walletResults),
 	})
 
 	// Component: cluster resources (etcd drift).
@@ -141,28 +146,31 @@ func Export(cfg *config.Config, opts ExportOptions, u *ui.UI) (string, error) {
 		if err := w.addBytes(ManifestFileName, manifestJSON, 0o600); err != nil {
 			return err
 		}
-		for _, sub := range []string{"wallets", "cluster"} {
+		for _, sub := range []string{walletsDir, "cluster"} {
 			dir := filepath.Join(staging, sub)
 			if _, err := os.Stat(dir); err != nil {
 				continue
 			}
-			if warns, err := w.addTree(dir, sub, nil); err != nil {
-				return err
-			} else {
-				warnAll(u, warns)
-			}
-		}
-		warns, err := w.addTree(cfg.ConfigDir, "config", skipConfigEntry)
-		if err != nil {
-			return err
-		}
-		warnAll(u, warns)
-		for _, ns := range dataNamespaces {
-			warns, err := w.addTree(filepath.Join(cfg.DataDir, ns), "data/"+ns, nil)
+			skipped, err := w.addTree(dir, sub, nil)
 			if err != nil {
 				return err
 			}
-			warnAll(u, warns)
+			warnSkipped(u, skipped, nil)
+		}
+		skipped, err := w.addTree(cfg.ConfigDir, "config", skipConfigEntry)
+		if err != nil {
+			return err
+		}
+		warnSkipped(u, skipped, nil)
+		for _, ns := range dataNamespaces {
+			skipped, err := w.addTree(filepath.Join(cfg.DataDir, ns), "data/"+ns, nil)
+			if err != nil {
+				return err
+			}
+			// An unreadable keystore dir of a wallet captured under
+			// wallets/ is not a lost key: the wallet summary below says
+			// how it was captured instead.
+			warnSkipped(u, skipped, walletResults)
 		}
 		return nil
 	}()
@@ -188,50 +196,51 @@ func Export(cfg *config.Config, opts ExportOptions, u *ui.UI) (string, error) {
 		}
 		u.Detail(c.Name, status)
 	}
-	if passphrase == "" && len(walletNotes) > 0 {
+	printWalletExports(walletResults, u)
+	if !clusterComponent.Included && hasSubAgentData(dataNamespaces) {
+		u.Warn("Sub-agent wallets (agent-*) live only in cluster Secrets and are NOT in this archive (cluster resources were not captured)")
+	}
+	if passphrase == "" && walletsCaptured > 0 {
 		u.Warn("Wallet backups inside the archive are UNENCRYPTED")
 	}
 	u.Warn("Archive contains keystore passwords and provider API keys — store securely")
 	return outputPath, nil
 }
 
-func warnAll(u *ui.UI, warns []string) {
-	for _, w := range warns {
-		u.Warnf("%s", w)
+// warnSkipped reports entries addTree left out, except those inside the
+// keystore dir of a wallet the wallets/ component captured.
+func warnSkipped(u *ui.UI, skipped []skippedEntry, wallets []walletExport) {
+	for _, s := range skipped {
+		if coveredByWalletBackup(s.path, wallets) {
+			continue
+		}
+		u.Warnf("%s", s.reason)
 	}
 }
 
-// exportWallets writes walletbackup-format files for every instance with a
-// wallet. Failures are recorded as notes, not fatal: the same keys also ride
-// along inside the data/ component's keystore dirs.
-func exportWallets(cfg *config.Config, destDir string, hermesIDs []string, passphrase string, u *ui.UI) []string {
-	if len(hermesIDs) == 0 {
-		return nil
+// printWalletExports prints one line per host wallet saying where its keys
+// are in the archive, and warns loudly about wallets that are not.
+func printWalletExports(results []walletExport, u *ui.UI) {
+	var missing []string
+	for _, r := range results {
+		if r.err != nil {
+			missing = append(missing, r.wallet.Namespace)
+			continue
+		}
+		u.Detail("Wallet "+r.wallet.Namespace, r.summary())
 	}
-	if err := os.MkdirAll(destDir, 0o700); err != nil {
-		u.Warnf("Could not create wallet staging dir: %v", err)
-		return nil
+	if len(missing) > 0 {
+		u.Warnf("Wallet(s) NOT in this archive: %s — it is not a complete backup of them; keep their config/data dirs until they are exported", strings.Join(missing, ", "))
 	}
-	ext := "json"
-	if passphrase != "" {
-		ext = "enc"
-	}
-	var notes []string
-	for _, id := range hermesIDs {
-		out := filepath.Join(destDir, fmt.Sprintf("hermes-%s.%s", id, ext))
-		err := hermes.BackupWalletCmd(cfg, id, hermes.BackupWalletOptions{
-			Output: out, Passphrase: passphrase, HasPassFlag: true,
-		}, u)
-		notes = append(notes, walletNote("hermes", id, err))
-	}
-	return notes
 }
 
-func walletNote(runtime, id string, err error) string {
-	if err != nil {
-		return fmt.Sprintf("%s/%s: FAILED (%v)", runtime, id, err)
+func hasSubAgentData(namespaces []string) bool {
+	for _, ns := range namespaces {
+		if strings.HasPrefix(ns, "agent-") {
+			return true
+		}
 	}
-	return fmt.Sprintf("%s/%s", runtime, id)
+	return false
 }
 
 // quiescedDeploy remembers a deployment's replica count so it can be

@@ -19,6 +19,11 @@ sessions, remote-signer keystores), encrypted wallet backups, and the
 cluster resources that only live in etcd (Agent CRs, ServiceOffers,
 LiteLLM/eRPC configuration).
 
+Every host wallet lands in wallets/<namespace>.json|.enc. When the keystore
+dir is not readable by you (on Linux the remote-signer pod owns it), it is
+read through the k3d node (cluster must be running) and wallets/ is its only
+copy; a wallet that cannot be read at all is reported as NOT in the archive.
+
 The archive contains keystore passwords and provider API keys — store it
 like a secret. Network chain data is excluded (re-syncable).`,
 		Flags: []cli.Flag{
@@ -61,7 +66,13 @@ existing agent data (keystores, agent state) left in the data dir, e.g. after
 'obol stack purge', is not overwritten: back it up first with 'obol agent
 wallet backup', or pass --force (a terminal asks instead). A pre-import
 cluster that holds no agents or offers is removed so the restored stack can
-claim the ingress ports; one that does is never deleted.`,
+claim the ingress ports; one that does is never deleted.
+
+In every mode (also --skip-cluster and --cluster-only), a remote-signer
+keystore the archive's data/ copy did not bring back (export could not read
+the host keystore dir) is restored from the archive's wallets/ backup, after
+checking it decrypts to the recorded address. Encrypted backups need
+--passphrase (a terminal is prompted instead).`,
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  "force",
@@ -79,6 +90,10 @@ claim the ingress ports; one that does is never deleted.`,
 				Name:  "skip-sync",
 				Usage: "Do not re-sync agent instances after applying cluster resources",
 			},
+			&cli.StringFlag{
+				Name:  "passphrase",
+				Usage: "Wallet backup passphrase given to 'obol stack export' (needed only when a keystore is restored from the archive's wallets/)",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 1 {
@@ -91,6 +106,8 @@ claim the ingress ports; one that does is never deleted.`,
 				SkipCluster: cmd.Bool("skip-cluster"),
 				ClusterOnly: cmd.Bool("cluster-only"),
 				SkipSync:    cmd.Bool("skip-sync"),
+				Passphrase:  cmd.String("passphrase"),
+				HasPassFlag: cmd.IsSet("passphrase"),
 				StackUp:     func() error { return runStackUp(ctx, cfg, u, false, false) },
 			}, u)
 		},
