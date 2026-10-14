@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/network"
@@ -41,11 +42,24 @@ func TestSelectDeployments(t *testing.T) {
 }
 
 func TestNetworkStatusFormatting(t *testing.T) {
-	if got := erpcPodLine("erpc-7c9cb85d44-5wbwt   Running   true   0", false); got != "pod Running · ready" {
+	pods := parseERPCPods("erpc-7c9cb85d44-5wbwt   Running   true   0\nerpc-7c9cb85d44-x2k9q   Running   false   3\n")
+	want := []networkERPCPod{
+		{Name: "erpc-7c9cb85d44-5wbwt", Phase: "Running", Ready: true, Restarts: 0},
+		{Name: "erpc-7c9cb85d44-x2k9q", Phase: "Running", Ready: false, Restarts: 3},
+	}
+	if !reflect.DeepEqual(pods, want) {
+		t.Fatalf("parseERPCPods = %+v", pods)
+	}
+
+	if got := parseERPCPods(""); got == nil || len(got) != 0 {
+		t.Errorf("parseERPCPods(\"\") = %#v, want an empty non-nil slice (JSON [])", got)
+	}
+
+	if got := erpcPodLine(pods[0], false); got != "pod Running · ready" {
 		t.Errorf("erpcPodLine = %q", got)
 	}
 
-	if got := erpcPodLine("erpc-7c9cb85d44-5wbwt   Running   false   3", true); got != "pod Running · not ready · 3 restarts (erpc-7c9cb85d44-5wbwt)" {
+	if got := erpcPodLine(pods[1], true); got != "pod Running · not ready · 3 restarts (erpc-7c9cb85d44-x2k9q)" {
 		t.Errorf("erpcPodLine verbose = %q", got)
 	}
 

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -536,8 +537,37 @@ type networkStatusResult struct {
 }
 
 type networkERPCStatus struct {
-	Pod       string                  `json:"pod"`
+	Pods      []networkERPCPod        `json:"pods"`
 	Upstreams []networkERPCChainCount `json:"upstreams"`
+}
+
+type networkERPCPod struct {
+	Name     string `json:"name"`
+	Phase    string `json:"phase"`
+	Ready    bool   `json:"ready"`
+	Restarts int    `json:"restarts"`
+}
+
+// parseERPCPods reads the NAME STATUS READY RESTARTS rows from
+// network.GetERPCStatus. Malformed rows are skipped.
+func parseERPCPods(raw string) []networkERPCPod {
+	pods := []networkERPCPod{}
+
+	for line := range strings.SplitSeq(raw, "\n") {
+		f := strings.Fields(line)
+		if len(f) != 4 {
+			continue
+		}
+
+		restarts, err := strconv.Atoi(f[3])
+		if err != nil {
+			continue
+		}
+
+		pods = append(pods, networkERPCPod{Name: f[0], Phase: f[1], Ready: f[2] == "true", Restarts: restarts})
+	}
+
+	return pods
 }
 
 type networkERPCChainCount struct {
@@ -581,7 +611,7 @@ Examples:
 			}
 
 			result := networkStatusResult{
-				ERPC:  networkERPCStatus{Pod: strings.TrimSpace(podStatus), Upstreams: []networkERPCChainCount{}},
+				ERPC:  networkERPCStatus{Pods: parseERPCPods(podStatus), Upstreams: []networkERPCChainCount{}},
 				Nodes: []network.NodeStatus{},
 			}
 
@@ -666,9 +696,9 @@ func selectDeployments(all []network.Deployment, arg string) ([]network.Deployme
 
 func printERPCStatus(u *ui.UI, st networkERPCStatus) {
 	u.Bold("eRPC gateway")
-	if st.Pod != "" {
-		for line := range strings.SplitSeq(st.Pod, "\n") {
-			u.Printf("  %s", erpcPodLine(line, u.IsVerbose()))
+	if len(st.Pods) > 0 {
+		for _, p := range st.Pods {
+			u.Printf("  %s", erpcPodLine(p, u.IsVerbose()))
 		}
 	} else {
 		u.Dim("  (no pods found)")
@@ -684,27 +714,22 @@ func printERPCStatus(u *ui.UI, st networkERPCStatus) {
 	}
 }
 
-// erpcPodLine turns a NAME STATUS READY RESTARTS row from GetERPCStatus into
-// "pod Running · ready"; the pod name only shows under --verbose.
-func erpcPodLine(line string, verbose bool) string {
-	f := strings.Fields(line)
-	if len(f) != 4 {
-		return strings.TrimSpace(line)
-	}
-
-	out := "pod " + f[1]
-	if f[2] == "true" {
+// erpcPodLine renders an eRPC pod as "pod Running · ready"; the pod name
+// only shows under --verbose.
+func erpcPodLine(p networkERPCPod, verbose bool) string {
+	out := "pod " + p.Phase
+	if p.Ready {
 		out += " · ready"
 	} else {
 		out += " · not ready"
 	}
 
-	if f[3] != "0" {
-		out += " · " + f[3] + " restarts"
+	if p.Restarts > 0 {
+		out += fmt.Sprintf(" · %d restarts", p.Restarts)
 	}
 
 	if verbose {
-		out += " (" + f[0] + ")"
+		out += " (" + p.Name + ")"
 	}
 
 	return out
