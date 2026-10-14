@@ -395,20 +395,28 @@ func IsDefaultsPath(rel string) bool {
 // edits cannot be told apart from defaults, so every file counts.
 func handEdited(defaultsDir string) ([]string, error) {
 	files, haveManifest := readManifest(defaultsDir)
+	// Root-scoped so a symlink swapped in mid-walk can't redirect a read
+	// outside the defaults tree.
+	root, err := os.OpenRoot(defaultsDir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
 	var edited []string
-	err := filepath.WalkDir(defaultsDir, func(path string, d fs.DirEntry, walkErr error) error {
+	err = fs.WalkDir(root.FS(), ".", func(rel string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil || d.IsDir() {
 			return walkErr
 		}
-		rel, err := filepath.Rel(defaultsDir, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
 		if rel == manifestFile || rel == stampFile {
 			return nil
 		}
-		data, err := os.ReadFile(path)
+		// obol never writes symlinks, so one is a hand-edit (and may point
+		// outside the tree, where the root won't follow it).
+		if d.Type()&fs.ModeSymlink != 0 {
+			edited = append(edited, rel)
+			return nil
+		}
+		data, err := root.ReadFile(rel)
 		if err != nil {
 			return err
 		}

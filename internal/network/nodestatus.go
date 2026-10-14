@@ -260,7 +260,7 @@ func (p *NodeProber) ProbeAll(ctx context.Context, deployments []Deployment) []N
 // (--no-probe): stopped nodes still say so.
 func Unprobed(d Deployment, summary string) NodeStatus {
 	st := NodeStatus{Deployment: d, Pods: []PodStatus{}, Problems: []PodProblem{}}
-	if d.Type == "ethereum" {
+	if d.Type == TypeEthereum {
 		st.GrafanaURL = GrafanaNodeURL(d.Namespace)
 	}
 
@@ -280,7 +280,7 @@ func Unprobed(d Deployment, summary string) NodeStatus {
 func (p *NodeProber) Probe(ctx context.Context, d Deployment) NodeStatus {
 	st := NodeStatus{Deployment: d, Pods: []PodStatus{}, Problems: []PodProblem{}}
 
-	if d.Type != "ethereum" {
+	if d.Type != TypeEthereum {
 		st.Verdict = Verdict{State: VerdictNotSupported, Summary: fmt.Sprintf("live status not implemented for %s; see obol kubectl get pods -n %s", d.Type, d.Namespace)}
 		return st
 	}

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -289,8 +290,15 @@ func rewriteRestoredPaths(cfg *config.Config, m *Manifest) (int, error) {
 	if len(pairs) == 2 && len(pairs[1].from) > len(pairs[0].from) {
 		pairs[0], pairs[1] = pairs[1], pairs[0]
 	}
+	// Root-scoped so a symlink swapped in mid-walk can't redirect a
+	// read or write outside the config dir.
+	root, err := os.OpenRoot(cfg.ConfigDir)
+	if err != nil {
+		return 0, err
+	}
+	defer root.Close()
 	changed := 0
-	err := filepath.WalkDir(cfg.ConfigDir, func(path string, d os.DirEntry, err error) error {
+	err = fs.WalkDir(root.FS(), ".", func(rel string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !d.Type().IsRegular() {
 			return err
 		}
@@ -298,7 +306,7 @@ func rewriteRestoredPaths(cfg *config.Config, m *Manifest) (int, error) {
 		if err != nil || info.Size() > 4<<20 {
 			return err
 		}
-		data, err := os.ReadFile(path)
+		data, err := root.ReadFile(rel)
 		if err != nil {
 			return err
 		}
@@ -313,11 +321,11 @@ func rewriteRestoredPaths(cfg *config.Config, m *Manifest) (int, error) {
 			return nil
 		}
 		changed++
-		if err := os.WriteFile(path, []byte(out), info.Mode().Perm()); err != nil {
+		if err := root.WriteFile(rel, []byte(out), info.Mode().Perm()); err != nil {
 			return err
 		}
 		// A re-pointed default is still obol's own content, not a hand-edit.
-		defaults.RecordRewrite(cfg, path, data, []byte(out))
+		defaults.RecordRewrite(cfg, filepath.Join(cfg.ConfigDir, filepath.FromSlash(rel)), data, []byte(out))
 		return nil
 	})
 	return changed, err

@@ -19,6 +19,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// TypeEthereum is the network type (and embedded network directory) of a
+// local Ethereum node deployment, e.g. the "ethereum" in "ethereum/mainnet".
+const TypeEthereum = "ethereum"
+
 // memoryQuantity is a Kubernetes memory quantity as accepted for
 // --execution-memory / --consensus-memory (binary or decimal suffix).
 var memoryQuantity = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|k|K|M|G|T)?$`)
@@ -136,7 +140,7 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 	// reflect any picker choice so downstream code (preflight, YAML
 	// render) sees the final value.
 	var archiveScope ArchiveScope
-	if network == "ethereum" {
+	if network == TypeEthereum {
 		for _, flag := range []struct{ field, flag string }{{"ExecutionMemory", "execution-memory"}, {"ConsensusMemory", "consensus-memory"}} {
 			if v := templateData[flag.field]; v != "" && !memoryQuantity.MatchString(v) {
 				return fmt.Errorf("invalid --%s %q: want a Kubernetes memory quantity such as 8Gi or 16Gi", flag.flag, v)
@@ -158,7 +162,7 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 	// Disk-space preflight (currently only meaningful for ethereum). The
 	// check warns and prompts; in non-interactive mode (no TTY / JSON) it
 	// auto-continues so scripted installs don't deadlock.
-	if network == "ethereum" {
+	if network == TypeEthereum {
 		netValue := templateData["Network"]
 		modeValue := templateData["Mode"]
 		if modeValue == "" {
@@ -190,7 +194,7 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 	// Append the resolved archive scope as additional YAML so helmfile can
 	// translate it into per-client prune args. Kept separate from the
 	// template because it's computed by the CLI, not passed by the user.
-	if network == "ethereum" {
+	if network == TypeEthereum {
 		var sb strings.Builder
 		sb.Write(buf.Bytes())
 		appendArchiveScopeYAML(&sb, templateData["Network"], templateData["Mode"], templateData["ExecutionClient"], archiveScope)

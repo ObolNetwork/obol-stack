@@ -17,6 +17,10 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
+// deploymentArgsUsage is the ArgsUsage of network subcommands that take one
+// installed deployment.
+const deploymentArgsUsage = "[<network>/<id>]"
+
 // networkCommand returns the network management command group with dynamic subcommands
 func networkCommand(cfg *config.Config) *cli.Command {
 	// Build install subcommands dynamically from embedded networks
@@ -38,7 +42,7 @@ func networkCommand(cfg *config.Config) *cli.Command {
 			{
 				Name:      "sync",
 				Usage:     "Deploy or update a network deployment to the cluster",
-				ArgsUsage: "[<network>/<id>]",
+				ArgsUsage: deploymentArgsUsage,
 				Flags: []cli.Flag{
 					&cli.BoolFlag{
 						Name:    "all",
@@ -63,7 +67,7 @@ func networkCommand(cfg *config.Config) *cli.Command {
 			{
 				Name:      "delete",
 				Usage:     "Remove network deployment and clean up cluster resources",
-				ArgsUsage: "[<network>/<id>]",
+				ArgsUsage: deploymentArgsUsage,
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					identifier, _, err := network.ResolveInstance(cfg, cmd.Args().Slice())
 					if err != nil {
@@ -73,8 +77,8 @@ func networkCommand(cfg *config.Config) *cli.Command {
 					return network.Delete(cfg, getUI(cmd), identifier)
 				},
 			},
-			networkStopStartCommand(cfg, "stop"),
-			networkStopStartCommand(cfg, "start"),
+			networkStopStartCommand(cfg, verbStop),
+			networkStopStartCommand(cfg, verbStart),
 			networkAddCommand(cfg),
 			networkRemoveCommand(cfg),
 			networkStatusCommand(cfg),
@@ -82,6 +86,12 @@ func networkCommand(cfg *config.Config) *cli.Command {
 		},
 	}
 }
+
+// Verbs of networkStopStartCommand.
+const (
+	verbStop  = "stop"
+	verbStart = "start"
+)
 
 // networkStopStartCommand builds `network stop` / `network start`.
 func networkStopStartCommand(cfg *config.Config, verb string) *cli.Command {
@@ -98,7 +108,7 @@ obol stack up.
 Examples:
   obol network stop ethereum/mainnet
   obol network stop --all`
-	if verb == "start" {
+	if verb == verbStart {
 		run, usage, description = network.Start, "Start a stopped local node again (it resumes syncing where it stopped)",
 			`Clears the stopped record, scales the node's clients back to 1 replica (or
 deploys it if the cluster no longer has it) and registers it with eRPC
@@ -113,13 +123,13 @@ Examples:
 	return &cli.Command{
 		Name:        verb,
 		Usage:       usage,
-		ArgsUsage:   "[<network>/<id>]",
+		ArgsUsage:   deploymentArgsUsage,
 		Description: description,
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:    "all",
 				Aliases: []string{"a"},
-				Usage:   fmt.Sprintf("%s every installed ethereum deployment", capitalize(verb)),
+				Usage:   capitalize(verb) + " every installed ethereum deployment",
 			},
 		},
 		Action: func(_ context.Context, cmd *cli.Command) error {
@@ -129,7 +139,7 @@ Examples:
 				var errs []error
 				n := 0
 				for _, d := range network.InstalledDeployments(cfg) {
-					if d.Type != "ethereum" || (verb == "stop" && d.Stopped) || (verb == "start" && !d.Stopped) {
+					if d.Type != network.TypeEthereum || (verb == verbStop && d.Stopped) || (verb == verbStart && !d.Stopped) {
 						continue
 					}
 
@@ -640,7 +650,7 @@ func networkERPCCommand(cfg *config.Config) *cli.Command {
 				},
 			},
 			{
-				Name:  "status",
+				Name:  statusCommandName,
 				Usage: "Show the durable eRPC config on disk",
 				Action: func(_ context.Context, cmd *cli.Command) error {
 					u := getUI(cmd)

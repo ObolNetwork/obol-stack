@@ -12,6 +12,12 @@ const (
 	GlyphPending = "·"
 )
 
+// Status kinds shared by Paint and UI.Check.
+const (
+	kindWarn = "warn"
+	kindFail = "fail"
+)
+
 // Paint styles s for a status kind: "ok", "warn", "fail", "info", "dim",
 // "bold" or "accent". Unknown kinds return s unchanged. Use it to compose
 // lines that are written in one go (e.g. a redrawn --watch frame).
@@ -19,9 +25,9 @@ func Paint(kind, s string) string {
 	switch kind {
 	case "ok":
 		return successStyle.Render(s)
-	case "warn":
+	case kindWarn:
 		return warnStyle.Render(s)
-	case "fail":
+	case kindFail:
 		return errorStyle.Render(s)
 	case "info":
 		return infoStyle.Render(s)

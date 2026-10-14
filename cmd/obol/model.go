@@ -528,7 +528,7 @@ type modelStatusProvider struct {
 
 func modelStatusCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
-		Name:  "status",
+		Name:  statusCommandName,
 		Usage: "Show LiteLLM gateway provider status",
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)

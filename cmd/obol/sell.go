@@ -2238,7 +2238,7 @@ func sellListCommand(cfg *config.Config) *cli.Command {
 
 func sellStatusCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
-		Name:      "status",
+		Name:      statusCommandName,
 		Usage:     "Show the status of all services for sale or a specific service by name",
 		ArgsUsage: "[name]",
 		Flags: []cli.Flag{

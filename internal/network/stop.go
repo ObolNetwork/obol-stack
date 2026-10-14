@@ -6,12 +6,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
+	"github.com/ObolNetwork/obol-stack/internal/validate"
 )
 
 // Swappable for tests (stop/start talk to the cluster only through these).
@@ -39,7 +41,7 @@ var stoppedLine = regexp.MustCompile(`(?m)^stopped:.*$`)
 
 // stoppableTypes are the network types whose chart renders `stopped` as
 // replicas 0 (see internal/embed/networks/ethereum/helmfile.yaml.gotmpl).
-var stoppableTypes = map[string]bool{"ethereum": true}
+var stoppableTypes = map[string]bool{TypeEthereum: true}
 
 // Stop scales a deployment's node workloads to 0, keeping its PVCs, takes
 // its local upstream out of eRPC (traffic falls back to remote RPCs) and
@@ -162,7 +164,23 @@ func stoppableDeployment(cfg *config.Config, identifier string) (networkType, id
 		return "", "", "", fmt.Errorf("stop/start is supported for ethereum deployments only (got %s)", identifier)
 	}
 
-	valuesPath = filepath.Join(cfg.ConfigDir, "networks", networkType, id, "values.yaml")
+	// The id becomes a path component (and the <type>-<id> namespace): it
+	// must be a DNS label and name a deployment that is actually installed.
+	if err := validate.Name(id); err != nil {
+		return "", "", "", fmt.Errorf("invalid deployment %q: %w", identifier, err)
+	}
+
+	if !slices.Contains(ListDeployments(cfg), networkType+"/"+id) {
+		return "", "", "", fmt.Errorf("deployment %s not found", identifier)
+	}
+
+	networksDir := filepath.Join(cfg.ConfigDir, "networks")
+	valuesPath = filepath.Join(networksDir, networkType, id, "values.yaml")
+
+	if rel, err := filepath.Rel(networksDir, valuesPath); err != nil || !filepath.IsLocal(rel) {
+		return "", "", "", fmt.Errorf("invalid deployment %q", identifier)
+	}
+
 	if _, err := os.Stat(valuesPath); err != nil {
 		return "", "", "", fmt.Errorf("deployment %s not found (%s)", identifier, valuesPath)
 	}
@@ -234,7 +252,7 @@ func setValuesStopped(valuesPath string, stopped bool) (bool, error) {
 		return false, err
 	}
 
-	if err := os.WriteFile(valuesPath, []byte(content), info.Mode().Perm()); err != nil {
+	if err := os.WriteFile(valuesPath, []byte(content), info.Mode().Perm()); err != nil { //nolint:gosec // G703: stoppableDeployment validated the id and checked the path is an installed deployment under $CONFIG/networks
 		return false, fmt.Errorf("write %s: %w", valuesPath, err)
 	}
 

@@ -80,7 +80,7 @@ func ResumeInstalled(cfg *config.Config, u *ui.UI) error {
 		}
 		if health == helmcmd.ReleasesDeployed {
 			networkType, id, _ := strings.Cut(ident, "/")
-			if networkType != "ethereum" {
+			if networkType != TypeEthereum {
 				continue
 			}
 

@@ -1117,7 +1117,7 @@ func frontendBuildArgs(contextDir string) []string {
 	}
 	if id == "" {
 		if data, err := os.ReadFile(filepath.Join(contextDir, ".env.local")); err == nil {
-			for _, line := range strings.Split(string(data), "\n") {
+			for line := range strings.SplitSeq(string(data), "\n") {
 				key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
 				if ok && (key == "NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID" || key == "WALLET_CONNECT_PROJECT_ID") {
 					id = strings.Trim(strings.TrimSpace(value), `"'`)

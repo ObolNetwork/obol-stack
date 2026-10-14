@@ -211,6 +211,10 @@ func TestStop_RejectsUnsupported(t *testing.T) {
 	if err := Stop(cfg, u, "ethereum/nope"); err == nil {
 		t.Fatal("missing deployment accepted")
 	}
+
+	if err := Stop(cfg, u, "ethereum/../../escape"); err == nil || !strings.Contains(err.Error(), "invalid deployment") {
+		t.Fatalf("path-traversal id accepted: err = %v", err)
+	}
 }
 
 func TestResumeInstalled_LeavesStoppedNodesDown(t *testing.T) {

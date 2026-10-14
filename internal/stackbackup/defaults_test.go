@@ -71,30 +71,39 @@ func defaultsBackups(t *testing.T, cfg *config.Config) []string {
 }
 
 func setDefaultsTestEnv(t *testing.T) {
+	t.Helper()
 	t.Setenv("OBOL_SKIP_IMAGE_DIGEST", "true")
 	t.Setenv("OBOL_DEVELOPMENT", "")
 }
 
+// handEditedExport is an exported stack with one hand-edited default
+// (edited) and a pending new default (pending).
+type handEditedExport struct {
+	src                      *config.Config
+	archive, edited, pending string
+}
+
 // exportHandEditedStack renders a stack, hand-edits one default, leaves a
 // pending new default, and exports it.
-func exportHandEditedStack(t *testing.T) (src *config.Config, archive, edited, pending string) {
+func exportHandEditedStack(t *testing.T) handEditedExport {
 	t.Helper()
-	src = defaultsStack(t, "stack-a")
-	edited = readFile(t, defaultsFile(src, editedDefault)) + "\n# operator hand-edit\n"
+	src := defaultsStack(t, "stack-a")
+	edited := readFile(t, defaultsFile(src, editedDefault)) + "\n# operator hand-edit\n"
 	writeFile(t, defaultsFile(src, editedDefault), edited)
-	pending = "# newer shipped default\n"
+	pending := "# newer shipped default\n"
 	writeFile(t, filepath.Join(src.ConfigDir, "defaults.obol-new", filepath.FromSlash(editedDefault)), pending)
 
-	archive = filepath.Join(t.TempDir(), "backup.tar.gz")
+	archive := filepath.Join(t.TempDir(), "backup.tar.gz")
 	if _, err := Export(src, ExportOptions{Output: archive, HasPassFlag: true}, testUI()); err != nil {
 		t.Fatalf("Export: %v", err)
 	}
-	return src, archive, edited, pending
+	return handEditedExport{src: src, archive: archive, edited: edited, pending: pending}
 }
 
 func TestExportImport_DefaultsHandEditsSurvive(t *testing.T) {
 	setDefaultsTestEnv(t)
-	src, archive, edited, pending := exportHandEditedStack(t)
+	exp := exportHandEditedStack(t)
+	src, archive, edited, pending := exp.src, exp.archive, exp.edited, exp.pending
 
 	// Restore over a fresh `stack init` (pristine defaults, other stack ID).
 	dst := defaultsStack(t, "fresh-id")
@@ -135,7 +144,8 @@ func TestExportImport_DefaultsHandEditsSurvive(t *testing.T) {
 
 func TestImport_SetsAsideEditedLocalDefaults(t *testing.T) {
 	setDefaultsTestEnv(t)
-	_, archive, edited, _ := exportHandEditedStack(t)
+	exp := exportHandEditedStack(t)
+	archive, edited := exp.archive, exp.edited
 
 	dst := defaultsStack(t, "fresh-id")
 	localEdit := "# local edit that the import replaces\n"
@@ -166,7 +176,7 @@ func TestImport_SetsAsideEditedLocalDefaults(t *testing.T) {
 
 func TestImport_DefaultsRespectForceGate(t *testing.T) {
 	setDefaultsTestEnv(t)
-	_, archive, _, _ := exportHandEditedStack(t)
+	archive := exportHandEditedStack(t).archive
 
 	dst := defaultsStack(t, "fresh-id")
 	localEdit := "# local edit\n"

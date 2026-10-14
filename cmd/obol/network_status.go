@@ -23,6 +23,9 @@ import (
 	"golang.org/x/term"
 )
 
+// statusCommandName is the name of every "status" subcommand.
+const statusCommandName = "status"
+
 // exitUnhealthy is `network status`'s exit code when a selected node is
 // degraded, unreachable or not deployed.
 const exitUnhealthy = 3
@@ -32,9 +35,9 @@ const statusBudget = 20 * time.Second
 
 func networkStatusCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
-		Name:      "status",
+		Name:      statusCommandName,
 		Usage:     "Show the RPC gateway and the live sync state of installed local nodes",
-		ArgsUsage: "[<network>/<id>]",
+		ArgsUsage: deploymentArgsUsage,
 		Description: `Shows the RPC gateway (eRPC): every chain it routes, its upstreams (local
 nodes marked and linked to their section) and which upstream answers right
 now (one eth_blockNumber per chain through eRPC, read from its
@@ -563,7 +566,7 @@ func nodeHeading(n network.NodeStatus) string {
 
 func renderNode(b *statusBuilder, n network.NodeStatus, chains []network.ERPCChain, o renderOptions) {
 	title := "Local node  " + nodeHeading(n)
-	if n.Type != "ethereum" {
+	if n.Type != network.TypeEthereum {
 		title = "Local deployment  " + nodeHeading(n)
 	}
 

@@ -466,7 +466,7 @@ func TestRateTracker(t *testing.T) {
 
 	node := func(exec, slot, target uint64) []NodeStatus {
 		return []NodeStatus{{
-			Deployment: Deployment{Namespace: "ethereum-mainnet"},
+			Namespace: "ethereum-mainnet",
 			Execution: &ExecutionStatus{Stages: []SyncStage{
 				{Name: "Headers", State: StageDone, Block: 1000000, Target: 1000000},
 				{Name: "Execution", State: StageCurrent, Block: exec, Target: 1000000},

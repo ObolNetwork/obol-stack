@@ -86,7 +86,7 @@ func readDeployment(cfg *config.Config, typ, id string) Deployment {
 	d.ConsensusClient = values.ConsensusClient
 	d.Mode = values.Mode
 	d.Stopped = values.Stopped
-	if typ == "ethereum" {
+	if typ == TypeEthereum {
 		if d.Mode == "" {
 			d.Mode = "full"
 		}

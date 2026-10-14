@@ -128,14 +128,14 @@ func (u *UI) Blank() {
 // shown even in quiet mode.
 func (u *UI) Check(kind, title string, width int, msg, fix string) {
 	symbol := map[string]string{
-		"ok":   successStyle.Render("✓"),
-		"info": dimStyle.Render("·"),
-		"skip": dimStyle.Render("–"),
-		"warn": warnStyle.Render("!"),
-		"fail": errorStyle.Render("✗"),
+		"ok":     successStyle.Render("✓"),
+		"info":   dimStyle.Render("·"),
+		"skip":   dimStyle.Render("–"),
+		kindWarn: warnStyle.Render("!"),
+		kindFail: errorStyle.Render("✗"),
 	}[kind]
 
-	if u.quiet && kind != "warn" && kind != "fail" {
+	if u.quiet && kind != kindWarn && kind != kindFail {
 		return
 	}
 

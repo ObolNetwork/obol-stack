@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -442,9 +443,9 @@ func servingUpstream(attempts []ERPCAttempt, single string) string {
 		return single
 	}
 
-	for i := len(attempts) - 1; i >= 0; i-- {
-		if attempts[i].Result == "success" {
-			return attempts[i].Upstream
+	for _, attempt := range slices.Backward(attempts) {
+		if attempt.Result == "success" {
+			return attempt.Upstream
 		}
 	}
 
@@ -467,7 +468,7 @@ func attemptSucceeded(attempts []ERPCAttempt, upstream string) bool {
 func linkNodesToERPC(nodes []NodeStatus, chains []ERPCChain) {
 	for i := range nodes {
 		n := &nodes[i]
-		if n.Type != "ethereum" {
+		if n.Type != TypeEthereum {
 			continue
 		}
 
