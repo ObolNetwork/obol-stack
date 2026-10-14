@@ -28,7 +28,7 @@
 #   url      {version} expands to the pinned version.
 tools:
   - name: kubectl
-    version: "1.36.5"
+    version: "1.37.1"
     obolupVar: KUBECTL_VERSION
     required: true
     compat: skew1
@@ -38,16 +38,16 @@ tools:
     assets:
       linux/amd64:
         url: https://dl.k8s.io/release/v{version}/bin/linux/amd64/kubectl
-        sha256: 33bc88a24c3b09cf55bfd59e6ca977881b61fc3f25ab65bc80c65b430248648e
+        sha256: 65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8
       linux/arm64:
         url: https://dl.k8s.io/release/v{version}/bin/linux/arm64/kubectl
-        sha256: 88fc1aca8fd0c1b44fe379f67c39bd6858bdfc50241dc55775f84d0f5b31da3a
+        sha256: ff749f4b78d9c4f1ec87307df9b50119ed819e2094aa9810cb9acffc3286c8c7
       darwin/amd64:
         url: https://dl.k8s.io/release/v{version}/bin/darwin/amd64/kubectl
-        sha256: 03338828c3ba74c37bf5964573fbfbab132eb5bb15da2f821c25a4043d6eb3f0
+        sha256: 6851381c486ff6edd691623e3d65c87cb9a5b02887ff8fbbb38d8a031b748387
       darwin/arm64:
         url: https://dl.k8s.io/release/v{version}/bin/darwin/arm64/kubectl
-        sha256: c5850a4a6b9469b26cce47c1ab456285f58e308283dcdf72b4ddda3db49b0ec0
+        sha256: fd65982c97ddad3106754b69ffa196d0e543aa591930ae52aed1adfb92f8c77f
 
   - name: helm
     version: "4.3.0"

@@ -524,7 +524,7 @@ Enforced by `.claude/settings.json` (Read/Edit/Write deny) + `.claude/hooks/secr
 
 **Docs**: `docs/guides/monetize-inference.md` (E2E monetize walkthrough), `README.md`.
 
-**Deps**: Docker 20.10.0+, Go 1.27+. Installed by `obol` (obolup.sh runs `obol upgrade --tools-only`; sha256-verified from `internal/tools/manifest.yaml`): kubectl 1.36.5, helm 4.3.0, k3d 5.9.0, helmfile 1.8.1, k9s 0.51.0, helm-diff 3.15.15, ollama 0.35.1. Key Go: `urfave/cli/v3`, `dustinkirkland/golang-petname`, `coinbase/x402/go` (v2 SDK, v1 wire format).
+**Deps**: Docker 20.10.0+, Go 1.27+. Installed by `obol` (obolup.sh runs `obol upgrade --tools-only`; sha256-verified from `internal/tools/manifest.yaml`): kubectl 1.37.1, helm 4.3.0, k3d 5.9.0, helmfile 1.8.1, k9s 0.51.0, helm-diff 3.15.15, ollama 0.40.4. Key Go: `urfave/cli/v3`, `dustinkirkland/golang-petname`, `coinbase/x402/go` (v2 SDK, v1 wire format).
 
 ## Related Codebases
 
