@@ -382,19 +382,16 @@ func TestStoreCreate_LegacyDescriptorWithoutResumeFields(t *testing.T) {
 
 // TestStoreGet_DescriptorWithRemovedIsolationFields pins that descriptors
 // written before the Secure Enclave / --vm / --tee modes were removed still
-// load (unknown fields are ignored), and that RemovedIsolationMode flags the
-// ones resume must not replay as a plain gateway. A bare enclave_tag (auto-
-// assigned on every macOS offer) is NOT an isolation mode: those offers keep
-// resuming as plain x402 gateways.
+// load (unknown fields are ignored). They predate standalone-only
+// `sell inference`, so resume treats them as legacy cluster-routed.
 func TestStoreGet_DescriptorWithRemovedIsolationFields(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		extra string
-		want  string
 	}{
-		{"enclave-tag-only", `"enclave_tag": "com.obol.inference.x"`, ""},
-		{"vm", `"enclave_tag": "com.obol.inference.x", "vm_mode": true, "vm_image": "ollama/ollama:latest", "vm_cpus": 4, "vm_memory_mb": 8192, "vm_host_port": 11435`, "vm"},
-		{"tee", `"tee_type": "snp", "model_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"`, "tee (snp)"},
+		{"enclave-tag-only", `"enclave_tag": "com.obol.inference.x"`},
+		{"vm", `"enclave_tag": "com.obol.inference.x", "vm_mode": true, "vm_image": "ollama/ollama:latest", "vm_cpus": 4, "vm_memory_mb": 8192, "vm_host_port": 11435`},
+		{"tee", `"tee_type": "snp", "model_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -418,8 +415,45 @@ func TestStoreGet_DescriptorWithRemovedIsolationFields(t *testing.T) {
 				t.Errorf("ModelName = %q, want qwen3.5:4b", got.ModelName)
 			}
 
-			if mode := got.RemovedIsolationMode(); mode != tc.want {
-				t.Errorf("RemovedIsolationMode() = %q, want %q", mode, tc.want)
+			if !got.LegacyClusterRouted() {
+				t.Error("descriptor without a mode must be LegacyClusterRouted")
+			}
+		})
+	}
+}
+
+// TestStoreGet_LegacyClusterRoutedDescriptor pins that descriptors written
+// before `sell inference` became standalone-only (no "mode", possibly the
+// old "no_payment_gate" field) still load and are flagged as legacy
+// cluster-routed, while descriptors marked standalone are not.
+func TestStoreGet_LegacyClusterRoutedDescriptor(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		extra string
+		want  bool
+	}{
+		{"no-mode", `"service_namespace": "llm"`, true},
+		{"old-no-payment-gate-field", `"no_payment_gate": true, "service_namespace": "llm"`, true},
+		{"standalone", `"mode": "standalone"`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			configDir := filepath.Join(dir, "inference", "x")
+			if err := os.MkdirAll(configDir, 0o700); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+
+			raw := `{"name": "x", "listen_addr": "0.0.0.0:8402", "model_name": "qwen3.5:4b", ` + tc.extra + `}`
+			if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(raw), 0o600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+
+			got, err := inference.NewStore(dir).Get("x")
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if got.LegacyClusterRouted() != tc.want {
+				t.Errorf("LegacyClusterRouted() = %v, want %v", got.LegacyClusterRouted(), tc.want)
 			}
 		})
 	}

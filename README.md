@@ -118,12 +118,20 @@ The core loop: put a service on sale → get a public URL → get registered →
 ### 1. Put a model up for sale
 
 ```bash
-# Sell local Ollama inference, priced per request (USDC on Base by default)
-obol sell inference my-qwen --model qwen3:8b --price 0.001 --pay-to 0x...
+# Sell a model LiteLLM serves (host Ollama models are added on `obol stack up`),
+# priced per request (USDC on Base by default)
+obol sell http my-qwen --upstream litellm --port 4000 --namespace llm \
+  --model qwen3:8b --price 0.001 --pay-to 0x...
 
 # Or price per million tokens, or accept OBOL instead of USDC
-obol sell inference my-qwen --model qwen3:8b --per-mtok 0.50 --token OBOL --pay-to 0x...
+obol sell http my-qwen --upstream litellm --port 4000 --namespace llm \
+  --model qwen3:8b --per-mtok 0.50 --token OBOL --pay-to 0x...
+
+# Selling a vLLM / llama.cpp server? Register it with LiteLLM first:
+obol model setup custom --endpoint http://192.168.1.20:8000/v1 --model qwen36-deep
 ```
+
+`obol sell inference` is the standalone gateway for hosts without a stack (its own x402 gate in front of a host inference server); on a stack host it refuses and prints the commands above unless you pass `--standalone`.
 
 If you omit `--pay-to`, the agent's own wallet address is auto-detected from the remote signer — your agent earns for itself. Set defaults once with `obol sell pricing --pay-to 0x... --chain base`.
 
@@ -131,7 +139,7 @@ Check it's live:
 
 ```bash
 obol sell list
-obol sell status my-qwen
+obol sell status my-qwen -n llm
 obol sell info          # buyer's-eye view of everything on sale
 ```
 

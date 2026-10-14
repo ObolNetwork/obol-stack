@@ -321,7 +321,7 @@ func TestGateway_UpstreamDown_Returns502(t *testing.T) {
 	}
 }
 
-func TestGateway_UnprotectedPassthrough(t *testing.T) {
+func TestGateway_ModelsEndpoint_RequiresPayment(t *testing.T) {
 	fac := newMockFacilitator(t, mockFacilitatorOpts{})
 	ollama := newMockOllama(t)
 	gw := newTestGateway(t, fac.URL, ollama.URL, false)
@@ -357,50 +357,6 @@ func TestGateway_ModelsEndpoint_WithPayment(t *testing.T) {
 	}
 }
 
-// TestGateway_NoPaymentGate_AllowsWithoutPayment verifies that when
-// NoPaymentGate is true the payment middleware is bypassed — requests reach
-// the upstream without an X-PAYMENT header and get 200, not 402.
-func TestGateway_NoPaymentGate_AllowsWithoutPayment(t *testing.T) {
-	fac := newMockFacilitator(t, mockFacilitatorOpts{})
-	ollama := newMockOllama(t)
-
-	gw, err := NewGateway(GatewayConfig{
-		UpstreamURL:     ollama.URL,
-		WalletAddress:   "0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
-		PricePerRequest: "0.001",
-		Chain:           x402pkg.ChainBaseSepolia,
-		FacilitatorURL:  fac.URL,
-		NoPaymentGate:   true,
-	})
-	if err != nil {
-		t.Fatalf("NewGateway: %v", err)
-	}
-
-	handler, err := gw.buildHandler(ollama.URL)
-	if err != nil {
-		t.Fatalf("buildHandler: %v", err)
-	}
-
-	ts := httptest.NewServer(handler)
-	t.Cleanup(ts.Close)
-
-	// No X-PAYMENT header — should pass straight through to upstream.
-	resp, err := http.Post(ts.URL+"/v1/chat/completions", "application/json",
-		strings.NewReader(`{"model":"llama3.2","messages":[{"role":"user","content":"hi"}]}`))
-	if err != nil {
-		t.Fatalf("POST: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("NoPaymentGate=true: expected 200 without payment, got %d", resp.StatusCode)
-	}
-
-	if fac.verifyCalls.Load() != 0 {
-		t.Errorf("NoPaymentGate=true: facilitator verify should not be called, got %d calls", fac.verifyCalls.Load())
-	}
-}
-
 // TestGateway_ValidateFacilitatorURL_RejectsHTTP verifies that NewGateway
 // rejects a plain http:// facilitator URL (non-localhost) at construction
 // time so bad configs are caught before any requests are served.
@@ -415,86 +371,114 @@ func TestGateway_ValidateFacilitatorURL_RejectsHTTP(t *testing.T) {
 	}
 }
 
-// TestNormalizeServicePrefixedPath covers the path rewriting used when the
-// cluster's Traefik gateway preserves the /services/<name>/ storefront prefix
-// on requests forwarded to the inference gateway.
-func TestNormalizeServicePrefixedPath(t *testing.T) {
+// countingUpstream is an upstream that answers every path (including
+// Ollama-native ones) with 200 and records how many requests reached it.
+func countingUpstream(t *testing.T) (*httptest.Server, *atomic.Int64) {
+	t.Helper()
+
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	return srv, &hits
+}
+
+// TestGateway_OnlyServesAllowlistedRoutes verifies the gateway answers 404
+// for any path or method outside its paid routes and /health, without the
+// request reaching the upstream.
+func TestGateway_OnlyServesAllowlistedRoutes(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	upstream, hits := countingUpstream(t)
+	gw := newTestGateway(t, fac.URL, upstream.URL, true)
+
 	cases := []struct {
-		input    string
-		wantPath string
-		wantOK   bool
+		method, path string
 	}{
-		{"/services/my-offer/v1/chat/completions", "/v1/chat/completions", true},
-		{"/services/my-offer/v1/models", "/v1/models", true},
-		{"/services/my-offer/", "/", true},
-		{"/services/my-offer", "/", true},
-		{"/v1/chat/completions", "", false},
-		{"/health", "", false},
-		{"", "", false},
+		{http.MethodPost, "/api/chat"},
+		{http.MethodPost, "/api/generate"},
+		{http.MethodGet, "/api/tags"},
+		{http.MethodDelete, "/api/delete"},
+		{http.MethodGet, "/"},
+		{http.MethodGet, "/metrics"},
+		{http.MethodGet, "/v1/chat/completions"},
+		{http.MethodDelete, "/v1/models"},
+		{http.MethodPost, "/services/my-offer/v1/chat/completions"},
 	}
-
 	for _, tc := range cases {
-		got, ok := normalizeServicePrefixedPath(tc.input)
-		if ok != tc.wantOK {
-			t.Errorf("normalizeServicePrefixedPath(%q): ok=%v, want %v", tc.input, ok, tc.wantOK)
-			continue
-		}
-		if ok && got != tc.wantPath {
-			t.Errorf("normalizeServicePrefixedPath(%q): path=%q, want %q", tc.input, got, tc.wantPath)
-		}
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			req, err := http.NewRequest(tc.method, gw.URL+tc.path, strings.NewReader(`{"model":"llama3.2"}`))
+			if err != nil {
+				t.Fatalf("NewRequest: %v", err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			// A payment header must not make an unlisted route reachable.
+			req.Header.Set("X-Payment", testPaymentHeader(t))
+
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("Do: %v", err)
+			}
+			resp.Body.Close()
+
+			if resp.StatusCode != http.StatusNotFound {
+				t.Errorf("%s %s: expected 404, got %d", tc.method, tc.path, resp.StatusCode)
+			}
+		})
+	}
+
+	if n := hits.Load(); n != 0 {
+		t.Errorf("upstream must not be reached for unlisted routes, got %d request(s)", n)
+	}
+	if n := fac.verifyCalls.Load(); n != 0 {
+		t.Errorf("facilitator must not be called for unlisted routes, got %d call(s)", n)
 	}
 }
 
-// TestGateway_ServicePrefixedPath_RoutesCorrectly verifies that a request
-// arriving with the /services/<name>/... prefix is rewritten and still hits
-// the protected inference route (returns 402 without payment).
-func TestGateway_ServicePrefixedPath_RoutesCorrectly(t *testing.T) {
+// TestGateway_PaidRoutesReachUpstream verifies every allowlisted route is
+// payment-gated (402 without payment) and proxied to the upstream once paid.
+func TestGateway_PaidRoutesReachUpstream(t *testing.T) {
 	fac := newMockFacilitator(t, mockFacilitatorOpts{})
-	ollama := newMockOllama(t)
-	gw := newTestGateway(t, fac.URL, ollama.URL, false)
+	upstream, hits := countingUpstream(t)
+	gw := newTestGateway(t, fac.URL, upstream.URL, true)
 
-	// Send without payment — expect 402, proving the path was normalised and
-	// hit the protected route rather than falling through to the catch-all proxy.
-	resp, err := http.Post(
-		gw.URL+"/services/my-offer/v1/chat/completions",
-		"application/json",
-		strings.NewReader(`{"model":"llama3.2","messages":[{"role":"user","content":"hi"}]}`),
-	)
-	if err != nil {
-		t.Fatalf("POST: %v", err)
-	}
-	defer resp.Body.Close()
+	for _, route := range PaidRoutes {
+		method, path, _ := strings.Cut(route, " ")
+		t.Run(route, func(t *testing.T) {
+			before := hits.Load()
 
-	if resp.StatusCode != http.StatusPaymentRequired {
-		t.Errorf("expected 402 after prefix normalisation, got %d", resp.StatusCode)
-	}
-}
+			unpaid, _ := http.NewRequest(method, gw.URL+path, strings.NewReader(`{"model":"llama3.2"}`))
+			unpaid.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(unpaid)
+			if err != nil {
+				t.Fatalf("unpaid Do: %v", err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusPaymentRequired {
+				t.Errorf("%s without payment: expected 402, got %d", route, resp.StatusCode)
+			}
+			if hits.Load() != before {
+				t.Errorf("%s without payment must not reach the upstream", route)
+			}
 
-// TestGateway_ServicePrefixedPath_PreservesQuery verifies the storefront path
-// rewrite does not drop the original query string when rebuilding RequestURI.
-func TestGateway_ServicePrefixedPath_PreservesQuery(t *testing.T) {
-	fac := newMockFacilitator(t, mockFacilitatorOpts{})
-	ollama := newMockOllama(t)
-	gw := newTestGateway(t, fac.URL, ollama.URL, false)
-
-	req, err := http.NewRequest(
-		http.MethodPost,
-		gw.URL+"/services/my-offer/v1/chat/completions?verbose=true",
-		strings.NewReader(`{"model":"llama3.2","messages":[{"role":"user","content":"hi"}]}`),
-	)
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("Do: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusPaymentRequired {
-		t.Errorf("expected 402 after prefix normalisation with query, got %d", resp.StatusCode)
+			paid, _ := http.NewRequest(method, gw.URL+path, strings.NewReader(`{"model":"llama3.2"}`))
+			paid.Header.Set("Content-Type", "application/json")
+			paid.Header.Set("X-Payment", testPaymentHeader(t))
+			resp, err = http.DefaultClient.Do(paid)
+			if err != nil {
+				t.Fatalf("paid Do: %v", err)
+			}
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				t.Errorf("%s with payment: expected 200, got %d", route, resp.StatusCode)
+			}
+			if hits.Load() != before+1 {
+				t.Errorf("%s with payment: expected exactly one upstream request, got %d", route, hits.Load()-before)
+			}
+		})
 	}
 }
 

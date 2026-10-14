@@ -112,8 +112,21 @@ func sellInferenceCommand(cfg *config.Config) *cli.Command {
 		Name:      "inference",
 		Usage:     "Sell local model inference with x402 payments",
 		ArgsUsage: "<name>",
-		Description: `Starts an x402-gated reverse proxy in front of a local Ollama instance.
-Buyers pay per-request in the selected x402 token to access inference endpoints.
+		Description: `Starts a standalone x402-gated reverse proxy in front of a host inference
+server (Ollama, vLLM, ...), for hosts without an Obol Stack. Buyers pay
+per-request in the selected x402 token. The gateway only serves the paid
+OpenAI-compatible routes (POST /v1/chat/completions, /v1/completions,
+/v1/embeddings, GET /v1/models) plus GET /health; everything else is 404.
+
+On a host running the stack, sell the inference server through LiteLLM
+instead (seller-pinned model, inference-only routes, settle on delivery):
+
+  obol model setup custom --endpoint http://<host>:<port>/v1 --model <id>
+  obol sell http <name> --upstream litellm --port 4000 --namespace llm \
+      --model <id> --per-mtok <price> --pay-to 0x...
+
+'obol sell inference' refuses to run when a stack kubeconfig exists unless
+--standalone is passed.
 
 Examples:
   obol sell inference my-qwen --model qwen3.5:4b --pay-to 0x... --price 0.001
@@ -181,6 +194,10 @@ Examples:
 				Aliases: []string{"register-description"},
 				Usage:   "Human-readable description of the service. Surfaced on the 402 payment page, in the storefront catalog, and (when registration is enabled) on the ERC-8004 registration document.",
 			},
+			&cli.BoolFlag{
+				Name:  "standalone",
+				Usage: "Run the standalone gateway (built-in x402 gate) even when this host runs an Obol Stack",
+			},
 			&cli.StringFlag{
 				Name:  "register-image",
 				Usage: "Agent image URL for ERC-8004 registration",
@@ -200,7 +217,6 @@ Examples:
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
-			warnOnClockSkew(ctx, u, cmd.String("facilitator"))
 			name := cmd.Args().First()
 			if name == "" {
 				if u.IsTTY() {
@@ -216,6 +232,15 @@ Examples:
 			if err := validate.Name(name); err != nil {
 				return err
 			}
+
+			// With a stack on this host, the supported way to sell a host
+			// inference server is LiteLLM + `obol sell http`. Refuse before
+			// any prompt or persisted state, unless --standalone is set.
+			if err := refuseSellInferenceWithStack(cfg, cmd, name); err != nil {
+				return err
+			}
+
+			warnOnClockSkew(ctx, u, cmd.String("facilitator"))
 
 			wallet := cmd.String("pay-to")
 			if wallet == "" {
@@ -285,12 +310,8 @@ Examples:
 			// requests fall through to the buyer sidecar with a 404 (see
 			// CLAUDE.md and the obol-agent's recent buy report). Reject
 			// up-front and suggest a `--` separator that survives the route.
-			// Resume replays of descriptors persisted before this rule
-			// existed are tolerated with a warning instead.
-			if warn, vErr := validateSellInferenceModelName(modelFlag, os.Getenv(resumeReplayEnv) == "1"); vErr != nil {
-				return vErr
-			} else if warn != "" {
-				u.Warnf("%s", warn)
+			if err := validateSellInferenceModelName(modelFlag); err != nil {
+				return err
 			}
 
 			chainName := cmd.String("chain")
@@ -319,12 +340,8 @@ Examples:
 				assetSymbol = "USDC"
 			}
 
-			// Resolve the registration block once, here, so we can persist it
-			// alongside the deployment descriptor. The resume path
-			// (`obol stack up` after a stack-down) rebuilds the ServiceOffer
-			// from the on-disk descriptor; without the registration block
-			// persisted, replays would lose the operator's --register-*
-			// customizations.
+			// Resolve (and validate) the registration block once, here, and
+			// persist it alongside the deployment descriptor.
 			persistedRegistration, _, regErr := buildSellRegistrationConfig(name, sellRegistrationInput{
 				NoRegister:    cmd.Bool("no-register"),
 				Name:          cmd.String("register-name"),
@@ -339,18 +356,18 @@ Examples:
 			}
 
 			d := &inference.Deployment{
-				Name:             name,
-				ListenAddr:       cmd.String("listen"),
-				UpstreamURL:      upstreamFlag,
-				WalletAddress:    wallet,
-				PricePerRequest:  perRequest,
-				PricePerMTok:     priceTable.PerMTok,
-				AssetSymbol:      assetSymbol,
-				Chain:            chainName,
-				FacilitatorURL:   cmd.String("facilitator"),
-				ModelName:        modelFlag,
-				ServiceNamespace: "llm",
-				Registration:     persistedRegistration,
+				Name:            name,
+				ListenAddr:      cmd.String("listen"),
+				UpstreamURL:     upstreamFlag,
+				WalletAddress:   wallet,
+				PricePerRequest: perRequest,
+				PricePerMTok:    priceTable.PerMTok,
+				AssetSymbol:     assetSymbol,
+				Chain:           chainName,
+				FacilitatorURL:  cmd.String("facilitator"),
+				ModelName:       modelFlag,
+				Mode:            inference.ModeStandalone,
+				Registration:    persistedRegistration,
 			}
 
 			if pf := cmd.String("provenance-file"); pf != "" {
@@ -372,117 +389,6 @@ Examples:
 			store := inference.NewStore(cfg.ConfigDir)
 			if err := store.Create(d, true); err != nil {
 				return err
-			}
-
-			// If a cluster is available, route through the cluster's x402 flow
-			// (tunnel → Traefik → x402-verifier → host gateway → Ollama).
-			// The gateway's built-in x402 is disabled to avoid double-gating.
-			kubeconfigPath := cfg.ConfigDir + "/kubeconfig.yaml"
-
-			clusterAvailable := false
-			if _, statErr := os.Stat(kubeconfigPath); statErr == nil {
-				clusterAvailable = true
-			}
-
-			if clusterAvailable {
-				d.NoPaymentGate = true
-
-				// Resolve the gateway port from the listen address.
-				listenAddr := d.ListenAddr
-
-				port := "8402"
-				if idx := strings.LastIndex(listenAddr, ":"); idx >= 0 {
-					port = listenAddr[idx+1:]
-				}
-
-				// Bind on all interfaces — the in-cluster Endpoints object
-				// points at the host's docker-bridge IP (e.g. 172.17.0.1 on
-				// Linux), which the kernel only delivers to listeners bound
-				// to 0.0.0.0 or the bridge IP itself, not to 127.0.0.1.
-				// Loopback-only binding made the cluster see "connection
-				// refused" on the host-routed Service.
-				d.ListenAddr = "0.0.0.0:" + port
-
-				// Create a K8s Service + Endpoints pointing to the host.
-				svcNs := "llm" // co-locate with LiteLLM for simplicity
-				if err := createHostService(cfg, name, svcNs, port); err != nil {
-					u.Warnf("could not create cluster service: %v", err)
-					u.Info("Falling back to standalone mode with built-in x402 payment gate.")
-					d.NoPaymentGate = false
-				} else {
-					// Create a ServiceOffer CR pointing at the host service.
-					// Reuse the persistedRegistration resolved above; both this
-					// in-process create AND the on-disk descriptor must agree.
-					soSpec, err := buildInferenceServiceOfferSpec(d, priceTable, svcNs, port, assetTerms, modelFlag, persistedRegistration)
-					if err != nil {
-						return err
-					}
-
-					soManifest := map[string]any{
-						"apiVersion": "obol.org/v1alpha1",
-						"kind":       "ServiceOffer",
-						"metadata": map[string]any{
-							"name":      name,
-							"namespace": svcNs,
-						},
-						"spec": soSpec,
-					}
-					if err := kubectlApply(cfg, soManifest); err != nil {
-						u.Warnf("could not create ServiceOffer: %v", err)
-						d.NoPaymentGate = false
-					} else {
-						u.Successf("ServiceOffer %s/%s created (type: inference, routed via cluster)", svcNs, name)
-
-						// Ensure tunnel is active.
-						u.Blank()
-						u.Info("Ensuring tunnel is active for public access...")
-
-						tunnelURL := ""
-						if url, tErr := tunnel.EnsureTunnelForSell(cfg, u); tErr != nil {
-							u.Warnf("Tunnel not started: %v", tErr)
-							u.Dim("  Start manually with: obol tunnel restart")
-						} else {
-							tunnelURL = url
-							u.Successf("Tunnel active: %s", tunnelURL)
-						}
-
-						// Auto-register the seller on ERC-8004, mirroring the
-						// `obol sell http` path. Without this step the offer
-						// stays in Registered=False AwaitingExternalRegistration
-						// forever, which makes Ready=False and excludes the
-						// offer from /api/services.json (the storefront feed
-						// only includes Ready=True offers).
-						if shouldAutoRegisterSell(soSpec, tunnelURL) {
-							reg, _ := soSpec["registration"].(map[string]any)
-							u.Blank()
-							u.Info("Registering seller agent on ERC-8004...")
-							if err := autoRegisterServiceOffer(ctx, cfg, u, autoRegisterOptions{
-								ChainCSV:      cmd.String("chain"),
-								Endpoint:      tunnelURL,
-								AgentName:     registrationNameForPrompt(name, reg),
-								AgentDesc:     registrationDescriptionForPrompt(name, reg),
-								ExpectedOwner: wallet,
-							}); err != nil {
-								u.Warnf("automatic sell registration failed: %v", err)
-								aw, _ := hermes.ResolveWalletAddress(cfg)
-								printRegistrationNotice(u, registrationNotice{
-									Mode:        regNoticeAutoFailed,
-									Chain:       cmd.String("chain"),
-									PayTo:       wallet,
-									AgentWallet: aw,
-									OfferName:   name,
-									Namespace:   svcNs,
-								})
-							}
-						} else {
-							// Registration enabled but auto-register not attempted (e.g.
-							// the tunnel URL was not ready): surface the Ready=False
-							// consequence + completion path instead of failing silently.
-							noticeInferenceRegistrationSkipped(u, cfg, soSpec, cmd.String("chain"), wallet, name, svcNs)
-						}
-						printOfferLinks(cfg, u, svcNs, name, true)
-					}
-				}
 			}
 
 			return runInferenceGateway(u, d, chain)
@@ -1284,26 +1190,6 @@ func registrationEnabledInSpec(spec map[string]any) bool {
 	}
 	enabled, _ := reg["enabled"].(bool)
 	return enabled
-}
-
-// noticeInferenceRegistrationSkipped prints the cluster-routed `sell inference`
-// advisory for the case where registration is enabled but the auto-register
-// step was not attempted (e.g. the tunnel URL was not ready in time). It is a
-// no-op when registration is disabled. Extracted so the inference Action stays
-// within the control-flow nesting budget.
-func noticeInferenceRegistrationSkipped(u *ui.UI, cfg *config.Config, soSpec map[string]any, chain, payTo, name, ns string) {
-	if !registrationEnabledInSpec(soSpec) {
-		return
-	}
-	aw, _ := hermes.ResolveWalletAddress(cfg)
-	printRegistrationNotice(u, registrationNotice{
-		Mode:        regNoticeAutoSkipped,
-		Chain:       chain,
-		PayTo:       payTo,
-		AgentWallet: aw,
-		OfferName:   name,
-		Namespace:   ns,
-	})
 }
 
 func registrationNameForPrompt(fallback string, reg map[string]any) string {
@@ -3098,7 +2984,16 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 			// controller renders an active:false / x402Support:false tombstone
 			// document while keeping the agentId.
 
-			if err := kubectlRun(cfg, "delete", "serviceoffers.obol.org", name, "-n", ns); err != nil {
+			// A legacy cluster-routed sell-inference descriptor may outlive
+			// its ServiceOffer (e.g. after a cluster recreation). Deleting it
+			// must still succeed so the descriptor gets tombstoned and resume
+			// stops warning about it.
+			legacy := legacyInferenceDescriptor(cfg, name, ns)
+			deleteArgs := []string{"delete", "serviceoffers.obol.org", name, "-n", ns}
+			if legacy != nil {
+				deleteArgs = append(deleteArgs, "--ignore-not-found")
+			}
+			if err := kubectlRun(cfg, deleteArgs...); err != nil {
 				return err
 			}
 
@@ -3110,26 +3005,13 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 				u.Warnf("could not remove persisted sell offer manifest at %s/%s: %v", ns, name, removeErr)
 			}
 
-			// Tombstone the inference descriptor when this was a
-			// sell-inference offer: the descriptor is kept on disk for
-			// `sell inference list/status` history, but without a marker
-			// the resume loop would rebuild the offer and relaunch its
-			// host gateway — undoing the delete. Re-running
-			// `obol sell inference <name>` rewrites the descriptor and
-			// clears the tombstone. Namespace-guarded so deleting an
-			// unrelated same-name offer elsewhere can't tombstone it.
-			if store := inference.NewStore(cfg.ConfigDir); store != nil {
-				if d, getErr := store.Get(name); getErr == nil && d != nil && d.DeletedAt == "" {
-					dNS := d.ServiceNamespace
-					if dNS == "" {
-						dNS = "llm"
-					}
-					if dNS == ns {
-						d.DeletedAt = time.Now().UTC().Format(time.RFC3339)
-						if updErr := store.Update(d); updErr != nil {
-							u.Warnf("could not tombstone inference descriptor for %s: %v", name, updErr)
-						}
-					}
+			// Tombstone a legacy cluster-routed sell-inference descriptor:
+			// it stays on disk for `sell status` history, and resume skips
+			// it silently instead of warning on every stack up.
+			if legacy != nil {
+				legacy.DeletedAt = time.Now().UTC().Format(time.RFC3339)
+				if updErr := inference.NewStore(cfg.ConfigDir).Update(legacy); updErr != nil {
+					u.Warnf("could not tombstone inference descriptor for %s: %v", name, updErr)
 				}
 			}
 
@@ -3793,7 +3675,6 @@ func runInferenceGateway(u *ui.UI, d *inference.Deployment, chain x402verifier.C
 		AssetSymbol:     d.AssetSymbol,
 		Chain:           chain,
 		FacilitatorURL:  d.FacilitatorURL,
-		NoPaymentGate:   d.NoPaymentGate,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to create gateway: %w", err)
@@ -4169,36 +4050,27 @@ func loadProvenance(path string) (*inference.Provenance, error) {
 	return &prov, nil
 }
 
-// createHostService creates a headless Service + Endpoints in the cluster
-// pointing to the Docker host IP on the given port, so that the cluster can
-// route traffic to a host-side inference gateway.
-//
-// Kubernetes Endpoints require an IP address, not a hostname. We resolve the
-// host IP using the same strategy as defaults.OllamaHostIPForBackend.
 // ---------------------------------------------------------------------------
-// sell resume — re-apply persisted offers + relaunch host gateways
+// sell resume — re-apply persisted offers
 // ---------------------------------------------------------------------------
 
 func sellResumeCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
 		Name:  "resume",
-		Usage: "Re-apply persisted sell offers and relaunch host gateways (run after a host reboot)",
+		Usage: "Re-apply persisted sell offers (run after a host reboot)",
 		Description: `Replays every locally-persisted sell offer against the cluster —
-all ServiceOffer types: inference (re-applies cluster artifacts AND
-relaunches the detached host gateway), http, agent, and demo-created
-agent offers — so one command brings the whole catalog back.
-
-After a host reboot, Docker's restart policy brings the k3d cluster back
-automatically — but the host-side x402 gateways started by
-'obol sell inference' die with the host and nothing restarts them. The
-offers survive in etcd with UpstreamHealthy=False, so the public catalog
-(/api/services.json) goes empty even though the stack looks up.
+http (including LiteLLM-backed inference), agent, and demo-created agent
+offers — so one command brings the whole catalog back.
 
 'obol stack up' already runs this resume path; this command exposes it
 directly so a reboot does not require a full stack-up to recover.
 
-Idempotent: offers whose gateway is still running are skipped, and the
-kubectl applies re-assert existing objects. Runs the same ordered record
+'obol sell inference' gateways are standalone foreground processes and are
+not resumed. Offers created by older releases that routed 'sell inference'
+through the cluster are skipped with a warning that shows how to re-create
+them via LiteLLM ('obol model setup custom' + 'obol sell http --upstream litellm').
+
+Idempotent: the kubectl applies re-assert existing objects. Runs the same ordered record
 replay as 'obol stack up' (models, missing networks, RPC upstreams, x402
 pricing, AgentIdentity, missing agent instances, Agent CRs, storefront,
 apps, then offers), so agent-backed offers resolve their agent.ref even
@@ -4218,9 +4090,8 @@ Examples:
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
 			// At boot the k3d API server lags Docker by a minute or
-			// more, and resumeOneInferenceOffer's kubectl applies run
-			// BEFORE the gateway relaunch and warn-and-continue on
-			// failure — without this wait a too-early resume silently
+			// more, and the per-offer kubectl applies warn-and-continue
+			// on failure — without this wait a too-early resume silently
 			// resumes nothing and nothing retries.
 			if err := waitForClusterAPI(ctx, cfg, u, 3*time.Minute); err != nil {
 				u.Warnf("cluster API not ready: %v (continuing — per-offer applies may fail)", err)
@@ -4292,27 +4163,17 @@ const resumeBootUnitName = "obol-sell-resume.service"
 //
 // The unit sleeps before resuming: Docker restarts the k3d node
 // containers on boot, but the API server inside them needs a moment
-// before the resume path's kubectl applies succeed. The gateway relaunch
-// itself has no cluster dependency, and resumeSellOffers warns-and-
-// continues per offer, so a still-starting cluster degrades gracefully
-// rather than failing the unit.
-//
-// RemainAfterExit=yes is load-bearing: the relaunched gateway is
-// spawned into the unit's cgroup (setsid detaches the session, NOT the
-// cgroup), and when a plain oneshot unit deactivates systemd kills
-// every process left in the cgroup — observed on the live reboot test
-// as "unit finished OK, gateway dead, log empty". Keeping the unit
-// active (exited) preserves the cgroup and the gateway with it; as a
-// bonus, `systemctl --user stop` becomes a deliberate gateway kill.
+// before the resume path's kubectl applies succeed. resumeSellOffers
+// warns-and-continues per offer, so a still-starting cluster degrades
+// gracefully rather than failing the unit.
 func renderResumeBootUnit(obolBin, configDir string) string {
 	return `[Unit]
-Description=Obol sell offer resume (relaunch x402 gateways after boot)
+Description=Obol sell offer resume (re-apply sell offers after boot)
 After=network-online.target docker.service
 Wants=network-online.target
 
 [Service]
 Type=oneshot
-RemainAfterExit=yes
 ExecStartPre=/bin/sleep 30
 Environment=OBOL_CONFIG_DIR=` + configDir + `
 ExecStart=` + obolBin + ` sell resume
@@ -4323,10 +4184,9 @@ WantedBy=default.target
 }
 
 // installResumeBootUnit writes and enables a systemd user unit so the
-// resume path runs automatically after a host reboot. Linux-only: the
-// host gateways this exists to relaunch run on headless Linux sellers;
-// macOS operators run `obol sell resume` manually (launchd support can
-// follow if asked for).
+// resume path runs automatically after a host reboot. Linux-only:
+// headless sellers run Linux; macOS operators run `obol sell resume`
+// manually (launchd support can follow if asked for).
 //
 // systemctl calls are best-effort — the unit file on disk is the
 // durable artifact, and the printed hints cover the enable steps when
@@ -4340,7 +4200,7 @@ func installResumeBootUnit(cfg *config.Config, u *ui.UI) error {
 	// just proved it has `sell resume`. The installed BinDir copy may be
 	// an older release without the subcommand (rc11 on the live seller
 	// box), which would make the unit fail on every boot.
-	obolBin, err := resumeGatewayBinary(cfg)
+	obolBin, err := runningObolBinary(cfg)
 	if err != nil {
 		return err
 	}
@@ -4374,6 +4234,21 @@ func installResumeBootUnit(cfg *config.Config, u *ui.UI) error {
 	return nil
 }
 
+// runningObolBinary picks the obol binary pinned into the boot unit: the
+// binary running THIS process, which is known to have `sell resume`. The
+// BinDir copy is only a fallback for the degenerate case where the
+// running executable's path cannot be resolved.
+func runningObolBinary(cfg *config.Config) (string, error) {
+	if exe, err := os.Executable(); err == nil {
+		return exe, nil
+	}
+	obolBin := filepath.Join(cfg.BinDir, "obol")
+	if _, err := os.Stat(obolBin); err != nil {
+		return "", fmt.Errorf("locate obol binary: %w", err)
+	}
+	return obolBin, nil
+}
+
 // warnOnClockSkew is a best-effort seller preflight. EIP-3009 payment
 // authorizations anchor validAfter/validBefore to wall clocks, so a
 // drifted seller host makes the facilitator reject every buyer payment
@@ -4403,27 +4278,21 @@ func warnOnClockSkew(ctx context.Context, u *ui.UI, facilitatorURL string) {
 	u.Dim("  Fix: enable NTP time sync (macOS: Date & Time → set automatically; Linux: timedatectl set-ntp true).")
 }
 
-// resumeSellOffers re-applies the cluster-side artifacts (Service +
-// Endpoints + ServiceOffer) for every locally-persisted `obol sell
-// inference` deployment, and relaunches each offer's host gateway as a
-// detached background process. Without this step the cluster has no
-// record of operator-created offers (CRs live in etcd, which is
-// destroyed by `obol stack down`), even though the host-side descriptors
-// at `<ConfigDir>/inference/<name>/` still exist.
+// resumeSellOffers re-applies every locally-persisted ServiceOffer
+// manifest (http, agent, demo-agent) so operator-created offers survive a
+// cluster recreation (CRs live in etcd, which `obol stack down` destroys).
 //
 // Two entrypoints share this path:
 //   - `obol stack up` (cmd/obol/main.go) — fresh-cluster case.
-//   - `obol sell resume` — host-reboot case. Docker's restart policy
-//     brings the k3d cluster back on boot WITHOUT a `stack up`, so the
-//     offers survive in etcd but the host gateway processes are gone and
-//     every sell-inference offer sits at UpstreamHealthy=False (empty
-//     /api/services.json catalog) until something relaunches them.
+//   - `obol sell resume` — host-reboot case.
 //
-// Idempotent: gateway relaunch is skipped when a live PID is on disk and
-// the kubectl applies re-assert existing objects.
+// `obol sell inference` descriptors are never replayed: the gateway is a
+// standalone foreground process. Descriptors written by releases that
+// routed it through the cluster are skipped with a one-line warning that
+// shows the LiteLLM recipe to re-create the offer.
 //
 // Best-effort. Per-offer failures emit a warning and the loop continues,
-// so one broken descriptor cannot block stack-up.
+// so one broken manifest cannot block stack-up.
 func resumeSellOffers(ctx context.Context, cfg *config.Config, u *ui.UI) error {
 	_ = ctx // reserved for cancellation support; current resume calls are synchronous and short
 
@@ -4433,50 +4302,12 @@ func resumeSellOffers(ctx context.Context, cfg *config.Config, u *ui.UI) error {
 		return nil
 	}
 
-	// 1. Inference offers: the only type with a host-side process. Each
-	//    descriptor re-applies its cluster artifacts AND relaunches the
-	//    detached x402 gateway. Tombstoned descriptors (offer deleted via
-	//    `obol sell delete`; kept on disk for list/status history) are
-	//    excluded — replaying one would undo the delete.
-	store := inference.NewStore(cfg.ConfigDir)
-	all, err := store.List()
-	if err != nil {
-		return fmt.Errorf("list inference deployments: %w", err)
-	}
-	deployments := activeInferenceDeployments(all)
+	warnLegacyInferenceOffers(cfg, u)
 
-	var failed []string
-
-	if len(deployments) > 0 {
-		u.Blank()
-		u.Infof("Resuming %d locally-persisted sell-inference offer(s)...", len(deployments))
-
-		var resumed int
-		for _, d := range deployments {
-			if err := resumeOneInferenceOffer(cfg, u, d); err != nil {
-				u.Warnf("resume %s: %v", d.Name, err)
-				failed = append(failed, d.Name)
-				continue
-			}
-			resumed++
-			u.Successf("Resumed sell-inference offer %q", d.Name)
-		}
-
-		if resumed > 0 {
-			u.Dim("  Gateways spawned as detached background processes — check <state>/sell-inference/<name>/gateway.log for output.")
-		}
-	}
-
-	// 2. Every other offer type (http, agent, demo-agent): pure manifest
-	//    replay from the shared ledger — no host process to relaunch.
-	//    The two stores stay separate on disk because the inference
-	//    descriptor is rich (listen addr, asset, registration, gateway
-	//    PID) while the ledger holds only rendered ServiceOffer manifests.
-	persistedFailed, err := resumePersistedServiceOffers(cfg, u)
+	failed, err := resumePersistedServiceOffers(cfg, u)
 	if err != nil {
 		u.Warnf("resume persisted sell offers: %v", err)
 	}
-	failed = append(failed, persistedFailed...)
 
 	// A seller who reboots and sees "stack up: OK" assumes their offers
 	// are live. Per-offer warnings scroll past; this summary — and a
@@ -4492,10 +4323,179 @@ func resumeSellOffers(ctx context.Context, cfg *config.Config, u *ui.UI) error {
 	return nil
 }
 
+// warnLegacyInferenceOffers prints one warning per active legacy
+// cluster-routed `sell inference` descriptor. Those offers are not
+// resumed (cluster routing for host gateways has been removed); the
+// warning names the commands that re-create the offer via LiteLLM.
+// Tombstoned and standalone descriptors are skipped silently.
+func warnLegacyInferenceOffers(cfg *config.Config, u *ui.UI) {
+	all, err := inference.NewStore(cfg.ConfigDir).List()
+	if err != nil {
+		u.Warnf("list sell-inference descriptors: %v", err)
+		return
+	}
+	for _, d := range activeInferenceDeployments(all) {
+		if d.LegacyClusterRouted() {
+			u.Warnf("%s", legacyInferenceResumeWarning(d))
+		}
+	}
+}
+
+// legacyInferenceResumeWarning is the one-line resume warning for a legacy
+// cluster-routed `sell inference` descriptor.
+func legacyInferenceResumeWarning(d *inference.Deployment) string {
+	ns := legacyInferenceNamespace(d)
+	recipe := liteLLMSellRecipe(inferenceRecipeFromDeployment(d))
+	return fmt.Sprintf("not resuming sell-inference offer %q: cluster routing for `obol sell inference` was removed. "+
+		"Remove the old offer (`obol sell delete %s -n %s`) and re-create it via LiteLLM: `%s` then `%s`",
+		d.Name, d.Name, ns, recipe[0], recipe[1])
+}
+
+// legacyInferenceNamespace is the namespace a legacy cluster-routed
+// descriptor's ServiceOffer was published in.
+func legacyInferenceNamespace(d *inference.Deployment) string {
+	if d.ServiceNamespace != "" {
+		return d.ServiceNamespace
+	}
+	return "llm" // descriptors written before service_namespace was persisted
+}
+
+// legacyInferenceDescriptor returns the active legacy cluster-routed
+// sell-inference descriptor for name whose offer lived in ns, or nil.
+// Namespace-guarded so deleting an unrelated same-name offer elsewhere
+// can't tombstone it.
+func legacyInferenceDescriptor(cfg *config.Config, name, ns string) *inference.Deployment {
+	d, err := inference.NewStore(cfg.ConfigDir).Get(name)
+	if err != nil || d == nil || d.DeletedAt != "" || !d.LegacyClusterRouted() {
+		return nil
+	}
+	if legacyInferenceNamespace(d) != ns {
+		return nil
+	}
+	return d
+}
+
+// inferenceRecipe carries the operator's values for the LiteLLM recipe
+// printed when `obol sell inference` is not the right tool.
+type inferenceRecipe struct {
+	Name       string
+	Model      string
+	Upstream   string
+	PerMTok    string
+	PerRequest string
+	Chain      string
+	Token      string
+	PayTo      string
+	NoRegister bool
+}
+
+func inferenceRecipeFromDeployment(d *inference.Deployment) inferenceRecipe {
+	r := inferenceRecipe{
+		Name:     d.Name,
+		Model:    d.ModelName,
+		Upstream: d.UpstreamURL,
+		PerMTok:  d.PricePerMTok,
+		Chain:    d.Chain,
+		Token:    d.AssetSymbol,
+		PayTo:    d.WalletAddress,
+	}
+	if r.PerMTok == "" {
+		r.PerRequest = d.PricePerRequest
+	}
+	if enabled, ok := d.Registration["enabled"].(bool); ok && !enabled {
+		r.NoRegister = true
+	}
+	return r
+}
+
+// liteLLMSellRecipe returns the two commands that sell a host inference
+// server on a host running the stack: register the endpoint with LiteLLM,
+// then publish a LiteLLM-backed `sell http` offer. Unknown values are
+// rendered as <placeholders>.
+func liteLLMSellRecipe(r inferenceRecipe) [2]string {
+	model := r.Model
+	if model == "" {
+		model = "<model-id>"
+	}
+	upstream := strings.TrimRight(strings.TrimSpace(r.Upstream), "/")
+	if upstream == "" {
+		upstream = "http://localhost:11434"
+	}
+	if !strings.HasSuffix(upstream, "/v1") {
+		upstream += "/v1"
+	}
+
+	setup := fmt.Sprintf("obol model setup custom --endpoint %s --model %s", upstream, model)
+
+	parts := []string{"obol sell http", r.Name, "--upstream litellm --port 4000 --namespace llm", "--model " + model}
+	switch {
+	case r.PerMTok != "":
+		parts = append(parts, "--per-mtok "+r.PerMTok)
+	case r.PerRequest != "":
+		parts = append(parts, "--per-request "+r.PerRequest)
+	default:
+		parts = append(parts, "--per-mtok <price>")
+	}
+	if r.Chain != "" {
+		parts = append(parts, "--network "+r.Chain)
+	}
+	if r.Token != "" && !strings.EqualFold(r.Token, "USDC") {
+		parts = append(parts, "--token "+r.Token)
+	}
+	if r.PayTo != "" {
+		parts = append(parts, "--pay-to "+r.PayTo)
+	}
+	if r.NoRegister {
+		parts = append(parts, "--no-register")
+	}
+
+	return [2]string{setup, strings.Join(parts, " ")}
+}
+
+// refuseSellInferenceWithStack returns the error `obol sell inference`
+// fails with when this host runs an Obol Stack and --standalone is not
+// set. The message carries the LiteLLM recipe filled with the operator's
+// flags.
+func refuseSellInferenceWithStack(cfg *config.Config, cmd *cli.Command, name string) error {
+	if cmd.Bool("standalone") {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")); err != nil {
+		return nil
+	}
+
+	perRequest := cmd.String("price")
+	if perRequest == "" {
+		perRequest = cmd.String("per-request")
+	}
+	r := inferenceRecipe{
+		Name:       name,
+		Model:      cmd.String("model"),
+		Upstream:   cmd.String("upstream"),
+		PerMTok:    cmd.String("per-mtok"),
+		PerRequest: perRequest,
+		Chain:      cmd.String("network"),
+		Token:      cmd.String("token"),
+		PayTo:      cmd.String("pay-to"),
+		NoRegister: cmd.Bool("no-register"),
+	}
+	if r.PerMTok != "" && r.PerRequest != "" {
+		// Same precedence as resolvePriceTable: a per-request price wins.
+		r.PerMTok = ""
+	}
+	recipe := liteLLMSellRecipe(r)
+
+	return fmt.Errorf("this host runs an Obol Stack, so `obol sell inference` will not start a host gateway here.\n"+
+		"Sell the inference server through LiteLLM instead (seller-pinned model, inference-only routes, settle on delivery):\n\n"+
+		"  %s\n"+
+		"  %s\n\n"+
+		"To run the standalone gateway with its own x402 gate on this host anyway, re-run with --standalone",
+		recipe[0], recipe[1])
+}
+
 // activeInferenceDeployments filters out tombstoned descriptors —
 // offers removed by `obol sell delete` whose on-disk state survives for
-// `sell inference list/status`. Pure so the resume exclusion is
-// testable on its own.
+// `sell status`. Pure so the resume exclusion is testable on its own.
 func activeInferenceDeployments(ds []*inference.Deployment) []*inference.Deployment {
 	var active []*inference.Deployment
 	for _, d := range ds {
@@ -4506,447 +4506,18 @@ func activeInferenceDeployments(ds []*inference.Deployment) []*inference.Deploym
 	return active
 }
 
-// resumeOneInferenceOffer re-creates the cluster-side artifacts that
-// `obol sell inference` would have produced for a single Deployment. Pure
-// in the sense that it only consumes the on-disk descriptor; it never
-// re-prompts the operator. Returns an error when the descriptor is
-// incomplete (no model name, no namespace, no listen port) so the resume
-// loop can surface a clear message per-offer.
-func resumeOneInferenceOffer(cfg *config.Config, u *ui.UI, d *inference.Deployment) error {
-	if d == nil || d.Name == "" {
-		return errors.New("nil or unnamed deployment descriptor")
-	}
-	// Offers created with the removed --vm / --tee modes are skipped rather
-	// than replayed as a plain host gateway: the operator asked for an
-	// isolated (VM) or attested (TEE) upstream, and silently serving the
-	// same offer without it would downgrade what buyers were promised.
-	if mode := d.RemovedIsolationMode(); mode != "" {
-		ns := d.ServiceNamespace
-		if ns == "" {
-			ns = "llm"
-		}
-
-		return fmt.Errorf("offer %q was created with `sell inference --%s`, which has been removed; not resuming it as a plain gateway. "+
-			"Recreate it without isolation (`obol sell inference %s --model <id> ...`) or delete it (`obol sell delete %s -n %s`)",
-			d.Name, strings.SplitN(mode, " ", 2)[0], d.Name, d.Name, ns)
-	}
-	if d.ModelName == "" {
-		return fmt.Errorf("deployment %q is missing model_name on disk — recreate the offer with `obol sell inference %s --model <id> ...`", d.Name, d.Name)
-	}
-	ns := d.ServiceNamespace
-	if ns == "" {
-		ns = "llm" // legacy descriptors written before service_namespace was persisted
-	}
-
-	port := "8402"
-	if idx := strings.LastIndex(d.ListenAddr, ":"); idx >= 0 && idx+1 < len(d.ListenAddr) {
-		port = d.ListenAddr[idx+1:]
-	}
-
-	if err := createHostService(cfg, d.Name, ns, port); err != nil {
-		return fmt.Errorf("create cluster Service/Endpoints: %w", err)
-	}
-
-	chainName := d.Chain
-	assetTerms, err := resolveAssetTermsFor(d.AssetSymbol, &chainName, true)
-	if err != nil {
-		return fmt.Errorf("resolve asset terms: %w", err)
-	}
-
-	pt := schemas.PriceTable{PerRequest: d.PricePerRequest, PerMTok: d.PricePerMTok}
-	soSpec, err := buildInferenceServiceOfferSpec(d, pt, ns, port, assetTerms, d.ModelName, d.Registration)
-	if err != nil {
-		return fmt.Errorf("rebuild ServiceOffer spec: %w", err)
-	}
-
-	manifest := map[string]any{
-		"apiVersion": "obol.org/v1alpha1",
-		"kind":       "ServiceOffer",
-		"metadata": map[string]any{
-			"name":      d.Name,
-			"namespace": ns,
-		},
-		"spec": soSpec,
-	}
-	if err := kubectlApply(cfg, manifest); err != nil {
-		return fmt.Errorf("apply ServiceOffer: %w", err)
-	}
-
-	// Auto-start the foreground x402 gateway as a detached background
-	// subprocess so the offer reaches UpstreamHealthy=True (and therefore
-	// shows up in /api/services.json) without the operator running an
-	// extra `obol sell inference` command after every stack-up.
-	//
-	// This is the pragmatic shape of the resume feature today. The proper
-	// long-term path is C from the design doc: build the inference gateway
-	// as an in-cluster Deployment image, helmfile-managed, so stack-up
-	// brings it back the same way it brings back Traefik or LiteLLM. That
-	// removes the host-side subprocess + PID-file plumbing entirely and
-	// lets the controller observe the gateway as a normal Pod. Tracked as
-	// a follow-up because the gateway code (internal/inference/gateway.go)
-	// currently runs in-process with the CLI, not as a packaged image.
-	if err := startDetachedInferenceGateway(cfg, u, d); err != nil {
-		u.Warnf("could not auto-start host gateway for %q: %v", d.Name, err)
-		u.Dim("  Run `obol sell inference " + d.Name + "` manually in a terminal you can keep open.")
-	}
-	return nil
-}
-
-// startDetachedInferenceGateway forks `obol sell inference <name>` as a
-// detached background subprocess. The CLI rebuilds the full flag set from
-// the persisted Deployment, redirects stdout/stderr to a log file under
-// the workspace state dir, and stores the PID alongside so subsequent
-// stack-ups can detect a still-running gateway and skip the relaunch.
-//
-// Skipped silently when a healthy PID is already on disk. Returns an
-// error only when launch itself fails (e.g. missing obol binary, log
-// file unwritable). Callers should warn-and-continue on failure — a
-// missing gateway leaves UpstreamHealthy=False which the controller will
-// re-emit clearly, while a hard error here would block the rest of the
-// resume loop.
-func startDetachedInferenceGateway(cfg *config.Config, u *ui.UI, d *inference.Deployment) error {
-	if d == nil || d.Name == "" {
-		return errors.New("nil or unnamed deployment")
-	}
-
-	stateDir := filepath.Join(cfg.StateDir, "sell-inference", d.Name)
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
-		return fmt.Errorf("create state dir: %w", err)
-	}
-	pidFile := filepath.Join(stateDir, "gateway.pid")
-	logFile := filepath.Join(stateDir, "gateway.log")
-
-	if pid, ok := readGatewayPID(pidFile); ok && processAlive(pid) {
-		u.Dim("  Gateway already running for " + d.Name + " (pid " + strconv.Itoa(pid) + ")")
+// validateSellInferenceModelName enforces the no-slash model-name rule
+// for `obol sell inference` offers.
+func validateSellInferenceModelName(model string) error {
+	if !strings.Contains(model, "/") {
 		return nil
 	}
-
-	obolBin, err := resumeGatewayBinary(cfg)
-	if err != nil {
-		return err
-	}
-
-	args := buildResumeGatewayArgs(d)
-
-	logF, err := os.OpenFile(logFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open log file: %w", err)
-	}
-
-	cmd := exec.Command(obolBin, args...)
-	cmd.Stdout = logF
-	cmd.Stderr = logF
-	cmd.SysProcAttr = detachedSysProcAttr()
-	cmd.Env = resumeGatewayEnviron()
-
-	if err := cmd.Start(); err != nil {
-		_ = logF.Close()
-		return fmt.Errorf("start gateway subprocess: %w", err)
-	}
-	// Snapshot the PID BEFORE Release — on Unix, os.Process.Release sets
-	// the Pid field to -1 as part of its handle teardown, so reading the
-	// field afterwards prints a misleading "-1" to the operator and pins
-	// a bogus -1 in the PID file. Persist + announce the captured value.
-	gatewayPID := cmd.Process.Pid
-	// We don't wait on the child, but releasing the handle ensures the
-	// parent process can exit cleanly without keeping a zombie reference.
-	if err := cmd.Process.Release(); err != nil {
-		u.Dim("  (could not release gateway process handle: " + err.Error() + ")")
-	}
-	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(gatewayPID)), 0o644); err != nil {
-		u.Warnf("gateway started (pid %d) but could not write %s: %v", gatewayPID, pidFile, err)
-	}
-	u.Successf("Gateway started in background (pid %d, log %s)", gatewayPID, logFile)
-	return nil
-}
-
-// resumeReplayEnv marks a spawned gateway process as a resume replay of
-// a previously-persisted offer. Validation that only exists to guard
-// *new* offer creation (e.g. the slash-in-model LiteLLM rule, added
-// after descriptors with slashed names were already on disk) downgrades
-// to a warning when this is set — tightening CLI validation must never
-// permanently strand an offer that was legal when it was created.
-const resumeReplayEnv = "OBOL_SELL_RESUME_REPLAY"
-
-// resumeGatewayEnviron is the environment for the relaunched gateway:
-// the parent's environment plus the resume-replay marker.
-func resumeGatewayEnviron() []string {
-	return append(os.Environ(), resumeReplayEnv+"=1")
-}
-
-// resumeGatewayBinary picks the obol binary used to relaunch a gateway.
-// It must be the binary running THIS process: buildResumeGatewayArgs
-// encodes the current version's flag surface, and handing those args to
-// a different (typically older, installed) obol re-parses them against
-// a different flag set. Live-debugged on the spark reboot test: the
-// installed rc11 predates the --description spelling and the relaunched
-// gateway died instantly with "flag provided but not defined". The
-// BinDir copy is only a fallback for the degenerate case where the
-// running executable's path cannot be resolved.
-func resumeGatewayBinary(cfg *config.Config) (string, error) {
-	if exe, err := os.Executable(); err == nil {
-		return exe, nil
-	}
-	obolBin := filepath.Join(cfg.BinDir, "obol")
-	if _, err := os.Stat(obolBin); err != nil {
-		return "", fmt.Errorf("locate obol binary: %w", err)
-	}
-	return obolBin, nil
-}
-
-// validateSellInferenceModelName enforces the no-slash model-name rule
-// for new offers, and relaxes it to a warning for resume replays of
-// descriptors that predate the rule. Returns a non-empty warning string
-// (for the caller to surface) when the name is tolerated on replay.
-func validateSellInferenceModelName(model string, resumeReplay bool) (string, error) {
-	if !strings.Contains(model, "/") {
-		return "", nil
-	}
 	suggestion := strings.ReplaceAll(model, "/", "--")
-	if resumeReplay {
-		return fmt.Sprintf(
-			"model %q contains '/' — tolerated because this is a resume replay of an existing offer, but LiteLLM `paid/*` buyers will see 404s; recreate the offer with a non-slash name (e.g. %q) when convenient",
-			model, suggestion,
-		), nil
-	}
-	return "", fmt.Errorf(
+	return fmt.Errorf(
 		"--model %q contains '/', which breaks LiteLLM's `paid/*` wildcard on the buyer side; "+
 			"use `--` (or another non-slash separator) — e.g. `%s` instead of `%s`",
 		model, suggestion, model,
 	)
-}
-
-// buildResumeGatewayArgs reconstructs the `obol sell inference` flag set
-// that originally created the offer, from the persisted Deployment. The
-// order matches obol sell inference's flag list so a future surface
-// reduction of the CLI doesn't silently drop a piece of operator intent
-// (CI's source-level guard tests catch that case).
-//
-// Exposed for testing: callers can compare the reproduced flag set
-// against the original `obol sell inference` invocation that wrote the
-// descriptor.
-func buildResumeGatewayArgs(d *inference.Deployment) []string {
-	args := []string{"sell", "inference", d.Name}
-	if d.ModelName != "" {
-		args = append(args, "--model", d.ModelName)
-	}
-	if d.UpstreamURL != "" {
-		args = append(args, "--upstream", d.UpstreamURL)
-	}
-	if d.WalletAddress != "" {
-		args = append(args, "--pay-to", d.WalletAddress)
-	}
-	if d.ListenAddr != "" {
-		args = append(args, "--listen", d.ListenAddr)
-	}
-	if d.Chain != "" {
-		args = append(args, "--network", d.Chain)
-	}
-	if d.AssetSymbol != "" {
-		args = append(args, "--token", d.AssetSymbol)
-	}
-	if d.PricePerMTok != "" {
-		args = append(args, "--per-mtok", d.PricePerMTok)
-	} else if d.PricePerRequest != "" {
-		args = append(args, "--price", d.PricePerRequest)
-	}
-	if d.FacilitatorURL != "" {
-		args = append(args, "--facilitator", d.FacilitatorURL)
-	}
-	// Registration block — rebuild --register-* flags from the persisted map.
-	if reg, ok := d.Registration["enabled"].(bool); ok && !reg {
-		args = append(args, "--no-register")
-	} else if d.Registration != nil {
-		if v, _ := d.Registration["name"].(string); v != "" {
-			args = append(args, "--register-name", v)
-		}
-		if v, _ := d.Registration["description"].(string); v != "" {
-			// --register-description, not --description: it is the one
-			// spelling every released CLI parses (primary name through
-			// rc11, kept alias since the rc12 rename), so a replayed
-			// descriptor survives being parsed by an older installed
-			// binary on the BinDir fallback path.
-			args = append(args, "--register-description", v)
-		}
-		if v, _ := d.Registration["image"].(string); v != "" {
-			args = append(args, "--register-image", v)
-		}
-		for _, s := range registrationStringSlice(d.Registration, "skills") {
-			args = append(args, "--register-skills", s)
-		}
-		for _, s := range registrationStringSlice(d.Registration, "domains") {
-			args = append(args, "--register-domains", s)
-		}
-	}
-	return args
-}
-
-func registrationStringSlice(reg map[string]any, key string) []string {
-	raw, ok := reg[key]
-	if !ok {
-		return nil
-	}
-	switch v := raw.(type) {
-	case []string:
-		return v
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	}
-	return nil
-}
-
-func readGatewayPID(path string) (int, bool) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0, false
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-	if err != nil || pid <= 0 {
-		return 0, false
-	}
-	return pid, true
-}
-
-func processAlive(pid int) bool {
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	// Signal 0 doesn't deliver — just probes existence/permission on Unix.
-	return p.Signal(syscall.Signal(0)) == nil
-}
-
-func createHostService(cfg *config.Config, name, ns, port string) error {
-	hostIP, err := resolveHostIP(cfg)
-	if err != nil {
-		return fmt.Errorf("cannot resolve host IP for cluster routing: %w", err)
-	}
-
-	portNum, err := strconv.Atoi(port)
-	if err != nil || portNum < 1 || portNum > 65535 {
-		return fmt.Errorf("invalid port %q: must be a number between 1 and 65535", port)
-	}
-
-	svc := map[string]any{
-		"apiVersion": "v1",
-		"kind":       "Service",
-		"metadata": map[string]any{
-			"name":      name,
-			"namespace": ns,
-		},
-		"spec": map[string]any{
-			"ports": []map[string]any{
-				{"port": portNum, "targetPort": portNum, "protocol": "TCP"},
-			},
-		},
-	}
-	ep := map[string]any{
-		"apiVersion": "v1",
-		"kind":       "Endpoints",
-		"metadata": map[string]any{
-			"name":      name,
-			"namespace": ns,
-		},
-		"subsets": []map[string]any{
-			{
-				"addresses": []map[string]any{
-					{"ip": hostIP},
-				},
-				"ports": []map[string]any{
-					{"port": portNum, "protocol": "TCP"},
-				},
-			},
-		},
-	}
-
-	if err := kubectlApply(cfg, svc); err != nil {
-		return fmt.Errorf("failed to create service: %w", err)
-	}
-
-	if err := kubectlApply(cfg, ep); err != nil {
-		return fmt.Errorf("failed to create endpoints: %w", err)
-	}
-
-	return nil
-}
-
-// resolveHostIP returns the host IP reachable from cluster containers.
-// For k3s (bare-metal) the host is localhost; for k3d the host is
-// reachable via Docker networking.
-func resolveHostIP(cfg *config.Config) (string, error) {
-	// Delegates to the same resolver `obol stack up` uses for the ollama
-	// Endpoints. This used to be a second copy of that strategy, which drifted:
-	// it returned 127.0.0.1 for the k3s backend, and Kubernetes rejects
-	// loopback addresses in Endpoints (enforced since v1.33) — which is exactly
-	// what this result is used to build. One resolver, one loopback guard.
-	return stackdefaults.OllamaHostIPForBackend(stack.DetectExistingBackend(cfg))
-}
-
-// buildInferenceServiceOfferSpec builds a ServiceOffer spec for a host-side
-// inference gateway routed through the cluster's x402 flow.
-//
-// modelName is the upstream model identifier the operator passed via --model
-// (e.g. "aeon-ultimate"). It is written into spec.model.name so the
-// serviceoffer-controller's registration document carries the real model id
-// rather than the historical hardcoded "ollama" string.
-//
-// registration is the operator's ERC-8004 registration block as produced by
-// buildSellRegistrationConfig — pass nil (or an empty map) to skip
-// registration. When non-nil it is merged verbatim into spec.registration.
-func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTable, ns, port string, asset schemas.AssetTerms, modelName string, registration map[string]any) (map[string]any, error) {
-	portNum, err := strconv.Atoi(port)
-	if err != nil || portNum < 1 || portNum > 65535 {
-		return nil, fmt.Errorf("invalid port %q: must be a number between 1 and 65535", port)
-	}
-	spec := map[string]any{
-		"type": "inference",
-		"upstream": map[string]any{
-			"service":    d.Name,
-			"namespace":  ns,
-			"port":       portNum,
-			"healthPath": "/health",
-		},
-		"payment": map[string]any{
-			"scheme":  "exact",
-			"network": d.Chain,
-			"payTo":   d.WalletAddress,
-			"price":   map[string]any{},
-		},
-		"path": "/services/" + d.Name,
-	}
-	if !asset.IsZero() {
-		spec["payment"].(map[string]any)["asset"] = asset
-	}
-
-	price := spec["payment"].(map[string]any)["price"].(map[string]any)
-	if pt.PerMTok != "" {
-		price["perMTok"] = pt.PerMTok
-	} else {
-		price["perRequest"] = d.PricePerRequest
-	}
-
-	if d.UpstreamURL != "" {
-		model := strings.TrimSpace(modelName)
-		if model == "" {
-			model = "ollama" // pre-fix fallback; the Action enforces --model
-		}
-		spec["model"] = map[string]any{
-			"name":    model,
-			"runtime": "ollama",
-		}
-	}
-
-	if len(registration) > 0 {
-		spec["registration"] = registration
-	}
-
-	return spec, nil
 }
 
 // sellOfferStoreDir returns the on-disk ledger of persisted ServiceOffer
@@ -4956,13 +4527,12 @@ func buildInferenceServiceOfferSpec(d *inference.Deployment, pt schemas.PriceTab
 // historical: it predates the ledger covering more than `sell http`.
 // Renaming it would orphan offers persisted by already-shipped CLIs.)
 //
-// EVERY offer type without a host-side process persists here: `sell
-// http`, `sell agent`, and the demo agent flow. The on-disk artifact is
-// just the rendered ServiceOffer manifest; the resume path
-// kubectl-applies it to bring the offer back identically. `sell
-// inference` keeps its own richer store (<ConfigDir>/inference/) because
-// it additionally tracks the host gateway (listen addr, asset terms,
-// registration, PID).
+// EVERY ServiceOffer type persists here: `sell http`, `sell agent`, and
+// the demo agent flow. The on-disk artifact is just the rendered
+// ServiceOffer manifest; the resume path kubectl-applies it to bring the
+// offer back identically. `sell inference` keeps its own store
+// (<ConfigDir>/inference/) for its standalone host gateway, which is
+// never replayed.
 func sellOfferStoreDir(cfg *config.Config) string {
 	return filepath.Join(cfg.ConfigDir, "sell-http")
 }

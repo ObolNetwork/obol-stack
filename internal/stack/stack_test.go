@@ -430,8 +430,8 @@ func TestDestroyOldBackendIfSwitching_LiveServicesRefusesNonInteractiveWithoutYe
 	k3dPath := filepath.Join(tmpDir, k3dConfigFile)
 	os.WriteFile(k3dPath, []byte("k3d config"), 0o644)
 
-	// A live sell-inference gateway makes this stack "serving traffic".
-	writeGatewayPID(t, cfg, "aeon", os.Getpid())
+	// A live ServiceOffer makes this stack "serving traffic".
+	withLiveOffer(t)
 
 	var buf bytes.Buffer
 	u := ui.NewForTest(&buf, &buf) // isTTY defaults false, no --yes
@@ -467,7 +467,7 @@ func TestDestroyOldBackendIfSwitching_SkipConfirmStillDestroys(t *testing.T) {
 	k3dPath := filepath.Join(tmpDir, k3dConfigFile)
 	os.WriteFile(k3dPath, []byte("k3d config"), 0o644)
 
-	writeGatewayPID(t, cfg, "aeon", os.Getpid())
+	withLiveOffer(t)
 
 	var buf bytes.Buffer
 	u := ui.NewForTest(&buf, &buf)

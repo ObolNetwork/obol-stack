@@ -22,7 +22,8 @@ var ErrDeploymentExists = errors.New("inference: deployment already exists")
 
 // Deployment is a named, persisted inference gateway configuration.
 // Unknown JSON fields are ignored on load, so descriptors written by older
-// releases (e.g. with the removed "enclave_tag" or "vm_*" fields) still load.
+// releases (e.g. with the removed "enclave_tag", "vm_*", "tee_type" or
+// "no_payment_gate" fields) still load.
 type Deployment struct {
 	// Name is the human-readable identifier for this deployment.
 	// Used as the directory name.
@@ -59,17 +60,12 @@ type Deployment struct {
 	// FacilitatorURL is the x402 facilitator URL.
 	FacilitatorURL string `json:"facilitator_url"`
 
-	// LegacyVMMode and LegacyTEEType are read-only remnants of the removed
-	// `--vm` (Apple Containerization) and `--tee` (TDX/SNP/Nitro attestation)
-	// modes. The CLI never sets them; they are decoded only so resume can
-	// refuse to silently downgrade such an offer to a plain gateway. See
-	// RemovedIsolationMode.
-	LegacyVMMode  bool   `json:"vm_mode,omitempty"`
-	LegacyTEEType string `json:"tee_type,omitempty"`
-
-	// NoPaymentGate disables the built-in x402 payment middleware when the
-	// gateway runs behind the cluster's x402 verifier to avoid double-gating.
-	NoPaymentGate bool `json:"no_payment_gate,omitempty"`
+	// Mode records how the gateway runs. Every descriptor written by the
+	// current CLI is ModeStandalone (built-in x402 gate, host listener).
+	// Descriptors without it predate the removal of cluster routing: on a
+	// host with a stack, resume used to publish them as cluster
+	// ServiceOffers fronting the host gateway. See LegacyClusterRouted.
+	Mode string `json:"mode,omitempty"`
 
 	// Provenance holds optional metadata about how the model was produced
 	// (e.g. training or benchmark results). Stored alongside the deployment
@@ -77,15 +73,13 @@ type Deployment struct {
 	Provenance *Provenance `json:"provenance,omitempty"`
 
 	// ModelName is the upstream model identifier the operator selected via
-	// `obol sell inference --model <name>` (e.g. "aeon-ultimate"). Persisted
-	// so `obol stack up` can rebuild the ServiceOffer's spec.model.name on
-	// resume without re-prompting the operator.
+	// `obol sell inference --model <name>` (e.g. "aeon-ultimate").
 	ModelName string `json:"model_name,omitempty"`
 
-	// ServiceNamespace is the Kubernetes namespace the cluster-routed Service
-	// + Endpoints + ServiceOffer live in (typically "llm" for inference
-	// deployments co-located with LiteLLM). Persisted so the resume path
-	// re-applies into the same namespace.
+	// ServiceNamespace is the Kubernetes namespace a legacy cluster-routed
+	// descriptor's Service + Endpoints + ServiceOffer live in (typically
+	// "llm"). Only read for legacy descriptors, so `obol sell delete` and
+	// the resume warning can name the right namespace.
 	ServiceNamespace string `json:"service_namespace,omitempty"`
 
 	// Registration is the ERC-8004 registration block the operator passed at
@@ -101,13 +95,12 @@ type Deployment struct {
 	// UpdatedAt is the RFC3339 timestamp of the most recent update.
 	UpdatedAt string `json:"updated_at,omitempty"`
 
-	// DeletedAt is set when `obol sell delete` removes the offer from
-	// the cluster. The descriptor stays on disk for `sell inference
-	// list/status` history, but resume must not replay a tombstoned
-	// offer (it would re-create the ServiceOffer and relaunch the host
-	// gateway, undoing the delete). Re-creating the offer with
-	// `obol sell inference <name>` rewrites the descriptor and clears
-	// the tombstone.
+	// DeletedAt is set when `obol sell delete` removes a legacy
+	// cluster-routed offer from the cluster. The descriptor stays on disk
+	// for `sell status` history; resume skips tombstoned descriptors
+	// silently instead of warning about them on every stack up.
+	// Re-creating the offer with `obol sell inference <name>` rewrites the
+	// descriptor and clears the tombstone.
 	DeletedAt string `json:"deleted_at,omitempty"`
 }
 
@@ -123,19 +116,17 @@ type Provenance struct {
 	ParamCount   string `json:"paramCount,omitempty"`   // e.g. "50000000"
 }
 
-// RemovedIsolationMode reports which removed isolation mode (if any) the
-// persisted descriptor was created with: "vm", "tee (<backend>)", or "" for a
-// plain gateway. Callers that replay descriptors use it to skip offers whose
-// operator explicitly asked for isolation the CLI can no longer provide.
-func (d *Deployment) RemovedIsolationMode() string {
-	switch {
-	case d.LegacyTEEType != "":
-		return "tee (" + d.LegacyTEEType + ")"
-	case d.LegacyVMMode:
-		return "vm"
-	}
+// ModeStandalone marks a descriptor written by a CLI where `obol sell
+// inference` only runs as a standalone host gateway with its own x402 gate.
+const ModeStandalone = "standalone"
 
-	return ""
+// LegacyClusterRouted reports whether the descriptor predates standalone-only
+// `obol sell inference`, i.e. it was (or on resume would have been) published
+// as a cluster ServiceOffer fronting the host gateway. That routing has been
+// removed; resume skips these descriptors and points the operator at the
+// LiteLLM-backed `obol sell http` path instead.
+func (d *Deployment) LegacyClusterRouted() bool {
+	return d.Mode != ModeStandalone
 }
 
 // validDeploymentName matches safe deployment names: alphanumeric, hyphens,

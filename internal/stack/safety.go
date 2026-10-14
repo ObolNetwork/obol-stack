@@ -4,12 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
-	"strconv"
-	"strings"
-	"syscall"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
@@ -27,24 +22,22 @@ type LiveServiceOffer struct {
 	Price     string
 }
 
-// LiveHostGateway is a sell-inference offer with a still-running host
-// gateway process (PID file present and alive). These survive `obol stack
-// down` of the cluster and need a separate signal.
-type LiveHostGateway struct {
-	Name string
-	PID  int
-}
-
 // LiveServices captures the snapshot used by ConfirmRunningServicesLoss.
+// Only cluster-side offers are tracked: `obol sell inference` gateways are
+// standalone foreground processes that do not depend on the cluster, so
+// tearing the cluster down does not affect them.
 type LiveServices struct {
-	Offers   []LiveServiceOffer
-	Gateways []LiveHostGateway
+	Offers []LiveServiceOffer
 }
 
-// Empty returns true when no live cluster services and no live host
-// gateways were found. The caller treats this as "safe to proceed without
-// prompting".
-func (s LiveServices) Empty() bool { return len(s.Offers) == 0 && len(s.Gateways) == 0 }
+// Empty returns true when no live cluster services were found. The caller
+// treats this as "safe to proceed without prompting".
+func (s LiveServices) Empty() bool { return len(s.Offers) == 0 }
+
+// discoverLiveServices is the snapshot source used by
+// ConfirmRunningServicesLoss. A package variable so tests can inject a
+// live snapshot without a cluster.
+var discoverLiveServices = DiscoverLiveServices
 
 // ConfirmRunningServicesLoss warns the operator when a destructive action
 // (`obol stack down` / `obol stack purge`) is about to tear down a cluster
@@ -52,7 +45,7 @@ func (s LiveServices) Empty() bool { return len(s.Offers) == 0 && len(s.Gateways
 //
 // Returns true when the caller should continue. The rules:
 //
-//   - No live offers and no live gateways -> pass through (no prompt).
+//   - No live offers -> pass through (no prompt).
 //   - skipConfirm (operator passed --yes) -> pass through.
 //   - Interactive TTY -> render the list and ask `ui.Confirm` (default N).
 //   - Non-interactive without --yes -> return a non-nil error so the
@@ -60,19 +53,19 @@ func (s LiveServices) Empty() bool { return len(s.Offers) == 0 && len(s.Gateways
 //     `ssh host '<obol stack down>'` from a non-prod worktree wiping the
 //     production stack without an explicit operator decision.
 func ConfirmRunningServicesLoss(cfg *config.Config, u *ui.UI, action string, skipConfirm bool) (bool, error) {
-	services := DiscoverLiveServices(cfg)
+	services := discoverLiveServices(cfg)
 	if services.Empty() {
 		return true, nil
 	}
 	if skipConfirm {
-		u.Warnf("%s: %d live offer(s), %d host gateway(s) — proceeding because --yes was passed",
-			action, len(services.Offers), len(services.Gateways))
+		u.Warnf("%s: %d live offer(s) — proceeding because --yes was passed",
+			action, len(services.Offers))
 		return true, nil
 	}
 
 	if !u.CanPrompt() {
-		return false, fmt.Errorf("refusing to run %q non-interactively while %d live offer(s) and %d host gateway(s) are serving traffic: pass --yes to confirm",
-			action, len(services.Offers), len(services.Gateways))
+		return false, fmt.Errorf("refusing to run %q non-interactively while %d live offer(s) are serving traffic: pass --yes to confirm",
+			action, len(services.Offers))
 	}
 
 	u.Blank()
@@ -96,9 +89,6 @@ func ConfirmRunningServicesLoss(cfg *config.Config, u *ui.UI, action string, ski
 		}
 		u.Dim("      " + summary)
 	}
-	for _, g := range services.Gateways {
-		u.Printf("  • sell-inference gateway %s (pid %d) will be orphaned", g.Name, g.PID)
-	}
 	u.Blank()
 	u.Dim(fmt.Sprintf("  After `%s`, external buyers will see 402/530 errors until `obol stack up`.", action))
 	u.Blank()
@@ -107,16 +97,12 @@ func ConfirmRunningServicesLoss(cfg *config.Config, u *ui.UI, action string, ski
 }
 
 // DiscoverLiveServices snapshots cluster-side ServiceOffers in a
-// payment-gate-ready state and host-side sell-inference gateways with
-// alive PID files. Errors are intentionally swallowed: a discovery failure
+// payment-gate-ready state. Errors are intentionally swallowed: a discovery failure
 // must not block `obol stack down`. A best-effort empty snapshot is
 // returned so the caller falls through to "no prompt needed" only when we
 // have positive evidence of nothing live.
 func DiscoverLiveServices(cfg *config.Config) LiveServices {
-	return LiveServices{
-		Offers:   discoverLiveOffers(cfg),
-		Gateways: discoverLiveHostGateways(cfg),
-	}
+	return LiveServices{Offers: discoverLiveOffers(cfg)}
 }
 
 // discoverLiveOffers returns ServiceOffers whose PaymentGateReady AND
@@ -128,7 +114,7 @@ func DiscoverLiveServices(cfg *config.Config) LiveServices {
 func discoverLiveOffers(cfg *config.Config) []LiveServiceOffer {
 	if err := kubectl.EnsureCluster(cfg); err != nil {
 		// Cluster already unreachable: down/purge is a no-op for the
-		// in-cluster side. Caller will still see host gateways.
+		// in-cluster side.
 		return nil
 	}
 	bin, kc := kubectl.Paths(cfg)
@@ -228,49 +214,6 @@ func (o rawOffer) priceSummary() string {
 		return fmt.Sprintf("%s %s/hour", o.Spec.Payment.Price.PerHour, asset)
 	}
 	return ""
-}
-
-// discoverLiveHostGateways walks <StateDir>/sell-inference/<name>/gateway.pid
-// for each persisted sell-inference deployment and reports those with a
-// PID file pointing at an alive process. Mirrors the readGatewayPID +
-// processAlive logic in cmd/obol/sell.go to avoid an import-from-cmd
-// cycle.
-func discoverLiveHostGateways(cfg *config.Config) []LiveHostGateway {
-	root := filepath.Join(cfg.StateDir, "sell-inference")
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil
-	}
-	out := make([]LiveHostGateway, 0, len(entries))
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		pidPath := filepath.Join(root, e.Name(), "gateway.pid")
-		data, err := os.ReadFile(pidPath)
-		if err != nil {
-			continue
-		}
-		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-		if err != nil || pid <= 0 {
-			continue
-		}
-		if !pidAlive(pid) {
-			continue
-		}
-		out = append(out, LiveHostGateway{Name: e.Name(), PID: pid})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
-}
-
-func pidAlive(pid int) bool {
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	// Signal 0 doesn't deliver — just probes existence/permission on Unix.
-	return p.Signal(syscall.Signal(0)) == nil
 }
 
 // errSafetyAborted is a sentinel for "user declined a ConfirmRunningServicesLoss
