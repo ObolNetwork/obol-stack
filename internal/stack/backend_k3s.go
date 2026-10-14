@@ -24,7 +24,28 @@ const (
 )
 
 // K3sBackend manages a standalone k3s cluster (bare-metal)
-type K3sBackend struct{}
+type K3sBackend struct {
+	// proc and signal are nil in production (real /proc, `sudo kill`);
+	// tests inject fakes.
+	proc   procFS
+	signal func(pid int, sig string) error
+}
+
+func (b *K3sBackend) procfs() procFS {
+	if b.proc != nil {
+		return b.proc
+	}
+	return sysProcFS{root: "/proc"}
+}
+
+func (b *K3sBackend) sendSignal(pid int, sig string) error {
+	if b.signal != nil {
+		return b.signal(pid, sig)
+	}
+	return sudoSignal(pid, sig)
+}
+
+func k3sBinaryPath(cfg *config.Config) string { return filepath.Join(cfg.BinDir, "k3s") }
 
 func (b *K3sBackend) Name() string { return BackendK3s }
 
@@ -81,12 +102,13 @@ func (b *K3sBackend) Init(cfg *config.Config, u *ui.UI, stackID string, force bo
 }
 
 func (b *K3sBackend) IsRunning(cfg *config.Config, stackID string) (bool, error) {
-	pid, err := b.readPid(cfg)
+	rec, err := b.readPidRecord(cfg)
 	if err != nil {
 		return false, nil //nolint:nilerr // missing PID file means not running
 	}
 
-	return b.isProcessAlive(pid), nil
+	state, _ := checkK3sPid(b.procfs(), rec, k3sBinaryPath(cfg))
+	return state == k3sPidVerified, nil
 }
 
 func (b *K3sBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, error) {
@@ -152,12 +174,24 @@ func (b *K3sBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 		return nil, fmt.Errorf("failed to start k3s: %w", err)
 	}
 
-	// Save PID before releasing the process handle
-	pid := cmd.Process.Pid
+	// cmd.Process is the sudo wrapper. Record k3s's own PID plus its start
+	// time so Down/Destroy can verify the PID still names this k3s server
+	// before signalling it (PIDs are reused after a reboot or crash).
+	sudoPid := cmd.Process.Pid
+	rec, resolveErr := resolveK3sServerPid(b.procfs(), sudoPid, k3sBinary, 15*time.Second)
+	if resolveErr != nil {
+		// Fall back to the sudo wrapper (it relays SIGTERM to k3s); its
+		// start time still guards against PID reuse.
+		u.Warnf("Could not find the k3s server process under sudo (%v); recording the sudo wrapper's PID", resolveErr)
+		rec = k3sPidRecord{PID: sudoPid}
+		if _, start, statErr := b.procfs().Stat(sudoPid); statErr == nil {
+			rec.StartTime = start
+		}
+	}
 
 	// Write PID file
 	pidPath := filepath.Join(cfg.ConfigDir, k3sPidFile)
-	if err := os.WriteFile(pidPath, []byte(strconv.Itoa(pid)), 0o600); err != nil {
+	if err := os.WriteFile(pidPath, []byte(rec.String()+"\n"), 0o600); err != nil {
 		logFile.Close()
 		return nil, fmt.Errorf("failed to write k3s PID file: %w", err)
 	}
@@ -167,6 +201,7 @@ func (b *K3sBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 
 	logFile.Close()
 
+	pid := rec.PID
 	u.Detail("PID", strconv.Itoa(pid))
 	u.Detail("Logs", logPath)
 
@@ -219,39 +254,47 @@ func (b *K3sBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 }
 
 func (b *K3sBackend) Down(cfg *config.Config, u *ui.UI, stackID string) error {
-	pid, err := b.readPid(cfg)
+	k3sBinary := k3sBinaryPath(cfg)
+	rec, err := b.readPidRecord(cfg)
 	if err != nil {
 		u.Warn("k3s PID file not found; cleaning up any orphaned runtime state")
-	} else if !b.isProcessAlive(pid) {
+	} else if state, why := checkK3sPid(b.procfs(), rec, k3sBinary); state == k3sPidGone {
 		u.Warn("k3s process not running; cleaning up orphaned runtime state")
+	} else if state == k3sPidReused {
+		// Never signal a PID we cannot prove is still our k3s server: after
+		// a reboot or crash it may belong to an unrelated process.
+		u.Warnf("Stale k3s PID file %s: pid %d is no longer this k3s server (%s); not signalling it",
+			filepath.Join(cfg.ConfigDir, k3sPidFile), rec.PID, why)
+		b.removePidFile(cfg)
+		u.Printf("  If k3s is still running, stop it manually: sudo pkill -TERM -f '%s server'", k3sBinary)
 	} else {
+		pid := rec.PID
 		u.Infof("Stopping k3s (pid: %d)", pid)
 
-		pidStr := strconv.Itoa(pid)
-
-		stopCmd := exec.Command("sudo", "kill", "-TERM", pidStr)
-		if err := u.Exec(ui.ExecConfig{
-			Name: "Sending SIGTERM to k3s",
-			Cmd:  stopCmd,
-		}); err != nil {
+		if err := b.sendSignal(pid, "TERM"); err != nil {
 			u.Warnf("SIGTERM failed: %v", err)
 		}
 
 		// Give k3s a chance to shut down gracefully before the official cleanup
 		// helper stops any remaining containers and runtime processes.
+		alive := func() bool {
+			state, _ := checkK3sPid(b.procfs(), rec, k3sBinary)
+			return state == k3sPidVerified
+		}
 		deadline := time.Now().Add(30 * time.Second)
 		for time.Now().Before(deadline) {
-			if !b.isProcessAlive(pid) {
+			if !alive() {
 				break
 			}
 
 			time.Sleep(1 * time.Second)
 		}
 
-		if b.isProcessAlive(pid) {
+		// Re-verified right before SIGKILL: the PID must still be our k3s.
+		if alive() {
 			u.Warn("k3s did not exit after 30s; sending SIGKILL")
 
-			if err := exec.Command("sudo", "kill", "-KILL", pidStr).Run(); err != nil {
+			if err := b.sendSignal(pid, "KILL"); err != nil {
 				u.Warnf("SIGKILL failed: %v", err)
 			}
 		}
@@ -370,41 +413,61 @@ func (b *K3sBackend) cleanupRuntime(cfg *config.Config, u *ui.UI) error {
 
 // readPid reads the k3s PID from the PID file
 func (b *K3sBackend) readPid(cfg *config.Config) (int, error) {
+	rec, err := b.readPidRecord(cfg)
+	return rec.PID, err
+}
+
+// readPidRecord reads "<pid> <starttime>" from the PID file. Files written
+// by older versions hold only the PID (StartTime 0).
+func (b *K3sBackend) readPidRecord(cfg *config.Config) (k3sPidRecord, error) {
 	pidPath := filepath.Join(cfg.ConfigDir, k3sPidFile)
 
 	data, err := os.ReadFile(pidPath)
 	if err != nil {
-		return 0, err
+		return k3sPidRecord{}, err
 	}
 
-	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	fields := strings.Fields(string(data))
+	if len(fields) == 0 || len(fields) > 2 {
+		return k3sPidRecord{}, fmt.Errorf("invalid PID in %s: %q", pidPath, strings.TrimSpace(string(data)))
+	}
+
+	pid, err := strconv.Atoi(fields[0])
 	if err != nil {
-		return 0, fmt.Errorf("invalid PID in %s: %w", pidPath, err)
+		return k3sPidRecord{}, fmt.Errorf("invalid PID in %s: %w", pidPath, err)
 	}
 
 	if pid <= 0 {
-		return 0, fmt.Errorf("invalid PID in %s: %d", pidPath, pid)
+		return k3sPidRecord{}, fmt.Errorf("invalid PID in %s: %d", pidPath, pid)
 	}
 
-	return pid, nil
+	rec := k3sPidRecord{PID: pid}
+	if len(fields) == 2 {
+		start, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			return k3sPidRecord{}, fmt.Errorf("invalid start time in %s: %w", pidPath, err)
+		}
+		rec.StartTime = start
+	}
+
+	return rec, nil
 }
 
-// cleanStalePid removes the PID file if the process is no longer running
+// cleanStalePid removes the PID file unless it still names this k3s server.
 func (b *K3sBackend) cleanStalePid(cfg *config.Config, u *ui.UI) {
-	pid, err := b.readPid(cfg)
+	rec, err := b.readPidRecord(cfg)
 	if err != nil {
 		return
 	}
 
-	if !b.isProcessAlive(pid) {
-		u.Dim(fmt.Sprintf("  Cleaning up stale PID file (pid %d no longer running)", pid))
+	switch state, why := checkK3sPid(b.procfs(), rec, k3sBinaryPath(cfg)); state {
+	case k3sPidGone:
+		u.Dim(fmt.Sprintf("  Cleaning up stale PID file (pid %d no longer running)", rec.PID))
+		b.removePidFile(cfg)
+	case k3sPidReused:
+		u.Dim(fmt.Sprintf("  Cleaning up stale PID file (pid %d is no longer k3s: %s)", rec.PID, why))
 		b.removePidFile(cfg)
 	}
-}
-
-// isProcessAlive checks if a root-owned process is still running.
-func (b *K3sBackend) isProcessAlive(pid int) bool {
-	return exec.Command("sudo", "kill", "-0", strconv.Itoa(pid)).Run() == nil
 }
 
 // removePidFile removes the k3s PID file

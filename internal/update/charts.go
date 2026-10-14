@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
 	"gopkg.in/yaml.v3"
 )
 
@@ -176,9 +177,17 @@ func UpgradeHelmfileVersions(cfg *config.Config, major bool, chartFilter string)
 	var allBumps []VersionBump
 
 	for _, helmfilePath := range collectHelmfiles(cfg) {
+		before, _ := os.ReadFile(helmfilePath)
 		bumps, err := upgradeOneHelmfile(helmfilePath, helmBinary, kubeconfigPath, major, chartFilter, reported)
 		if err != nil {
 			continue // best-effort: skip unreadable instance helmfiles
+		}
+		if len(bumps) > 0 {
+			// obol's own version bump in the defaults helmfile is not a
+			// hand-edit; keep the defaults manifest in step.
+			if after, readErr := os.ReadFile(helmfilePath); readErr == nil {
+				stackdefaults.RecordRewrite(cfg, helmfilePath, before, after)
+			}
 		}
 
 		allBumps = append(allBumps, bumps...)

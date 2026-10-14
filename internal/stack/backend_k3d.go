@@ -235,7 +235,17 @@ func (b *K3dBackend) Down(cfg *config.Config, u *ui.UI, stackID string) error {
 		Name: "Stopping k3d cluster",
 		Cmd:  stopCmd,
 	}); err != nil {
-		u.Warn("Graceful stop failed, forcing cluster deletion")
+		// Deleting the cluster destroys every in-cluster resource (sub-agent
+		// wallet Secrets, CRs), so it is never a silent fallback for a
+		// failed stop: ask on a TTY (default No), refuse otherwise.
+		u.Warnf("Graceful stop failed: %v", err)
+		if !u.CanPrompt() {
+			return fmt.Errorf("failed to stop cluster %s (not deleting it without confirmation; delete it yourself with 'k3d cluster delete %s' or run 'obol stack purge'): %w", stackName, stackName, err)
+		}
+		u.Warn("Deleting the cluster destroys everything in it, including sub-agent wallet Secrets (config and host data are kept).")
+		if !u.Confirm(fmt.Sprintf("Delete cluster %s instead?", stackName), false) {
+			return fmt.Errorf("failed to stop cluster %s (left in place): %w", stackName, err)
+		}
 
 		deleteCmd := exec.Command(cfg.ToolPath("k3d"), "cluster", "delete", stackName)
 		if err := u.Exec(ui.ExecConfig{

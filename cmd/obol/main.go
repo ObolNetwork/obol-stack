@@ -122,7 +122,7 @@ func newRootCommand(cfg *config.Config) *cli.Command {
 							&cli.BoolFlag{
 								Name:    "yes",
 								Aliases: []string{"y"},
-								Usage:   "Skip the live-services confirmation prompt when --force switches backends (required in non-interactive shells when offers are running)",
+								Usage:   "Confirm destroying the old cluster when --force switches backends (required in non-interactive shells)",
 							},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -137,10 +137,14 @@ func newRootCommand(cfg *config.Config) *cli.Command {
 								Name:  "wildcard-dns",
 								Usage: "Configure wildcard *.obol.stack DNS via NetworkManager/dnsmasq (Linux) or /etc/resolver (macOS)",
 							},
+							&cli.BoolFlag{
+								Name:  "reset-defaults",
+								Usage: "Overwrite hand-edited files in the defaults tree with the shipped defaults (edited files are backed up first)",
+							},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							u := getUI(cmd)
-							if err := runStackUp(ctx, cfg, u, cmd.Bool("wildcard-dns")); err != nil {
+							if err := runStackUp(ctx, cfg, u, cmd.Bool("wildcard-dns"), cmd.Bool("reset-defaults")); err != nil {
 								return err
 							}
 							printStackUpLinks(cfg, u)
@@ -173,7 +177,7 @@ func newRootCommand(cfg *config.Config) *cli.Command {
 							&cli.BoolFlag{
 								Name:    "yes",
 								Aliases: []string{"y"},
-								Usage:   "Skip the live-services confirmation prompt (required in non-interactive shells when offers are running)",
+								Usage:   "Skip the confirmation prompt (required in non-interactive shells when offers are running or the cluster cannot be checked)",
 							},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -416,8 +420,8 @@ func debugReadBuildInfo() (string, bool) {
 // runStackUp is the full `obol stack up`: cluster + infra, then replay of every
 // recorded piece of operator state. Shared with `obol stack import`, which
 // brings a restored stack up through exactly this path.
-func runStackUp(ctx context.Context, cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
-	if err := stack.Up(cfg, u, wildcardDNS); err != nil {
+func runStackUp(ctx context.Context, cfg *config.Config, u *ui.UI, wildcardDNS, resetDefaults bool) error {
+	if err := stack.Up(cfg, u, wildcardDNS, resetDefaults); err != nil {
 		return err
 	}
 	// Replay every recorded piece of operator state (models, networks, RPC

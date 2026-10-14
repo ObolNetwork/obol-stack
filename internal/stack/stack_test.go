@@ -336,9 +336,9 @@ func TestDestroyOldBackendIfSwitching_CleansStaleConfigs(t *testing.T) {
 	k3dPath := filepath.Join(tmpDir, k3dConfigFile)
 	os.WriteFile(k3dPath, []byte("k3d config"), 0o644)
 
-	// Switch to k3s — k3d config should be cleaned up
-	// (Destroy will fail because no real cluster, but cleanup should still work)
-	if err := destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3s, "test-id", false); err != nil {
+	// Switch to k3s (confirmed with --yes) — k3d config should be cleaned up.
+	stubDestroy(t)
+	if err := destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3s, "test-id", true); err != nil {
 		t.Fatalf("destroyOldBackendIfSwitching: %v", err)
 	}
 
@@ -384,8 +384,9 @@ func TestDestroyOldBackendIfSwitching_K3sToK3d(t *testing.T) {
 		os.WriteFile(filepath.Join(tmpDir, f), []byte("data"), 0o644)
 	}
 
-	// Switch to k3d — k3s files should be cleaned up
-	if err := destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3d, "test-id", false); err != nil {
+	// Switch to k3d (confirmed with --yes) — k3s files should be cleaned up
+	stubDestroy(t)
+	if err := destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3d, "test-id", true); err != nil {
 		t.Fatalf("destroyOldBackendIfSwitching: %v", err)
 	}
 
@@ -468,6 +469,7 @@ func TestDestroyOldBackendIfSwitching_SkipConfirmStillDestroys(t *testing.T) {
 	os.WriteFile(k3dPath, []byte("k3d config"), 0o644)
 
 	withLiveOffer(t)
+	stubDestroy(t) // never run the real k3d delete from a unit test
 
 	var buf bytes.Buffer
 	u := ui.NewForTest(&buf, &buf)

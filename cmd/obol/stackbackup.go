@@ -91,7 +91,7 @@ claim the ingress ports; one that does is never deleted.`,
 				SkipCluster: cmd.Bool("skip-cluster"),
 				ClusterOnly: cmd.Bool("cluster-only"),
 				SkipSync:    cmd.Bool("skip-sync"),
-				StackUp:     func() error { return runStackUp(ctx, cfg, u, false) },
+				StackUp:     func() error { return runStackUp(ctx, cfg, u, false, false) },
 			}, u)
 		},
 	}

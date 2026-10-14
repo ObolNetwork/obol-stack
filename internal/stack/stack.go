@@ -43,9 +43,9 @@ const (
 	stackIDFile    = ".stack-id"
 )
 
-// Init initializes the stack configuration. skipConfirm (--yes) bypasses the
-// live-services confirmation prompt when --force switches backends and would
-// otherwise destroy a cluster serving live traffic (mirrors Down/Purge).
+// Init initializes the stack configuration. When --force switches backends
+// the old cluster is destroyed, which always needs confirmation: a default-No
+// prompt on a TTY, or skipConfirm (--yes) in non-interactive shells.
 func Init(cfg *config.Config, u *ui.UI, force bool, backendName string, skipConfirm bool) error {
 	// Check if any stack config already exists (legacy k3d.yaml included).
 	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
@@ -110,9 +110,9 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string, skipConf
 	// If switching backends, destroy the old one first to prevent
 	// orphaned clusters (e.g., k3d containers still running after
 	// switching to k3s, or k3s process still alive after switching to k3d).
-	// Gated on ConfirmRunningServicesLoss (same safety bar as Down/Purge) so
-	// this destructive step can't run unconfirmed against a cluster serving
-	// live traffic.
+	// Gated on ConfirmClusterDestroy with always=true: destroying a cluster
+	// never happens without an explicit yes, whether or not anything was
+	// found running (or could be checked).
 	if hasExistingConfig && force {
 		if err := destroyOldBackendIfSwitching(cfg, u, backendName, stackID, skipConfirm); err != nil {
 			// A declined safety prompt stops Init entirely (nothing switched,
@@ -129,9 +129,16 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string, skipConf
 		return err
 	}
 
-	// Copy embedded defaults (helmfile + charts for infrastructure).
-	if err := stackdefaults.CopyInfrastructure(cfg, backendName, stackID); err != nil {
+	// Copy embedded defaults (helmfile + charts for infrastructure). On
+	// --force this overwrites the whole tree; hand-edited files are backed
+	// up first and listed.
+	copied, err := stackdefaults.RefreshInfrastructure(cfg, backendName, stackID,
+		stackdefaults.RefreshOptions{Force: true, Reset: true})
+	if err != nil {
 		return fmt.Errorf("failed to copy defaults: %w", err)
+	}
+	if len(copied.BackedUp) > 0 {
+		stackdefaults.ReportRefresh(u, copied, "")
 	}
 
 	// Store stack ID
@@ -151,9 +158,9 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string, skipConf
 
 // destroyOldBackendIfSwitching checks if the backend is changing and tears down
 // the old one to prevent orphaned clusters running side by side. The destroy
-// is gated on ConfirmRunningServicesLoss — the same safety bar `obol stack
-// down`/`purge` use — since it's just as capable of destroying a cluster that
-// is currently serving paid traffic.
+// always requires confirmation (ConfirmClusterDestroy, always=true); live
+// services are listed and an unreachable cluster is reported as unchecked.
+// A same-backend --force destroys nothing and is not prompted.
 func destroyOldBackendIfSwitching(cfg *config.Config, u *ui.UI, newBackend, stackID string, skipConfirm bool) error {
 	oldBackend, err := LoadBackend(cfg)
 	if err != nil {
@@ -164,7 +171,7 @@ func destroyOldBackendIfSwitching(cfg *config.Config, u *ui.UI, newBackend, stac
 		return nil // same backend, nothing to clean up
 	}
 
-	proceed, err := ConfirmRunningServicesLoss(cfg, u, "stack init --force (backend switch)", skipConfirm)
+	proceed, err := ConfirmClusterDestroy(cfg, u, "stack init --force (backend switch)", skipConfirm, true)
 	if err != nil {
 		return err
 	}
@@ -180,7 +187,7 @@ func destroyOldBackendIfSwitching(cfg *config.Config, u *ui.UI, newBackend, stac
 
 	// Destroy the old backend's cluster (best-effort, don't block init)
 	if stackID != "" {
-		if err := oldBackend.Destroy(cfg, u, stackID); err != nil {
+		if err := destroyBackendFn(oldBackend, cfg, u, stackID); err != nil {
 			u.Warnf("Failed to destroy old %s cluster: %v", oldBackend.Name(), err)
 		}
 	}
@@ -188,6 +195,11 @@ func destroyOldBackendIfSwitching(cfg *config.Config, u *ui.UI, newBackend, stac
 	// Clean up stale config files from the old backend
 	cleanupStaleBackendConfigs(cfg, oldBackend.Name())
 	return nil
+}
+
+// destroyBackendFn is swappable in tests so they never run k3d/k3s.
+var destroyBackendFn = func(b Backend, cfg *config.Config, u *ui.UI, stackID string) error {
+	return b.Destroy(cfg, u, stackID)
 }
 
 // cleanupStaleBackendConfigs removes config files belonging to the old backend
@@ -210,8 +222,10 @@ func cleanupStaleBackendConfigs(cfg *config.Config, oldBackend string) {
 	}
 }
 
-// Up starts the cluster using the configured backend
-func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
+// Up starts the cluster using the configured backend. resetDefaults
+// (--reset-defaults) overwrites hand-edited files in the defaults tree with
+// the shipped defaults, backing them up first.
+func Up(cfg *config.Config, u *ui.UI, wildcardDNS, resetDefaults bool) error {
 	stackID := getStackID(cfg)
 	if stackID == "" {
 		return errors.New("stack ID not found, run 'obol stack init' first")
@@ -240,10 +254,20 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 		return fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
 
-	if refreshed, err := stackdefaults.RefreshInfrastructureIfChanged(cfg, backend.Name(), stackID); err != nil {
+	// Hand-edits to the defaults tree survive a refresh (the new default is
+	// set aside and reported); --reset-defaults takes the shipped defaults,
+	// backing edited files up first.
+	refresh, err := stackdefaults.RefreshInfrastructure(cfg, backend.Name(), stackID,
+		stackdefaults.RefreshOptions{Reset: resetDefaults})
+	if err != nil {
 		return fmt.Errorf("failed to refresh default infrastructure templates: %w", err)
-	} else if refreshed {
-		u.Dim("Refreshed default infrastructure templates from embedded assets")
+	}
+	stackdefaults.ReportRefresh(u, refresh, "obol stack up --reset-defaults")
+	if !refresh.Refreshed {
+		if pending := stackdefaults.PendingDefaults(cfg); len(pending) > 0 {
+			u.Dim(fmt.Sprintf("%d hand-edited defaults file(s) have a newer default waiting in %s (take them with: obol stack up --reset-defaults)",
+				len(pending), filepath.Dir(pending[0].New)))
+		}
 	}
 
 	// Ensure the base host before syncing defaults. Include existing agent
@@ -336,12 +360,23 @@ func Down(cfg *config.Config, u *ui.UI, skipConfirm bool) error {
 
 // Purge deletes the cluster config and optionally data
 func Purge(cfg *config.Config, u *ui.UI, force, skipConfirm bool) error {
-	// Refuse to purge a stack that is currently serving paid traffic
+	// Refuse to purge a stack that is currently serving paid traffic, or
+	// whose cluster could not be checked (unreachable / listing failed),
 	// without explicit operator confirmation. --force keeps its existing
 	// meaning ("delete data dir even when root-owned") and does NOT imply
 	// --yes — operator muscle memory for `obol stack purge --force` still
-	// hits this gate.
-	proceed, err := ConfirmRunningServicesLoss(cfg, u, "obol stack purge", skipConfirm)
+	// hits this gate. Without a stack ID no cluster is destroyed, so only
+	// live host gateways are checked.
+	stackID := getStackID(cfg)
+	var (
+		proceed bool
+		err     error
+	)
+	if stackID != "" {
+		proceed, err = ConfirmClusterDestroy(cfg, u, "obol stack purge", skipConfirm, false)
+	} else {
+		proceed, err = ConfirmRunningServicesLoss(cfg, u, "obol stack purge", skipConfirm)
+	}
 	if err != nil {
 		return err
 	}
@@ -354,8 +389,6 @@ func Purge(cfg *config.Config, u *ui.UI, force, skipConfirm bool) error {
 	// --force deletes the data dir, and even a plain purge deletes the config
 	// dir holding the keystore passwords, stranding the kept keystores.
 	stackbackup.PromptExportBeforePurge(cfg, u, force)
-
-	stackID := getStackID(cfg)
 
 	backend, err := LoadBackend(cfg)
 	if err != nil {
@@ -467,9 +500,13 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		u.Warnf("Failed to preserve LiteLLM config across Helm sync: %v", err)
 	}
 
-	// Compatibility migration
+	// Compatibility migration (an obol rewrite, not a hand-edit: keep the
+	// defaults manifest in step).
+	helmfileBefore, _ := os.ReadFile(helmfilePath)
 	if err := migrateDefaultsHTTPRouteHostnames(helmfilePath); err != nil {
 		u.Warnf("Failed to migrate defaults helmfile hostnames: %v", err)
+	} else if after, readErr := os.ReadFile(helmfilePath); readErr == nil && string(after) != string(helmfileBefore) {
+		stackdefaults.RecordRewrite(cfg, helmfilePath, helmfileBefore, after)
 	}
 
 	helmBinary := cfg.ToolPath("helm")

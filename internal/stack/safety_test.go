@@ -30,11 +30,11 @@ func newTestCfg(t *testing.T) *config.Config {
 // the duration of the test, standing in for a reachable cluster.
 func withLiveOffer(t *testing.T) {
 	t.Helper()
-	prev := discoverLiveServices
-	discoverLiveServices = func(*config.Config) LiveServices {
-		return LiveServices{Offers: []LiveServiceOffer{{Namespace: "llm", Name: "aeon", Type: "http"}}}
+	prev := discoverLiveServicesFn
+	discoverLiveServicesFn = func(*config.Config) (LiveServices, error) {
+		return LiveServices{Offers: []LiveServiceOffer{{Namespace: "llm", Name: "aeon", Type: "http"}}}, nil
 	}
-	t.Cleanup(func() { discoverLiveServices = prev })
+	t.Cleanup(func() { discoverLiveServicesFn = prev })
 }
 
 func TestConfirmRunningServicesLoss_EmptyPassesThrough(t *testing.T) {
