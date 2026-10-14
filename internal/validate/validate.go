@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
-	"strconv"
+
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 )
 
 // nameRegex matches k8s-safe DNS labels: starts with lowercase alphanumeric,
@@ -24,19 +25,20 @@ func Name(s string) error {
 	return nil
 }
 
-// Price validates a decimal price string (positive, parseable as float).
+// Price validates a paid decimal price string exactly (no float parsing):
+// plain digits with an optional single '.', at most 18 fractional digits
+// (the most any ERC-20 token has), greater than zero and at most
+// schemas.MaxPriceWholeTokens. Signs, exponents, Inf/NaN, commas and
+// currency symbols are rejected. Free routes use gate=free, not a zero price.
 func Price(s string) error {
-	if s == "" {
-		return fmt.Errorf("price cannot be empty")
-	}
-	f, err := strconv.ParseFloat(s, 64)
-	if err != nil {
-		return fmt.Errorf("invalid price %q: %w", s, err)
-	}
-	if f < 0 {
-		return fmt.Errorf("price must be non-negative: %q", s)
-	}
-	return nil
+	return schemas.ValidatePrice(s)
+}
+
+// PriceForToken is Price limited to the settlement token's decimals, e.g.
+// "0.0000001" is rejected for USDC (6 decimals) with "max 6 decimal places
+// for USDC".
+func PriceForToken(s string, decimals int, symbol string) error {
+	return schemas.ValidatePriceForToken(s, decimals, symbol)
 }
 
 // URL validates a URL string.

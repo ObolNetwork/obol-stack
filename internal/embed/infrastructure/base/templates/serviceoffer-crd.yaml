@@ -308,17 +308,41 @@ spec:
                       perEpoch:
                         description: Per-training-epoch price in USDC. Fine-tuning
                           only.
+                        maxLength: 64
+                        pattern: ^([0-9]+(\.[0-9]{0,18})?|\.[0-9]{1,18})$
                         type: string
+                        x-kubernetes-validations:
+                        - message: 'price must be greater than zero (use gate: free
+                            for a free route)'
+                          rule: self.matches('[1-9]')
                       perHour:
                         description: Per-compute-hour price in USDC. Fine-tuning only.
+                        maxLength: 64
+                        pattern: ^([0-9]+(\.[0-9]{0,18})?|\.[0-9]{1,18})$
                         type: string
+                        x-kubernetes-validations:
+                        - message: 'price must be greater than zero (use gate: free
+                            for a free route)'
+                          rule: self.matches('[1-9]')
                       perMTok:
                         description: Per-million-tokens price in USDC. Inference only.
+                        maxLength: 64
+                        pattern: ^([0-9]+(\.[0-9]{0,18})?|\.[0-9]{1,18})$
                         type: string
+                        x-kubernetes-validations:
+                        - message: 'price must be greater than zero (use gate: free
+                            for a free route)'
+                          rule: self.matches('[1-9]')
                       perRequest:
                         description: Flat per-request price in USDC. Applicable to
                           all types.
+                        maxLength: 64
+                        pattern: ^([0-9]+(\.[0-9]{0,18})?|\.[0-9]{1,18})$
                         type: string
+                        x-kubernetes-validations:
+                        - message: 'price must be greater than zero (use gate: free
+                            for a free route)'
+                          rule: self.matches('[1-9]')
                     type: object
                   scheme:
                     default: exact
@@ -394,19 +418,43 @@ spec:
                         perEpoch:
                           description: Per-training-epoch price in USDC. Fine-tuning
                             only.
+                          maxLength: 64
+                          pattern: ^([0-9]+(\.[0-9]{0,18})?|\.[0-9]{1,18})$
                           type: string
+                          x-kubernetes-validations:
+                          - message: 'price must be greater than zero (use gate: free
+                              for a free route)'
+                            rule: self.matches('[1-9]')
                         perHour:
                           description: Per-compute-hour price in USDC. Fine-tuning
                             only.
+                          maxLength: 64
+                          pattern: ^([0-9]+(\.[0-9]{0,18})?|\.[0-9]{1,18})$
                           type: string
+                          x-kubernetes-validations:
+                          - message: 'price must be greater than zero (use gate: free
+                              for a free route)'
+                            rule: self.matches('[1-9]')
                         perMTok:
                           description: Per-million-tokens price in USDC. Inference
                             only.
+                          maxLength: 64
+                          pattern: ^([0-9]+(\.[0-9]{0,18})?|\.[0-9]{1,18})$
                           type: string
+                          x-kubernetes-validations:
+                          - message: 'price must be greater than zero (use gate: free
+                              for a free route)'
+                            rule: self.matches('[1-9]')
                         perRequest:
                           description: Flat per-request price in USDC. Applicable
                             to all types.
+                          maxLength: 64
+                          pattern: ^([0-9]+(\.[0-9]{0,18})?|\.[0-9]{1,18})$
                           type: string
+                          x-kubernetes-validations:
+                          - message: 'price must be greater than zero (use gate: free
+                              for a free route)'
+                            rule: self.matches('[1-9]')
                       type: object
                     scheme:
                       default: exact
@@ -568,19 +616,43 @@ spec:
                         perEpoch:
                           description: Per-training-epoch price in USDC. Fine-tuning
                             only.
+                          maxLength: 64
+                          pattern: ^([0-9]+(\.[0-9]{0,18})?|\.[0-9]{1,18})$
                           type: string
+                          x-kubernetes-validations:
+                          - message: 'price must be greater than zero (use gate: free
+                              for a free route)'
+                            rule: self.matches('[1-9]')
                         perHour:
                           description: Per-compute-hour price in USDC. Fine-tuning
                             only.
+                          maxLength: 64
+                          pattern: ^([0-9]+(\.[0-9]{0,18})?|\.[0-9]{1,18})$
                           type: string
+                          x-kubernetes-validations:
+                          - message: 'price must be greater than zero (use gate: free
+                              for a free route)'
+                            rule: self.matches('[1-9]')
                         perMTok:
                           description: Per-million-tokens price in USDC. Inference
                             only.
+                          maxLength: 64
+                          pattern: ^([0-9]+(\.[0-9]{0,18})?|\.[0-9]{1,18})$
                           type: string
+                          x-kubernetes-validations:
+                          - message: 'price must be greater than zero (use gate: free
+                              for a free route)'
+                            rule: self.matches('[1-9]')
                         perRequest:
                           description: Flat per-request price in USDC. Applicable
                             to all types.
+                          maxLength: 64
+                          pattern: ^([0-9]+(\.[0-9]{0,18})?|\.[0-9]{1,18})$
                           type: string
+                          x-kubernetes-validations:
+                          - message: 'price must be greater than zero (use gate: free
+                              for a free route)'
+                            rule: self.matches('[1-9]')
                       type: object
                     summary:
                       description: |-

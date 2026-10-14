@@ -775,7 +775,9 @@ upstream).
   label (`invalid_payment_header`, `no_matching_requirement`,
   `facilitator_unreachable`, `payment_invalid`, `settlement_failed`,
   `settlement_rejected`, plus the settle-skip reasons `client_disconnected`,
-  `client_write_failed`, `upstream_no_value` — the set enumerated in
+  `client_write_failed`, `upstream_no_value`, and `payment_in_use` (409: the
+  same signed authorization is already attached to another in-flight or
+  settled request) / `payment_registry_full` — the set enumerated in
   `internal/x402/forwardauth.go`), turning "the buy funnel leaks" into
   "this stage eats the buyers". `_upstream_failed_after_verify_total`
   counts paid requests bounced by the seller's own upstream after the

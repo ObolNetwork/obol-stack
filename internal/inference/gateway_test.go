@@ -89,9 +89,14 @@ func newMockOllama(t *testing.T) *httptest.Server {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+// testNonce gives every testPaymentHeader call its own authorization nonce:
+// the gateway refuses a payment that is already in use or settled.
+var testNonce atomic.Uint64
+
 // testPaymentHeader returns a valid base64-encoded x402 PaymentPayload that
 // satisfies the middleware's scheme+network matching for BaseSepolia/exact.
 // The mock facilitator accepts any payload so no real signature is needed.
+// Each call carries a fresh nonce.
 func testPaymentHeader(t *testing.T) string {
 	t.Helper()
 
@@ -112,7 +117,7 @@ func testPaymentHeader(t *testing.T) string {
 				"value":       "1000",
 				"validAfter":  "0",
 				"validBefore": "9999999999",
-				"nonce":       "0xabcdef",
+				"nonce":       fmt.Sprintf("0x%064x", testNonce.Add(1)),
 			},
 		},
 	}
@@ -529,5 +534,38 @@ func TestNewGateway_PreservesAssetSymbol(t *testing.T) {
 				t.Errorf("gw.config.AssetSymbol = %q; want %q", gw.config.AssetSymbol, tc.want)
 			}
 		})
+	}
+}
+
+// The standalone gateway gates with the same in-flight payment registry as
+// the cluster verifier: a settled authorization cannot pay for a second
+// request.
+func TestGateway_SettledPaymentNotReusable(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	ollama := newMockOllama(t)
+	gw := newTestGateway(t, fac.URL, ollama.URL, false)
+	header := testPaymentHeader(t)
+
+	send := func() int {
+		req, _ := http.NewRequest(http.MethodPost, gw.URL+"/v1/chat/completions",
+			strings.NewReader(`{"model":"llama3.2","messages":[{"role":"user","content":"hi"}]}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Payment", header)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST: %v", err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := send(); got != http.StatusOK {
+		t.Fatalf("first request = %d, want 200", got)
+	}
+	if got := send(); got != http.StatusConflict {
+		t.Fatalf("replayed payment = %d, want 409", got)
+	}
+	if got := fac.settleCalls.Load(); got != 1 {
+		t.Fatalf("settle calls = %d, want 1", got)
 	}
 }

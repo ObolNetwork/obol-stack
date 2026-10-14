@@ -281,6 +281,9 @@ spec:
   # informer caches; multiple replicas produce metric series drift across
   # ServiceMonitor scrape rotations and the pruneSeriesNotIn GC (metrics.go)
   # becomes inconsistent. Single-node k3d gains no HA from 2 replicas.
+  # The in-flight payment registry (internal/x402/payment_inuse.go) that
+  # refuses a signed authorization on a second concurrent request is also
+  # per-process memory: scaling out requires a shared store for it first.
   replicas: 1
   selector:
     matchLabels:

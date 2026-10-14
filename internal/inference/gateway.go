@@ -137,6 +137,10 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 		// or an empty completion. Non-chat JSON (embeddings, model lists)
 		// fails open: any non-empty body still settles.
 		SettleOnDelivery: true,
+		// One signed authorization per request: a concurrent duplicate is
+		// refused with 409 before it reaches the inference server. The
+		// registry is in-process; the gateway is a single process.
+		InUse: x402pkg.NewPaymentInUseRegistry(),
 	}, []x402types.PaymentRequirements{requirement})
 
 	// Build HTTP mux. The gateway serves an explicit allowlist: the paid

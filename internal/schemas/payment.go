@@ -9,7 +9,7 @@
 package schemas
 
 import (
-	"strings"
+	"math/big"
 
 	"github.com/shopspring/decimal"
 )
@@ -24,7 +24,6 @@ const ApproxTokensPerRequest = 1000
 const ApproxMinutesPerRequest = 5
 
 var (
-	approxTokensPerRequestDecimal  = decimal.NewFromInt(ApproxTokensPerRequest)
 	minutesPerHour                 = decimal.NewFromInt(60)
 	approxMinutesPerRequestDecimal = decimal.NewFromInt(ApproxMinutesPerRequest)
 )
@@ -129,14 +128,32 @@ func (p PriceTable) EffectiveRequestPriceE() (string, error) {
 }
 
 // ApproximateRequestPriceFromPerMTok converts a per-million-token price into a
-// temporary per-request x402 charge using ApproxTokensPerRequest.
+// temporary per-request x402 charge using ApproxTokensPerRequest. The result
+// is exact (it may carry more fractional digits than the settlement token);
+// the enforced atomic amount is derived with PerMTokToAtomicPerRequest, which
+// rounds up to at least one atomic unit.
 func ApproximateRequestPriceFromPerMTok(perMTok string) (string, error) {
-	value, err := decimal.NewFromString(strings.TrimSpace(perMTok))
+	value, err := ParsePositiveDecimalAmount(perMTok, MaxPriceDecimals, "")
 	if err != nil {
 		return "", err
 	}
+	perRequest := new(big.Rat).Mul(value, big.NewRat(ApproxTokensPerRequest, 1_000_000))
+	// value has at most MaxPriceDecimals fractional digits and the ratio is
+	// 1/1000, so MaxPriceDecimals+3 digits render it exactly.
+	return trimDecimalString(perRequest.FloatString(MaxPriceDecimals + 3)), nil
+}
 
-	return value.Div(approxTokensPerRequestDecimal).String(), nil
+// PerRequestPriceFromPerMTok is ApproximateRequestPriceFromPerMTok rounded up
+// to the settlement token's precision: the decimal form of
+// PerMTokToAtomicPerRequest, never below one atomic unit. Use it where a
+// per-request price string is handed to a token-precision consumer (the
+// standalone inference gateway).
+func PerRequestPriceFromPerMTok(perMTok string, decimals int, symbol string) (string, error) {
+	atomic, err := PerMTokToAtomicPerRequest(perMTok, ApproxTokensPerRequest, decimals, symbol)
+	if err != nil {
+		return "", err
+	}
+	return AtomicToDecimal(atomic, decimals), nil
 }
 
 // ApproximateRequestPriceFromPerHour converts a per-hour price into a temporary
@@ -144,7 +161,10 @@ func ApproximateRequestPriceFromPerMTok(perMTok string) (string, error) {
 // matching the autoresearch experiment budget).
 // Formula: perRequest = perHour * (minutesPerRequest / 60)
 func ApproximateRequestPriceFromPerHour(perHour string) (string, error) {
-	value, err := decimal.NewFromString(strings.TrimSpace(perHour))
+	if err := ValidatePrice(perHour); err != nil {
+		return "", err
+	}
+	value, err := decimal.NewFromString(perHour)
 	if err != nil {
 		return "", err
 	}

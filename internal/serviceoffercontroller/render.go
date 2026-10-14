@@ -4,7 +4,6 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -2013,26 +2012,19 @@ func defaultUSDCForNetwork(network string) (schemas.ServiceCatalogAsset, bool) {
 }
 
 // decimalToAtomicString converts a decimal token amount (e.g. "0.001") to
-// atomic units using big.Float to avoid floating-point truncation. Returns
-// "" on parse error so callers can omit the field.
+// atomic units exactly (no floating point), rounding a sub-atomic remainder
+// up. Returns "" on parse error so callers can omit the field. Display-only:
+// the verifier enforces the strict per-token precision when it builds the
+// payment requirement.
 func decimalToAtomicString(amount string, decimals int) string {
-	if amount == "" || decimals < 0 {
+	if amount == "" || decimals < 0 || decimals > schemas.MaxPriceDecimals {
 		return ""
 	}
-	parsed, _, err := big.ParseFloat(amount, 10, 128, big.ToNearestEven)
-	if err != nil || parsed == nil {
+	parsed, err := schemas.ParseDecimalAmount(amount, schemas.MaxPriceDecimals, "")
+	if err != nil {
 		return ""
 	}
-	multiplier := new(big.Float).SetPrec(128).SetInt(
-		new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil),
-	)
-	atomic := new(big.Float).SetPrec(128).Mul(parsed, multiplier)
-	atomic.Add(atomic, new(big.Float).SetPrec(128).SetFloat64(0.5))
-	out, _ := atomic.Int(nil)
-	if out == nil {
-		return ""
-	}
-	return out.String()
+	return schemas.CeilAtomic(parsed, decimals).String()
 }
 
 func describeOfferPrice(offer *monetizeapi.ServiceOffer) string {

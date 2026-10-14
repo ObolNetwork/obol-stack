@@ -78,7 +78,18 @@ func testPaymentHeader(t *testing.T) string {
 	)
 }
 
+// testPaymentNonce makes every test payment a distinct authorization: the
+// verifier refuses an authorization already used by another request.
+var testPaymentNonce atomic.Uint64
+
 func testPaymentHeaderFor(t *testing.T, payTo, amount string) string {
+	t.Helper()
+	return testPaymentHeaderWithNonce(t, payTo, amount, fmt.Sprintf("0x%064x", testPaymentNonce.Add(1)))
+}
+
+// testPaymentHeaderWithNonce builds a test payment with an explicit EIP-3009
+// nonce, for tests that need two requests to carry the same authorization.
+func testPaymentHeaderWithNonce(t *testing.T, payTo, amount, nonce string) string {
 	t.Helper()
 	p := x402types.PaymentPayload{
 		X402Version: 2,
@@ -97,7 +108,7 @@ func testPaymentHeaderFor(t *testing.T, payTo, amount string) string {
 				"value":       amount,
 				"validAfter":  "0",
 				"validBefore": "9999999999",
-				"nonce":       "0xabcdef",
+				"nonce":       nonce,
 			},
 		},
 	}

@@ -2,6 +2,8 @@ package x402
 
 import (
 	"testing"
+
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 )
 
 func TestResolveChainInfo(t *testing.T) {
@@ -284,23 +286,19 @@ func TestBuildV2RequirementWithAsset(t *testing.T) {
 // the route at $0) and "abc"/""/"  " left amountFloat nil, panicking the
 // next line's Mul(nil, ...) on every request in the verifier hot path.
 func TestDecimalToAtomic_RejectsMalformedInput(t *testing.T) {
-	for _, amount := range []string{"abc", "", "  ", "0,01", "$0.01", "-1"} {
+	for _, amount := range []string{"abc", "", "  ", "0,01", "$0.01", "-1", "Inf", "NaN", "1e3", "0x10", "1000000000001"} {
 		t.Run(amount, func(t *testing.T) {
-			if _, err := decimalToAtomic(amount, 6); err == nil {
+			if _, err := decimalToAtomic(amount, 6, "USDC"); err == nil {
 				t.Fatalf("decimalToAtomic(%q) expected error, got nil", amount)
 			}
 		})
 	}
 }
 
-// TestBuildV2RequirementWithAsset_RejectsZeroAtomicAmount pins the
-// Canary402 zero-price finding: decimalToAtomic only rejected parse errors
-// and negative amounts, so a "0" price — or a sub-atomic price like
-// "0.0000001" at 6 decimals, which rounds to 0 — sailed through and
-// BuildV2RequirementWithAsset returned a payment requirement with
-// Amount "0", contradicting its own doc promise to never do that.
-// resolvePaidRoute must fail this option closed instead of advertising a
-// free accepts[] entry.
+// TestBuildV2RequirementWithAsset_RejectsZeroAtomicAmount: a "0" price, or
+// a price with more fractional digits than the token has (e.g. "0.0000001"
+// at 6 decimals), must never produce a payment requirement — resolvePaidRoute
+// fails this option closed instead of advertising a free accepts[] entry.
 func TestBuildV2RequirementWithAsset_RejectsZeroAtomicAmount(t *testing.T) {
 	asset := AssetInfo{
 		Address:        ChainBaseSepolia.USDCAddress,
@@ -327,10 +325,15 @@ func TestDecimalToAtomic_ValidInput(t *testing.T) {
 		{"0.01", 6, "10000"},
 		{"1.5", 6, "1500000"},
 		{"0.001", 18, "1000000000000000"},
+		{"0.000001", 6, "1"},
+		{"0.000000000000000001", 18, "1"},
+		{"1.123456789012345678", 18, "1123456789012345678"},
+		{"1000000000000", 18, "1000000000000000000000000000000"},
+		{".5", 6, "500000"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.amount, func(t *testing.T) {
-			got, err := decimalToAtomic(tc.amount, tc.decimals)
+			got, err := decimalToAtomic(tc.amount, tc.decimals, "")
 			if err != nil {
 				t.Fatalf("decimalToAtomic(%q, %d): unexpected error %v", tc.amount, tc.decimals, err)
 			}
@@ -338,5 +341,51 @@ func TestDecimalToAtomic_ValidInput(t *testing.T) {
 				t.Fatalf("decimalToAtomic(%q, %d) = %q, want %q", tc.amount, tc.decimals, got, tc.want)
 			}
 		})
+	}
+}
+
+// Per-MTok options are charged from the original per-MTok price, computed
+// exactly and rounded up, so a tiny per-MTok price still charges at least
+// one atomic unit and never rounds down to a free request.
+func TestBuildV2RequirementForPayment_PerMTok(t *testing.T) {
+	usdc := ChainBaseSepolia.DefaultAsset()
+	obol := AssetInfo{Address: "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7", Symbol: "OBOL", Decimals: 18, TransferMethod: "permit2"}
+	tests := []struct {
+		name    string
+		asset   AssetInfo
+		perMTok string
+		want    string
+	}{
+		{"usdc exact", usdc, "1.25", "1250"},           // 1.25/1000 USDC = 0.00125
+		{"usdc tiny rounds up", usdc, "0.000001", "1"}, // 1e-9 USDC → 1 atomic unit
+		{"usdc remainder rounds up", usdc, "0.0015", "2"},
+		{"obol exact", obol, "0.000000000000000001", "1"},
+		{"obol 18dp", obol, "1.000000000000000001", "1000000000000001"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			price, err := schemas.ApproximateRequestPriceFromPerMTok(tc.perMTok)
+			if err != nil {
+				t.Fatalf("approximate: %v", err)
+			}
+			req, err := BuildV2RequirementForPayment(ChainBaseSepolia, tc.asset, RoutePayment{
+				Price:      price,
+				PriceModel: "perMTok",
+				PerMTok:    tc.perMTok,
+			}, "0xRecipient")
+			if err != nil {
+				t.Fatalf("BuildV2RequirementForPayment: %v", err)
+			}
+			if req.Amount != tc.want {
+				t.Fatalf("Amount = %q, want %q", req.Amount, tc.want)
+			}
+		})
+	}
+
+	// A per-MTok price beyond the token precision, or zero, still fails.
+	for _, bad := range []string{"0", "0.0000001", "Inf", "1e3"} {
+		if _, err := BuildV2RequirementForPayment(ChainBaseSepolia, usdc, RoutePayment{Price: "1", PriceModel: "perMTok", PerMTok: bad}, "0xRecipient"); err == nil {
+			t.Fatalf("perMTok %q: want error", bad)
+		}
 	}
 }

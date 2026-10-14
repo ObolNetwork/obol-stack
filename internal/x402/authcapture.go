@@ -2,9 +2,9 @@ package x402
 
 import (
 	"fmt"
-	"math/big"
 	"time"
 
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	"github.com/ethereum/go-ethereum/common"
 	x402types "github.com/x402-foundation/x402/go/v2/types"
 )
@@ -79,12 +79,8 @@ func (c *AuthCaptureUnlockConfig) Validate() error {
 		return fmt.Errorf("refundDeadlineSecs %d is less than captureDeadlineSecs %d", c.RefundDeadlineSecs, c.CaptureDeadlineSecs)
 	}
 
-	price, _, err := new(big.Float).SetPrec(128).Parse(c.Price, 10)
-	if err != nil {
-		return fmt.Errorf("price %q is not a valid decimal: %w", c.Price, err)
-	}
-	if price == nil || price.Sign() <= 0 {
-		return fmt.Errorf("price must be a positive decimal, got %q", c.Price)
+	if err := schemas.ValidatePrice(c.Price); err != nil {
+		return fmt.Errorf("price must be a positive decimal: %w", err)
 	}
 
 	return nil
@@ -100,7 +96,7 @@ func BuildAuthCaptureRequirement(chain ChainInfo, asset AssetInfo, c *AuthCaptur
 	if err := c.Validate(); err != nil {
 		return x402types.PaymentRequirements{}, fmt.Errorf("validate auth-capture config: %w", err)
 	}
-	atomicAmount, err := decimalToAtomic(c.Price, asset.Decimals)
+	atomicAmount, err := decimalToAtomic(c.Price, asset.Decimals, asset.Symbol)
 	if err != nil {
 		return x402types.PaymentRequirements{}, fmt.Errorf("invalid price %q: %w", c.Price, err)
 	}

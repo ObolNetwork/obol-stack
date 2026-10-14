@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
+	"github.com/ObolNetwork/obol-stack/internal/validate"
 	x402verifier "github.com/ObolNetwork/obol-stack/internal/x402"
-	"github.com/shopspring/decimal"
 	"github.com/urfave/cli/v3"
 )
 
@@ -141,8 +141,8 @@ func parseAcceptOption(raw, defaultPayTo string) (acceptOption, int64, error) {
 	if priceKey == "" {
 		return acceptOption{}, 0, fmt.Errorf("--accept %q: a price is required (price=, per-mtok=, …)", raw)
 	}
-	if d, derr := decimal.NewFromString(priceVal); derr != nil || d.IsNegative() {
-		return acceptOption{}, 0, fmt.Errorf("--accept %q: price %q must be a non-negative decimal", raw, priceVal)
+	if err := validate.Price(priceVal); err != nil {
+		return acceptOption{}, 0, fmt.Errorf("--accept %q: %w", raw, err)
 	}
 
 	// Asset: token=<symbol> (registry) XOR asset=0x... (raw). Default USDC
@@ -209,6 +209,10 @@ func parseAcceptOption(raw, defaultPayTo string) (acceptOption, int64, error) {
 			TransferMethod: entry.TransferMethod, EIP712Name: entry.EIP712Name, EIP712Version: entry.EIP712Version,
 		}
 		opt.dedupKey = canonicalChain + "\x00" + strings.ToLower(entry.Address)
+	}
+
+	if err := validatePriceForAsset(priceVal, opt.Asset); err != nil {
+		return acceptOption{}, 0, fmt.Errorf("--accept %q: %w", raw, err)
 	}
 
 	return opt, maxTimeout, nil
@@ -326,6 +330,9 @@ func resolveOfferPayments(cmd *cli.Command, wallet string, allowPerHour bool) (p
 	assetTerms, aerr := resolveAssetTerms(cmd, &chainName)
 	if aerr != nil {
 		return nil, nil, "", "", aerr
+	}
+	if verr := validatePriceTableForAsset(priceTable, assetTerms); verr != nil {
+		return nil, nil, "", "", verr
 	}
 	maxTimeout := cmd.Int("max-timeout")
 	if maxTimeout <= 0 {

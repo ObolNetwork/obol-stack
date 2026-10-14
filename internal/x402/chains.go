@@ -2,9 +2,9 @@ package x402
 
 import (
 	"fmt"
-	"math/big"
 	"strings"
 
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	x402types "github.com/x402-foundation/x402/go/v2/types"
 )
 
@@ -249,33 +249,22 @@ func ResolveChainInfo(name string) (ChainInfo, error) {
 	}
 }
 
-// decimalToAtomic converts a decimal token amount (e.g. "0.001") to atomic
-// units using big.Float with 128-bit precision to avoid floating-point
-// truncation (e.g. 0.001 * 1e6 must produce 1000, not 999).
+// decimalToAtomic converts a paid decimal token amount (e.g. "0.001") to
+// atomic units exactly (no floating point): the amount may carry at most the
+// token's decimals of fractional digits, so the conversion never rounds.
 //
 // Returns an error rather than silently mispricing or panicking on
-// malformed input (e.g. "0,01" EU-style decimals, "abc", "", "$0.01") —
-// amount ultimately comes from operator/CLI input and, via a ServiceOffer
-// applied directly to the cluster, can bypass CLI validation entirely.
-func decimalToAtomic(amount string, decimals int) (string, error) {
-	amountFloat, _, err := new(big.Float).SetPrec(128).Parse(amount, 10)
+// malformed input (e.g. "0,01" EU-style decimals, "abc", "", "$0.01",
+// "1e3", "Inf", "NaN"), on zero, on more fractional digits than the token
+// has, and on values above schemas.MaxPriceWholeTokens — amount ultimately
+// comes from operator/CLI input and, via a ServiceOffer applied directly to
+// the cluster, can skip CLI validation entirely.
+func decimalToAtomic(amount string, decimals int, symbol string) (string, error) {
+	atomic, err := schemas.DecimalToAtomic(amount, decimals, symbol)
 	if err != nil {
-		return "", fmt.Errorf("invalid decimal amount %q: %w", amount, err)
+		return "", err
 	}
-	if amountFloat == nil {
-		return "", fmt.Errorf("invalid decimal amount %q", amount)
-	}
-	if amountFloat.Sign() < 0 {
-		return "", fmt.Errorf("amount must be non-negative: %q", amount)
-	}
-	multiplier := new(big.Float).SetPrec(128).SetInt(
-		new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil),
-	)
-	atomicFloat := new(big.Float).SetPrec(128).Mul(amountFloat, multiplier)
-	// Add 0.5 before truncating to int so we round to nearest.
-	atomicFloat.Add(atomicFloat, new(big.Float).SetPrec(128).SetFloat64(0.5))
-	atomicInt, _ := atomicFloat.Int(nil)
-	return atomicInt.String(), nil
+	return atomic.String(), nil
 }
 
 // DefaultAsset returns the default settlement asset for a chain.
@@ -429,13 +418,30 @@ func BuildV2Requirement(chain ChainInfo, amount, recipientAddress string, maxTim
 // (e.g. "0", or a sub-atomic price like "0.0000001" at 6 decimals); callers
 // must fail closed on error, never serve the route for free.
 func BuildV2RequirementWithAsset(chain ChainInfo, asset AssetInfo, amount, recipientAddress string, maxTimeoutSeconds int64) (x402types.PaymentRequirements, error) {
-	atomicAmount, err := decimalToAtomic(amount, asset.Decimals)
+	atomicAmount, err := decimalToAtomic(amount, asset.Decimals, asset.Symbol)
 	if err != nil {
 		return x402types.PaymentRequirements{}, fmt.Errorf("invalid price %q: %w", amount, err)
 	}
-	if atomicAmount == "0" {
-		return x402types.PaymentRequirements{}, fmt.Errorf("price %q rounds to 0 atomic units at %d decimals: refusing to advertise a $0 paid route", amount, asset.Decimals)
+	return buildV2RequirementAtomic(chain, asset, atomicAmount, recipientAddress, maxTimeoutSeconds), nil
+}
+
+// BuildV2RequirementForPayment builds the requirement for one route payment
+// option. A per-MTok option is charged from its original per-MTok price
+// (ceil to at least one atomic unit, computed exactly) rather than from the
+// approximated per-request decimal, which can carry more fractional digits
+// than the token has. Every other option is charged its Price exactly.
+func BuildV2RequirementForPayment(chain ChainInfo, asset AssetInfo, opt RoutePayment, recipientAddress string) (x402types.PaymentRequirements, error) {
+	if opt.PriceModel == "perMTok" && opt.PerMTok != "" {
+		atomic, err := schemas.PerMTokToAtomicPerRequest(opt.PerMTok, opt.ApproxTokensPerRequest, asset.Decimals, asset.Symbol)
+		if err != nil {
+			return x402types.PaymentRequirements{}, fmt.Errorf("invalid perMTok price %q: %w", opt.PerMTok, err)
+		}
+		return buildV2RequirementAtomic(chain, asset, atomic.String(), recipientAddress, opt.MaxTimeoutSeconds), nil
 	}
+	return BuildV2RequirementWithAsset(chain, asset, opt.Price, recipientAddress, opt.MaxTimeoutSeconds)
+}
+
+func buildV2RequirementAtomic(chain ChainInfo, asset AssetInfo, atomicAmount, recipientAddress string, maxTimeoutSeconds int64) x402types.PaymentRequirements {
 	return x402types.PaymentRequirements{
 		Scheme:            "exact",
 		Network:           chain.CAIP2Network,
@@ -448,5 +454,5 @@ func BuildV2RequirementWithAsset(chain ChainInfo, asset AssetInfo, amount, recip
 			"version":             asset.EIP712Version,
 			"assetTransferMethod": asset.TransferMethod,
 		},
-	}, nil
+	}
 }

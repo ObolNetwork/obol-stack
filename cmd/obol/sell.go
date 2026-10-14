@@ -329,10 +329,25 @@ Examples:
 			if err != nil {
 				return err
 			}
+			if err := validatePriceTableForAsset(priceTable, assetTerms); err != nil {
+				return err
+			}
 
 			perRequest, err := priceTable.EffectiveRequestPriceE()
 			if err != nil {
 				return fmt.Errorf("invalid pricing: %w", err)
+			}
+			if priceTable.PerRequest == "" && priceTable.PerMTok != "" {
+				// The gateway charges in token atomic units: round the
+				// per-MTok approximation up to the token's precision (at
+				// least one atomic unit) rather than handing it a price
+				// with more decimals than the token has.
+				if decimals, symbol, ok := priceAssetPrecision(assetTerms); ok {
+					perRequest, err = schemas.PerRequestPriceFromPerMTok(priceTable.PerMTok, decimals, symbol)
+					if err != nil {
+						return fmt.Errorf("invalid --per-mtok value %q: %w", priceTable.PerMTok, err)
+					}
+				}
 			}
 
 			assetSymbol := strings.ToUpper(strings.TrimSpace(assetTerms.Symbol))
@@ -1740,6 +1755,9 @@ Example:
 			assetTerms, err := resolveAssetTermsFor(tokenName, &chain, chainExplicit)
 			if err != nil {
 				return err
+			}
+			if err := validatePriceForAsset(price, assetTerms); err != nil {
+				return fmt.Errorf("invalid --price value %q: %w", price, err)
 			}
 			symbol := assetTerms.Symbol
 			if symbol == "" {
@@ -3908,6 +3926,51 @@ func resolvePriceTable(cmd *cli.Command, allowPerHour bool) (schemas.PriceTable,
 	}
 }
 
+// priceAssetPrecision returns the decimals and symbol a price for asset is
+// limited to. An empty asset block is the chain default USDC (6 decimals).
+// ok is false when the asset's decimals are not known yet (an unlisted
+// token whose metadata is read from the chain later).
+func priceAssetPrecision(asset schemas.AssetTerms) (decimals int, symbol string, ok bool) {
+	if asset.IsZero() {
+		return 6, "USDC", true
+	}
+	if asset.Decimals < 0 {
+		return 0, asset.Symbol, false
+	}
+	return asset.Decimals, asset.Symbol, true
+}
+
+// validatePriceForAsset checks a paid price against the settlement token's
+// precision, e.g. USDC accepts at most 6 decimal places. When the token's
+// decimals are not known yet only the generic grammar (<= 18 places) applies;
+// the verifier enforces the token precision when it builds the requirement.
+func validatePriceForAsset(price string, asset schemas.AssetTerms) error {
+	decimals, symbol, ok := priceAssetPrecision(asset)
+	if !ok {
+		return validate.Price(price)
+	}
+	return validate.PriceForToken(price, decimals, symbol)
+}
+
+// validatePriceTableForAsset applies validatePriceForAsset to whichever price
+// slot is populated.
+func validatePriceTableForAsset(pt schemas.PriceTable, asset schemas.AssetTerms) error {
+	for _, slot := range []struct{ flag, value string }{
+		{"--price/--per-request", pt.PerRequest},
+		{"--per-mtok", pt.PerMTok},
+		{"--per-hour", pt.PerHour},
+		{"--per-epoch", pt.PerEpoch},
+	} {
+		if slot.value == "" {
+			continue
+		}
+		if err := validatePriceForAsset(slot.value, asset); err != nil {
+			return fmt.Errorf("invalid %s value %q: %w", slot.flag, slot.value, err)
+		}
+	}
+	return nil
+}
+
 func resolveAssetTerms(cmd *cli.Command, chainName *string) (schemas.AssetTerms, error) {
 	return resolveAssetTermsFor(strings.TrimSpace(cmd.String("token")), chainName, cmd.IsSet("chain"))
 }
@@ -4590,6 +4653,9 @@ func parseRouteFlags(vals []string) (routes []map[string]any, hasPaid bool, err 
 					return nil, false, fmt.Errorf("--route %q: gate must be paid, free, or auth (got %q)", val, v)
 				}
 			case "price":
+				if err := validate.Price(v); err != nil {
+					return nil, false, fmt.Errorf("--route %q: %w", val, err)
+				}
 				route["price"] = map[string]any{"perRequest": v}
 			case "freeQuota", "free-quota":
 				n, err := strconv.ParseInt(v, 10, 64)

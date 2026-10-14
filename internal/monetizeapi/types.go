@@ -479,14 +479,33 @@ type ServiceOfferAsset struct {
 	EIP712Version string `json:"eip712Version,omitempty"`
 }
 
+// ServiceOfferPriceTable holds human-readable decimal prices in the
+// settlement token (USDC unless spec.payment.asset says otherwise). Every
+// price is a plain unsigned decimal (digits with an optional single '.', no
+// sign or exponent) with at most 18 fractional digits and greater than zero;
+// the verifier further limits it to the token's own decimals (USDC 6, OBOL
+// 18) and to at most 1e12 whole tokens. The grammar mirrors
+// schemas.PriceDecimalPattern.
 type ServiceOfferPriceTable struct {
 	// Flat per-request price in USDC. Applicable to all types.
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]{0,18})?|\.[0-9]{1,18})$`
+	// +kubebuilder:validation:XValidation:rule="self.matches('[1-9]')",message="price must be greater than zero (use gate: free for a free route)"
 	PerRequest string `json:"perRequest,omitempty"`
 	// Per-million-tokens price in USDC. Inference only.
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]{0,18})?|\.[0-9]{1,18})$`
+	// +kubebuilder:validation:XValidation:rule="self.matches('[1-9]')",message="price must be greater than zero (use gate: free for a free route)"
 	PerMTok string `json:"perMTok,omitempty"`
 	// Per-compute-hour price in USDC. Fine-tuning only.
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]{0,18})?|\.[0-9]{1,18})$`
+	// +kubebuilder:validation:XValidation:rule="self.matches('[1-9]')",message="price must be greater than zero (use gate: free for a free route)"
 	PerHour string `json:"perHour,omitempty"`
 	// Per-training-epoch price in USDC. Fine-tuning only.
+	// +kubebuilder:validation:MaxLength=64
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]{0,18})?|\.[0-9]{1,18})$`
+	// +kubebuilder:validation:XValidation:rule="self.matches('[1-9]')",message="price must be greater than zero (use gate: free for a free route)"
 	PerEpoch string `json:"perEpoch,omitempty"`
 }
 
@@ -948,6 +967,12 @@ type AgentList struct {
 	Items           []Agent `json:"items"`
 }
 
+// AgentSpec is the desired state of an Agent.
+//
+// A provisioned wallet is permanent for the Agent's lifetime: once
+// wallet.create is true it cannot be cleared (set false, or the field or
+// wallet block removed). Delete the Agent to abandon its wallet.
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.wallet) || !has(oldSelf.wallet.create) || !oldSelf.wallet.create || (has(self.wallet) && has(self.wallet.create) && self.wallet.create)",message="wallet.create cannot be changed from true to false; delete the Agent to abandon its wallet"
 type AgentSpec struct {
 	// Agent runtime (only hermes).
 	// +kubebuilder:default=hermes
@@ -1021,7 +1046,9 @@ type MCPServer struct {
 
 type AgentWallet struct {
 	// Provision a per-namespace remote-signer keystore. Address is
-	// published in status.walletAddress.
+	// published in status.walletAddress. Once true it cannot be set back
+	// to false (see the AgentSpec validation rule); delete the Agent to
+	// abandon the wallet.
 	// +kubebuilder:default=false
 	Create bool `json:"create,omitempty"`
 }

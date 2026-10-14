@@ -2442,6 +2442,9 @@ func TestParseRouteFlags(t *testing.T) {
 		"path=/x,methods=YEET",        // unknown method
 		"path=/x,gate=free,price=0.5", // free routes cannot charge
 		"path=/x,pricing=0.5",         // unknown key
+		"path=/x,price=0",             // paid routes must charge
+		"path=/x,price=1e3",           // exponent
+		"path=/x,price=NaN",           // not a number
 	} {
 		if _, _, err := parseRouteFlags([]string{bad}); err == nil {
 			t.Errorf("parseRouteFlags(%q): expected error, got nil", bad)
@@ -2476,7 +2479,7 @@ func TestOfferPathCollisionInList_Hostname(t *testing.T) {
 // already validate via ApproximateRequestPriceFrom*; --price/--per-request
 // must too.
 func TestResolvePriceTable_RejectsMalformedPrice(t *testing.T) {
-	badPrices := []string{"0,01", "abc", "$0.01", "-1", ""}
+	badPrices := []string{"0,01", "abc", "$0.01", "-1", "", "Inf", "NaN", "1e3", "0", "0.0000000000000000001"}
 
 	for _, price := range badPrices {
 		t.Run(price, func(t *testing.T) {
@@ -2527,5 +2530,37 @@ func TestResolvePriceTable_RejectsMalformedPrice(t *testing.T) {
 	}
 	if got.PerRequest != "0.01" {
 		t.Fatalf("PerRequest = %q, want 0.01", got.PerRequest)
+	}
+}
+
+func TestValidatePriceTableForAsset(t *testing.T) {
+	obol := schemas.AssetTerms{Address: "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7", Symbol: "OBOL", Decimals: 18, TransferMethod: schemas.AssetTransferMethodPermit2}
+	cases := []struct {
+		name    string
+		pt      schemas.PriceTable
+		asset   schemas.AssetTerms
+		wantErr string
+	}{
+		{"usdc ok", schemas.PriceTable{PerRequest: "0.000001"}, schemas.AssetTerms{}, ""},
+		{"usdc too precise", schemas.PriceTable{PerRequest: "0.0000001"}, schemas.AssetTerms{}, "max 6 decimal places for USDC"},
+		{"usdc per-mtok too precise", schemas.PriceTable{PerMTok: "0.0000001"}, schemas.AssetTerms{}, "max 6 decimal places for USDC"},
+		{"obol 18dp ok", schemas.PriceTable{PerRequest: "0.000000000000000001"}, obol, ""},
+		{"obol 19dp", schemas.PriceTable{PerRequest: "0.0000000000000000001"}, obol, "max 18 decimal places for OBOL"},
+		{"zero", schemas.PriceTable{PerRequest: "0"}, schemas.AssetTerms{}, "greater than zero"},
+		{"unknown decimals uses generic grammar", schemas.PriceTable{PerRequest: "0.0000001"}, schemas.AssetTerms{Address: "0x" + strings.Repeat("b", 40), Decimals: -1}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validatePriceTableForAsset(tc.pt, tc.asset)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want containing %q", err, tc.wantErr)
+			}
+		})
 	}
 }

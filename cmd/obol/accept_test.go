@@ -83,6 +83,11 @@ func TestParseAcceptOption_Errors(t *testing.T) {
 		{"token and asset", "token=USDC,asset=0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,network=base,price=1,pay-to=" + testPayTo, "not both"},
 		{"bad decimals", "asset=0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,decimals=999,network=base,price=1,pay-to=" + testPayTo, "decimals must be"},
 		{"unregistered token", "token=WETH,network=base,price=1,pay-to=" + testPayTo, "not in the registry"},
+		{"usdc too precise", "token=USDC,network=base,price=0.0000001,pay-to=" + testPayTo, "max 6 decimal places for USDC"},
+		{"zero price", "token=USDC,network=base,price=0,pay-to=" + testPayTo, "greater than zero"},
+		{"exponent price", "token=USDC,network=base,price=1e3,pay-to=" + testPayTo, "plain decimal"},
+		{"inf price", "token=USDC,network=base,price=Inf,pay-to=" + testPayTo, "plain decimal"},
+		{"raw asset too precise", "asset=0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb,decimals=2,symbol=FOO,network=base,price=0.001,pay-to=" + testPayTo, "max 2 decimal places for FOO"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

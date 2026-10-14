@@ -203,8 +203,9 @@ func (c *Controller) reconcileAgent(ctx context.Context, key string) error {
 	// asked for it at agent-creation time. Failure here is recorded as a
 	// WalletError condition but does not roll back Hermes provisioning —
 	// the agent can still serve cached / deterministic answers without a
-	// signing wallet. Operators flip wallet.create=false then re-run if
-	// they need to abandon the keystore.
+	// signing wallet. wallet.create cannot be cleared once true (CRD
+	// validation rule); operators abandon the keystore by deleting the
+	// Agent.
 	if agent.Spec.Wallet.Create {
 		address, walletErr := c.ensureAgentWallet(ctx, agent)
 		if walletErr != nil {
