@@ -6,7 +6,7 @@
 // markers on the Go types in internal/monetizeapi.
 //
 // See `just generate`. CI fails if generated artifacts drift from the
-// markers (see .github/workflows/lint-test.yaml::generate-check).
+// markers (see .github/workflows/ci.yml, job "go").
 package tools
 
 import (

@@ -10,6 +10,7 @@ linters:
     - depguard
     - err113
     - exhaustruct
+    - exhaustruct_v5  # successor of exhaustruct (default: all would re-enable it)
     - forbidigo       # CLI uses fmt.Print* for user output
     - forcetypeassert
     - funlen
@@ -42,6 +43,7 @@ linters:
     - varnamelen
     - wrapcheck       # obol-stack has no app/errors wrapper package
     - wsl
+    - wsl_v5          # successor of wsl (default: all would re-enable it)
     # TODO: re-enable incrementally as issues are fixed
     # All linters re-enabled
   settings:

@@ -1,13 +1,21 @@
 name: Gitleaks
 
+# The repo's one secret scan (web/frontend included). Scans only the commits
+# a PR or push adds. The same pinned version runs locally via
+# .pre-commit-config.yaml.
+
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'integration/**']
   push:
-    branches: [main]
+    branches: [main, 'integration/**']
 
 permissions:
   contents: read
+
+concurrency:
+  group: gitleaks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   gitleaks:
@@ -27,10 +35,18 @@ jobs:
           tar xzf gitleaks.tar.gz gitleaks
           sudo mv gitleaks /usr/local/bin/
 
-      - name: Run gitleaks on PR diff
+      - name: Run gitleaks on PR commits
         if: github.event_name == 'pull_request'
         run: gitleaks detect --log-opts "${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}" --verbose
 
-      - name: Run gitleaks on push
+      - name: Run gitleaks on pushed commits
         if: github.event_name == 'push'
-        run: gitleaks detect --log-opts "${{ github.event.before }}..${{ github.sha }}" --verbose
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          # A new branch (all-zero "before") or a force-push to an unknown
+          # commit has no usable range: scan what the branch adds over main.
+          if [[ "$BEFORE" =~ ^0+$ ]] || ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            BEFORE="$(git merge-base origin/main "$GITHUB_SHA")"
+          fi
+          gitleaks detect --log-opts "${BEFORE}..${GITHUB_SHA}" --verbose

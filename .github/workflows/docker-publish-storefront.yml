@@ -17,9 +17,13 @@ on:
         type: boolean
         default: false
 
+# main: one group per commit, never cancelled — every main commit must end up
+# with images at :<short-sha> (release gate), so a newer push must not cancel
+# an older commit's publish/retag. Other refs (dispatch on a branch) keep
+# cancel-on-supersede.
 concurrency:
-  group: storefront-${{ github.ref }}
-  cancel-in-progress: true
+  group: storefront-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   REGISTRY: ghcr.io

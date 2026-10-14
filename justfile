@@ -174,7 +174,7 @@ dev-prune-registries:
 
 # Regenerate CRD manifests + DeepCopy methods from kubebuilder markers
 # in internal/monetizeapi/. The Go types are the single source of truth;
-# CI (.github/workflows/lint-test.yaml::generate-check) fails if the
+# CI (.github/workflows/ci.yml, job "go") fails if the
 # working tree is dirty after this command runs. See CLAUDE.md for the
 # edit-types -> just generate -> commit-both workflow.
 generate:
