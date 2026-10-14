@@ -83,6 +83,33 @@ func HardforkByName(name string) *Hardfork {
 	return nil
 }
 
+// HardforkByBlock returns the mainnet hardfork activating at exactly the
+// given block, or nil. Used to name the scope of nodes installed before
+// `since` was recorded in values.yaml.
+func HardforkByBlock(block uint64) *Hardfork {
+	for i := range MainnetHardforks {
+		if MainnetHardforks[i].Block == block {
+			return &MainnetHardforks[i]
+		}
+	}
+	return nil
+}
+
+// scope returns the partial-archive scope that keeps history from hf on.
+func (hf Hardfork) scope() ArchiveScope {
+	return ArchiveScope{
+		Kind:  "before",
+		Block: hf.Block,
+		Label: fmt.Sprintf("since %s (block %d, %s)", hf.DisplayName, hf.Block, hf.Date),
+		Since: hf.Name,
+	}
+}
+
+// genesisScope is the full-archive (all history) scope.
+func genesisScope() ArchiveScope {
+	return ArchiveScope{Kind: "all", Label: "all history (from genesis)", Since: "genesis"}
+}
+
 // ArchiveScope is the resolved meaning of --since after parsing.
 type ArchiveScope struct {
 	// Kind is one of: "all" (full archive from genesis), "before" (prune
@@ -94,6 +121,11 @@ type ArchiveScope struct {
 	Distance uint64
 	// Label is a human-readable description for logs/picker confirmation.
 	Label string
+	// Since is the canonical human token for the scope (a hardfork name
+	// like "cancun", a duration like "365d", a raw block number, or
+	// "genesis"). Written back to values.yaml so `network list|status` can
+	// show what the user chose rather than only the resolved block.
+	Since string
 }
 
 // ParseSince resolves a --since value into an ArchiveScope. Accepted
@@ -112,15 +144,11 @@ func ParseSince(raw string) (ArchiveScope, error) {
 	}
 
 	if v == "genesis" || v == "all" {
-		return ArchiveScope{Kind: "all", Label: "all history (from genesis)"}, nil
+		return genesisScope(), nil
 	}
 
 	if hf := HardforkByName(v); hf != nil {
-		return ArchiveScope{
-			Kind:  "before",
-			Block: hf.Block,
-			Label: fmt.Sprintf("since %s (block %d, %s)", hf.DisplayName, hf.Block, hf.Date),
-		}, nil
+		return hf.scope(), nil
 	}
 
 	// Duration: <N>{d,mo,y}. Translates to block distance using the
@@ -130,6 +158,7 @@ func ParseSince(raw string) (ArchiveScope, error) {
 			Kind:     "distance",
 			Distance: blocks,
 			Label:    fmt.Sprintf("last %s (~%d blocks from tip)", v, blocks),
+			Since:    v,
 		}, nil
 	}
 
@@ -139,6 +168,7 @@ func ParseSince(raw string) (ArchiveScope, error) {
 			Kind:  "before",
 			Block: n,
 			Label: fmt.Sprintf("since block %d", n),
+			Since: strconv.FormatUint(n, 10),
 		}, nil
 	}
 

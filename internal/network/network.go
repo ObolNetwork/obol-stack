@@ -138,6 +138,10 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 		}
 		archiveScope = scope
 		templateData["Mode"] = resolvedMode
+		// Record the canonical human choice (e.g. "cancun", "365d") so a
+		// picker-chosen scope isn't lost; helmfile ignores `since` and
+		// reads only the prune* fields appended below.
+		templateData["Since"] = scope.Since
 	}
 
 	// Disk-space preflight (currently only meaningful for ethereum). The

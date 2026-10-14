@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/network"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 func TestSelectDeployments(t *testing.T) {
@@ -81,5 +84,33 @@ func TestNetworkStatusFormatting(t *testing.T) {
 
 	if !podsNeedLine([]network.PodStatus{ready, pending}) {
 		t.Error("podsNeedLine: a pending pod with no reason has no warning")
+	}
+}
+
+func TestNetworkArchiveScopeDisplay(t *testing.T) {
+	d := network.Deployment{
+		Type: "ethereum", ID: "x", Network: "mainnet",
+		ExecutionClient: "reth", ConsensusClient: "lighthouse", Mode: "archive",
+		ArchiveScope: "archive since cancun (block 19,426,587)",
+	}
+
+	var out bytes.Buffer
+	u := ui.NewForTest(&out, &out)
+	printDeployments(u, []network.Deployment{d})
+	printNodeStatus(u, network.NodeStatus{
+		Deployment: d,
+		Verdict:    network.Verdict{State: network.VerdictNotProbed, Summary: "skipped"},
+	})
+
+	if got := strings.Count(out.String(), "archive since cancun (block 19,426,587)"); got != 2 {
+		t.Fatalf("want the archive scope in list and status output, got %d:\n%s", got, out.String())
+	}
+	if !strings.Contains(out.String(), "mainnet · reth + lighthouse · archive since cancun") {
+		t.Errorf("status header:\n%s", out.String())
+	}
+
+	// Deployments without a computed scope (non-ethereum) fall back to mode.
+	if got := modeLabel(network.Deployment{Mode: "full"}); got != "full" {
+		t.Errorf("modeLabel fallback = %q", got)
 	}
 }

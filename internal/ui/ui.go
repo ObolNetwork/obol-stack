@@ -94,6 +94,15 @@ func NewForTest(stdout, stderr io.Writer) *UI {
 	}
 }
 
+// NewForTestTTY is NewForTest with prompts enabled, for exercising
+// interactive pickers in unit tests (answers are read from os.Stdin).
+func NewForTestTTY(stdout, stderr io.Writer) *UI {
+	u := NewForTest(stdout, stderr)
+	u.isTTY = true
+
+	return u
+}
+
 // IsVerbose returns whether verbose mode is enabled.
 func (u *UI) IsVerbose() bool { return u.verbose }
 

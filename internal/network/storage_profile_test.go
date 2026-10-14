@@ -209,7 +209,7 @@ func TestInstallEthereumArchiveScopeWritesStorageProfile(t *testing.T) {
 			},
 			wantValues: []string{
 				`mode: archive`,
-				`since: `,
+				`since: genesis`,
 				`pruneKind: "all"`,
 				`executionStorageSize: 4500Gi`,
 				`consensusStorageSize: 500Gi`,
@@ -230,6 +230,17 @@ func TestInstallEthereumArchiveScopeWritesStorageProfile(t *testing.T) {
 				`executionStorageSize: 1900Gi`,
 				`consensusStorageSize: 500Gi`,
 				`diskRequirementGB: 2600`,
+			},
+		},
+		{
+			name: "hardfork since is recorded canonically",
+			overrides: map[string]string{
+				"since": "Cancun",
+			},
+			wantValues: []string{
+				`mode: archive`,
+				`since: cancun`,
+				`pruneBlock: 19426587`,
 			},
 		},
 		{
@@ -301,7 +312,58 @@ func TestInstallEthereumArchiveScopeWritesStorageProfile(t *testing.T) {
 	}
 }
 
-func installEthereumValues(t *testing.T, overrides map[string]string) (string, string) {
+// TestInstallEthereumArchivePickerWritesSince covers the TTY picker path:
+// the chosen preset must be recorded as `since` (it used to be written back
+// empty, so `network list` could only show the raw prune block).
+func TestInstallEthereumArchivePickerWritesSince(t *testing.T) {
+	cases := []struct {
+		name   string
+		choice string // 1-based picker answer
+		want   []string
+	}{
+		{"cancun preset", "3", []string{`since: cancun`, `pruneKind: "before"`, `pruneBlock: 19426587`}},
+		{"last 365 days", "6", []string{`since: 365d`, `pruneKind: "distance"`, `pruneDistance: 2628000`}},
+		{"all history", "7", []string{`since: genesis`, `pruneKind: "all"`}},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("OBOL_NONINTERACTIVE", "")
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := w.WriteString(c.choice + "\n"); err != nil {
+				t.Fatal(err)
+			}
+			w.Close()
+			oldStdin := os.Stdin
+			os.Stdin = r
+			t.Cleanup(func() { os.Stdin = oldStdin; r.Close() })
+
+			cfg := testInstallConfig(t)
+			var stdout, stderr bytes.Buffer
+			u := ui.NewForTestTTY(&stdout, &stderr)
+			// --mode=archive skips the full/archive picker so only the
+			// scope picker reads stdin.
+			if err := Install(cfg, u, "ethereum", map[string]string{"id": "test", "mode": "archive"}, false); err != nil {
+				t.Fatalf("Install() error = %v\nstderr:\n%s", err, stderr.String())
+			}
+
+			raw, err := os.ReadFile(filepath.Join(cfg.ConfigDir, "networks", "ethereum", "test", "values.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range c.want {
+				if !strings.Contains(string(raw), want) {
+					t.Fatalf("values.yaml missing %q:\n%s", want, raw)
+				}
+			}
+		})
+	}
+}
+
+func testInstallConfig(t *testing.T) *config.Config {
 	t.Helper()
 
 	tmp := t.TempDir()
@@ -314,6 +376,14 @@ func installEthereumValues(t *testing.T, overrides map[string]string) (string, s
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
+	return cfg
+}
+
+func installEthereumValues(t *testing.T, overrides map[string]string) (string, string) {
+	t.Helper()
+
+	cfg := testInstallConfig(t)
 
 	installOverrides := map[string]string{"id": "test"}
 	for k, v := range overrides {

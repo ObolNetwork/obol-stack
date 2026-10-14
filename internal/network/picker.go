@@ -100,7 +100,7 @@ func resolveEthereumArchiveScope(u *ui.UI, templateData map[string]string, overr
 	// Archive selected but no --since. Prompt on TTY; default to genesis
 	// otherwise.
 	if !u.IsTTY() || u.IsJSON() {
-		return ArchiveScope{Kind: "all", Label: "all history (from genesis)"}, mode, nil
+		return genesisScope(), mode, nil
 	}
 
 	// Non-mainnet archives are small enough that the preset picker isn't
@@ -162,19 +162,14 @@ func promptArchiveScopeMainnet(u *ui.UI) (ArchiveScope, error) {
 	}
 
 	if idx < len(MainnetHardforks) {
-		hf := MainnetHardforks[idx]
-		return ArchiveScope{
-			Kind:  "before",
-			Block: hf.Block,
-			Label: fmt.Sprintf("since %s (block %d, %s)", hf.DisplayName, hf.Block, hf.Date),
-		}, nil
+		return MainnetHardforks[idx].scope(), nil
 	}
 
 	switch idx - len(MainnetHardforks) {
 	case 0: // last 365 days
 		return ParseSince("365d")
 	case 1: // all history
-		return ArchiveScope{Kind: "all", Label: "all history (from genesis)"}, nil
+		return genesisScope(), nil
 	case 2: // custom
 		return promptCustomBlock(u)
 	}
@@ -191,7 +186,7 @@ func promptArchiveScopeMinimal(u *ui.UI) (ArchiveScope, error) {
 		return ArchiveScope{}, err
 	}
 	if idx == 0 {
-		return ArchiveScope{Kind: "all", Label: "all history (from genesis)"}, nil
+		return genesisScope(), nil
 	}
 	return promptCustomBlock(u)
 }

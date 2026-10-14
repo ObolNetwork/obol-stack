@@ -290,6 +290,16 @@ func networkListCommand(cfg *config.Config) *cli.Command {
 	}
 }
 
+// modeLabel is the mode shown to humans: the archive scope where known
+// (so a partial archive doesn't read as a genesis archive), else the mode.
+func modeLabel(d network.Deployment) string {
+	if d.ArchiveScope != "" {
+		return d.ArchiveScope
+	}
+
+	return d.Mode
+}
+
 // printDeployments renders installed deployments as an aligned table.
 func printDeployments(u *ui.UI, deployments []network.Deployment) {
 	dash := func(s string) string {
@@ -307,7 +317,7 @@ func printDeployments(u *ui.UI, deployments []network.Deployment) {
 		}
 
 		u.Printf("  %-26s %-9s %-11s %-11s %s", d.Identifier(), dash(d.Network),
-			dash(d.ExecutionClient), dash(d.ConsensusClient), dash(d.Mode))
+			dash(d.ExecutionClient), dash(d.ConsensusClient), dash(modeLabel(d)))
 	}
 }
 
@@ -765,8 +775,8 @@ func printNodeStatus(u *ui.UI, n network.NodeStatus) {
 		if n.ExecutionClient != "" || n.ConsensusClient != "" {
 			parts = append(parts, n.ExecutionClient+" + "+n.ConsensusClient)
 		}
-		if n.Mode != "" {
-			parts = append(parts, n.Mode)
+		if mode := modeLabel(n.Deployment); mode != "" {
+			parts = append(parts, mode)
 		}
 		head += "  (" + strings.Join(parts, " · ") + ")"
 	}
