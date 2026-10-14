@@ -1,2 +1,8 @@
 # OpenClaw->Hermes wallet migration test: a struct field assignment, not a password.
 5b96bc6d6a39350f1811762d925208c066808569:internal/hermes/wallet_migrate_openclaw_test.go:bls-keystore-password:42
+
+# Imported obol-stack-front-end history: the phrase "Basic building blocks" in docs matches
+# http-basic-auth-in-log; no credential.
+1269f4fb1dfa31447e33ba0b9ac5a816648dd5e8:README.md:http-basic-auth-in-log:170
+3bee7eab4a586fb6a8003d484570add8c19f73b8:README.md:http-basic-auth-in-log:116
+1c8471cb64065774ee29a4d10b91a91be4ede96f:src/components/atoms/.gitkeep:http-basic-auth-in-log:2
