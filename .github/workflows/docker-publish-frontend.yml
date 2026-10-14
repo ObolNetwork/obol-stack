@@ -1,0 +1,217 @@
+name: Build and Publish Front End
+
+# The operator dashboard served at obol.stack (web/frontend). Pinned by the
+# CLI like the other stack-owned images (internal/images Managed →
+# :<short-sha> + registry digest); release gate:
+# .github/scripts/verify-release-images.sh.
+
+on:
+  # Dispatch-only on main until the front-end lives here: GitHub only lets a
+  # workflow be dispatched once it exists on the default branch, and runs the
+  # file from the dispatched ref (e.g. integration/v0.17). The full trigger
+  # set (main pushes, v* tags) arrives with the branch that adds web/frontend.
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Rebuild even if the image can be reused (overwrites the existing short-SHA tag)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: frontend-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: obolnetwork/obol-stack-front-end
+
+jobs:
+  plan:
+    if: github.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      source: ${{ steps.plan.outputs.source }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 50
+
+      - name: Build, retag or skip
+        id: plan
+        env:
+          IMAGE_GROUP: frontend
+          FORCE_BUILD: ${{ inputs.force_build }}
+        run: .github/scripts/image-plan.sh
+
+  retag:
+    needs: plan
+    if: needs.plan.outputs.mode == 'retag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Copy manifest to this commit's tags
+        env:
+          IMAGE_GROUP: frontend
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tags=("${GITHUB_SHA::7}" "${GITHUB_SHA}")
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then tags+=(latest); fi
+          .github/scripts/image-retag.sh "${{ needs.plan.outputs.source }}" "${tags[@]}"
+
+  release-tags:
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Add semver tags to the commit's image
+        env:
+          IMAGE_GROUP: frontend
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          tags=("${version}")
+          # major.minor only for stable releases, as metadata-action did.
+          if [[ "${version}" != *-* ]]; then tags+=("${version%.*}"); fi
+          .github/scripts/image-retag.sh "${GITHUB_SHA::7}" "${tags[@]}"
+
+  # One native runner per arch (no QEMU: emulated arm64 Next.js builds took
+  # 30+ min), each pushing by digest; merge then creates the multi-arch index.
+  build:
+    needs: plan
+    if: needs.plan.outputs.mode == 'build'
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-24.04
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
+        with:
+          context: web/frontend
+          file: web/frontend/Dockerfile
+          platforms: ${{ matrix.platform }}
+          # The WalletConnect project ID is inlined into the client bundle and
+          # public by design; without it the wallet UI is disabled.
+          build-args: |
+            GITCOMMIT=${{ github.sha }}
+            NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=${{ secrets.WALLET_CONNECT_PROJECT_ID || '' }}
+          labels: |
+            org.opencontainers.image.title=obol-stack-front-end
+            org.opencontainers.image.description=Obol Stack operator dashboard (obol.stack)
+            org.opencontainers.image.vendor=Obol
+            org.opencontainers.image.source=https://github.com/ObolNetwork/obol-stack
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=frontend-${{ matrix.runner }}
+          cache-to: type=gha,scope=frontend-${{ matrix.runner }},mode=max
+          provenance: true
+          sbom: true
+
+      - name: Export digest
+        run: |
+          mkdir -p "${RUNNER_TEMP}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${RUNNER_TEMP}/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digests-${{ matrix.runner }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4.1.0
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch index
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          ref="${REGISTRY}/${IMAGE}"
+          # Short SHA = the CLI's version.GitCommit pin; long SHA for Trivy.
+          tags=(-t "${ref}:${GITHUB_SHA::7}" -t "${ref}:${GITHUB_SHA}")
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then tags+=(-t "${ref}:latest"); fi
+          # shellcheck disable=SC2046 # one source arg per digest file
+          docker buildx imagetools create "${tags[@]}" $(printf "${ref}@sha256:%s " *)
+          docker buildx imagetools inspect "${ref}:${GITHUB_SHA::7}"
+
+  security-scan:
+    needs: merge
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+
+    steps:
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE }}:${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
+        with:
+          sarif_file: 'trivy-results.sarif'
+        if: always()
