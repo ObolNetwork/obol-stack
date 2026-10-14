@@ -130,6 +130,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Images are built per main commit and only retagged at release, so the
+      # build can't know a release version: stamp the short SHA (the tag the
+      # CLI pins) instead of leaving the footer on "local".
+      - name: Build metadata
+        id: meta
+        run: |
+          echo "version=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "buildtime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
@@ -141,6 +150,8 @@ jobs:
           # public by design; without it the wallet UI is disabled.
           build-args: |
             GITCOMMIT=${{ github.sha }}
+            VERSION=${{ steps.meta.outputs.version }}
+            BUILDTIME=${{ steps.meta.outputs.buildtime }}
             NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=${{ secrets.WALLET_CONNECT_PROJECT_ID || '' }}
           labels: |
             org.opencontainers.image.title=obol-stack-front-end

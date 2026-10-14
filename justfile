@@ -15,7 +15,7 @@ build:
     set -e
     VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed "s/^v//" || true)
     [ -n "$VERSION" ] || VERSION=$(cat VERSION 2>/dev/null || echo "0.0.0")
-    COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    COMMIT=$(git rev-parse --short=7 HEAD 2>/dev/null || echo "unknown")
     BUILD_TIME=$(date -u +%Y%m%d%H%M%S)
     DIRTY="false"
     git diff --quiet 2>/dev/null || DIRTY="true"

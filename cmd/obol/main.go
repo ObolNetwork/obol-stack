@@ -9,6 +9,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/images"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/passthrough"
 	"github.com/ObolNetwork/obol-stack/internal/replay"
@@ -220,12 +221,14 @@ func newRootCommand(cfg *config.Config) *cli.Command {
 							GitCommit string `json:"git_commit"`
 							BuildTime string `json:"build_time"`
 							GitDirty  string `json:"git_dirty"`
+							ImageTag  string `json:"image_tag"`
 							GoVersion string `json:"go_version,omitempty"`
 						}{
 							Version:   version.Version,
 							GitCommit: version.GitCommit,
 							BuildTime: version.BuildTime,
 							GitDirty:  version.GitDirty,
+							ImageTag:  images.PinTag(),
 						}
 						if bi, ok := debugReadBuildInfo(); ok {
 							result.GoVersion = bi

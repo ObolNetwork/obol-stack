@@ -27,6 +27,7 @@ package images
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -69,10 +70,38 @@ var Managed = []string{
 // dynamically-created workloads should go through defaults.ResolveWorkloadImage,
 // which handles that switch.
 func Resolve(repo string) string {
+	ref, _ := ResolveChecked(repo)
+	return ref
+}
+
+// ResolveChecked is Resolve, but reports an error wrapping ErrTagNotFound when
+// GHCR answers that the pinned tag does not exist (and no earlier pin is
+// stored). The returned ref is still usable as a best-effort value. Network
+// failures are not errors: offline installs keep the bare short-SHA tag.
+func ResolveChecked(repo string) (string, error) {
 	if useLatest() {
-		return repo + ":latest"
+		return repo + ":latest", nil
 	}
 	return resolvePinned(repo, pinCommit())
+}
+
+// ErrTagNotFound means the registry has no image under the pinned tag: the
+// release's images were never published, or the binary pins the wrong tag.
+var ErrTagNotFound = errors.New("image tag not found on registry")
+
+// PinTagLength is the length of the commit tag every image publisher emits
+// (docker/metadata-action type=sha,format=short and `git rev-parse --short=7`).
+const PinTagLength = 7
+
+const latestTag = "latest"
+
+// PinTag returns the tag stack-owned images are pinned to, or "latest" when
+// this build has no release commit (dev, unknown, dirty or VCS-only builds).
+func PinTag() string {
+	if useLatest() {
+		return latestTag
+	}
+	return pinCommit()
 }
 
 // ResolveDev returns repo:devTag with no digest — local builds are imported
@@ -178,14 +207,14 @@ func buildReplacers(resolve func(repo string) string) []replacer {
 	return out
 }
 
-func resolvePinned(repo, tag string) string {
+func resolvePinned(repo, tag string) (string, error) {
 	tag = strings.TrimSpace(tag)
 	if tag == "" || tag == "unknown" || tag == "dev" {
-		return repo + ":latest"
+		return repo + ":latest", nil
 	}
 	ref := repo + ":" + tag
 	if skipDigest() {
-		return ref
+		return ref, nil
 	}
 
 	// Prefer a durable local pin so restarts / stack up with the same CLI
@@ -193,7 +222,7 @@ func resolvePinned(repo, tag string) string {
 	// overwritten later. Fresh bind only when no pin exists or refresh is set.
 	if !refreshDigests() {
 		if d := loadPersistedDigest(repo, tag); d != "" {
-			return ref + "@" + d
+			return ref + "@" + d, nil
 		}
 	}
 
@@ -201,23 +230,43 @@ func resolvePinned(repo, tag string) string {
 	if err != nil || digest == "" {
 		// Fall back to a prior pin if refresh failed mid-flight.
 		if d := loadPersistedDigest(repo, tag); d != "" {
-			return ref + "@" + d
+			return ref + "@" + d, nil
+		}
+		if errors.Is(err, ErrTagNotFound) {
+			return ref, err
 		}
 		// Short-SHA tag is still privileged over :latest.
-		return ref
+		return ref, nil
 	}
 	_ = persistDigest(repo, tag, digest)
-	return ref + "@" + digest
+	return ref + "@" + digest, nil
 }
 
 // pinCommit returns the release commit used for image tags. Commits recovered
 // from VCS build info (plain `go build`, no ldflags) have no published images,
 // so they pin like an unknown commit (":latest").
+//
+// The commit is cut to PinTagLength: builders pass `git rev-parse --short`,
+// whose length grows with the repo's object count (v0.17.0-rc1 shipped an
+// 8-char commit), while the publishers always tag the first 7 characters.
 func pinCommit() string {
 	if version.CommitFromVCS {
 		return ""
 	}
-	return strings.TrimSpace(version.GitCommit)
+	c := strings.TrimSpace(version.GitCommit)
+	if len(c) > PinTagLength && isHex(c) {
+		c = c[:PinTagLength]
+	}
+	return c
+}
+
+func isHex(s string) bool {
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return s != ""
 }
 
 func useLatest() bool {
@@ -294,6 +343,9 @@ func FetchIndexDigest(repo, tag string) (string, error) {
 		return "", err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return "", fmt.Errorf("%w: ghcr.io/%s:%s", ErrTagNotFound, path, tag)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("images: ghcr HEAD %s:%s → HTTP %d", path, tag, resp.StatusCode)
 	}

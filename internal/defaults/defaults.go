@@ -119,8 +119,24 @@ func renderInfrastructure(cfg *config.Config, defaultsDir, backendName, stackID 
 			return fmt.Errorf("persist dev image tag: %w", err)
 		}
 	} else {
-		if err := images.RewriteTree(defaultsDir, images.Resolve); err != nil {
+		var missing []string
+		resolve := func(repo string) string {
+			ref, err := images.ResolveChecked(repo)
+			if errors.Is(err, images.ErrTagNotFound) {
+				missing = append(missing, ref)
+			}
+			return ref
+		}
+		if err := images.RewriteTree(defaultsDir, resolve); err != nil {
 			return fmt.Errorf("rewrite managed image refs: %w", err)
+		}
+		// Fail before anything is applied: rolling workloads to a tag that
+		// was never published leaves them in ImagePullBackOff (and a fresh
+		// install with none of these components).
+		if len(missing) > 0 {
+			return fmt.Errorf("this obol build (commit %s) pins images that are not published:\n  %s\n"+
+				"the release is incomplete; reinstall a published release, or set OBOL_SKIP_IMAGE_DIGEST=true to apply the tags anyway",
+				images.PinTag(), strings.Join(missing, "\n  "))
 		}
 	}
 
