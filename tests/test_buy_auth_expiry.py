@@ -56,10 +56,11 @@ class AuthExpiryTest(unittest.TestCase):
         self.assertAlmostEqual(self.buy._auth_expiry() - now, 3600, delta=5)
 
     def test_floored_at_settle_window(self):
-        # Values below the 300s settle-window floor are clamped up.
+        # Values below the settle-window floor are clamped up to 600s
+        # (x402.DefaultMaxTimeoutSeconds, raised from 300s in d46e5792).
         os.environ["OBOL_X402_AUTH_TTL"] = "10"
         now = int(time.time())
-        self.assertAlmostEqual(self.buy._auth_expiry() - now, 300, delta=5)
+        self.assertAlmostEqual(self.buy._auth_expiry() - now, 600, delta=5)
 
     def test_garbage_falls_back_to_default(self):
         os.environ["OBOL_X402_AUTH_TTL"] = "not-a-number"

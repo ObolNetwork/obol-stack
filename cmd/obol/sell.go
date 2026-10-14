@@ -1182,32 +1182,6 @@ func buildSellAcceptUpdatePatch(payments []map[string]any) map[string]any {
 	}
 }
 
-// shouldAutoRegisterSell reports whether the post-create auto-register step
-// must run for a freshly-applied ServiceOffer spec. Both `obol sell http` and
-// `obol sell inference` need the same gate: registration must be enabled AND
-// a tunnel URL must be available to write into the on-chain registration
-// document. The decision is intentionally shared so the inference path
-// cannot silently regress to "create the offer, never register" (the bug
-// behind https://github.com/ObolNetwork/obol-stack/issues — Registered=False
-// AwaitingExternalRegistration hiding the offer from /api/services.json).
-func shouldAutoRegisterSell(spec map[string]any, tunnelURL string) bool {
-	if tunnelURL == "" {
-		return false
-	}
-	return registrationEnabledInSpec(spec)
-}
-
-// registrationEnabledInSpec reports whether a ServiceOffer spec map has
-// ERC-8004 registration enabled.
-func registrationEnabledInSpec(spec map[string]any) bool {
-	reg, ok := spec["registration"].(map[string]any)
-	if !ok {
-		return false
-	}
-	enabled, _ := reg["enabled"].(bool)
-	return enabled
-}
-
 func registrationNameForPrompt(fallback string, reg map[string]any) string {
 	if reg == nil {
 		return fallback

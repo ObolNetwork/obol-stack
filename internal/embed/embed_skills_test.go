@@ -132,11 +132,11 @@ func TestWriteSkillSubset_EmptyNamesIsNoop(t *testing.T) {
 	}
 }
 
-func TestCopySkills(t *testing.T) {
+func TestWriteAllSkills(t *testing.T) {
 	destDir := t.TempDir()
 
-	if err := CopySkills(destDir); err != nil {
-		t.Fatalf("CopySkills: %v", err)
+	if err := writeAllSkills(destDir); err != nil {
+		t.Fatalf("writeAllSkills: %v", err)
 	}
 
 	// Every skill must have a SKILL.md
@@ -226,8 +226,8 @@ func TestMonetizePy_Syntax(t *testing.T) {
 	}
 
 	destDir := t.TempDir()
-	if err := CopySkills(destDir); err != nil {
-		t.Fatalf("CopySkills: %v", err)
+	if err := writeAllSkills(destDir); err != nil {
+		t.Fatalf("writeAllSkills: %v", err)
 	}
 
 	monetizePy := filepath.Join(destDir, "sell", "scripts", "monetize.py")
@@ -249,8 +249,8 @@ func TestBuyPyAutoRefillCostCapRequiresAutoRefill(t *testing.T) {
 	}
 
 	destDir := t.TempDir()
-	if err := CopySkills(destDir); err != nil {
-		t.Fatalf("CopySkills: %v", err)
+	if err := writeAllSkills(destDir); err != nil {
+		t.Fatalf("writeAllSkills: %v", err)
 	}
 
 	buyPy := filepath.Join(destDir, "buy-x402", "scripts", "buy.py")
@@ -296,8 +296,8 @@ func TestBuyPyGaslessPermitScopedToSelectedAsset(t *testing.T) {
 	}
 
 	destDir := t.TempDir()
-	if err := CopySkills(destDir); err != nil {
-		t.Fatalf("CopySkills: %v", err)
+	if err := writeAllSkills(destDir); err != nil {
+		t.Fatalf("writeAllSkills: %v", err)
 	}
 
 	buyPy := filepath.Join(destDir, "buy-x402", "scripts", "buy.py")
@@ -354,8 +354,8 @@ func TestAgentFactoryPy_Syntax(t *testing.T) {
 	}
 
 	destDir := t.TempDir()
-	if err := CopySkills(destDir); err != nil {
-		t.Fatalf("CopySkills: %v", err)
+	if err := writeAllSkills(destDir); err != nil {
+		t.Fatalf("writeAllSkills: %v", err)
 	}
 
 	factoryPy := filepath.Join(destDir, "agent-factory", "scripts", "factory.py")
@@ -377,8 +377,8 @@ func TestAgentFactoryPy_AcceptAllowsZeroDecimals(t *testing.T) {
 	}
 
 	destDir := t.TempDir()
-	if err := CopySkills(destDir); err != nil {
-		t.Fatalf("CopySkills: %v", err)
+	if err := writeAllSkills(destDir); err != nil {
+		t.Fatalf("writeAllSkills: %v", err)
 	}
 
 	factoryPy := filepath.Join(destDir, "agent-factory", "scripts", "factory.py")
@@ -423,8 +423,8 @@ func TestAgentFactoryPy_ProfileArchiveAndRegistrationBehavior(t *testing.T) {
 	}
 
 	destDir := t.TempDir()
-	if err := CopySkills(destDir); err != nil {
-		t.Fatalf("CopySkills: %v", err)
+	if err := writeAllSkills(destDir); err != nil {
+		t.Fatalf("writeAllSkills: %v", err)
 	}
 
 	factoryPy := filepath.Join(destDir, "agent-factory", "scripts", "factory.py")
@@ -502,8 +502,8 @@ if registration.get("metadata") != expected_metadata:
 
 func TestKubePy_WriteHelpers(t *testing.T) {
 	destDir := t.TempDir()
-	if err := CopySkills(destDir); err != nil {
-		t.Fatalf("CopySkills: %v", err)
+	if err := writeAllSkills(destDir); err != nil {
+		t.Fatalf("writeAllSkills: %v", err)
 	}
 
 	kubePy := filepath.Join(destDir, "obol-stack", "scripts", "kube.py")
@@ -530,8 +530,8 @@ func TestKubePy_NamespaceScoping(t *testing.T) {
 	}
 
 	destDir := t.TempDir()
-	if err := CopySkills(destDir); err != nil {
-		t.Fatalf("CopySkills: %v", err)
+	if err := writeAllSkills(destDir); err != nil {
+		t.Fatalf("writeAllSkills: %v", err)
 	}
 
 	kubePy := filepath.Join(destDir, "obol-stack", "scripts", "kube.py")
@@ -617,8 +617,8 @@ func TestDiscoveryPy_Syntax(t *testing.T) {
 	}
 
 	destDir := t.TempDir()
-	if err := CopySkills(destDir); err != nil {
-		t.Fatalf("CopySkills: %v", err)
+	if err := writeAllSkills(destDir); err != nil {
+		t.Fatalf("writeAllSkills: %v", err)
 	}
 
 	discoveryPy := filepath.Join(destDir, "discovery", "scripts", "discovery.py")
@@ -636,8 +636,8 @@ func TestDiscoveryPy_Syntax(t *testing.T) {
 
 func TestDiscoverySkill_Commands(t *testing.T) {
 	destDir := t.TempDir()
-	if err := CopySkills(destDir); err != nil {
-		t.Fatalf("CopySkills: %v", err)
+	if err := writeAllSkills(destDir); err != nil {
+		t.Fatalf("writeAllSkills: %v", err)
 	}
 
 	discoveryPy := filepath.Join(destDir, "discovery", "scripts", "discovery.py")
@@ -679,7 +679,7 @@ func TestDiscoverySkill_Commands(t *testing.T) {
 	}
 }
 
-func TestCopySkillsSkipsExisting(t *testing.T) {
+func TestWriteAllSkillsKeepsExisting(t *testing.T) {
 	destDir := t.TempDir()
 
 	// Pre-create a skill directory with custom content
@@ -693,9 +693,9 @@ func TestCopySkillsSkipsExisting(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	// CopySkills should still succeed (it copies all files, including into existing dirs)
-	if err := CopySkills(destDir); err != nil {
-		t.Fatalf("CopySkills: %v", err)
+	// writeAllSkills should still succeed (it copies all files, including into existing dirs)
+	if err := writeAllSkills(destDir); err != nil {
+		t.Fatalf("writeAllSkills: %v", err)
 	}
 
 	// Custom file should still be present
@@ -707,4 +707,14 @@ func TestCopySkillsSkipsExisting(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(customDir, "SKILL.md")); err != nil {
 		t.Errorf("SKILL.md not copied alongside custom content: %v", err)
 	}
+}
+
+// writeAllSkills seeds every embedded skill into dst through the production
+// path (WriteSkillSubset).
+func writeAllSkills(dst string) error {
+	names, err := GetEmbeddedSkillNames()
+	if err != nil {
+		return err
+	}
+	return WriteSkillSubset(dst, names)
 }

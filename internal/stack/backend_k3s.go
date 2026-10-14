@@ -411,12 +411,6 @@ func (b *K3sBackend) cleanupRuntime(cfg *config.Config, u *ui.UI) error {
 	return nil
 }
 
-// readPid reads the k3s PID from the PID file
-func (b *K3sBackend) readPid(cfg *config.Config) (int, error) {
-	rec, err := b.readPidRecord(cfg)
-	return rec.PID, err
-}
-
 // readPidRecord reads "<pid> <starttime>" from the PID file. Files written
 // by older versions hold only the PID (StartTime 0).
 func (b *K3sBackend) readPidRecord(cfg *config.Config) (k3sPidRecord, error) {

@@ -14,7 +14,7 @@ import (
 
 // TestEmbeddedImages_ManagedUsePlaceholder guards the post-repin model:
 // stack-owned images in embedded templates MUST use :__OBOL_IMAGE__, which
-// CopyInfrastructure rewrites to short-SHA (+ registry digest) at apply time.
+// RefreshInfrastructure rewrites to short-SHA (+ registry digest) at apply time.
 // Digests are never committed to git.
 func TestEmbeddedImages_ManagedUsePlaceholder(t *testing.T) {
 	files := []string{

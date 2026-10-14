@@ -13,6 +13,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentsync"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/defaults"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
@@ -312,20 +313,42 @@ func rewriteRestoredPaths(cfg *config.Config, m *Manifest) (int, error) {
 			return nil
 		}
 		changed++
-		return os.WriteFile(path, []byte(out), info.Mode().Perm())
+		if err := os.WriteFile(path, []byte(out), info.Mode().Perm()); err != nil {
+			return err
+		}
+		// A re-pointed default is still obol's own content, not a hand-edit.
+		defaults.RecordRewrite(cfg, path, data, []byte(out))
+		return nil
 	})
 	return changed, err
 }
 
 // extractHostState streams the archive once, routing config/ entries into
 // ConfigDir, data/ entries into DataDir, and cluster/ entries into scratch.
+//
+// An archive that carries the defaults tree replaces the local one as a
+// unit (see defaults.ClearForRestore), so its manifest describes exactly the
+// files restored with it; a local tree with hand-edits is set aside first.
+// Archives from before defaults/ was exported leave the local tree alone.
 func extractHostState(cfg *config.Config, input, scratch string, u *ui.UI) error {
+	defaultsCleared := false
 	return walkArchive(input, func(tr *tar.Reader, hdr *tar.Header, clean string) error {
 		switch {
 		case clean == ManifestFileName:
 			return nil
 		case strings.HasPrefix(clean, "config"+string(os.PathSeparator)):
-			return extractEntry(tr, hdr, cfg.ConfigDir, strings.TrimPrefix(clean, "config"+string(os.PathSeparator)))
+			rel := strings.TrimPrefix(clean, "config"+string(os.PathSeparator))
+			if !defaultsCleared && defaults.IsDefaultsPath(rel) {
+				defaultsCleared = true
+				backup, err := defaults.ClearForRestore(cfg)
+				if err != nil {
+					return fmt.Errorf("make way for restored defaults: %w", err)
+				}
+				if backup != "" {
+					u.Warnf("Hand-edited defaults replaced by the archive's; the previous tree was moved to %s", backup)
+				}
+			}
+			return extractEntry(tr, hdr, cfg.ConfigDir, rel)
 		case strings.HasPrefix(clean, "data"+string(os.PathSeparator)):
 			return extractEntry(tr, hdr, cfg.DataDir, strings.TrimPrefix(clean, "data"+string(os.PathSeparator)))
 		default:

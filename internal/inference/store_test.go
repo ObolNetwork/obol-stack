@@ -202,23 +202,6 @@ func TestStoreListEmpty(t *testing.T) {
 	}
 }
 
-func TestStoreDelete(t *testing.T) {
-	dir := t.TempDir()
-	store := inference.NewStore(dir)
-
-	if err := store.Create(&inference.Deployment{Name: "todelete"}, false); err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	if err := store.Delete("todelete"); err != nil {
-		t.Fatalf("Delete: %v", err)
-	}
-
-	if _, err := store.Get("todelete"); !errors.Is(err, inference.ErrDeploymentNotFound) {
-		t.Fatalf("expected ErrDeploymentNotFound after delete, got %v", err)
-	}
-}
-
 func TestStoreGetNotFound(t *testing.T) {
 	dir := t.TempDir()
 	store := inference.NewStore(dir)

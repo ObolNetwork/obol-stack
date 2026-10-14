@@ -25,7 +25,7 @@ func withVersion(t *testing.T, commit, dirty string) {
 }
 
 func TestResolve_DevModeForcesLatest(t *testing.T) {
-	// Resolve itself returns :latest under OBOL_DEVELOPMENT; CopyInfrastructure
+	// Resolve itself returns :latest under OBOL_DEVELOPMENT; RefreshInfrastructure
 	// uses ResolveDev with the per-commit dev tag instead.
 	withVersion(t, "abc1234", "false")
 	t.Setenv("OBOL_DEVELOPMENT", "true")

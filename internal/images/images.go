@@ -5,7 +5,7 @@
 //
 //  1. Embedded templates mark stack-owned images with the PlaceholderTag
 //     (`:__OBOL_IMAGE__`). Digests are never committed to git.
-//  2. At apply time (CopyInfrastructure / dynamic resource creation), Resolve
+//  2. At apply time (RefreshInfrastructure / dynamic resource creation), Resolve
 //     rewrites each managed image to a short-SHA tag from version.GitCommit.
 //  3. For production security, Resolve binds the multi-arch index digest from
 //     GHCR on first resolve for that (repo, tag) and persists it under the
@@ -41,7 +41,7 @@ import (
 )
 
 // PlaceholderTag is the sentinel tag embedded templates use for stack-owned
-// images. CopyInfrastructure rewrites every occurrence before helmfile apply.
+// images. RefreshInfrastructure rewrites every occurrence before helmfile apply.
 // Leaving it unreplaced would fail image pulls loudly (fail-closed).
 const PlaceholderTag = "__OBOL_IMAGE__"
 

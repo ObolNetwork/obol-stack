@@ -483,11 +483,6 @@ func (c *Controller) removeAgentFinalizer(ctx context.Context, raw *unstructured
 // Idempotent: NotFound responses from the apiserver are treated as
 // success, so re-runs after a partial sweep complete cleanly.
 func (c *Controller) tearDownAgent(ctx context.Context, agent *monetizeapi.Agent) error {
-	type victim struct {
-		gvr      string
-		resource dynamic.NamespaceableResourceInterface
-		name     string
-	}
 	dynNs := func(r dynamic.NamespaceableResourceInterface) dynamic.ResourceInterface {
 		return r.Namespace(agent.Namespace)
 	}
@@ -517,7 +512,6 @@ func (c *Controller) tearDownAgent(ctx context.Context, agent *monetizeapi.Agent
 	// host-side cleanup) to remove. Deleting the namespace from the
 	// controller would race with any other Agent CRs that might share
 	// it — unlikely under our current naming, but cheap to be careful.
-	_ = victim{} // keep the local type referenced; future kinds slot in here
 	return nil
 }
 

@@ -45,10 +45,13 @@ func TestSkipConfigEntry(t *testing.T) {
 	cases := map[string]bool{
 		"kubeconfig.yaml":                  true,
 		"kubeconfig.yaml.bak":              true,
-		"defaults":                         true,
-		filepath.Join("defaults", "x.yml"): true,
-		".stack-id":                        false,
-		"k3d.yaml":                         false,
+		".defaults-render-123":             true,
+		"defaults":                         false,
+		filepath.Join("defaults", "x.yml"): false,
+		filepath.Join("defaults", ".obol-defaults-manifest.json"): false,
+		filepath.Join("defaults.obol-new", "values", "erpc.yaml"): false,
+		".stack-id": false,
+		"k3d.yaml":  false,
 		filepath.Join("applications", "hermes", "obol-agent", "values-hermes.yaml"): false,
 		filepath.Join("sell-http", "llm__ollama-gated.yaml"):                        false,
 	}

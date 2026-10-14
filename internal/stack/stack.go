@@ -1324,7 +1324,7 @@ func buildAndImportLocalImages(cfg *config.Config, u *ui.UI) {
 	cache := loadImportedImageCache(cfg)
 
 	// Tag locally-built images with the per-commit dev tag the manifest
-	// rewrite stamped (defaults.CopyInfrastructure persisted it). This keeps a
+	// rewrite stamped (defaults.RefreshInfrastructure persisted it). This keeps a
 	// branch/worktree's images on their own tag instead of a shared :latest,
 	// so parallel dev stacks on one Docker daemon can't clobber each other's
 	// images (the cross-worktree poisoning that masquerades as a stale build).

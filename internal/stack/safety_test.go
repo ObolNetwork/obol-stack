@@ -14,7 +14,7 @@ import (
 
 // newTestCfg returns a Config rooted at t.TempDir() so safety_test does not
 // touch real cluster paths. ConfigDir has no kubeconfig.yaml so the cluster
-// half of DiscoverLiveServices short-circuits via kubectl.EnsureCluster.
+// half of discoverLiveServicesChecked short-circuits via kubectl.EnsureCluster.
 func newTestCfg(t *testing.T) *config.Config {
 	t.Helper()
 	tmp := t.TempDir()

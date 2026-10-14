@@ -69,7 +69,6 @@ export default async function OpengraphImage() {
         {/* Brand, top-left. The default wordmark is light-on-dark, so light
             themes use the dark square mark + name instead. */}
         {customLogoSrc === "" && dark ? (
-          // eslint-disable-next-line @next/next/no-img-element
           <img
             src={logoDataUrl("obol-stack-logo.png")}
             alt={storefront.displayName}
@@ -85,7 +84,6 @@ export default async function OpengraphImage() {
               gap: 18,
             }}
           >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={
                 customLogoSrc === ""

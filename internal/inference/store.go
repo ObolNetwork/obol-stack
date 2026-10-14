@@ -271,23 +271,6 @@ func (s *Store) List() ([]*Deployment, error) {
 	return deployments, nil
 }
 
-// Delete removes a deployment's config directory from disk.
-func (s *Store) Delete(name string) error {
-	if err := ValidateName(name); err != nil {
-		return err
-	}
-
-	if _, err := s.Get(name); err != nil {
-		return err
-	}
-
-	if err := os.RemoveAll(s.dir(name)); err != nil {
-		return fmt.Errorf("inference store: delete %s: %w", name, err)
-	}
-
-	return nil
-}
-
 // Update persists changes to an existing Deployment.
 func (s *Store) Update(d *Deployment) error {
 	if _, err := s.Get(d.Name); err != nil {

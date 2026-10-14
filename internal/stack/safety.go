@@ -138,18 +138,8 @@ func confirmLoss(u *ui.UI, action string, skipConfirm bool, services LiveService
 // discoverLiveServicesFn is swappable in tests.
 var discoverLiveServicesFn = discoverLiveServicesChecked
 
-// DiscoverLiveServices snapshots cluster-side ServiceOffers in a
-// payment-gate-ready state. `obol sell inference` gateways are standalone
-// processes that don't depend on the cluster, so they aren't tracked. Errors
-// are swallowed (best-effort snapshot); callers that
-// must distinguish "nothing live" from "could not check" use
-// discoverLiveServicesChecked.
-func DiscoverLiveServices(cfg *config.Config) LiveServices {
-	s, _ := discoverLiveServicesChecked(cfg)
-	return s
-}
-
-// discoverLiveServicesChecked is DiscoverLiveServices plus the reason the
+// discoverLiveServicesChecked snapshots cluster-side ServiceOffers in a
+// payment-gate-ready state, plus the reason the
 // cluster half could not be checked (unreachable cluster, listing or
 // decoding failure).
 func discoverLiveServicesChecked(cfg *config.Config) (LiveServices, error) {

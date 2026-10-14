@@ -264,16 +264,6 @@ func ReconcileOne(cfg *config.Config, k Kube, rec *Record) (Outcome, error) {
 	}
 }
 
-// Mirror copies the live CR ns/name to its record. A missing CR leaves any
-// existing record untouched (the record is what restores it).
-func Mirror(cfg *config.Config, k Kube, ns, name string) error {
-	live, err := Get(k, ns, name)
-	if err != nil || live == nil {
-		return err
-	}
-	return Save(cfg, live)
-}
-
 // MirrorAll records every AgentIdentity in the cluster. Used by `obol stack
 // export` so the archive's config tree carries registrations the
 // serviceoffer-controller wrote since the last CLI write. CRD absent or no

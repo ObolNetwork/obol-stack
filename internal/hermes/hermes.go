@@ -785,12 +785,6 @@ func dashboardURL(id string) string {
 	return "http://" + dashboardHostname(id)
 }
 
-// dashboardPasswordLoginURL is the form path Hermes actually serves (and the
-// target of the edge redirect from "/").
-func dashboardPasswordLoginURL(id string) string {
-	return dashboardURL(id) + DashboardPasswordLoginPath
-}
-
 // dashboardAccessGuidance returns operator-facing lines that name the pretty
 // dashboard URL and how credentials map to the agent API token.
 // Pure for unit tests; printDashboardAccessGuidance is the Sync success path.

@@ -377,6 +377,79 @@ func RecordRewrite(cfg *config.Config, path string, before, after []byte) {
 	_ = writeManifest(defaultsDir, files)
 }
 
+// IsDefaultsPath reports whether a ConfigDir-relative path belongs to the
+// defaults tree or its pending new-default sibling (the parts a stack
+// backup restores as one unit).
+func IsDefaultsPath(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	for _, root := range []string{"defaults", pendingDirName} {
+		if rel == root || strings.HasPrefix(rel, root+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// handEdited returns the defaults-relative paths whose content differs from
+// what obol last wrote. Without a manifest (a tree written by an older obol)
+// edits cannot be told apart from defaults, so every file counts.
+func handEdited(defaultsDir string) ([]string, error) {
+	files, haveManifest := readManifest(defaultsDir)
+	var edited []string
+	err := filepath.WalkDir(defaultsDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() {
+			return walkErr
+		}
+		rel, err := filepath.Rel(defaultsDir, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == manifestFile || rel == stampFile {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !haveManifest || files[rel] != sha256Hex(data) {
+			edited = append(edited, rel)
+		}
+		return nil
+	})
+	return edited, err
+}
+
+// ClearForRestore makes way for a defaults tree restored from a stack
+// backup, so the archive's files and manifest are not mixed with the local
+// tree they replace. The local pending new defaults are removed (they belong
+// to the replaced tree). A local tree without hand-edits is removed; one with
+// edits is moved to $CONFIG/defaults.bak.<timestamp> and that path returned.
+func ClearForRestore(cfg *config.Config) (string, error) {
+	if err := os.RemoveAll(filepath.Join(cfg.ConfigDir, pendingDirName)); err != nil {
+		return "", err
+	}
+	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
+	if _, err := os.Stat(defaultsDir); errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	edited, err := handEdited(defaultsDir)
+	if err != nil {
+		return "", fmt.Errorf("inspect %s: %w", defaultsDir, err)
+	}
+	if len(edited) == 0 {
+		return "", os.RemoveAll(defaultsDir)
+	}
+	backupDir := filepath.Join(cfg.ConfigDir, backupDirPrefix+nowFn().UTC().Format("20060102T150405Z"))
+	if _, err := os.Stat(backupDir); err == nil {
+		backupDir += "-pre-import"
+	}
+	if err := os.Rename(defaultsDir, backupDir); err != nil {
+		return "", fmt.Errorf("set aside %s: %w", defaultsDir, err)
+	}
+	return backupDir, nil
+}
+
 // ReportRefresh prints the outcome of a refresh. resetCmd is the command
 // that takes the new defaults (e.g. "obol stack up --reset-defaults").
 func ReportRefresh(u *ui.UI, res RefreshResult, resetCmd string) {

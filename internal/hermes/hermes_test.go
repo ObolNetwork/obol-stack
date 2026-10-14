@@ -485,20 +485,6 @@ func TestDashboardHostname_UsesDefaultAgentHostAndHermesUIHostForNamedInstances(
 	}
 }
 
-func TestDashboardPasswordLoginURL_UsesPasswordLoginPath(t *testing.T) {
-	got := dashboardPasswordLoginURL("obol-agent")
-	want := "http://obol-agent.obol.stack" + DashboardPasswordLoginPath
-	if got != want {
-		t.Fatalf("dashboardPasswordLoginURL(obol-agent) = %q, want %q", got, want)
-	}
-	if !strings.HasSuffix(got, "/auth/password-login") {
-		t.Fatalf("login URL must end with /auth/password-login, got %q", got)
-	}
-	if gotRoot := dashboardURL("obol-agent"); gotRoot != "http://obol-agent.obol.stack" {
-		t.Fatalf("dashboardURL(obol-agent) = %q, want pretty host root", gotRoot)
-	}
-}
-
 func TestDashboardAccessGuidance_NamesPrettyURLAndTokenPassword(t *testing.T) {
 	id := "obol-agent"
 	lines := dashboardAccessGuidance(id)

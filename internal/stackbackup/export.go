@@ -114,7 +114,7 @@ func Export(cfg *config.Config, opts ExportOptions, u *ui.UI) (string, error) {
 	manifest.Components = append(manifest.Components, clusterComponent)
 
 	manifest.Components = append(manifest.Components,
-		Component{Name: "config", Included: true, Notes: []string{"excludes kubeconfig*, defaults/"}},
+		Component{Name: "config", Included: true, Notes: []string{"excludes kubeconfig*; includes defaults/ with its hand-edit manifest"}},
 		Component{Name: "data", Included: len(dataNamespaces) > 0, Notes: dataNamespaces},
 	)
 

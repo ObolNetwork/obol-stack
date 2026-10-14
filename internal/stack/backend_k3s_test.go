@@ -55,25 +55,26 @@ func TestK3sReadPid(t *testing.T) {
 
 			b := &K3sBackend{}
 
-			pid, err := b.readPid(cfg)
+			rec, err := b.readPidRecord(cfg)
+			pid := rec.PID
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("readPid() = %d, nil error; want error containing %q", pid, tt.errContains)
+					t.Fatalf("readPidRecord() = %d, nil error; want error containing %q", pid, tt.errContains)
 				}
 
 				if !strings.Contains(err.Error(), tt.errContains) {
-					t.Errorf("readPid() error = %q, want containing %q", err.Error(), tt.errContains)
+					t.Errorf("readPidRecord() error = %q, want containing %q", err.Error(), tt.errContains)
 				}
 
 				return
 			}
 
 			if err != nil {
-				t.Fatalf("readPid() unexpected error: %v", err)
+				t.Fatalf("readPidRecord() unexpected error: %v", err)
 			}
 
 			if pid != tt.wantPid {
-				t.Errorf("readPid() = %d, want %d", pid, tt.wantPid)
+				t.Errorf("readPidRecord() = %d, want %d", pid, tt.wantPid)
 			}
 		})
 	}
@@ -84,9 +85,9 @@ func TestK3sReadPid(t *testing.T) {
 
 		b := &K3sBackend{}
 
-		_, err := b.readPid(cfg)
+		_, err := b.readPidRecord(cfg)
 		if err == nil {
-			t.Fatal("readPid() with no file should return error")
+			t.Fatal("readPidRecord() with no file should return error")
 		}
 	})
 }

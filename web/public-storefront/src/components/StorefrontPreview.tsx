@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Header } from "@/components/Header";
 import { PaymentFlow } from "@/components/PaymentFlow";
 import { RichText } from "@/components/RichText";
@@ -39,6 +39,13 @@ function isOperatorPreviewFrame(): boolean {
   if (typeof window === "undefined") return false;
   if (window.parent !== window) return true;
   return window.location.hostname === PREVIEW_HOST;
+}
+
+// Frame/host never change for a loaded page, so there is nothing to subscribe
+// to; useSyncExternalStore just gives a server snapshot (false) and the real
+// client value after hydration without a setState-in-effect.
+function subscribeNever(): () => void {
+  return () => {};
 }
 
 function optionalImage(value: unknown): string | null | undefined {
@@ -105,11 +112,14 @@ export function StorefrontPreview({
   initial: ServiceCatalogDocument;
 }) {
   const [storefront, setStorefront] = useState(initial);
-  const [previewMode, setPreviewMode] = useState(false);
+  const previewMode = useSyncExternalStore(
+    subscribeNever,
+    isOperatorPreviewFrame,
+    () => false,
+  );
 
   useEffect(() => {
     const preview = isOperatorPreviewFrame();
-    setPreviewMode(preview);
     const root = document.documentElement;
     if (preview) root.dataset.obolPreview = "1";
     else delete root.dataset.obolPreview;

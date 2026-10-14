@@ -13,12 +13,12 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/version"
 )
 
-func TestCopyInfrastructure_DevModeRewritesManagedImages(t *testing.T) {
+func TestRefreshInfrastructure_DevModeRewritesManagedImages(t *testing.T) {
 	t.Setenv("OBOL_DEVELOPMENT", "true")
 
 	cfg := &config.Config{ConfigDir: t.TempDir()}
-	if err := CopyInfrastructure(cfg, backendK3s, "test-stack"); err != nil {
-		t.Fatalf("CopyInfrastructure: %v", err)
+	if _, err := RefreshInfrastructure(cfg, backendK3s, "test-stack", RefreshOptions{Force: true, Reset: true}); err != nil {
+		t.Fatalf("RefreshInfrastructure: %v", err)
 	}
 
 	x402Path := filepath.Join(cfg.ConfigDir, "defaults", "base", "templates", "x402.yaml")
@@ -136,7 +136,7 @@ func TestResolveWorkloadImage_ProductionDelegatesToResolve(t *testing.T) {
 	}
 }
 
-func TestCopyInfrastructure_ProductionUsesCommitSHA(t *testing.T) {
+func TestRefreshInfrastructure_ProductionUsesCommitSHA(t *testing.T) {
 	// Production path: rewrite placeholder → :GitCommit (digest skipped for
 	// offline unit tests). Never :latest, never leave the placeholder.
 	t.Setenv("OBOL_DEVELOPMENT", "")
@@ -146,8 +146,8 @@ func TestCopyInfrastructure_ProductionUsesCommitSHA(t *testing.T) {
 	t.Cleanup(func() { version.GitCommit = prev })
 
 	cfg := &config.Config{ConfigDir: t.TempDir()}
-	if err := CopyInfrastructure(cfg, backendK3s, "test-stack"); err != nil {
-		t.Fatalf("CopyInfrastructure: %v", err)
+	if _, err := RefreshInfrastructure(cfg, backendK3s, "test-stack", RefreshOptions{Force: true, Reset: true}); err != nil {
+		t.Fatalf("RefreshInfrastructure: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, "defaults", "base", "templates", "x402.yaml"))
 	if err != nil {
@@ -172,12 +172,12 @@ func TestCopyInfrastructure_ProductionUsesCommitSHA(t *testing.T) {
 	}
 }
 
-func TestCopyInfrastructureRendersStackPlaceholders(t *testing.T) {
+func TestRefreshInfrastructureRendersStackPlaceholders(t *testing.T) {
 	t.Setenv("OBOL_SKIP_IMAGE_DIGEST", "true")
 	cfg := &config.Config{ConfigDir: t.TempDir()}
 
-	if err := CopyInfrastructure(cfg, backendK3s, "test-stack"); err != nil {
-		t.Fatalf("CopyInfrastructure: %v", err)
+	if _, err := RefreshInfrastructure(cfg, backendK3s, "test-stack", RefreshOptions{Force: true, Reset: true}); err != nil {
+		t.Fatalf("RefreshInfrastructure: %v", err)
 	}
 
 	data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, "defaults", "base", "templates", "llm.yaml"))

@@ -54,7 +54,7 @@ func DevImageTag() string {
 	return "dev-" + sha
 }
 
-// ReadDevImageTag returns the dev image tag persisted at CopyInfrastructure
+// ReadDevImageTag returns the dev image tag persisted at RefreshInfrastructure
 // time, or "latest" if none was recorded (non-dev install, or pre-dates this
 // mechanism). internal/stack uses it to tag the images it builds.
 func ReadDevImageTag(cfg *config.Config) string {
@@ -72,7 +72,7 @@ func ReadDevImageTag(cfg *config.Config) string {
 // ResolveWorkloadImage returns the image reference for stack-owned workloads
 // created dynamically at runtime (tunnel storefront, demo-server) rather than
 // through the rendered defaults tree. Under OBOL_DEVELOPMENT it pins the
-// locally-imported tag recorded at CopyInfrastructure time, matching what
+// locally-imported tag recorded at RefreshInfrastructure time, matching what
 // `stack up` builds and imports into the cluster. images.Resolve alone returns
 // `:latest` in dev mode, which imagePullPolicy IfNotPresent then satisfies
 // from a stale registry pull instead of the local build.
@@ -90,14 +90,6 @@ func ResolveWorkloadImage(cfg *config.Config, repo string) string {
 func RefreshInfrastructureIfChanged(cfg *config.Config, backendName, stackID string) (bool, error) {
 	res, err := RefreshInfrastructure(cfg, backendName, stackID, RefreshOptions{})
 	return res.Refreshed, err
-}
-
-// CopyInfrastructure renders the embedded infrastructure defaults for the
-// current stack, overwriting the whole tree (hand-edited files are backed up
-// first, see RefreshOptions.Reset), and records the stamp and manifest.
-func CopyInfrastructure(cfg *config.Config, backendName, stackID string) error {
-	_, err := RefreshInfrastructure(cfg, backendName, stackID, RefreshOptions{Force: true, Reset: true})
-	return err
 }
 
 // renderInfrastructure writes the embedded infrastructure defaults for the
