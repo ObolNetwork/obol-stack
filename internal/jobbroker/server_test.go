@@ -319,3 +319,84 @@ func TestBroker_HMAC_RejectsForgedSubmit(t *testing.T) {
 		t.Fatalf("correctly-signed submit = %d (%s), want 202", w.Code, w.Body.String())
 	}
 }
+
+// failedStatusJSON fetches the free /jobs/<id> status JSON for a failed job.
+func failedStatusJSON(t *testing.T, srv *Server, id string) (map[string]any, string) {
+	t.Helper()
+	if waitState(t, srv, id) != StateFailed {
+		t.Fatal("want failed state")
+	}
+	req := httptest.NewRequest(http.MethodGet, "/jobs/"+id, nil)
+	w := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d (%s), want 200", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("status body: %v", err)
+	}
+	return body, w.Body.String()
+}
+
+func TestBroker_StatusError_DialFailureIsGeneric(t *testing.T) {
+	// Reserve a loopback port, then close it so the replay cannot connect.
+	closed := httptest.NewServer(http.NotFoundHandler())
+	upstreamURL := closed.URL
+	closed.Close()
+	hostPort := strings.TrimPrefix(upstreamURL, "http://")
+
+	srv := testServer(t)
+	resp := submit(t, srv, upstreamURL, "0xpayer", "payer", `{}`)
+	body, raw := failedStatusJSON(t, srv, resp["jobId"].(string))
+
+	if body["error"] != "upstream request failed" {
+		t.Errorf("error = %v, want generic upstream request failure", body["error"])
+	}
+	for _, leak := range []string{hostPort, "127.0.0.1", "dial", "connect"} {
+		if strings.Contains(raw, leak) {
+			t.Errorf("status JSON contains %q: %s", leak, raw)
+		}
+	}
+}
+
+func TestBroker_StatusError_TimeoutIsGeneric(t *testing.T) {
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	defer upstream.Close()
+	defer close(release)
+	hostPort := strings.TrimPrefix(upstream.URL, "http://")
+
+	srv := testServer(t)
+	srv.client = &http.Client{Timeout: 50 * time.Millisecond}
+	resp := submit(t, srv, upstream.URL, "0xpayer", "payer", `{}`)
+	body, raw := failedStatusJSON(t, srv, resp["jobId"].(string))
+
+	if body["error"] != "upstream timed out" {
+		t.Errorf("error = %v, want upstream timed out", body["error"])
+	}
+	for _, leak := range []string{hostPort, "127.0.0.1", "Client.Timeout", "deadline"} {
+		if strings.Contains(raw, leak) {
+			t.Errorf("status JSON contains %q: %s", leak, raw)
+		}
+	}
+}
+
+func TestJobFailureSummary_OnlyStableReasons(t *testing.T) {
+	for _, tc := range []struct {
+		job  Job
+		want string
+	}{
+		{Job{Error: "upstream timed out"}, "upstream timed out"},
+		{Job{Error: "upstream request failed"}, "upstream request failed"},
+		{Job{ResultStatus: 500}, "upstream returned HTTP 500"},
+		// Free-form text stored by an older build is not echoed.
+		{Job{Error: `upstream: Post "http://svc.ns.svc.cluster.local:8080/x": dial tcp 10.0.0.1:8080: connect: connection refused`}, "upstream request failed"},
+	} {
+		if got := jobFailureSummary(&tc.job); got != tc.want {
+			t.Errorf("jobFailureSummary(%q) = %q, want %q", tc.job.Error, got, tc.want)
+		}
+	}
+}

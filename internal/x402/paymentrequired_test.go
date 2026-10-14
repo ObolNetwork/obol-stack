@@ -548,3 +548,30 @@ func TestPaymentRequired_CarriesCatalogLinkHeader(t *testing.T) {
 		}
 	})
 }
+
+// The 402 page's copy-paste buy.py commands must carry --max-price when the
+// quoted per-request price is above buy.py's default 1-token ceiling, or the
+// pasted command is refused before signing.
+func TestTypeCopy_MaxPriceAboveDefaultCeiling(t *testing.T) {
+	url := "https://agent.example.tunnel.dev/services/quant"
+	site := "https://agent.example.tunnel.dev"
+
+	// 2.5 USDC (6 decimals) per request: above the ceiling.
+	asset := AssetInfo{Symbol: "USDC", Decimals: 6}
+	d := buildPaymentDisplay(&RouteRule{OfferType: "agent"}, ChainInfo{Name: "base-sepolia"}, asset, "0xabc", "2500000")
+	if d.PriceUnits != "2.5" {
+		t.Fatalf("PriceUnits = %q, want 2.5", d.PriceUnits)
+	}
+	mustContain(t, agentCopy(url, site, d).PromptObol, "--max-price 2.5")
+	d.OfferType = "http"
+	mustContain(t, httpCopy(url, site, d).PromptObol, "--max-price 2.5")
+
+	// 0.001 USDC per request: within the ceiling, command unchanged.
+	cheap := buildPaymentDisplay(&RouteRule{OfferType: "agent"}, ChainInfo{Name: "base-sepolia"}, asset, "0xabc", "1000")
+	if p := agentCopy(url, site, cheap).PromptObol; strings.Contains(p, "--max-price") {
+		t.Errorf("cheap agent prompt must not carry --max-price: %q", p)
+	}
+	if p := httpCopy(url, site, cheap).PromptObol; strings.Contains(p, "--max-price") {
+		t.Errorf("cheap http prompt must not carry --max-price: %q", p)
+	}
+}

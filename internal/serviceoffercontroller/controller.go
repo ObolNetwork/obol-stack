@@ -1326,7 +1326,15 @@ func (c *Controller) loadStorefrontProfile(ctx context.Context) (*schemas.Storef
 	if !found {
 		return nil, nil
 	}
-	return storefront.ParseProfile(raw)
+	profile, err := storefront.ParseProfile(raw)
+	if err != nil {
+		return nil, err
+	}
+	if dropped := storefront.DropInvalidBrandingText(profile); len(dropped) > 0 {
+		log.Printf("serviceoffer-controller: storefront profile: ignoring %s (must be single-line plain text without '<' or '>'); using defaults",
+			strings.Join(dropped, ", "))
+	}
+	return profile, nil
 }
 
 // reconcileStaticSite rebuilds the /skill.md ConfigMap/Deployment/Service/

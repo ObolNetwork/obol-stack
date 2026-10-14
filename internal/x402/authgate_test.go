@@ -440,3 +440,77 @@ func TestVerifier_AuthChallenge_AdvertisesSIWXExtension(t *testing.T) {
 		t.Error("nonce not fresh across challenges")
 	}
 }
+
+// TestVerifier_AuthGate_URLSchemeFollowsRequest pins that the SIWX challenge
+// and /auth JSON URLs use the same public scheme as the 402 challenge
+// (resolveScheme): http on locally-served hosts, https when the request was
+// forwarded as https or arrives on a public hostname.
+func TestVerifier_AuthGate_URLSchemeFollowsRequest(t *testing.T) {
+	fac := newMockFacilitator(t, mockFacilitatorOpts{})
+	v, _, _ := authGateVerifier(t, fac.URL)
+
+	for _, tc := range []struct {
+		name      string
+		host      string
+		forwarded string
+		want      string
+	}{
+		{name: "localhost", host: "localhost:8080", want: "http://localhost:8080"},
+		{name: "obol.stack", host: "obol.stack:8080", want: "http://obol.stack:8080"},
+		{name: "local forwarded https", host: "obol.stack", forwarded: "https", want: "https://obol.stack"},
+		{name: "public host", host: "shop.example.com", want: "https://shop.example.com"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/services/audit/reports/42", nil)
+			req.Host = tc.host
+			if tc.forwarded != "" {
+				req.Header.Set("X-Forwarded-Proto", tc.forwarded)
+			}
+			w := httptest.NewRecorder()
+			v.HandleProxy(w, req)
+			if w.Code != http.StatusUnauthorized {
+				t.Fatalf("challenge = %d, want 401", w.Code)
+			}
+			var challenge struct {
+				Auth struct {
+					SignInURL string `json:"signInUrl"`
+					VerifyURL string `json:"verifyUrl"`
+				} `json:"auth"`
+				Extensions map[string]struct {
+					Info struct {
+						URI string `json:"uri"`
+					} `json:"info"`
+				} `json:"extensions"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &challenge); err != nil {
+				t.Fatalf("challenge: %v", err)
+			}
+			if got, want := challenge.Auth.SignInURL, tc.want+"/services/audit/auth"; got != want {
+				t.Errorf("signInUrl = %q, want %q", got, want)
+			}
+			if got, want := challenge.Auth.VerifyURL, tc.want+"/services/audit/auth/verify"; got != want {
+				t.Errorf("verifyUrl = %q, want %q", got, want)
+			}
+			if got, want := challenge.Extensions["sign-in-with-x"].Info.URI, tc.want+"/services/audit/reports/42"; got != want {
+				t.Errorf("siwx resource uri = %q, want %q", got, want)
+			}
+
+			req = httptest.NewRequest(http.MethodGet, "/services/audit/auth?format=json", nil)
+			req.Host = tc.host
+			if tc.forwarded != "" {
+				req.Header.Set("X-Forwarded-Proto", tc.forwarded)
+			}
+			w = httptest.NewRecorder()
+			v.HandleProxy(w, req)
+			var params struct {
+				VerifyURL string `json:"verifyUrl"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &params); err != nil {
+				t.Fatalf("auth params: %v (%s)", err, w.Body.String())
+			}
+			if got, want := params.VerifyURL, tc.want+"/services/audit/auth/verify"; got != want {
+				t.Errorf("/auth verifyUrl = %q, want %q", got, want)
+			}
+		})
+	}
+}

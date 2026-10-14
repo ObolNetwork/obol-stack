@@ -272,6 +272,12 @@ storefront identity on that origin only — fields you don't set inherit:
 			if patch == (schemas.StorefrontProfile{}) {
 				return errors.New("nothing to set")
 			}
+			if err := storefront.ValidateBrandingText(patch.DisplayName, "display name"); err != nil {
+				return err
+			}
+			if err := storefront.ValidateBrandingText(patch.Tagline, "tagline"); err != nil {
+				return err
+			}
 			if err := storefront.ValidateLogoURL(patch.LogoURL); err != nil {
 				return err
 			}
@@ -458,6 +464,12 @@ func brandingPatchFromFlags(cmd *cli.Command) (map[string]any, error) {
 			return fn(v)
 		}
 		return nil
+	}
+	if err := validate("displayName", func(v string) error { return storefront.ValidateBrandingText(v, "display name") }); err != nil {
+		return nil, err
+	}
+	if err := validate("tagline", func(v string) error { return storefront.ValidateBrandingText(v, "tagline") }); err != nil {
+		return nil, err
 	}
 	if err := validate("logoUrl", storefront.ValidateLogoURL); err != nil {
 		return nil, err

@@ -197,7 +197,10 @@ func (v *Verifier) writeSIWXChallenge(w http.ResponseWriter, r *http.Request, ru
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
-	resourceURI := "https://" + host + publicPrefix(rule, host) + stripRoutePrefix(rule.StripPrefix, r.URL.Path)
+	// Same public-scheme rule as the 402 challenge (resolveScheme): http for
+	// hosts the stack serves locally, https otherwise or when forwarded so.
+	scheme := resolveScheme(r, host)
+	resourceURI := scheme + "://" + host + publicPrefix(rule, host) + stripRoutePrefix(rule.StripPrefix, r.URL.Path)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"error":  "authentication_required",
 		"detail": reason.Error(),
@@ -206,8 +209,8 @@ func (v *Verifier) writeSIWXChallenge(w http.ResponseWriter, r *http.Request, ru
 			"version":       "eip4361",
 			"domain":        host,
 			"windowSeconds": windowSecs,
-			"signInUrl":     "https://" + host + authPath,
-			"verifyUrl":     "https://" + host + authPath + "/verify",
+			"signInUrl":     scheme + "://" + host + authPath,
+			"verifyUrl":     scheme + "://" + host + authPath + "/verify",
 			"hint": "Sign an EIP-4361 message (domain must equal the host above, Version 1, fresh Nonce, " +
 				"Issued At within the window) with EIP-191 personal_sign, then send " +
 				"`Authorization: SIWX <base64 message>.<base64 signature>`. Or POST {message, signature} " +
@@ -319,7 +322,7 @@ func (v *Verifier) handleAuthEndpoints(w http.ResponseWriter, r *http.Request) b
 		"version":       "eip4361",
 		"domain":        host,
 		"windowSeconds": int(v.siwx.Window().Seconds()),
-		"verifyUrl":     "https://" + host + publicPrefix(rule, host) + authVerifySuffix,
+		"verifyUrl":     resolveScheme(r, host) + "://" + host + publicPrefix(rule, host) + authVerifySuffix,
 	})
 	return true
 }

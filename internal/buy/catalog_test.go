@@ -172,3 +172,96 @@ func TestPickCatalogEntry(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveCatalogEndpoint(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		seller   string
+		endpoint string
+		want     string
+		wantErr  bool
+	}{
+		{"relative path", "https://seller.example/", "/services/foo", "https://seller.example/services/foo", false},
+		{"relative without slash", "https://seller.example", "services/foo", "https://seller.example/services/foo", false},
+		{"relative ignores seller path", "https://seller.example/shop/", "/services/foo", "https://seller.example/services/foo", false},
+		{"relative keeps seller port", "http://localhost:8080", "/services/foo", "http://localhost:8080/services/foo", false},
+		{"absolute same origin", "https://seller.example", "https://seller.example/services/foo", "https://seller.example/services/foo", false},
+		{"absolute same origin explicit default port", "https://seller.example", "https://seller.example:443/services/foo", "https://seller.example:443/services/foo", false},
+		{"absolute host case-insensitive", "https://Seller.Example", "https://seller.example/services/foo", "https://seller.example/services/foo", false},
+		{"http seller allows http endpoint", "http://obol.stack:8080", "http://obol.stack:8080/services/foo", "http://obol.stack:8080/services/foo", false},
+		{"http seller allows https upgrade", "http://seller.example", "https://seller.example/services/foo", "https://seller.example/services/foo", false},
+		{"hostname-bound offer on another public https host", "https://seller.example", "https://audit.acme.io", "https://audit.acme.io", false},
+		{"public https subdomain", "https://seller.example", "https://api.seller.example/services/foo", "https://api.seller.example/services/foo", false},
+		{"public https other port", "https://seller.example", "https://seller.example:8443/services/foo", "https://seller.example:8443/services/foo", false},
+		{"local buyer, tunnel-host https endpoint", "http://obol.stack:8080", "https://shop.example.com/services/foo", "https://shop.example.com/services/foo", false},
+		{"http other host", "https://seller.example", "http://other.example/services/foo", "", true},
+		{"http other port same host", "http://seller.example", "http://seller.example:8080/services/foo", "", true},
+		{"ipv4 literal", "https://seller.example", "https://10.0.0.5/services/foo", "", true},
+		{"public ipv4 literal", "https://seller.example", "https://203.0.113.7/services/foo", "", true},
+		{"ipv6 literal", "https://seller.example", "https://[::1]/services/foo", "", true},
+		{"ipv6 public literal", "https://seller.example", "https://[2001:db8::1]:443/services/foo", "", true},
+		{"localhost", "https://seller.example", "https://localhost/services/foo", "", true},
+		{"dot localhost", "https://seller.example", "https://api.localhost/services/foo", "", true},
+		{"mdns local", "https://seller.example", "https://printer.local/services/foo", "", true},
+		{"internal", "https://seller.example", "https://host.k3d.internal/services/foo", "", true},
+		{"cluster service", "https://seller.example", "https://litellm.llm.svc.cluster.local:4000/", "", true},
+		{"short svc", "https://seller.example", "https://litellm.llm.svc/", "", true},
+		{"obol.stack", "https://seller.example", "https://obol.stack/services/foo", "", true},
+		{"single label", "https://seller.example", "https://intranet/services/foo", "", true},
+		{"https seller refuses http endpoint", "https://seller.example", "http://seller.example/services/foo", "", true},
+		{"scheme-relative other host", "http://seller.example", "//other.example/services/foo", "", true},
+		{"non-http scheme", "https://seller.example", "ftp://seller.example/services/foo", "", true},
+		{"empty endpoint", "https://seller.example", "", "", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ResolveCatalogEndpoint(tc.seller, tc.endpoint)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("ResolveCatalogEndpoint(%q, %q) = %q, want error", tc.seller, tc.endpoint, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ResolveCatalogEndpoint(%q, %q) err = %v", tc.seller, tc.endpoint, err)
+			}
+			if got != tc.want {
+				t.Fatalf("ResolveCatalogEndpoint(%q, %q) = %q, want %q", tc.seller, tc.endpoint, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPinCatalogToSeller(t *testing.T) {
+	t.Parallel()
+	entries := []CatalogEntry{
+		{Name: "local", Type: "inference", Endpoint: "/services/local"},
+		{Name: "same", Type: "inference", Endpoint: "https://seller.example/services/same"},
+		{Name: "elsewhere", Type: "inference", Endpoint: "http://10.0.0.5/services/elsewhere"},
+	}
+	pinned, skipped := PinCatalogToSeller(entries, "https://seller.example/")
+	if len(pinned) != 2 || pinned[0].Endpoint != "https://seller.example/services/local" || pinned[1].Name != "same" {
+		t.Fatalf("pinned = %+v", pinned)
+	}
+	if len(skipped) != 1 || !strings.Contains(skipped[0], `"elsewhere"`) {
+		t.Fatalf("skipped = %v", skipped)
+	}
+	if entries[0].Endpoint != "/services/local" {
+		t.Fatal("input entries must not be mutated")
+	}
+
+	// A cross-origin entry selected by its service path is not picked.
+	if _, err := PickCatalogEntry(pinned, "https://seller.example/services/elsewhere"); err == nil {
+		t.Fatal("expected no match for a skipped cross-origin entry")
+	}
+	// Only-entry case: nothing left to pick.
+	only, skippedOnly := PinCatalogToSeller(entries[2:], "https://seller.example/")
+	if len(only) != 0 || len(skippedOnly) != 1 {
+		t.Fatalf("pinned=%v skipped=%v", only, skippedOnly)
+	}
+	if _, err := PickCatalogEntry(only, "https://seller.example/"); err == nil {
+		t.Fatal("expected an error when every entry was skipped")
+	}
+}

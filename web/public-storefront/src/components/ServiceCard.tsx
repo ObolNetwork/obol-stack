@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { ReactNode } from "react";
 import type { Service, ServicePayment } from "@/types";
 import { RichText } from "@/components/RichText";
+import { maxPriceFlag } from "@/lib/max-price";
 
 // paymentOptions returns the service's accepted payment options, falling back
 // to the flat fields for catalogs predating multi-currency.
@@ -107,19 +108,27 @@ function buildAgentPayAgentCommand(
   endpoint: string,
   model: string | undefined,
   agentTask: string,
+  maxPrice: string,
 ): string {
   const modelId = model || "<model-id>";
-  return `pay-agent ${endpoint} --model ${JSON.stringify(modelId)} --message ${quoteAgentTask(agentTask)}`;
+  return `pay-agent ${endpoint} --model ${JSON.stringify(modelId)} --message ${quoteAgentTask(agentTask)}${maxPrice}`;
 }
 
 function buildAgentObolPrompt(
-  endpoint: string,
-  model: string | undefined,
+  service: Service,
   agentTask: string,
 ): string {
+  const maxPrice = maxPriceFlag(service.priceRaw, service.priceUnit);
   return `Use the buy-x402 skill's \`pay-agent\` command to buy one round of work from this Obol Agent (skills, tools, and memory — not a raw LLM):
 
-${buildAgentPayAgentCommand(endpoint, model, agentTask)}`;
+${buildAgentPayAgentCommand(service.endpoint, service.model, agentTask, maxPrice)}`;
+}
+
+function httpMaxPriceClause(opt: ServicePayment): string {
+  const flag = maxPriceFlag(opt.priceRaw, opt.priceUnit).trim();
+  return flag
+    ? ` Pass \`${flag}\` — the price is above the skill's default 1-token per-call ceiling.`
+    : "";
 }
 
 export function ServiceCard({ service }: { service: Service }) {
@@ -453,7 +462,7 @@ function BuyViaObolAgent({
   if (kind === "agent") {
     const prompt =
       buyPrompt(service, "obol-agent", agentTask) ??
-      buildAgentObolPrompt(service.endpoint, service.model, agentTask);
+      buildAgentObolPrompt(service, agentTask);
     return (
       <div className="space-y-2">
         <p className="text-xs text-text-muted">
@@ -474,7 +483,7 @@ function BuyViaObolAgent({
   // http (default): single-shot pay.
   const prompt =
     buyPrompt(service, "obol-agent") ??
-    `Use the buy-x402 skill's \`pay\` command to call ${service.endpoint} once. Pay ${opt.price} on ${opt.network}. Report what it returns.`;
+    `Use the buy-x402 skill's \`pay\` command to call ${service.endpoint} once. Pay ${opt.price} on ${opt.network}.${httpMaxPriceClause(opt)} Report what it returns.`;
   return (
     <div className="space-y-2">
       <p className="text-xs text-text-muted">

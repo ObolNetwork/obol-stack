@@ -2564,3 +2564,18 @@ func TestValidatePriceTableForAsset(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildSellRegistrationConfig_RejectsNonPlainTextName(t *testing.T) {
+	for _, name := range []string{"Acme</script>", "two\nlines"} {
+		if _, _, err := buildSellRegistrationConfig("demo", sellRegistrationInput{Name: name}); err == nil {
+			t.Errorf("expected error for --register-name %q", name)
+		}
+	}
+	reg, _, err := buildSellRegistrationConfig("demo", sellRegistrationInput{Name: "Acme Labs & Co"})
+	if err != nil {
+		t.Fatalf("plain-text name rejected: %v", err)
+	}
+	if reg["name"] != "Acme Labs & Co" {
+		t.Fatalf("registration.name = %v", reg["name"])
+	}
+}

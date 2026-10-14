@@ -2,14 +2,17 @@ package jobbroker
 
 import (
 	"bytes"
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -246,7 +249,8 @@ func (s *Server) run(id, upstreamAuth string) {
 	url := strings.TrimSuffix(job.UpstreamURL, "/") + job.Path
 	req, err := http.NewRequest(job.Method, url, bytes.NewReader(job.Body))
 	if err != nil {
-		_ = s.store.Finish(id, 0, "", nil, "build upstream request: "+err.Error(), s.now())
+		log.Printf("job-broker: job %s: build upstream request: %v", id, err)
+		_ = s.store.Finish(id, 0, "", nil, jobErrUpstreamRequest, s.now())
 		s.fireWebhook(job)
 		return
 	}
@@ -260,14 +264,16 @@ func (s *Server) run(id, upstreamAuth string) {
 
 	resp, err := s.client.Do(req)
 	if err != nil {
-		_ = s.store.Finish(id, 0, "", nil, "upstream: "+err.Error(), s.now())
+		log.Printf("job-broker: job %s: upstream request: %v", id, err)
+		_ = s.store.Finish(id, 0, "", nil, upstreamErrorSummary(err), s.now())
 		s.fireWebhook(job)
 		return
 	}
 	defer resp.Body.Close()
 	result, err := io.ReadAll(io.LimitReader(resp.Body, maxResultBody))
 	if err != nil {
-		_ = s.store.Finish(id, resp.StatusCode, "", nil, "read upstream response: "+err.Error(), s.now())
+		log.Printf("job-broker: job %s: read upstream response: %v", id, err)
+		_ = s.store.Finish(id, resp.StatusCode, "", nil, upstreamErrorSummary(err), s.now())
 		s.fireWebhook(job)
 		return
 	}
@@ -426,11 +432,35 @@ func visibilityOrDefault(v string) string {
 	return "payer"
 }
 
-func jobFailureSummary(job *Job) string {
-	if job.Error != "" {
-		return job.Error
+// Stable, public failure reasons. The job status endpoint is free and
+// unauthenticated, so a stored job error is one of these fixed strings; the
+// underlying Go error (which names internal URLs/addresses) is only logged.
+const (
+	jobErrUpstreamRequest = "upstream request failed"
+	jobErrUpstreamTimeout = "upstream timed out"
+)
+
+// upstreamErrorSummary maps a transport/read error to a stable public reason.
+func upstreamErrorSummary(err error) string {
+	var netErr net.Error
+	if errors.Is(err, context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
+		return jobErrUpstreamTimeout
 	}
-	return fmt.Sprintf("upstream returned HTTP %d", job.ResultStatus)
+	return jobErrUpstreamRequest
+}
+
+// jobFailureSummary is the public failure reason for a failed job. Only the
+// fixed reasons above are echoed; anything else stored on the record (e.g.
+// by an older broker build) collapses to the generic reason.
+func jobFailureSummary(job *Job) string {
+	switch job.Error {
+	case jobErrUpstreamRequest, jobErrUpstreamTimeout:
+		return job.Error
+	case "":
+		return fmt.Sprintf("upstream returned HTTP %d", job.ResultStatus)
+	default:
+		return jobErrUpstreamRequest
+	}
 }
 
 const monetizeDefaultTTL = 72 * time.Hour

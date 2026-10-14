@@ -32,6 +32,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/replay"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
+	"github.com/ObolNetwork/obol-stack/internal/storefront"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/validate"
@@ -1352,6 +1353,9 @@ func buildSellRegistrationConfig(serviceName string, in sellRegistrationInput) (
 		"description": registrationDescriptionForPrompt(serviceName, nil),
 	}
 	if in.Name != "" {
+		if err := storefront.ValidateBrandingText(in.Name, "--register-name"); err != nil {
+			return nil, false, err
+		}
 		reg["name"] = in.Name
 	}
 	if in.Description != "" {

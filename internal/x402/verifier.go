@@ -816,6 +816,7 @@ func buildPaymentDisplay(rule *RouteRule, chain ChainInfo, asset AssetInfo, payT
 		AssetSymbol:      asset.Symbol,
 		AssetAddress:     asset.Address,
 		PriceDisplay:     FormatPriceDisplay(atomicAmount, asset.Decimals, asset.Symbol),
+		PriceUnits:       formatAmount(atomicAmount, asset.Decimals, ""),
 		PriceAtomic:      atomicAmount,
 		PayToFull:        payTo,
 		ExplorerURL:      explorerAddressURL(chain.Name, payTo),

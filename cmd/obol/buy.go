@@ -197,8 +197,17 @@ func runBuyInference(ctx context.Context, cfg *config.Config, cmd *cli.Command) 
 	if err != nil {
 		return fmt.Errorf("seller catalog: %w (pass --seller to override, or contact the operator)", err)
 	}
+	// Pin every advertised endpoint: relative ones resolve against the seller
+	// origin; absolute ones must be same-origin or public https, else skipped.
+	entries, skipped := buy.PinCatalogToSeller(entries, sellerURL)
+	for _, msg := range skipped {
+		u.Warnf("%s", msg)
+	}
 	entry, err := buy.PickCatalogEntry(entries, sellerURL)
 	if err != nil {
+		if len(skipped) > 0 {
+			return fmt.Errorf("%w (%d catalog entries skipped: endpoint not on the seller origin or a public https host)", err, len(skipped))
+		}
 		return err
 	}
 
@@ -598,18 +607,14 @@ func canonicalOfferURL(userURL string, entry *buy.CatalogEntry) (string, error) 
 	}
 	endpoint = strings.TrimRight(endpoint, "/")
 
-	// Absolute URL — use verbatim. Don't splice onto the user's base; the
-	// catalog's hostname is the seller's source of truth.
-	if looksLikeURL(endpoint) {
-		return endpoint, nil
+	// Path-only endpoints resolve against the user's seller origin; an
+	// absolute endpoint must be on that origin or a public https host (the
+	// catalog cannot point pricing probes or payments at private addresses).
+	resolved, err := buy.ResolveCatalogEndpoint(userURL, endpoint)
+	if err != nil {
+		return "", fmt.Errorf("catalog entry %q: %w", entry.Name, err)
 	}
-
-	// Path-only — splice onto the user's scheme+host.
-	base := strings.TrimRight(userURL, "/")
-	if !strings.HasPrefix(endpoint, "/") {
-		endpoint = "/" + endpoint
-	}
-	return base + endpoint, nil
+	return strings.TrimRight(resolved, "/"), nil
 }
 
 func resolveBuyModel(flag string, entry *buy.CatalogEntry) (string, error) {

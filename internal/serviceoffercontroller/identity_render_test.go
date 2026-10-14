@@ -2,9 +2,11 @@ package serviceoffercontroller
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/ObolNetwork/obol-stack/internal/buyprompts"
 	"github.com/ObolNetwork/obol-stack/internal/erc8004"
 	"github.com/ObolNetwork/obol-stack/internal/monetizeapi"
 	"github.com/ObolNetwork/obol-stack/internal/schemas"
@@ -285,5 +287,59 @@ func TestBuildServiceCatalogJSON_DefaultBranding(t *testing.T) {
 	}
 	if catalog.LogoURL != "https://seller.example/obol-stack-logo.png" {
 		t.Fatalf("LogoURL = %q", catalog.LogoURL)
+	}
+}
+
+func TestOfferPerCallPrice(t *testing.T) {
+	o := readyOffer("svc")
+	o.Spec.Payment.Price.PerRequest = "0.5"
+	if got := offerPerCallPrice(o); got != "0.5" {
+		t.Errorf("single option = %q, want 0.5", got)
+	}
+	// Multi-currency: the highest per-request price across options (buy.py
+	// may auto-select any of them).
+	o.Spec.Payments = []monetizeapi.ServiceOfferPayment{
+		{Network: "base", Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "1"}},
+		{Network: "mainnet", Price: monetizeapi.ServiceOfferPriceTable{PerRequest: "10"}},
+	}
+	if got := offerPerCallPrice(o); got != "10" {
+		t.Errorf("multi option = %q, want 10", got)
+	}
+	// Per-MTok only: no flat per-call price.
+	p := readyOffer("tok")
+	p.Spec.Payment.Price.PerMTok = "3"
+	if got := offerPerCallPrice(p); got != "" {
+		t.Errorf("per-MTok offer = %q, want empty", got)
+	}
+}
+
+// TestCatalogBuyPromptCarriesMaxPrice: the catalog's buy prompts (rendered
+// verbatim by the storefront) pass --max-price when the per-call price is
+// above buy.py's default 1-token ceiling.
+func TestCatalogBuyPromptCarriesMaxPrice(t *testing.T) {
+	pricey := readyOffer("pricey")
+	pricey.Spec.Payment.Network = "base-sepolia"
+	pricey.Spec.Payment.Price.PerRequest = "2.5"
+	cheap := readyOffer("cheap")
+	cheap.Spec.Payment.Network = "base-sepolia"
+	cheap.Spec.Payment.Price.PerRequest = "0.01"
+
+	catalogJSON := buildServiceCatalogJSON([]*monetizeapi.ServiceOffer{pricey, cheap}, "https://seller.example", nil)
+	var catalog schemas.ServiceCatalog
+	if err := json.Unmarshal([]byte(catalogJSON), &catalog); err != nil {
+		t.Fatalf("catalog: %v", err)
+	}
+	got := map[string]string{}
+	for _, svc := range catalog.Services {
+		if svc.Buy == nil {
+			t.Fatalf("%s: no buy block", svc.Name)
+		}
+		got[svc.Name] = svc.Buy.Prompts[buyprompts.PromptCLI]
+	}
+	if !strings.HasSuffix(got["pricey"], " --max-price 2.5") {
+		t.Errorf("pricey CLI prompt = %q, want --max-price 2.5", got["pricey"])
+	}
+	if strings.Contains(got["cheap"], "--max-price") {
+		t.Errorf("cheap CLI prompt = %q, want no --max-price", got["cheap"])
 	}
 }

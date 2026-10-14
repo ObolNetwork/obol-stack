@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -1485,6 +1486,30 @@ func catalogModelName(offer *monetizeapi.ServiceOffer) string {
 	return offer.Spec.Model.Name
 }
 
+// offerPerCallPrice is the highest flat per-request price (whole token
+// units) a one-shot buyer may be quoted for this offer: the primary paid
+// route's override when it has one, else the maximum perRequest across the
+// accepted payment options (buy.py may auto-select any of them). Used to
+// add --max-price to generated buy.py commands; "" when not per-request.
+func offerPerCallPrice(offer *monetizeapi.ServiceOffer) string {
+	if rt, ok := primaryPaidRoute(offer); ok && rt.HasPriceOverride() {
+		return strings.TrimSpace(rt.Price.PerRequest)
+	}
+	var best *big.Rat
+	bestRaw := ""
+	for _, p := range offer.EffectivePayments() {
+		raw := strings.TrimSpace(p.Price.PerRequest)
+		v, err := schemas.ParseDecimalAmount(raw, 18, "")
+		if raw == "" || err != nil {
+			continue
+		}
+		if best == nil || v.Cmp(best) > 0 {
+			best, bestRaw = v, raw
+		}
+	}
+	return bestRaw
+}
+
 // skillMarkdownTryIt renders the per-offer "Try it" subsection: one curl that
 // probes the 402 pricing, and one worked paid request. The paid example for
 // chat-shaped offers is buyprompts.Build's Example — the exact same bytes
@@ -1802,6 +1827,7 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string,
 			Model:        modelName,
 			PriceDisplay: svc.Price,
 			NetworkLabel: offer.Spec.Payment.Network,
+			PerCallPrice: offerPerCallPrice(offer),
 		})
 		svc.Buy = &buy
 		svc.OpenAPIPath = openAPIPrimaryPathForOffer(offer)

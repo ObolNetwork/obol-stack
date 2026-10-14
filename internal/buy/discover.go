@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -202,6 +203,116 @@ func FetchServiceCatalog(ctx context.Context, sellerURL string) ([]CatalogEntry,
 		return nil, fmt.Errorf("parse catalog JSON: %w", err)
 	}
 	return catalog.Services, nil
+}
+
+// ResolveCatalogEndpoint pins a catalog entry's endpoint to the origin of
+// the seller URL the buyer chose. A relative endpoint ("/services/foo") is
+// resolved against that origin. An absolute endpoint is accepted only when
+// its host and port equal the seller's and its scheme matches — or it
+// upgrades an http seller URL to https on the same host — or when it is
+// https on a public DNS name (isPublicHTTPSEndpoint; hostname-bound offers
+// and tunnel hostnames). Anything else (plain http to another host, IP
+// literals, local or cluster-internal names) is rejected, so the catalog
+// cannot direct pricing probes or payments at private addresses.
+func ResolveCatalogEndpoint(sellerURL, endpoint string) (string, error) {
+	seller, err := url.Parse(strings.TrimSpace(sellerURL))
+	if err != nil {
+		return "", fmt.Errorf("parse seller URL: %w", err)
+	}
+	if seller.Scheme == "" || seller.Host == "" {
+		return "", fmt.Errorf("seller URL must include scheme and host: %q", sellerURL)
+	}
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return "", errors.New("empty endpoint")
+	}
+	ref, err := url.Parse(endpoint)
+	if err != nil {
+		return "", fmt.Errorf("parse endpoint %q: %w", endpoint, err)
+	}
+	origin := &url.URL{Scheme: strings.ToLower(seller.Scheme), Host: seller.Host, Path: "/"}
+	if ref.Scheme == "" && ref.Host == "" {
+		return origin.ResolveReference(ref).String(), nil
+	}
+	if !sameSellerOrigin(origin, ref) && !isPublicHTTPSEndpoint(ref) {
+		return "", fmt.Errorf("endpoint %s is neither on the seller origin %s://%s nor a public https hostname", endpoint, origin.Scheme, origin.Host)
+	}
+	return ref.String(), nil
+}
+
+// isPublicHTTPSEndpoint accepts a cross-origin catalog endpoint only when it
+// is https on a public-looking DNS name — e.g. an offer bound to its own
+// dedicated hostname, or a tunnel hostname advertised to a local buyer. IP
+// literals, single-label names and local/cluster-internal suffixes are
+// refused. No DNS resolution is done here.
+func isPublicHTTPSEndpoint(ref *url.URL) bool {
+	if !strings.EqualFold(ref.Scheme, "https") {
+		return false
+	}
+	host := strings.ToLower(strings.TrimSuffix(ref.Hostname(), "."))
+	if host == "" || !strings.Contains(host, ".") {
+		return false
+	}
+	if net.ParseIP(host) != nil {
+		return false
+	}
+	if host == "obol.stack" {
+		return false
+	}
+	for _, suffix := range []string{".localhost", ".local", ".internal", ".cluster.local", ".svc"} {
+		if strings.HasSuffix(host, suffix) {
+			return false
+		}
+	}
+	return true
+}
+
+// sameSellerOrigin reports whether ref is on the seller's origin: same
+// hostname and effective port with the same scheme, or an https upgrade of
+// an http seller URL on the same hostname (default https port).
+func sameSellerOrigin(seller, ref *url.URL) bool {
+	refScheme := strings.ToLower(ref.Scheme)
+	if refScheme != "http" && refScheme != "https" {
+		return false
+	}
+	if !strings.EqualFold(seller.Hostname(), ref.Hostname()) {
+		return false
+	}
+	if refScheme == seller.Scheme {
+		return effectivePort(seller) == effectivePort(ref)
+	}
+	return seller.Scheme == "http" && refScheme == "https" && effectivePort(ref) == "443"
+}
+
+func effectivePort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http":
+		return "80"
+	case "https":
+		return "443"
+	}
+	return ""
+}
+
+// PinCatalogToSeller rewrites every entry's endpoint onto the seller origin
+// (see ResolveCatalogEndpoint) and drops entries whose endpoint points
+// elsewhere. skipped carries one human-readable line per dropped entry for
+// the caller to surface as a warning.
+func PinCatalogToSeller(entries []CatalogEntry, sellerURL string) (pinned []CatalogEntry, skipped []string) {
+	pinned = make([]CatalogEntry, 0, len(entries))
+	for _, e := range entries {
+		resolved, err := ResolveCatalogEndpoint(sellerURL, e.Endpoint)
+		if err != nil {
+			skipped = append(skipped, fmt.Sprintf("skipping catalog entry %q: %v", e.Name, err))
+			continue
+		}
+		e.Endpoint = resolved
+		pinned = append(pinned, e)
+	}
+	return pinned, skipped
 }
 
 // PickCatalogEntry picks the entry whose endpoint matches sellerURL.

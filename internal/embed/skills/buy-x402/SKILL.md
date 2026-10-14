@@ -27,7 +27,9 @@ python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py go
 
 Both flows auto-detect the token + transfer method from the seller's 402 response. Currently supported: **USDC via EIP-3009** (Base Sepolia, Base Mainnet, Ethereum Mainnet) and **OBOL via Permit2** (Ethereum Mainnet).
 
-**Multi-currency offers (pick what you pay with).** A seller can advertise several payment options (e.g. *1 USDC on Base* OR *10 OBOL on Ethereum*) in the 402 `accepts[]` array. `probe` lists them all. For `go`, `pay`, `pay-agent`, and `buy`, choose one with `--token <SYMBOL>` (e.g. `--token OBOL`), `--network <chain>`, and/or `--payment-option <N>` (the 1-based index from `probe`). With a single option the choice is automatic. With several and no selector: a TTY prompts; non-interactive runs **auto-select the first option the wallet can afford** (announced loudly, with the full option list, before any signing). `--token`/`--network` also act as a guard — if the filter matches no advertised option, it aborts rather than paying the wrong asset.
+**Multi-currency offers (pick what you pay with).** A seller can advertise several payment options (e.g. *1 USDC on Base* OR *10 OBOL on Ethereum*) in the 402 `accepts[]` array. `probe` lists them all. For `go`, `pay`, `pay-agent`, and `buy`, choose one with `--token <SYMBOL>` (e.g. `go <url> --token OBOL --max-price 10` — the 10 OBOL quote is above the default 1-token per-call ceiling, see below), `--network <chain>`, and/or `--payment-option <N>` (the 1-based index from `probe`). With a single option the choice is automatic. With several and no selector: a TTY prompts; non-interactive runs **auto-select the first option the wallet can afford** (announced loudly, with the full option list, before any signing). `--token`/`--network` also act as a guard — if the filter matches no advertised option, it aborts rather than paying the wrong asset.
+
+**Per-call price ceiling (`--max-price`).** `go`, `pay`, and `pay-agent` sign the seller's quoted price as-is, so they refuse — before anything is signed — a quote above `--max-price <token units>` (e.g. `--max-price 0.25`). Default: `$OBOL_BUY_MAX_PRICE`, else **1** (1 USDC / 1 OBOL). The refusal prints the quoted price and the exact `--max-price` to re-run with; only raise it when the price is what you meant to pay. Tokens with unknown decimals are refused.
 
 **Money amounts (`--budget`, `--cost-cap`).** Both accept atomic units (`1500000`), token units (`1.5`), or token units with a symbol (`'1.5 USDC'`, `'$1.50'`). Anything with a decimal point, symbol, or `$` is treated as token units and scaled by the asset's decimals; the parsed interpretation is echoed before signing. A symbol that contradicts the asset being paid with aborts.
 
@@ -228,10 +230,10 @@ python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py ma
 
 | Command | Description |
 |---------|-------------|
-| `go <url> [--message <text>] [--data <json>] [--method GET\|POST]` | Probe, detect offer type (agent / chat inference / http), dispatch to the right flow |
+| `go <url> [--message <text>] [--data <json>] [--method GET\|POST] [--max-price <units>]` | Probe, detect offer type (agent / chat inference / http), dispatch to the right flow |
 | `probe <url> [--model <id>] [--type http\|inference\|agent] [--method GET\|POST]` | Send request without payment, parse 402 response for pricing |
-| `pay <url> [--type http\|inference] [--method GET\|POST] [--data <body>]` | Single-shot paid request: sign 1 auth, attach X-PAYMENT, send |
-| `pay-agent <url> [--message <text> \| --data <json>] [--timeout <s>]` | Single-shot paid streaming agent call (no `--model` — the agent runs its own): SSE events flush to stdout as they arrive (default timeout 1h) |
+| `pay <url> [--type http\|inference] [--method GET\|POST] [--data <body>] [--max-price <units>]` | Single-shot paid request: sign 1 auth, attach X-PAYMENT, send. Refuses a quote above `--max-price` (default `$OBOL_BUY_MAX_PRICE`, else 1 token) |
+| `pay-agent <url> [--message <text> \| --data <json>] [--timeout <s>] [--max-price <units>]` | Single-shot paid streaming agent call (no `--model` — the agent runs its own): SSE events flush to stdout as they arrive (default timeout 1h) |
 | `buy <name> --endpoint <url> --model <id> [--budget <amount>] [--count N]` | Pre-sign auths, create/update `PurchaseRequest`, expose `paid/<model>`. `--budget` takes atomic units or token units (`'1.5 USDC'`) |
 | `buy <name> --endpoint <url> --model <id> --set-default [--auto-refill]` | As above, then set `paid/<model>` as the agent's own primary model in-pod (no restart, no host CLI) |
 | `process <name> \| --all` | Reconcile `autoRefill` policies against live `x402-buyer` status |

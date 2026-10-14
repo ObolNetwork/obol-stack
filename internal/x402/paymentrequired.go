@@ -79,6 +79,10 @@ type PaymentDisplay struct {
 	// PriceDisplay is the formatted price including symbol (e.g. "0.001 USDC per request").
 	PriceDisplay string
 
+	// PriceUnits is the per-request price in whole token units (e.g. "2.5"),
+	// used to add --max-price to generated buy.py commands.
+	PriceUnits string
+
 	// PriceAtomic is the raw atomic-units amount as a string.
 	PriceAtomic string
 
@@ -457,15 +461,16 @@ func inferenceCopy(url, siteURL string, d PaymentDisplay) typeCopy {
 // Other-AI-Agent prompt cards drive the action, and a chat-completions
 // example sits next to the raw x402 JSON in the Pay-manually card to
 // make the wire shape obvious to readers walking the spec by hand.
-func agentCopy(url, siteURL string, _ PaymentDisplay) typeCopy {
+func agentCopy(url, siteURL string, d PaymentDisplay) typeCopy {
 	// Deliberately no model: an Obol Agent runs its own pinned model, skills,
 	// and memory — the buyer never picks one, and the agent ignores the
 	// chat-completions `model` field. buyprompts' agent block omits the model
 	// from the pay-agent command and the wire example entirely.
 	block := buyprompts.Build(buyprompts.Input{
-		Type:    "agent",
-		URL:     url,
-		SiteURL: siteURL,
+		Type:         "agent",
+		URL:          url,
+		SiteURL:      siteURL,
+		PerCallPrice: d.PriceUnits,
 	})
 
 	return typeCopy{
@@ -496,6 +501,7 @@ func httpCopy(url, siteURL string, d PaymentDisplay) typeCopy {
 		SiteURL:      siteURL,
 		PriceDisplay: d.PriceDisplay,
 		NetworkLabel: d.NetworkLabel,
+		PerCallPrice: d.PriceUnits,
 	})
 	prompt := block.Prompts[buyprompts.PromptObolAgent]
 

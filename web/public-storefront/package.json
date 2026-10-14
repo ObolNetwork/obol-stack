@@ -6,7 +6,8 @@
     "dev": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "test": "node --test 'src/**/*.test.mjs'"
   },
   "dependencies": {
     "next": "^16.2.0",

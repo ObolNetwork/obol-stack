@@ -7,6 +7,7 @@ import {
   isDefaultStorefrontLogo,
 } from "@/lib/catalog";
 import { isDarkTheme, safeCustomCss, themeStyle, themeToken } from "@/lib/theme";
+import { safeJsonForScript } from "@/lib/json-ld";
 import { resolveSiteUrl } from "@/lib/site-url";
 import "./globals.css";
 
@@ -153,7 +154,7 @@ function JsonLd({
   return (
     <script
       type="application/ld+json"
-      dangerouslySetInnerHTML={{ __html: JSON.stringify(data) }}
+      dangerouslySetInnerHTML={{ __html: safeJsonForScript(data) }}
     />
   );
 }

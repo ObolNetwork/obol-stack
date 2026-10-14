@@ -166,3 +166,70 @@ func TestIsDefaultLogoURL(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateBrandingText(t *testing.T) {
+	for _, tc := range []struct {
+		in      string
+		wantErr bool
+	}{
+		{"", false},
+		{"Acme Labs", false},
+		{"Café & Co. — paid APIs!", false},
+		{"Acme</script>", true},
+		{"a < b", true},
+		{"a > b", true},
+		{"two\nlines", true},
+		{"tab\there", true},
+		{"nul\x00", true},
+		{"line" + string(rune(0x2028)) + "sep", true},
+		{"para" + string(rune(0x2029)) + "sep", true},
+	} {
+		err := storefront.ValidateBrandingText(tc.in, "display name")
+		if (err != nil) != tc.wantErr {
+			t.Errorf("ValidateBrandingText(%q) err=%v, wantErr=%v", tc.in, err, tc.wantErr)
+		}
+		if err != nil && !strings.Contains(err.Error(), "display name") {
+			t.Errorf("error %q should name the field", err)
+		}
+	}
+}
+
+func TestResolvePublished_IgnoresInvalidBrandingText(t *testing.T) {
+	defaults := storefront.ResolvePublished(nil, "https://seller.example")
+	got := storefront.ResolvePublished(&schemas.StorefrontProfile{
+		DisplayName: "Acme</script>",
+		Tagline:     "line one\nline two",
+		LogoURL:     "https://acme.example/logo.png",
+	}, "https://seller.example")
+	if got.DisplayName != defaults.DisplayName || got.Tagline != defaults.Tagline {
+		t.Fatalf("invalid text fields should fall back to defaults, got %+v", got)
+	}
+	if got.LogoURL != "https://acme.example/logo.png" {
+		t.Fatalf("valid fields should still apply, got logo %q", got.LogoURL)
+	}
+}
+
+func TestMergeProfile_IgnoresInvalidBrandingText(t *testing.T) {
+	base := schemas.StorefrontProfile{DisplayName: "Acme", Tagline: "Paid APIs"}
+	got := storefront.MergeProfile(base, schemas.StorefrontProfile{DisplayName: "<b>x</b>", Tagline: "ok tagline"})
+	if got.DisplayName != "Acme" || got.Tagline != "ok tagline" {
+		t.Fatalf("unexpected merge: %+v", got)
+	}
+}
+
+func TestDropInvalidBrandingText(t *testing.T) {
+	if storefront.DropInvalidBrandingText(nil) != nil {
+		t.Fatal("nil profile should drop nothing")
+	}
+	p := &schemas.StorefrontProfile{DisplayName: "Acme>", Tagline: "fine", Description: "<em>markdown path</em>"}
+	dropped := storefront.DropInvalidBrandingText(p)
+	if len(dropped) != 1 || dropped[0] != "displayName" {
+		t.Fatalf("dropped = %v, want [displayName]", dropped)
+	}
+	if p.DisplayName != "" || p.Tagline != "fine" {
+		t.Fatalf("unexpected profile after drop: %+v", p)
+	}
+	if p.Description != "<em>markdown path</em>" {
+		t.Fatal("description is sanitized by the markdown renderer and must not be touched here")
+	}
+}

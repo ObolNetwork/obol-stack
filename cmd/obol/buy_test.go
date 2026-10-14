@@ -372,10 +372,40 @@ func TestCanonicalOfferURL(t *testing.T) {
 			want:  "https://inference.v1337.org/services/aeon7",
 		},
 		{
-			name:  "absolute URL endpoint, mismatched user base — catalog wins",
+			name:  "absolute https endpoint on another public host is accepted (hostname-bound offer)",
 			user:  "https://other-base.example/",
 			entry: absolute,
 			want:  "https://inference.v1337.org/services/aeon7",
+		},
+		{
+			name:  "local buyer reaches tunnel-host https endpoint",
+			user:  "http://obol.stack:8080/",
+			entry: absolute,
+			want:  "https://inference.v1337.org/services/aeon7",
+		},
+		{
+			name:    "cluster-internal endpoint is refused",
+			user:    "https://inference.v1337.org/",
+			entry:   &buy.CatalogEntry{Name: "internal", Endpoint: "https://litellm.llm.svc.cluster.local:4000/v1"},
+			wantErr: "nor a public https hostname",
+		},
+		{
+			name:  "absolute https endpoint upgrades an http seller URL on the same host",
+			user:  "http://inference.v1337.org/",
+			entry: absolute,
+			want:  "https://inference.v1337.org/services/aeon7",
+		},
+		{
+			name:    "absolute http endpoint refused for an https seller URL",
+			user:    "https://inference.v1337.org/",
+			entry:   &buy.CatalogEntry{Name: "plain", Endpoint: "http://inference.v1337.org/services/plain"},
+			wantErr: "nor a public https hostname",
+		},
+		{
+			name:  "relative endpoint resolves against the seller origin, not its path",
+			user:  "https://inference.v1337.org/shop",
+			entry: pathOnly,
+			want:  "https://inference.v1337.org/services/aeon",
 		},
 		{
 			name:  "service URL passed verbatim",

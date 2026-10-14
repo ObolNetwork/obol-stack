@@ -47,6 +47,7 @@ export interface Service {
   endpoint: string;
   price: string;
   priceRaw?: string;
+  priceUnit?: string;
   payTo: string;
   network: string;
   // asset is the resolved settlement token. Mirrors the controller's
