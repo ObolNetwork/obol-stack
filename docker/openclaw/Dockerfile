@@ -7,7 +7,7 @@
 #     -f docker/openclaw/Dockerfile .
 #
 ARG FOUNDRY_TAG
-ARG BASE_TAG=latest
+ARG BASE_TAG=latest@sha256:196fd3cc7cbb59cdb5155533e05e92ac0aabdb1a3ba80035b8cba8fa774eee59
 
 FROM ghcr.io/foundry-rs/foundry:${FOUNDRY_TAG} AS foundry
 
