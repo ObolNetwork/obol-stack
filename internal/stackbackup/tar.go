@@ -26,6 +26,12 @@ func newArchiveWriter(path string) (*archiveWriter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create archive: %w", err)
 	}
+	// The archive holds keystores and passwords: tighten an existing file
+	// too (OpenFile only applies the mode when it creates the file).
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("chmod archive: %w", err)
+	}
 	gz := gzip.NewWriter(f)
 	return &archiveWriter{f: f, gz: gz, tw: tar.NewWriter(gz)}, nil
 }
@@ -125,18 +131,13 @@ func (w *archiveWriter) addTree(srcDir, prefix string, skip func(rel string) boo
 // readArchiveManifest opens the archive and returns its manifest without
 // extracting anything else. The manifest is written as the first entry, but
 // scan the whole stream defensively in case of re-packed archives.
+// It reads through the same decompression-ratio guard as extraction.
 func readArchiveManifest(path string) (*Manifest, error) {
-	f, err := os.Open(path)
+	tr, closeArchive, err := openArchive(path)
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return nil, fmt.Errorf("not a gzip archive: %w", err)
-	}
-	defer gz.Close()
-	tr := tar.NewReader(gz)
+	defer closeArchive()
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -184,12 +185,30 @@ func symlinkEscapesRoot(destRoot, linkPath, target string) bool {
 	return resolved != root && !strings.HasPrefix(resolved, root+string(os.PathSeparator))
 }
 
+// Modes for restored entries. Everything lands in the user's own config/data
+// dirs and nothing there needs group/world access, so archive-declared modes
+// are not honoured: directories are created 0700 and files written 0600, plus
+// the owner-exec bit for files the archive marks executable (scripts).
+const (
+	extractDirMode  os.FileMode = 0o700
+	extractFileMode os.FileMode = 0o600
+)
+
+// extractedFileMode maps an archive-declared mode to the restored file mode.
+func extractedFileMode(declared int64) os.FileMode {
+	if declared&0o111 != 0 {
+		return extractFileMode | 0o100
+	}
+	return extractFileMode
+}
+
 // extractEntry writes one tar entry under destRoot/relName.
 func extractEntry(tr *tar.Reader, hdr *tar.Header, destRoot, relName string) error {
 	dest := filepath.Join(destRoot, relName)
 	switch hdr.Typeflag {
 	case tar.TypeDir:
-		return os.MkdirAll(dest, os.FileMode(hdr.Mode)|0o700)
+		// New directories are owner-only; existing ones keep their mode.
+		return os.MkdirAll(dest, extractDirMode)
 	case tar.TypeSymlink:
 		if symlinkEscapesRoot(destRoot, dest, hdr.Linkname) {
 			return fmt.Errorf("symlink %q targets %q which escapes extraction root", relName, hdr.Linkname)
@@ -200,11 +219,18 @@ func extractEntry(tr *tar.Reader, hdr *tar.Header, destRoot, relName string) err
 		_ = os.Remove(dest)
 		return os.Symlink(hdr.Linkname, dest)
 	case tar.TypeReg:
-		if err := os.MkdirAll(filepath.Dir(dest), 0o700); err != nil {
+		if err := os.MkdirAll(filepath.Dir(dest), extractDirMode); err != nil {
 			return err
 		}
-		f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(hdr.Mode)&0o777)
+		mode := extractedFileMode(hdr.Mode)
+		f, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 		if err != nil {
+			return err
+		}
+		// OpenFile applies mode only on create (and through the umask): set
+		// it explicitly so an overwritten file ends up with it too.
+		if err := f.Chmod(mode); err != nil {
+			f.Close()
 			return err
 		}
 		if _, err := io.Copy(f, tr); err != nil {
@@ -228,6 +254,27 @@ var (
 	bombFloorBytes      int64 = 64 << 20 // ignore the ratio below this many uncompressed bytes
 	maxCompressionRatio int64 = 100      // abort above this uncompressed:compressed ratio
 )
+
+// openArchive opens a tar.gz for reading with the decompression-ratio guard
+// between gzip and tar. Every reader of an import archive (manifest scan and
+// extraction alike) goes through here. The returned func closes everything.
+func openArchive(path string) (*tar.Reader, func(), error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	counted := &countingReader{r: f}
+	gz, err := gzip.NewReader(counted)
+	if err != nil {
+		f.Close()
+		return nil, nil, fmt.Errorf("not a gzip archive: %w", err)
+	}
+	closeAll := func() {
+		gz.Close()
+		f.Close()
+	}
+	return tar.NewReader(&ratioGuard{r: gz, compressed: &counted.n}), closeAll, nil
+}
 
 // countingReader counts the bytes read from an underlying reader (used on the
 // raw compressed stream, beneath gzip).

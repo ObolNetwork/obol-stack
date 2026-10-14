@@ -14,6 +14,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/fsutil"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/walletbackup"
@@ -97,7 +98,7 @@ func BackupWalletCmd(cfg *config.Config, id string, opts BackupWalletOptions, u 
 		outputPath = fmt.Sprintf("obol-wallet-backup-%s.%s", addrSuffix, ext)
 	}
 
-	if err := os.WriteFile(outputPath, payload, 0o600); err != nil {
+	if err := fsutil.WriteSecret(outputPath, payload); err != nil {
 		return fmt.Errorf("failed to write backup: %w", err)
 	}
 
@@ -145,7 +146,7 @@ func RestoreWalletCmd(cfg *config.Config, id string, opts RestoreWalletOptions, 
 	}
 
 	keystorePath := filepath.Join(keystoreDir, w.KeystoreUUID+".json")
-	if err := os.WriteFile(keystorePath, []byte(w.Keystore), 0o600); err != nil {
+	if err := fsutil.WriteSecret(keystorePath, []byte(w.Keystore)); err != nil {
 		return fmt.Errorf("failed to write keystore: %w", err)
 	}
 	fixRuntimeVolumeOwnershipFn(cfg, keystoreDir, u)

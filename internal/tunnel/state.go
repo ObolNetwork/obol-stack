@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/fsutil"
 )
 
 const (
@@ -261,7 +262,7 @@ func saveRemoteTunnelToken(cfg *config.Config, token string) error {
 		return err
 	}
 
-	return os.WriteFile(remoteTunnelTokenPath(cfg), []byte(token), 0o600)
+	return fsutil.WriteSecret(remoteTunnelTokenPath(cfg), []byte(token))
 }
 
 func loadRemoteTunnelToken(cfg *config.Config) (string, error) {

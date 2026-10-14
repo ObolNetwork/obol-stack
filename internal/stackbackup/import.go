@@ -3,7 +3,6 @@ package stackbackup
 import (
 	"archive/tar"
 	"bytes"
-	"compress/gzip"
 	"errors"
 	"fmt"
 	"io"
@@ -73,6 +72,11 @@ func Import(cfg *config.Config, opts ImportOptions, u *ui.UI) error {
 		if replacedStackID != "" && !opts.Force {
 			return fmt.Errorf("config dir %s already holds stack %q — purge it first or pass --force to overwrite", cfg.ConfigDir, replacedStackID)
 		}
+		if !opts.Force {
+			if err := confirmDataOverwrite(cfg, manifest, u); err != nil {
+				return err
+			}
+		}
 		if err := extractHostState(cfg, opts.Input, scratch, u); err != nil {
 			return err
 		}
@@ -124,6 +128,67 @@ func Import(cfg *config.Config, opts ImportOptions, u *ui.UI) error {
 	u.Print("  Paid-inference purchases are not restored (pre-signed auths expire) — re-run buy flows as needed.")
 	u.Print("  ERC-8004 registrations are bound to the tunnel hostname — re-run 'obol sell register' if it changed.")
 	return nil
+}
+
+// dataConflicts describes existing agent data the archive would restore over.
+type dataConflicts struct {
+	dataDir   string
+	dirs      []string // non-empty DataDir/<namespace> dirs the archive also carries
+	keystores int      // remote-signer keystores inside those dirs
+}
+
+func (c dataConflicts) summary() string {
+	return fmt.Sprintf("%d keystore(s), %d agent data dir(s) (%s) under %s",
+		c.keystores, len(c.dirs), strings.Join(c.dirs, ", "), c.dataDir)
+}
+
+// findDataConflicts returns the agent data dirs under cfg.DataDir that the
+// archive restores into and that already hold files. A config purge without
+// -f leaves DataDir (keystores, agent state) in place, so the stack-ID check
+// on ConfigDir alone does not catch it. Archives whose manifest predates the
+// data component are treated as carrying every agent namespace.
+func findDataConflicts(cfg *config.Config, m *Manifest) dataConflicts {
+	c := dataConflicts{dataDir: cfg.DataDir}
+	var namespaces []string
+	if comp := m.component("data"); comp != nil {
+		if comp.Included {
+			namespaces = comp.Notes
+		}
+	} else {
+		namespaces = selectDataNamespaces(cfg.DataDir)
+	}
+	for _, ns := range namespaces {
+		if ns == "" || ns != filepath.Base(ns) || ns == "." || ns == ".." {
+			continue
+		}
+		dir := filepath.Join(cfg.DataDir, ns)
+		entries, err := os.ReadDir(dir)
+		if err != nil || len(entries) == 0 {
+			continue
+		}
+		c.dirs = append(c.dirs, ns)
+		keystores, _ := filepath.Glob(filepath.Join(dir, "remote-signer-keystores", "*.json"))
+		c.keystores += len(keystores)
+	}
+	return c
+}
+
+// confirmDataOverwrite refuses (or, on a terminal, asks before) restoring
+// over existing agent data without --force.
+func confirmDataOverwrite(cfg *config.Config, m *Manifest, u *ui.UI) error {
+	c := findDataConflicts(cfg, m)
+	if len(c.dirs) == 0 {
+		return nil
+	}
+	if u.CanPrompt() {
+		u.Warnf("This import would overwrite existing data: %s", c.summary())
+		u.Print("  Back up first with 'obol agent wallet backup' (and 'obol stack export' for everything else).")
+		if u.Confirm("Overwrite the existing data?", false) {
+			return nil
+		}
+		return errors.New("import cancelled: existing data left untouched")
+	}
+	return fmt.Errorf("refusing to overwrite existing data: %s — back up first ('obol agent wallet backup') or pass --force to overwrite", c.summary())
 }
 
 // ensureClusterFn reports whether the kubeconfig reaches an API server.
@@ -281,18 +346,11 @@ func extractScratchOnly(input, scratch string) error {
 }
 
 func walkArchive(input string, fn func(*tar.Reader, *tar.Header, string) error) error {
-	f, err := os.Open(input)
+	tr, closeArchive, err := openArchive(input)
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	counted := &countingReader{r: f}
-	gz, err := gzip.NewReader(counted)
-	if err != nil {
-		return fmt.Errorf("not a gzip archive: %w", err)
-	}
-	defer gz.Close()
-	tr := tar.NewReader(&ratioGuard{r: gz, compressed: &counted.n})
+	defer closeArchive()
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {

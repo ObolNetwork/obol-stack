@@ -23,6 +23,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
 	"github.com/ObolNetwork/obol-stack/internal/dns"
+	"github.com/ObolNetwork/obol-stack/internal/fsutil"
 	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"github.com/ObolNetwork/obol-stack/internal/hermes"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
@@ -235,7 +236,7 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS bool) error {
 	}
 
 	// Write kubeconfig
-	if err := os.WriteFile(kubeconfigPath, kubeconfigData, 0o600); err != nil {
+	if err := fsutil.WriteSecret(kubeconfigPath, kubeconfigData); err != nil {
 		return fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
 

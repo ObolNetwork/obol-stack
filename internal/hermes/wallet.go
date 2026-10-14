@@ -13,6 +13,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/fsutil"
 	"github.com/ObolNetwork/obol-stack/internal/keystore"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
@@ -68,7 +69,7 @@ func provisionKeystoreToVolume(cfg *config.Config, id, keystoreID string, keysto
 	}
 
 	path := filepath.Join(dir, keystoreID+".json")
-	if err := os.WriteFile(path, keystoreJSON, 0o600); err != nil {
+	if err := fsutil.WriteSecret(path, keystoreJSON); err != nil {
 		return "", fmt.Errorf("write keystore: %w", err)
 	}
 
@@ -101,7 +102,7 @@ func WriteWalletMetadata(deploymentDir string, wallet *WalletInfo) error {
 	if err != nil {
 		return fmt.Errorf("marshal wallet metadata: %w", err)
 	}
-	return os.WriteFile(walletMetadataPath(deploymentDir), data, 0o600)
+	return fsutil.WriteSecret(walletMetadataPath(deploymentDir), data)
 }
 
 func ReadWalletMetadata(deploymentDir string) (*WalletInfo, error) {

@@ -56,13 +56,16 @@ ServiceOffers, LiteLLM and eRPC config) and re-syncs agent instances.
 On a clean host this is one command:
   obol stack import backup.tar.gz
 
-Over a fresh 'obol stack init' (and 'up'), pass --force. A pre-import
+Over a fresh 'obol stack init' (and 'up'), pass --force. Without --force,
+existing agent data (keystores, agent state) left in the data dir, e.g. after
+'obol stack purge', is not overwritten: back it up first with 'obol agent
+wallet backup', or pass --force (a terminal asks instead). A pre-import
 cluster that holds no agents or offers is removed so the restored stack can
 claim the ingress ports; one that does is never deleted.`,
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  "force",
-				Usage: "Overwrite an existing stack config",
+				Usage: "Overwrite an existing stack config and agent data",
 			},
 			&cli.BoolFlag{
 				Name:  "skip-cluster",

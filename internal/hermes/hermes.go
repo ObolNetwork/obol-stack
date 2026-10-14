@@ -19,6 +19,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/agentskills"
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/dns"
+	"github.com/ObolNetwork/obol-stack/internal/fsutil"
 	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
@@ -196,7 +197,7 @@ func Onboard(cfg *config.Config, opts OnboardOptions, u *ui.UI) error {
 	}
 
 	rsValues := generateRemoteSignerValues(wallet)
-	if err := os.WriteFile(filepath.Join(deploymentDir, "values-remote-signer.yaml"), []byte(rsValues), 0o600); err != nil {
+	if err := fsutil.WriteSecret(filepath.Join(deploymentDir, "values-remote-signer.yaml"), []byte(rsValues)); err != nil {
 		_ = os.RemoveAll(deploymentDir)
 		return fmt.Errorf("failed to write remote-signer values: %w", err)
 	}
@@ -731,7 +732,7 @@ func writeDeploymentFiles(cfg *config.Config, id, deploymentDir, agentBaseURL st
 		return err
 	}
 
-	if err := os.WriteFile(filepath.Join(deploymentDir, valuesFileName), []byte(generateValues(namespace, hostname, dashboardHost, agentBaseURL, token, primary, configData)), 0o600); err != nil {
+	if err := fsutil.WriteSecret(filepath.Join(deploymentDir, valuesFileName), []byte(generateValues(namespace, hostname, dashboardHost, agentBaseURL, token, primary, configData))); err != nil {
 		return fmt.Errorf("failed to write %s: %w", valuesFileName, err)
 	}
 	if err := os.WriteFile(filepath.Join(deploymentDir, helmfileFileName), []byte(generateHelmfile(namespace)), 0o600); err != nil {
@@ -1185,7 +1186,7 @@ func syncRuntimeFiles(cfg *config.Config, id string, configData []byte, u *ui.UI
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create Hermes home %s: %w", targetDir, err)
 	}
-	if err := os.WriteFile(filepath.Join(targetDir, "config.yaml"), configData, 0o600); err != nil {
+	if err := fsutil.WriteSecret(filepath.Join(targetDir, "config.yaml"), configData); err != nil {
 		return fmt.Errorf("failed to write Hermes config: %w", err)
 	}
 
@@ -1445,7 +1446,7 @@ func persistGatewayToken(deploymentDir, token string) error {
 	if token == "" {
 		return errors.New("gateway token is empty")
 	}
-	return os.WriteFile(gatewayTokenPath(deploymentDir), []byte(token+"\n"), 0o600)
+	return fsutil.WriteSecret(gatewayTokenPath(deploymentDir), []byte(token+"\n"))
 }
 
 func generateGatewayToken() (string, error) {
