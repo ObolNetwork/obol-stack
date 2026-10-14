@@ -26,6 +26,9 @@ type ImportOptions struct {
 	SkipCluster bool
 	ClusterOnly bool
 	SkipSync    bool
+	// SkipWallets restores without re-materialising keystores from the
+	// archive's wallets/ backups (and without checking they decrypt).
+	SkipWallets bool
 	// Passphrase decrypts the archive's wallets/ backups when a keystore
 	// must be re-materialised from them. HasPassFlag means it was given
 	// (even empty); otherwise a terminal is prompted when needed.
@@ -79,6 +82,11 @@ func Import(cfg *config.Config, opts ImportOptions, u *ui.UI) error {
 		if replacedStackID != "" && !opts.Force {
 			return fmt.Errorf("config dir %s already holds stack %q — purge it first or pass --force to overwrite", cfg.ConfigDir, replacedStackID)
 		}
+		if !opts.SkipWallets {
+			if err := preflightWallets(opts.Input, &opts, u); err != nil {
+				return err
+			}
+		}
 		if !opts.Force {
 			if err := confirmDataOverwrite(cfg, manifest, u); err != nil {
 				return err
@@ -100,8 +108,22 @@ func Import(cfg *config.Config, opts ImportOptions, u *ui.UI) error {
 	// Every mode: a keystore the data/ copy did not bring back (export could
 	// not read the host dir) is re-materialised from wallets/ before any
 	// remote-signer starts on it.
-	wallets := restoreWalletKeystores(cfg, filepath.Join(scratch, walletsDir), opts, u)
-	printWalletRestores(wallets, u)
+	var wallets []walletRestore
+	if opts.SkipWallets {
+		u.Warn("Skipping wallet keystores from the archive's wallets/ (--skip-wallets): agents whose keystore is missing cannot sign")
+	} else {
+		wallets = restoreWalletKeystores(cfg, filepath.Join(scratch, walletsDir), opts, u)
+		printWalletRestores(wallets, u)
+	}
+	// Stop before any cluster work: an agent must not start without its key.
+	if n := walletRestoreFailures(wallets); n > 0 {
+		retry := "obol stack import " + opts.Input + " --cluster-only"
+		if opts.SkipCluster {
+			retry += " --skip-cluster"
+		}
+		return fmt.Errorf("%d wallet keystore(s) not restored (see above); the cluster was left alone. "+
+			"Fix the cause, then re-run: %s", n, retry)
+	}
 
 	if opts.SkipCluster {
 		u.Info("Skipping cluster restore (--skip-cluster)")

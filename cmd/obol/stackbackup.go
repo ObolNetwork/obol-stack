@@ -72,7 +72,10 @@ In every mode (also --skip-cluster and --cluster-only), a remote-signer
 keystore the archive's data/ copy did not bring back (export could not read
 the host keystore dir) is restored from the archive's wallets/ backup, after
 checking it decrypts to the recorded address. Encrypted backups need
---passphrase (a terminal is prompted instead).`,
+--passphrase (a terminal is prompted instead). The passphrase is checked
+before anything is restored; a wrong or missing one stops the import, and a
+keystore that cannot be restored stops it before the cluster starts.
+--skip-wallets restores without those keystores.`,
 		Flags: []cli.Flag{
 			&cli.BoolFlag{
 				Name:  "force",
@@ -94,6 +97,10 @@ checking it decrypts to the recorded address. Encrypted backups need
 				Name:  "passphrase",
 				Usage: "Wallet backup passphrase given to 'obol stack export' (needed only when a keystore is restored from the archive's wallets/)",
 			},
+			&cli.BoolFlag{
+				Name:  "skip-wallets",
+				Usage: "Restore without the keystores in the archive's wallets/ (agents whose keystore is missing cannot sign)",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			if cmd.Args().Len() != 1 {
@@ -106,6 +113,7 @@ checking it decrypts to the recorded address. Encrypted backups need
 				SkipCluster: cmd.Bool("skip-cluster"),
 				ClusterOnly: cmd.Bool("cluster-only"),
 				SkipSync:    cmd.Bool("skip-sync"),
+				SkipWallets: cmd.Bool("skip-wallets"),
 				Passphrase:  cmd.String("passphrase"),
 				HasPassFlag: cmd.IsSet("passphrase"),
 				StackUp:     func() error { return runStackUp(ctx, cfg, u, false, false) },

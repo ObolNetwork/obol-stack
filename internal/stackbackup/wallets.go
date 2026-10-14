@@ -1,8 +1,10 @@
 package stackbackup
 
 import (
+	"archive/tar"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -85,7 +87,7 @@ func (w walletExport) note() string {
 	}
 	how := "keystore also in data/"
 	if w.route == hermes.KeystoreRouteK3dNode {
-		how = "only copy: host keystore dir not readable by the exporting user, read through the k3d node"
+		how = "only copy: the exporting user cannot read the host keystore dir, so the keystore was copied out through the k3d node"
 	}
 	return fmt.Sprintf("%s: %s %s (%s)", w.wallet.Namespace, w.address, w.file, how)
 }
@@ -93,7 +95,7 @@ func (w walletExport) note() string {
 // summary is the human line printed at the end of an export.
 func (w walletExport) summary() string {
 	if w.route == hermes.KeystoreRouteK3dNode {
-		return fmt.Sprintf("%s -> %s only (the host keystore dir is owned by the remote-signer pod and not readable by you; read through the k3d node)", w.address, w.file)
+		return fmt.Sprintf("%s -> %s only (the host keystore dir belongs to the remote-signer pod, so the keystore was copied out through the k3d node; data/ has no copy)", w.address, w.file)
 	}
 	return fmt.Sprintf("%s -> %s (keystore also under data/%s/)", w.address, w.file, w.wallet.Namespace)
 }
@@ -162,6 +164,107 @@ func coveredByWalletBackup(path string, results []walletExport) bool {
 		}
 	}
 	return false
+}
+
+// maxWalletBackupBytes bounds a wallets/ entry read into memory.
+const maxWalletBackupBytes = 1 << 20
+
+// passphraseAttempts is how often a terminal is asked for the passphrase.
+const passphraseAttempts = 3
+
+// preflightWallets runs before an import touches host state. A wallet whose
+// keystore the archive's data/ copy does not carry can only come back from
+// its wallets/ backup, so that backup has to decrypt now: otherwise a wrong
+// or missing passphrase restores everything else and leaves the agent
+// without its key. On success the working passphrase is kept in opts.
+func preflightWallets(input string, opts *ImportOptions, u *ui.UI) error {
+	backups := map[string][]byte{}
+	inData := map[string]bool{}
+	err := walkArchive(input, func(tr *tar.Reader, hdr *tar.Header, clean string) error {
+		if hdr.Typeflag != tar.TypeReg {
+			return nil
+		}
+		parts := strings.Split(filepath.ToSlash(clean), "/")
+		switch {
+		case len(parts) == 2 && parts[0] == walletsDir && filepath.Ext(parts[1]) == walletExtEncrypted:
+			ns := strings.TrimSuffix(parts[1], walletExtEncrypted)
+			if !isWalletNamespace(ns) {
+				return nil
+			}
+			data, err := io.ReadAll(io.LimitReader(tr, maxWalletBackupBytes))
+			if err != nil {
+				return err
+			}
+			backups[ns] = data
+		case len(parts) == 4 && parts[0] == "data" && parts[2] == "remote-signer-keystores" &&
+			strings.HasSuffix(parts[3], ".json") && hdr.Size > 0:
+			inData[parts[1]] = true
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	var need []string
+	for ns := range backups {
+		if !inData[ns] {
+			need = append(need, ns)
+		}
+	}
+	if len(need) == 0 {
+		return nil
+	}
+	sort.Strings(need)
+
+	decrypts := func(pass string) error {
+		for _, ns := range need {
+			if _, err := walletbackup.Decode(backups[ns], pass); err != nil {
+				return fmt.Errorf("%s/%s%s: %w", walletsDir, ns, walletExtEncrypted, err)
+			}
+		}
+		return nil
+	}
+	refuse := func(err error) error {
+		return fmt.Errorf("cannot restore the wallet keys of %s: %w\n"+
+			"Nothing was restored. Re-run with the --passphrase given to 'obol stack export', "+
+			"or pass --skip-wallets to restore without these keys (those agents could not sign)",
+			strings.Join(need, ", "), err)
+	}
+
+	if opts.HasPassFlag {
+		if err := decrypts(opts.Passphrase); err != nil {
+			return refuse(err)
+		}
+		return nil
+	}
+	if !u.CanPrompt() {
+		return refuse(errors.New("the wallet backup is encrypted and no --passphrase was given"))
+	}
+	var lastErr error
+	for range passphraseAttempts {
+		p, err := u.SecretInput("Wallet backup passphrase (from 'obol stack export')")
+		if err != nil {
+			return fmt.Errorf("read passphrase: %w", err)
+		}
+		if lastErr = decrypts(p); lastErr == nil {
+			opts.Passphrase, opts.HasPassFlag = p, true
+			return nil
+		}
+		u.Warn("That passphrase does not decrypt the wallet backup")
+	}
+	return refuse(lastErr)
+}
+
+// walletRestoreFailures counts wallets whose keystore was not restored.
+func walletRestoreFailures(results []walletRestore) int {
+	n := 0
+	for _, r := range results {
+		if r.err != nil {
+			n++
+		}
+	}
+	return n
 }
 
 // walletRestore is the outcome of restoring one wallet's keystore on import.

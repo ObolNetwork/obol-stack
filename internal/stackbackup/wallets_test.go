@@ -334,18 +334,49 @@ func TestImport_EncryptedWalletWithoutPassphraseIsReported(t *testing.T) {
 
 	dst := freshHost(t)
 	u, out := captureUI() // not a terminal: no prompt
-	if err := Import(dst, ImportOptions{Input: archive, SkipCluster: true}, u); err != nil {
+	err := Import(dst, ImportOptions{Input: archive, SkipCluster: true}, u)
+	if err == nil {
+		t.Fatalf("Import succeeded without the wallet passphrase\n%s", out)
+	}
+	for _, want := range []string{"no --passphrase", "Nothing was restored", "--skip-wallets", walletTestNS} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error missing %q: %v", want, err)
+		}
+	}
+	assertNothingRestored(t, dst)
+}
+
+// assertNothingRestored checks a refused import left the host untouched.
+func assertNothingRestored(t *testing.T, dst *config.Config) {
+	t.Helper()
+	for _, dir := range []string{dst.ConfigDir, dst.DataDir} {
+		entries, err := os.ReadDir(dir)
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if len(entries) != 0 {
+			t.Errorf("refused import still wrote into %s: %d entries", dir, len(entries))
+		}
+	}
+}
+
+func TestImport_SkipWalletsRestoresTheRest(t *testing.T) {
+	s := newWalletStack(t)
+	lockKeystoreDir(t, s)
+	stubNodeRead(t, s)
+	archive, _ := exportTo(t, s.cfg, walletTestPass)
+
+	dst := freshHost(t)
+	u, out := captureUI()
+	if err := Import(dst, ImportOptions{Input: archive, SkipCluster: true, SkipWallets: true}, u); err != nil {
 		t.Fatalf("Import: %v\n%s", err, out)
+	}
+	if !strings.Contains(out.String(), "--skip-wallets") {
+		t.Errorf("no --skip-wallets warning:\n%s", out)
 	}
 	ks := filepath.Join(agentruntime.KeystoreVolumePath(dst, agentruntime.Hermes, walletTestID), s.material.KeystoreUUID+".json")
 	if _, err := os.Stat(ks); !os.IsNotExist(err) {
-		t.Fatalf("keystore written without a passphrase: %v", err)
-	}
-	text := out.String()
-	for _, want := range []string{"keystore NOT restored", "--passphrase", "obol agent wallet restore " + walletTestID} {
-		if !strings.Contains(text, want) {
-			t.Errorf("import output missing %q:\n%s", want, text)
-		}
+		t.Fatalf("--skip-wallets still wrote the keystore: %v", err)
 	}
 }
 
@@ -355,13 +386,16 @@ func TestImport_WrongPassphraseIsReported(t *testing.T) {
 	stubNodeRead(t, s)
 	archive, _ := exportTo(t, s.cfg, walletTestPass)
 
+	dst := freshHost(t)
 	u, out := captureUI()
-	if err := Import(freshHost(t), ImportOptions{Input: archive, SkipCluster: true, Passphrase: "wrong", HasPassFlag: true}, u); err != nil {
-		t.Fatalf("Import: %v", err)
+	err := Import(dst, ImportOptions{Input: archive, SkipCluster: true, Passphrase: "wrong", HasPassFlag: true}, u)
+	if err == nil {
+		t.Fatalf("Import succeeded with a wrong passphrase\n%s", out)
 	}
-	if !strings.Contains(out.String(), "keystore NOT restored") {
-		t.Errorf("wrong passphrase not reported:\n%s", out)
+	if !strings.Contains(err.Error(), "Nothing was restored") {
+		t.Errorf("error = %v", err)
 	}
+	assertNothingRestored(t, dst)
 }
 
 func TestImport_DataCopyNeedsNoPassphrase(t *testing.T) {
@@ -403,8 +437,8 @@ func TestImport_RejectsBackupThatDoesNotMatchConfig(t *testing.T) {
 	}
 	writeWalletConfig(t, dst, other)
 	u, out := captureUI()
-	if err := Import(dst, ImportOptions{Input: archive, ClusterOnly: true, SkipCluster: true}, u); err != nil {
-		t.Fatalf("Import: %v", err)
+	if err := Import(dst, ImportOptions{Input: archive, ClusterOnly: true, SkipCluster: true}, u); err == nil {
+		t.Fatalf("Import succeeded with a mismatching wallet backup\n%s", out)
 	}
 	dir := agentruntime.KeystoreVolumePath(dst, agentruntime.Hermes, walletTestID)
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
