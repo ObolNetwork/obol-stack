@@ -1,0 +1,1 @@
+export { PercentageChip } from './PercentageChip';

@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui* -type f -name *.d.ts)",
+      "Bash(find /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui* -type f \\\\\\(-name theme* -o -name token* -o -name index.d.ts \\\\\\))",
+      "Bash(grep -r \"colors\\\\|green\\\\|primary\\\\|accent\\\\|teal\" /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui/dist/stitches.config.d.ts)",
+      "Bash(head -300 /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui/dist/stitches.config.d.ts)",
+      "Bash(grep -A 1000 \"declare const theme:\" /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui/dist/stitches.config.d.ts)",
+      "Bash(grep \"obolGreen\\\\|2FE4AB\\\\|#2FE4AB\" /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui/dist/*.js)",
+      "Bash(grep -o \"obol[A-Z][a-zA-Z]*.*:\" /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui/dist/stitches.config.d.ts)",
+      "Bash(cat /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui/package.json)",
+      "Bash(find /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui* -type f -name \"stitches.config.js\")",
+      "Bash(grep -o obolGreen[^:]*:[^,}]* /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui/dist/index.js)",
+      "Bash(claude auth:*)",
+      "Bash(pnpm config:*)",
+      "Bash(npm install:*)",
+      "Bash(find /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui/dist -name \"ResponsiveDialog.js\" -o -name \"index.js\")",
+      "Bash(grep -r \"ResponsiveDialogStyledContent\" /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui/dist --include=\"*.js\")",
+      "Bash(grep -A 50 ResponsiveDialogStyledContents*= /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui/dist/index.js)",
+      "Bash(find /Users/agnieszkaskrobot/Desktop/projects/obol-stack-front-end/node_modules/.pnpm/@obolnetwork+obol-ui@1.1.14*/node_modules/@obolnetwork/obol-ui -name \"ResponsiveDialog.tsx\" -o -name \"ResponsiveDialog.ts\")"
+    ]
+  },
+  "enabledPlugins": {
+    "frontend-design@claude-plugins-official": true
+  }
+}

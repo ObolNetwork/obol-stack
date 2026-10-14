@@ -1,0 +1,5 @@
+title = "gitleaks config"
+
+[allowlist]
+  description = "Ethereum contract addresses are public by design"
+  regexes = ['''0x[0-9a-fA-F]{40}''']

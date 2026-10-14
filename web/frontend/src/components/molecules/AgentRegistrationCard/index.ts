@@ -1,0 +1,1 @@
+export { AgentRegistrationCard } from './AgentRegistrationCard';
