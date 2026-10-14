@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -510,6 +511,8 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 			setCondition(&status, "Ready", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
 			return c.updateOfferStatus(ctx, raw, status)
 		}
+	} else {
+		clearNonAgentResolution(offer, &status)
 	}
 
 	if err := c.reconcileModel(&status, offer); err != nil {
@@ -1265,6 +1268,13 @@ func (c *Controller) recoverRegistration(ctx context.Context, client *erc8004.Cl
 		status.RegistrationURI,
 		uint64(status.RegistrationSearchFromBlock),
 	)
+	var mismatch *erc8004.OwnerMismatchError
+	if errors.As(err, &mismatch) {
+		// Matching events exist but the minted token(s) no longer belong to
+		// the registration owner; never adopt someone else's agent ID.
+		log.Printf("serviceoffer-controller: registration recovery skipped: %v", mismatch)
+		return "", "", false, nil
+	}
 	if err != nil || !found {
 		return "", "", found, err
 	}

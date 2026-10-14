@@ -227,6 +227,14 @@ func (c *Controller) reconcileAgent(ctx context.Context, key string) error {
 		return err
 	}
 
+	signerReady := true
+	if agent.Spec.Wallet.Create && status.WalletAddress != "" {
+		signerReady, err = c.isAgentSignerReady(ctx, agent.Namespace)
+		if err != nil {
+			return err
+		}
+	}
+
 	if deploymentReady {
 		setAgentCondition(&status, agentConditionProvisioned, "True", "Provisioned", "Hermes deployment reports ready replicas")
 		if agent.Spec.Wallet.Create && status.WalletAddress == "" {
@@ -236,6 +244,17 @@ func (c *Controller) reconcileAgent(ctx context.Context, key string) error {
 			// load-bearing.
 			setAgentCondition(&status, agentConditionReady, "False", "WaitingForWallet", "wallet.create=true but status.walletAddress is unset")
 			status.Phase = monetizeapi.AgentPhaseProvisioning
+		} else if !signerReady {
+			// status.walletAddress stays populated (the keystore exists and
+			// the address is stable), but the agent cannot sign until the
+			// remote-signer serves, so Ready waits for it.
+			setAgentCondition(&status, agentConditionReady, "False", "WaitingForSigner", "remote-signer deployment has no ready replicas yet")
+			status.Phase = monetizeapi.AgentPhaseProvisioning
+			if err := c.updateAgentStatus(ctx, raw, status); err != nil {
+				return err
+			}
+			c.requeueAgentAfter(key, agentReadinessRequeueDelay)
+			return nil
 		} else {
 			setAgentCondition(&status, agentConditionReady, "True", "Reconciled", "Agent is serving on the cluster endpoint")
 			status.Phase = monetizeapi.AgentPhaseReady
@@ -673,7 +692,18 @@ func (c *Controller) readLiteLLMMasterKey(ctx context.Context) (string, error) {
 // Ready condition; absence of the Deployment (e.g. mid-provision) is
 // treated as not-ready, not as an error.
 func (c *Controller) isAgentDeploymentReady(ctx context.Context, namespace string) (bool, error) {
-	dep, err := c.deployments.Namespace(namespace).Get(ctx, hermesServiceName, metav1.GetOptions{})
+	return c.isDeploymentReady(ctx, namespace, hermesServiceName)
+}
+
+// isAgentSignerReady reports whether the per-agent remote-signer
+// Deployment has at least one ready replica. Only Deployment status is
+// read; the keystore Secret is never touched here.
+func (c *Controller) isAgentSignerReady(ctx context.Context, namespace string) (bool, error) {
+	return c.isDeploymentReady(ctx, namespace, remoteSignerName)
+}
+
+func (c *Controller) isDeploymentReady(ctx context.Context, namespace, name string) (bool, error) {
+	dep, err := c.deployments.Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return false, nil
 	}

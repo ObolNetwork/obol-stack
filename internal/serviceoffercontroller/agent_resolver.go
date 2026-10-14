@@ -95,3 +95,14 @@ func (c *Controller) resolveAgentOffer(ctx context.Context, offer *monetizeapi.S
 
 	return true, nil
 }
+
+// clearNonAgentResolution drops status.AgentResolution from an offer that is
+// not type=agent (for example one edited from agent to http). The field is
+// read by the catalog/OpenAPI renderers and the verifier route source, so a
+// leftover value would keep advertising an agent the offer no longer fronts.
+func clearNonAgentResolution(offer *monetizeapi.ServiceOffer, status *monetizeapi.ServiceOfferStatus) {
+	if offer.IsAgent() {
+		return
+	}
+	status.AgentResolution = nil
+}

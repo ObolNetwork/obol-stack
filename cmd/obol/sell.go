@@ -3534,7 +3534,7 @@ func registerDirectViaSigner(ctx context.Context, cfg *config.Config, u *ui.UI, 
 	// No recorded agentId: try owner+URI recovery from genesis before
 	// minting so reruns don't double-mint a registration that already
 	// exists on-chain.
-	if recoveredID, _, ok := recoverRegistrationByOwnerAndURI(ctx, client, addr, agentURI, 0); ok {
+	if recoveredID, _, ok := recoverRegistrationByOwnerAndURI(ctx, u, client, addr, agentURI, 0); ok {
 		u.Printf("    Agent ID: %s (recovered via owner+URI)", recoveredID.String())
 		identity.Status = monetizeapi.UpsertAgentIdentityRegistration(identity.Status, net.Name, recoveredID.String())
 		if err := applyAgentIdentity(cfg, identity); err != nil {
@@ -3608,7 +3608,7 @@ func registerWithRecovery(
 		}
 		lastErr = err
 
-		if agentID, txHash, ok := recoverRegistrationByOwnerAndURI(ctx, client, owner, agentURI, startBlock); ok {
+		if agentID, txHash, ok := recoverRegistrationByOwnerAndURI(ctx, u, client, owner, agentURI, startBlock); ok {
 			u.Warnf("registration submit returned an error but the on-chain event was recovered: %v", err)
 			return agentID, txHash, nil
 		}
@@ -3625,11 +3625,22 @@ func registerWithRecovery(
 	return nil, "", lastErr
 }
 
-func recoverRegistrationByOwnerAndURI(ctx context.Context, client *erc8004.Client, owner common.Address, agentURI string, startBlock uint64) (*big.Int, string, bool) {
+// recoverRegistrationByOwnerAndURI looks up a previous Registered event for
+// owner+agentURI. A candidate is adopted only if the registry still reports
+// owner as its ownerOf; if every matching token has moved to another address
+// the reason is printed and recovery reports not found.
+func recoverRegistrationByOwnerAndURI(ctx context.Context, u *ui.UI, client *erc8004.Client, owner common.Address, agentURI string, startBlock uint64) (*big.Int, string, bool) {
 	for attempt := 1; attempt <= 4; attempt++ {
 		agentID, txHash, found, err := client.FindRegistrationByOwnerAndURI(ctx, owner, agentURI, startBlock)
 		if err == nil && found {
 			return agentID, txHash, true
+		}
+		var mismatch *erc8004.OwnerMismatchError
+		if errors.As(err, &mismatch) {
+			if u != nil {
+				u.Warnf("not reusing previous registration: %v", mismatch)
+			}
+			return nil, "", false
 		}
 		if !sleepWithContext(ctx, 2*time.Second) {
 			return nil, "", false

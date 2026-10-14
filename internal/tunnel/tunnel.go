@@ -56,9 +56,13 @@ type tunnelStatusResult struct {
 	RequestsServed   int64  `json:"requests_served,omitempty"`
 	RequestErrors    int64  `json:"request_errors,omitempty"`
 
-	// Public reachability probe (HTTP GET of the public URL).
-	PublicReachable  bool `json:"public_reachable,omitempty"`
-	PublicHTTPStatus int  `json:"public_http_status,omitempty"`
+	// Public reachability probe (HTTP GET of the public URL). PublicProbed is
+	// true when the probe ran (not --no-probe, probeable URL); a probe that
+	// ran with PublicReachable=false downgrades Status to "degraded".
+	PublicProbed     bool   `json:"public_probed,omitempty"`
+	PublicReachable  bool   `json:"public_reachable,omitempty"`
+	PublicHTTPStatus int    `json:"public_http_status,omitempty"`
+	PublicProbeError string `json:"public_probe_error,omitempty"`
 
 	// TokenRejected: cloudflared logs show Cloudflare refusing the token.
 	TokenRejected bool `json:"token_rejected,omitempty"`
@@ -220,7 +224,11 @@ func gatherStatus(cfg *config.Config, kubectlPath, kubeconfigPath string, noProb
 
 	// Public reachability probe: GET the public URL root and assert HTTP < 400.
 	if !noProbe && isProbeableURL(result.URL) {
-		if code, ok := probePublicURL(result.URL); ok {
+		result.PublicProbed = true
+		code, err := probePublicURL(result.URL)
+		if err != nil {
+			result.PublicProbeError = err.Error()
+		} else {
 			result.PublicHTTPStatus = code
 			result.PublicReachable = code < 400
 		}
@@ -280,18 +288,33 @@ func Status(cfg *config.Config, u *ui.UI, opts StatusOptions) error {
 	if probeablePublicURL {
 		syncTunnelDependents(cfg, u, publicURL)
 	}
+	printStatusHints(u, result)
+
+	return nil
+}
+
+// printStatusHints prints the follow-up guidance under a running tunnel's
+// status report: troubleshooting steps whenever the tunnel is not "active"
+// (including a failed public reachability probe), otherwise the quick-tunnel
+// reminder.
+func printStatusHints(u *ui.UI, result tunnelStatusResult) {
 	if result.Status != "active" {
 		u.Blank()
 		u.Print("Troubleshooting:")
 		u.Print("  - Check logs:     obol tunnel logs")
 		u.Print("  - Restart tunnel: obol tunnel restart")
-	} else if mode == tunnelExposureQuick {
+		if result.PublicProbed && !result.PublicReachable {
+			if result.Mode == tunnelExposureQuick {
+				u.Print("  - A new quick-tunnel URL can take a minute to resolve; re-check: obol tunnel status")
+			} else {
+				u.Print("  - Check the Cloudflare dashboard Public Hostname routes to http://traefik.traefik.svc.cluster.local:80")
+			}
+		}
+	} else if result.Mode == tunnelExposureQuick {
 		u.Blank()
 		u.Dim("This is a temporary URL — it changes on every restart.")
 		u.Print("  Create a permanent URL: obol tunnel setup")
 	}
-
-	return nil
 }
 
 func summarizeTunnelStatus(result tunnelStatusResult) string {
@@ -311,6 +334,11 @@ func summarizeTunnelStatus(result tunnelStatusResult) string {
 		return "starting"
 	}
 	if result.ManagementMode == tunnelManagementRemote && result.ConnectorStatus == "waiting_for_connections" {
+		return "degraded"
+	}
+	// The connector is up, but the public URL probe ran and did not return a
+	// success: buyers cannot reach the stack, so it is not "active".
+	if result.PublicProbed && !result.PublicReachable {
 		return "degraded"
 	}
 	return "active"
@@ -875,6 +903,9 @@ func printStatusReport(u *ui.UI, result tunnelStatusResult, lastUpdated time.Tim
 		}
 		u.Detail("Connector", connector)
 	}
+	if result.PublicHTTPStatus == 0 && result.PublicProbeError != "" {
+		u.Detail("Public check", "unreachable ("+result.PublicProbeError+")")
+	}
 	if result.PublicHTTPStatus > 0 {
 		reach := fmt.Sprintf("HTTP %d", result.PublicHTTPStatus)
 		if result.PublicReachable {
@@ -1020,16 +1051,16 @@ func metricLabelValue(line, label string) string {
 }
 
 // probePublicURL issues a short GET against the public URL root and returns the
-// HTTP status code. ok is false when the request could not be completed.
-func probePublicURL(publicURL string) (int, bool) {
+// HTTP status code, or an error when the request could not be completed.
+func probePublicURL(publicURL string) (int, error) {
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get(strings.TrimRight(publicURL, "/") + "/")
 	if err != nil {
-		return 0, false
+		return 0, err
 	}
 	defer resp.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1024))
-	return resp.StatusCode, true
+	return resp.StatusCode, nil
 }
 
 func freeLocalPort() (int, error) {

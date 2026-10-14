@@ -1053,11 +1053,13 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
                   value: http://localhost:%d
                 - name: GATEWAY_HEALTH_TIMEOUT
                   value: "3"
-                # Local k3d/dev clusters do not expose the dashboard's messaging integrations
-                # (Telegram/Discord/etc.) to the public internet, so enabling open-allowlist
-                # is safe here. Production deployments must override this via a values overlay.
+                # No messaging platforms (Telegram/Discord/etc.) are configured by obol;
+                # the obol front end and CLI reach Hermes through the API server with a
+                # bearer token, not the messaging gateway. Keep the gateway closed by
+                # default: operators who connect a platform must set that platform's
+                # allowlist.
                 - name: GATEWAY_ALLOW_ALL_USERS
-                  value: "true"
+                  value: "false"
                 # v2026.7.x hardening: a non-loopback (0.0.0.0) dashboard bind now
                 # requires an auth provider; the legacy --insecure flag no longer
                 # bypasses it (closes the hermes-0day unauthenticated-dashboard

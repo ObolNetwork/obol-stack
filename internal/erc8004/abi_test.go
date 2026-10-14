@@ -34,6 +34,7 @@ func TestABI_AllFunctionsPresent(t *testing.T) {
 		"setAgentWallet",
 		"unsetAgentWallet",
 		"tokenURI",
+		"ownerOf",
 	}
 
 	for _, name := range wantMethods {

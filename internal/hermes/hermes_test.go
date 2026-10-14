@@ -342,6 +342,8 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		`- "obol-agent.obol.stack"`,
 		"name: hermes-dashboard",
 		"name: GATEWAY_HEALTH_URL",
+		// No messaging platforms are configured; the gateway stays closed.
+		"name: GATEWAY_ALLOW_ALL_USERS\n                  value: \"false\"",
 		"HERMES_DASHBOARD_BASIC_AUTH_USERNAME",
 		"HERMES_DASHBOARD_BASIC_AUTH_PASSWORD",
 		// Username is fixed; password is the agent API token (API_SERVER_KEY),
