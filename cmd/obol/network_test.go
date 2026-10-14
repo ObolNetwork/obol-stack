@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -44,49 +43,6 @@ func TestSelectDeployments(t *testing.T) {
 	}
 }
 
-func TestNetworkStatusFormatting(t *testing.T) {
-	pods := parseERPCPods("erpc-7c9cb85d44-5wbwt   Running   true   0\nerpc-7c9cb85d44-x2k9q   Running   false   3\n")
-	want := []networkERPCPod{
-		{Name: "erpc-7c9cb85d44-5wbwt", Phase: "Running", Ready: true, Restarts: 0},
-		{Name: "erpc-7c9cb85d44-x2k9q", Phase: "Running", Ready: false, Restarts: 3},
-	}
-	if !reflect.DeepEqual(pods, want) {
-		t.Fatalf("parseERPCPods = %+v", pods)
-	}
-
-	if got := parseERPCPods(""); got == nil || len(got) != 0 {
-		t.Errorf("parseERPCPods(\"\") = %#v, want an empty non-nil slice (JSON [])", got)
-	}
-
-	if got := erpcPodLine(pods[0], false); got != "pod Running · ready" {
-		t.Errorf("erpcPodLine = %q", got)
-	}
-
-	if got := erpcPodLine(pods[1], true); got != "pod Running · not ready · 3 restarts (erpc-7c9cb85d44-x2k9q)" {
-		t.Errorf("erpcPodLine verbose = %q", got)
-	}
-
-	if got := shortClientVersion("reth/v2.7.0-3d592ec/x86_64-unknown-linux-gnu"); got != "reth/v2.7.0-3d592ec" {
-		t.Errorf("shortClientVersion = %q", got)
-	}
-
-	if got := shortClientVersion("Lighthouse/v8.0.0"); got != "Lighthouse/v8.0.0" {
-		t.Errorf("shortClientVersion short = %q", got)
-	}
-
-	ready := network.PodStatus{Component: "execution", Ready: true}
-	oom := network.PodStatus{Component: "beacon", Reason: "OOMKilled", Restarts: 9}
-	pending := network.PodStatus{Component: "beacon", Phase: "Pending"}
-
-	if podsNeedLine([]network.PodStatus{ready, oom}) {
-		t.Error("podsNeedLine: OOMKilled pod is already reported as a warning")
-	}
-
-	if !podsNeedLine([]network.PodStatus{ready, pending}) {
-		t.Error("podsNeedLine: a pending pod with no reason has no warning")
-	}
-}
-
 func TestNetworkArchiveScopeDisplay(t *testing.T) {
 	d := network.Deployment{
 		Type: "ethereum", ID: "x", Network: "mainnet",
@@ -97,16 +53,23 @@ func TestNetworkArchiveScopeDisplay(t *testing.T) {
 	var out bytes.Buffer
 	u := ui.NewForTest(&out, &out)
 	printDeployments(u, []network.Deployment{d})
-	printNodeStatus(u, network.NodeStatus{
-		Deployment: d,
-		Verdict:    network.Verdict{State: network.VerdictNotProbed, Summary: "skipped"},
-	})
+	out.WriteString(renderStatus(network.StatusReport{Nodes: []network.NodeStatus{
+		network.Unprobed(d, "skipped"),
+	}}, renderOptions{}))
 
 	if got := strings.Count(out.String(), "archive since cancun (block 19,426,587)"); got != 2 {
 		t.Fatalf("want the archive scope in list and status output, got %d:\n%s", got, out.String())
 	}
-	if !strings.Contains(out.String(), "mainnet · reth + lighthouse · archive since cancun") {
+	if !strings.Contains(out.String(), "ethereum/x  ·  reth + lighthouse  ·  archive since cancun (block 19,426,587)  ·  mainnet") {
 		t.Errorf("status header:\n%s", out.String())
+	}
+
+	// A stopped deployment says so in network list.
+	out.Reset()
+	d.Stopped = true
+	printDeployments(u, []network.Deployment{d})
+	if !strings.Contains(out.String(), "◼ stopped (obol network start ethereum/x)") {
+		t.Errorf("list of a stopped node:\n%s", out.String())
 	}
 
 	// Deployments without a computed scope (non-ethereum) fall back to mode.

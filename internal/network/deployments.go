@@ -31,6 +31,9 @@ type Deployment struct {
 	PruneBlock    uint64 `json:"prune_block,omitempty"`
 	PruneDistance uint64 `json:"prune_distance,omitempty"`
 	Since         string `json:"since,omitempty"`
+	// Stopped is set by `obol network stop`: workloads scaled to 0, data
+	// kept, not registered with eRPC (values.yaml `stopped: true`).
+	Stopped bool `json:"stopped,omitempty"`
 	// Error is set when values.yaml could not be read; the deployment
 	// directory still exists, so it is listed rather than hidden.
 	Error string `json:"error,omitempty"`
@@ -71,6 +74,7 @@ func readDeployment(cfg *config.Config, typ, id string) Deployment {
 		PruneKind       string `yaml:"pruneKind"`
 		PruneBlock      uint64 `yaml:"pruneBlock"`
 		PruneDistance   uint64 `yaml:"pruneDistance"`
+		Stopped         bool   `yaml:"stopped"`
 	}
 	if err := yaml.Unmarshal(raw, &values); err != nil {
 		d.Error = "values.yaml invalid: " + err.Error()
@@ -81,6 +85,7 @@ func readDeployment(cfg *config.Config, typ, id string) Deployment {
 	d.ExecutionClient = values.ExecutionClient
 	d.ConsensusClient = values.ConsensusClient
 	d.Mode = values.Mode
+	d.Stopped = values.Stopped
 	if typ == "ethereum" {
 		if d.Mode == "" {
 			d.Mode = "full"

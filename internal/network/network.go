@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"text/template"
 
@@ -17,6 +18,10 @@ import (
 	petname "github.com/dustinkirkland/golang-petname"
 	"gopkg.in/yaml.v3"
 )
+
+// memoryQuantity is a Kubernetes memory quantity as accepted for
+// --execution-memory / --consensus-memory (binary or decimal suffix).
+var memoryQuantity = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?(Ki|Mi|Gi|Ti|k|K|M|G|T)?$`)
 
 // List displays all available networks from the embedded filesystem
 func List(cfg *config.Config, u *ui.UI) error {
@@ -132,6 +137,12 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 	// render) sees the final value.
 	var archiveScope ArchiveScope
 	if network == "ethereum" {
+		for _, flag := range []struct{ field, flag string }{{"ExecutionMemory", "execution-memory"}, {"ConsensusMemory", "consensus-memory"}} {
+			if v := templateData[flag.field]; v != "" && !memoryQuantity.MatchString(v) {
+				return fmt.Errorf("invalid --%s %q: want a Kubernetes memory quantity such as 8Gi or 16Gi", flag.flag, v)
+			}
+		}
+
 		scope, resolvedMode, err := resolveEthereumArchiveScope(u, templateData, overrides)
 		if err != nil {
 			return err
@@ -358,8 +369,16 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 		return fmt.Errorf("helmfile sync failed: %w", err)
 	}
 
-	// Register local node as eRPC upstream
-	if err := RegisterERPCUpstream(cfg, networkName, deploymentID); err != nil {
+	// Register local node as eRPC upstream — unless it is stopped (rendered
+	// with 0 replicas), which must stay out of eRPC.
+	if deploymentStopped(cfg, networkName, deploymentID) {
+		if err := DeregisterERPCUpstream(cfg, networkName, deploymentID); err != nil {
+			u.Warnf("Could not remove the stopped node from eRPC: %v", err)
+		}
+
+		u.Infof("%s/%s is stopped (0 replicas, not in eRPC); start it with: obol network start %s/%s",
+			networkName, deploymentID, networkName, deploymentID)
+	} else if err := RegisterERPCUpstream(cfg, networkName, deploymentID); err != nil {
 		u.Warnf("Could not register eRPC upstream: %v", err)
 	} else {
 		u.Successf("Registered local-%s-%s with eRPC", networkName, deploymentID)

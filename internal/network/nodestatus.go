@@ -9,8 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +27,10 @@ const (
 	beaconService    = "ethereum-beacon"
 	beaconAPIPort    = 5052
 
+	// Pod component labels (app.kubernetes.io/name) of the EL and CL pods.
+	componentExecution = "execution"
+	componentBeacon    = "beacon"
+
 	// slotSeconds is the post-merge slot time, for "N slots behind" → time.
 	slotSeconds = 12
 )
@@ -38,6 +40,7 @@ const (
 	VerdictSynced       = "synced"
 	VerdictSyncing      = "syncing"
 	VerdictWaiting      = "waiting"
+	VerdictStopped      = "stopped"
 	VerdictDegraded     = "degraded"
 	VerdictELOffline    = "el_offline"
 	VerdictUnreachable  = "unreachable"
@@ -45,6 +48,18 @@ const (
 	VerdictNotProbed    = "not_probed"
 	VerdictNotSupported = "not_supported"
 )
+
+// VerdictUnhealthy reports whether a verdict state means the node needs
+// attention (`network status` exits 3 for these). A deliberately stopped
+// node, or one that is still syncing, is not unhealthy.
+func VerdictUnhealthy(state string) bool {
+	switch state {
+	case VerdictDegraded, VerdictELOffline, VerdictUnreachable, VerdictNotDeployed:
+		return true
+	default:
+		return false
+	}
+}
 
 // ExecutionStatus is what the EL's JSON-RPC says about itself.
 type ExecutionStatus struct {
@@ -56,6 +71,9 @@ type ExecutionStatus struct {
 	CurrentBlock  uint64  `json:"current_block,omitempty"`
 	HighestBlock  uint64  `json:"highest_block,omitempty"`
 	Peers         *uint64 `json:"peers,omitempty"`
+	// Stages is reth's staged-sync pipeline from eth_syncing, in pipeline
+	// order, annotated with done/current/pending against the sync target.
+	Stages []SyncStage `json:"stages,omitempty"`
 }
 
 // ConsensusStatus is what the beacon node API says about itself.
@@ -69,16 +87,15 @@ type ConsensusStatus struct {
 	IsOptimistic bool    `json:"is_optimistic"`
 	ELOffline    bool    `json:"el_offline"`
 	Peers        *uint64 `json:"peers,omitempty"`
-}
-
-// PodStatus is a pod in the network namespace, condensed.
-type PodStatus struct {
-	Name      string `json:"name"`
-	Component string `json:"component"`
-	Phase     string `json:"phase"`
-	Ready     bool   `json:"ready"`
-	Restarts  int32  `json:"restarts"`
-	Reason    string `json:"reason,omitempty"`
+	// SyncState is Lighthouse's own sync state (/lighthouse/syncing):
+	// SyncingFinalized, SyncingHead, BackFillSyncing, SyncTransition,
+	// Synced or Stalled. Empty for other clients.
+	SyncState         string `json:"sync_state,omitempty"`
+	SyncTargetSlot    uint64 `json:"sync_target_slot,omitempty"`
+	BackfillCompleted uint64 `json:"backfill_completed,omitempty"`
+	BackfillRemaining uint64 `json:"backfill_remaining,omitempty"`
+	// Stages is the human view of the sync (finalized → head → backfill).
+	Stages []SyncStage `json:"stages,omitempty"`
 }
 
 // Verdict is the one-line answer to "is my node usable yet?".
@@ -89,28 +106,75 @@ type Verdict struct {
 	Warnings    []string `json:"warnings,omitempty"`
 }
 
+// NodeERPC links a node to the RPC gateway.
+type NodeERPC struct {
+	// Upstream is the eRPC upstream id the node registers as.
+	Upstream string `json:"upstream"`
+	// Registered is whether the live eRPC config lists that upstream.
+	Registered bool `json:"registered"`
+	// Serving is the upstream that answered a probe request for the node's
+	// chain through eRPC (empty when not probed).
+	Serving string `json:"serving,omitempty"`
+}
+
 // NodeStatus is the live state of one installed deployment.
 type NodeStatus struct {
 	Deployment
 
 	Pods      []PodStatus      `json:"pods"`
 	PodsError string           `json:"pods_error,omitempty"`
+	Problems  []PodProblem     `json:"problems"`
 	Execution *ExecutionStatus `json:"execution,omitempty"`
 	Consensus *ConsensusStatus `json:"consensus,omitempty"`
-	Verdict   Verdict          `json:"verdict"`
+	Storage   *StorageStatus   `json:"storage,omitempty"`
+	ERPC      *NodeERPC        `json:"erpc,omitempty"`
+	// GrafanaURL is the node's dashboard on the local Grafana route.
+	GrafanaURL string  `json:"grafana_url,omitempty"`
+	Verdict    Verdict `json:"verdict"`
+}
+
+// GrafanaNodeURL is the obol-eth-node dashboard filtered to one namespace.
+func GrafanaNodeURL(namespace string) string {
+	return "http://obol.stack:8080/grafana/d/obol-eth-node?var-namespace=" + url.QueryEscape(namespace)
+}
+
+// LocalUpstreamID is the eRPC upstream id RegisterERPCUpstream uses for a
+// local deployment.
+func LocalUpstreamID(networkType, id string) string {
+	return fmt.Sprintf("local-%s-%s", networkType, id)
 }
 
 // NodeProber reaches in-cluster node APIs. Production wiring
-// (NewKubectlNodeProber) uses short-lived `kubectl port-forward`s on obol's
-// own kubeconfig; tests swap Forward/Pods for httptest servers and fixtures.
+// (NewKubectlNodeProber) uses `kubectl port-forward`s on obol's own
+// kubeconfig; tests swap the funcs for httptest servers and fixtures.
+//
+// By default every probe opens and closes its own forwards. After
+// StartSession, forwards are kept open and reused across probes (for
+// `network status --watch`) until Close; a forward whose API stopped
+// answering is dropped and reopened on the next probe.
 type NodeProber struct {
 	// Forward opens a tunnel to namespace/service:port and returns its base
 	// URL and a closer.
 	Forward func(ctx context.Context, namespace, service string, port int) (string, func(), error)
 	// Pods lists the pods in a namespace.
 	Pods func(ctx context.Context, namespace string) ([]PodStatus, error)
+	// ERPCConfig returns the parsed live eRPC config (erpc-config ConfigMap).
+	ERPCConfig func(ctx context.Context) (map[string]any, error)
+	// DiskUsage sums the bytes under dir (partial when it could not read
+	// everything in time). Nil disables the Data line.
+	DiskUsage func(ctx context.Context, dir string) (bytes uint64, partial bool, err error)
+	// FreeBytes reports free space on the filesystem holding path.
+	FreeBytes func(path string) (uint64, error)
+	// DataDir is the host directory holding PVC data (<ns>/<pvc>).
+	DataDir string
 	// HTTP is used for every API call; its Timeout bounds each request.
 	HTTP *http.Client
+	// Now is the clock for "last 3m ago" (defaults to time.Now).
+	Now func() time.Time
+
+	pool    *forwardPool
+	storeMu sync.Mutex
+	stores  map[string]storageCacheEntry
 }
 
 // NewKubectlNodeProber returns a prober that reaches the cluster through
@@ -130,8 +194,52 @@ func NewKubectlNodeProber(cfg *config.Config) *NodeProber {
 		Pods: func(ctx context.Context, namespace string) ([]PodStatus, error) {
 			return kubectlPods(ctx, bin, kubeconfig, namespace)
 		},
-		HTTP: &http.Client{Timeout: 3 * time.Second},
+		// The caller checks the cluster once (kubectl.EnsureCluster).
+		ERPCConfig: func(context.Context) (map[string]any, error) {
+			return fetchERPCConfig(cfg)
+		},
+		DiskUsage: dirUsage,
+		FreeBytes: freeDiskBytes,
+		DataDir:   cfg.DataDir,
+		HTTP:      &http.Client{Timeout: 3 * time.Second},
 	}
+}
+
+func (p *NodeProber) now() time.Time {
+	if p.Now != nil {
+		return p.Now()
+	}
+
+	return time.Now()
+}
+
+// StartSession keeps port-forwards open across probes until Close. ctx
+// bounds the forwards' lifetime (cancel it, or call Close, to stop them).
+func (p *NodeProber) StartSession(ctx context.Context) {
+	p.pool = newForwardPool(ctx, p.Forward)
+}
+
+// Close closes every forward a session kept open. Safe without a session.
+func (p *NodeProber) Close() {
+	if p.pool != nil {
+		p.pool.closeAll()
+	}
+}
+
+// open returns a base URL for namespace/service:port. release(ok) must be
+// called when done; ok=false means the API did not answer, so a session
+// drops the forward (the pod behind it may have been replaced).
+func (p *NodeProber) open(ctx context.Context, namespace, service string, port int) (string, func(ok bool), error) {
+	if p.pool != nil {
+		return p.pool.get(namespace, service, port)
+	}
+
+	base, closeFn, err := p.Forward(ctx, namespace, service, port)
+	if err != nil {
+		return "", nil, err
+	}
+
+	return base, func(bool) { closeFn() }, nil
 }
 
 // ProbeAll probes every deployment concurrently. Non-ethereum deployments
@@ -148,19 +256,46 @@ func (p *NodeProber) ProbeAll(ctx context.Context, deployments []Deployment) []N
 	return out
 }
 
+// Unprobed is the status of a deployment that is not probed live
+// (--no-probe): stopped nodes still say so.
+func Unprobed(d Deployment, summary string) NodeStatus {
+	st := NodeStatus{Deployment: d, Pods: []PodStatus{}, Problems: []PodProblem{}}
+	if d.Type == "ethereum" {
+		st.GrafanaURL = GrafanaNodeURL(d.Namespace)
+	}
+
+	if d.Stopped {
+		st.Verdict = Verdict{State: VerdictStopped, Summary: "stopped (data kept)"}
+		return st
+	}
+
+	st.Verdict = Verdict{State: VerdictNotProbed, Summary: summary}
+
+	return st
+}
+
 // Probe gathers pods + EL + CL status for one deployment and
 // computes its verdict. Every failure degrades into the result; it never
 // returns an error.
 func (p *NodeProber) Probe(ctx context.Context, d Deployment) NodeStatus {
-	st := NodeStatus{Deployment: d, Pods: []PodStatus{}}
+	st := NodeStatus{Deployment: d, Pods: []PodStatus{}, Problems: []PodProblem{}}
 
 	if d.Type != "ethereum" {
 		st.Verdict = Verdict{State: VerdictNotSupported, Summary: fmt.Sprintf("live status not implemented for %s; see obol kubectl get pods -n %s", d.Type, d.Namespace)}
 		return st
 	}
 
+	st.GrafanaURL = GrafanaNodeURL(d.Namespace)
+
 	if d.Error != "" {
 		st.Verdict = Verdict{State: VerdictNotProbed, Summary: d.Error}
+		return st
+	}
+
+	if d.Stopped {
+		st.Storage = p.storage(ctx, d)
+		st.Verdict = Verdict{State: VerdictStopped, Summary: "stopped (data kept)"}
+
 		return st
 	}
 
@@ -176,8 +311,10 @@ func (p *NodeProber) Probe(ctx context.Context, d Deployment) NodeStatus {
 	})
 	wg.Go(func() { st.Execution = p.probeExecution(ctx, d.Namespace) })
 	wg.Go(func() { st.Consensus = p.probeConsensus(ctx, d.Namespace) })
+	wg.Go(func() { st.Storage = p.storage(ctx, d) })
 	wg.Wait()
 
+	st.Problems = PodProblems(d, st.Pods, p.now())
 	st.Verdict = ComputeVerdict(st.Pods, st.Execution, st.Consensus)
 
 	return st
@@ -186,14 +323,14 @@ func (p *NodeProber) Probe(ctx context.Context, d Deployment) NodeStatus {
 func (p *NodeProber) probeExecution(ctx context.Context, namespace string) *ExecutionStatus {
 	el := &ExecutionStatus{}
 
-	base, closeFn, err := p.Forward(ctx, namespace, executionService, executionRPCPort)
+	base, release, err := p.open(ctx, namespace, executionService, executionRPCPort)
 	if err != nil {
 		el.Error = err.Error()
 		return el
 	}
-	defer closeFn()
 
 	ProbeExecutionAPI(ctx, p.HTTP, base, el)
+	release(el.Reachable)
 
 	return el
 }
@@ -201,14 +338,14 @@ func (p *NodeProber) probeExecution(ctx context.Context, namespace string) *Exec
 func (p *NodeProber) probeConsensus(ctx context.Context, namespace string) *ConsensusStatus {
 	cl := &ConsensusStatus{}
 
-	base, closeFn, err := p.Forward(ctx, namespace, beaconService, beaconAPIPort)
+	base, release, err := p.open(ctx, namespace, beaconService, beaconAPIPort)
 	if err != nil {
 		cl.Error = err.Error()
 		return cl
 	}
-	defer closeFn()
 
 	ProbeBeaconAPI(ctx, p.HTTP, base, cl)
+	release(cl.Reachable)
 
 	return cl
 }
@@ -246,7 +383,8 @@ func ProbeExecutionAPI(ctx context.Context, client *http.Client, base string, el
 }
 
 // ProbeBeaconAPI fills cl from the beacon node API at base. /node/syncing is
-// the reachability gate; peer count and version are best-effort.
+// the reachability gate; peer count, version and (for Lighthouse) its own
+// sync state are best-effort.
 func ProbeBeaconAPI(ctx context.Context, client *http.Client, base string, cl *ConsensusStatus) {
 	code, body, err := httpGet(ctx, client, base+"/eth/v1/node/syncing")
 	if err != nil {
@@ -281,11 +419,18 @@ func ProbeBeaconAPI(ctx context.Context, client *http.Client, base string, cl *C
 			cl.Version = v.Data.Version
 		}
 	}
+
+	if strings.HasPrefix(strings.ToLower(cl.Version), "lighthouse") {
+		if code, body, err := httpGet(ctx, client, base+"/lighthouse/syncing"); err == nil && code == http.StatusOK {
+			_ = parseLighthouseSyncing(body, cl)
+		}
+	}
+
+	cl.Stages = consensusStages(cl)
 }
 
 // parseEthSyncing handles eth_syncing's two shapes: false, or an object
-// with hex startingBlock/currentBlock/highestBlock (extra fields such as
-// reth's "stages" are ignored).
+// with hex startingBlock/currentBlock/highestBlock, plus reth's "stages".
 func parseEthSyncing(raw json.RawMessage, el *ExecutionStatus) error {
 	var b bool
 	if json.Unmarshal(raw, &b) == nil {
@@ -296,6 +441,10 @@ func parseEthSyncing(raw json.RawMessage, el *ExecutionStatus) error {
 	var obj struct {
 		CurrentBlock string `json:"currentBlock"`
 		HighestBlock string `json:"highestBlock"`
+		Stages       []struct {
+			Name  string          `json:"name"`
+			Block json.RawMessage `json:"block"`
+		} `json:"stages"`
 	}
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return fmt.Errorf("eth_syncing: unexpected result %s", truncate(string(raw), 80))
@@ -305,7 +454,35 @@ func parseEthSyncing(raw json.RawMessage, el *ExecutionStatus) error {
 	el.CurrentBlock, _ = parseHex(obj.CurrentBlock)
 	el.HighestBlock, _ = parseHex(obj.HighestBlock)
 
+	el.Stages = nil
+	for _, s := range obj.Stages {
+		el.Stages = append(el.Stages, SyncStage{Name: s.Name, Block: flexQuantity(s.Block), Unit: UnitBlocks})
+	}
+
+	annotateExecutionStages(el)
+
 	return nil
+}
+
+// flexQuantity reads a JSON-RPC quantity that may be a hex string, a
+// decimal string or a bare number. Unparseable values read as 0.
+func flexQuantity(raw json.RawMessage) uint64 {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
+			n, _ := parseHex(s)
+			return n
+		}
+
+		n, _ := strconv.ParseUint(s, 10, 64)
+
+		return n
+	}
+
+	var n uint64
+	_ = json.Unmarshal(raw, &n)
+
+	return n
 }
 
 // beaconUint accepts the beacon API's quoted decimal integers (and bare
@@ -367,12 +544,16 @@ func parseBeaconPeerCount(body []byte) (uint64, error) {
 // ComputeVerdict turns raw node state into one state + one-line summary.
 // The consensus view wins where both are available: it knows whether the
 // EL is reachable over the engine API (el_offline) and whether the chain
-// head is optimistic (EL still catching up).
+// head is optimistic (EL still catching up). A client whose API is down
+// because its pod is crash-looping makes the node degraded, even while the
+// other client still reports progress.
 func ComputeVerdict(pods []PodStatus, el *ExecutionStatus, cl *ConsensusStatus) Verdict {
 	v := Verdict{Warnings: podWarnings(pods)}
 
 	elUp := el != nil && el.Reachable
 	clUp := cl != nil && cl.Reachable
+	elCrash := crashCause(pods, componentExecution)
+	clCrash := crashCause(pods, componentBeacon)
 
 	switch {
 	case el == nil && cl == nil:
@@ -415,11 +596,20 @@ func ComputeVerdict(pods []PodStatus, el *ExecutionStatus, cl *ConsensusStatus) 
 	case clUp && !elUp:
 		v.State = VerdictDegraded
 		v.Summary = fmt.Sprintf("beacon synced (slot %d) but the execution JSON-RPC is unreachable", cl.HeadSlot)
+		if elCrash != "" {
+			v.Summary = fmt.Sprintf("execution client restarting (%s); beacon at slot %d", elCrash, cl.HeadSlot)
+		}
 	case clUp:
 		v.State = VerdictSynced
 		v.Summary = fmt.Sprintf("synced — head slot %d, block %d", cl.HeadSlot, el.HeadBlock)
 		pct := 100.0
 		v.ProgressPct = &pct
+	case clCrash != "":
+		v.State = VerdictDegraded
+		v.Summary = fmt.Sprintf("beacon node restarting (%s); the execution client cannot follow the chain without it", clCrash)
+		if pct, ok := elProgress(el); ok {
+			v.ProgressPct = &pct
+		}
 	case el.Syncing:
 		v.State = VerdictSyncing
 		v.Summary = "execution syncing; beacon API unreachable"
@@ -445,8 +635,19 @@ func ComputeVerdict(pods []PodStatus, el *ExecutionStatus, cl *ConsensusStatus) 
 	return v
 }
 
+// elProgress is the execution sync progress. With reth's staged sync it
+// is the Execution stage against the sync target (current/highest stay 0
+// for most of the pipeline); otherwise current/highest from eth_syncing.
 func elProgress(el *ExecutionStatus) (float64, bool) {
-	if el == nil || !el.Reachable || !el.Syncing || el.HighestBlock == 0 {
+	if el == nil || !el.Reachable || !el.Syncing {
+		return 0, false
+	}
+
+	if st, target, ok := executionStage(el); ok && target > 0 {
+		return percent(st.Block, target), true
+	}
+
+	if el.HighestBlock == 0 {
 		return 0, false
 	}
 
@@ -478,46 +679,6 @@ func slotsBehind(distance uint64) string {
 	default:
 		return fmt.Sprintf("%d slots (~%dm)", distance, int(d.Minutes()))
 	}
-}
-
-func podWarnings(pods []PodStatus) []string {
-	var out []string
-
-	for _, p := range pods {
-		if !p.Ready && (p.Reason != "" || p.Restarts > 0) {
-			msg := fmt.Sprintf("%s pod %s not ready", p.Component, p.Name)
-			switch p.Reason {
-			case "":
-			case "OOMKilled":
-				msg += " (OOMKilled: out of memory — check host memory and the pod's limits)"
-			default:
-				msg += " (" + p.Reason + ")"
-			}
-			if p.Restarts > 0 {
-				msg += fmt.Sprintf(", %d restarts", p.Restarts)
-			}
-			out = append(out, msg)
-		}
-	}
-
-	return out
-}
-
-func firstUnhealthyPod(pods []PodStatus) string {
-	for _, p := range pods {
-		if p.Ready {
-			continue
-		}
-
-		reason := p.Reason
-		if reason == "" {
-			reason = p.Phase
-		}
-
-		return fmt.Sprintf("%s pod %s", p.Component, reason)
-	}
-
-	return ""
 }
 
 // --- transport helpers ------------------------------------------------------
@@ -622,87 +783,4 @@ func truncate(s string, n int) string {
 	}
 
 	return s[:n] + "…"
-}
-
-// kubectlPods lists pods in namespace via obol's kubeconfig.
-func kubectlPods(ctx context.Context, bin, kubeconfig, namespace string) ([]PodStatus, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, bin, "get", "pods", "-n", namespace, "-o", "json", "--request-timeout=4s")
-	cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
-
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	out, err := cmd.Output()
-	if err != nil {
-		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return nil, errors.New(msg)
-		}
-
-		return nil, err
-	}
-
-	return parsePodList(out)
-}
-
-// parsePodList condenses `kubectl get pods -o json`.
-func parsePodList(raw []byte) ([]PodStatus, error) {
-	var list struct {
-		Items []struct {
-			Metadata struct {
-				Name   string            `json:"name"`
-				Labels map[string]string `json:"labels"`
-			} `json:"metadata"`
-			Status struct {
-				Phase             string `json:"phase"`
-				ContainerStatuses []struct {
-					Ready        bool  `json:"ready"`
-					RestartCount int32 `json:"restartCount"`
-					State        struct {
-						Waiting *struct {
-							Reason string `json:"reason"`
-						} `json:"waiting"`
-						Terminated *struct {
-							Reason string `json:"reason"`
-						} `json:"terminated"`
-					} `json:"state"`
-				} `json:"containerStatuses"`
-			} `json:"status"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(raw, &list); err != nil {
-		return nil, fmt.Errorf("parse pod list: %w", err)
-	}
-
-	pods := make([]PodStatus, 0, len(list.Items))
-	for _, it := range list.Items {
-		p := PodStatus{
-			Name:      it.Metadata.Name,
-			Component: it.Metadata.Labels["app.kubernetes.io/name"],
-			Phase:     it.Status.Phase,
-			Ready:     len(it.Status.ContainerStatuses) > 0,
-		}
-		if p.Component == "" {
-			p.Component = p.Name
-		}
-
-		for _, cs := range it.Status.ContainerStatuses {
-			p.Ready = p.Ready && cs.Ready
-			p.Restarts += cs.RestartCount
-
-			if p.Reason == "" && cs.State.Waiting != nil {
-				p.Reason = cs.State.Waiting.Reason
-			}
-
-			if p.Reason == "" && cs.State.Terminated != nil {
-				p.Reason = cs.State.Terminated.Reason
-			}
-		}
-
-		pods = append(pods, p)
-	}
-
-	return pods, nil
 }

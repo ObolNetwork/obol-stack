@@ -452,65 +452,18 @@ func RemovePublicRPCs(cfg *config.Config, chainID int) error {
 	return nil
 }
 
-// GetERPCStatus returns eRPC pod status and upstream counts.
-func GetERPCStatus(cfg *config.Config) (podStatus string, upstreamCounts map[int]int, err error) {
-	if err := kubectl.EnsureCluster(cfg); err != nil {
-		return "", nil, err
-	}
-
-	kubectlBin, kubeconfigPath := kubectl.Paths(cfg)
-
-	// Get pod status.
-	podStatus, err = kubectl.Output(kubectlBin, kubeconfigPath,
-		"get", "pods", "-n", erpcNamespace, "-l", "app.kubernetes.io/name=erpc",
-		"-o", "custom-columns=NAME:.metadata.name,STATUS:.status.phase,READY:.status.containerStatuses[0].ready,RESTARTS:.status.containerStatuses[0].restartCount",
-		"--no-headers")
-	if err != nil {
-		podStatus = "(unable to fetch pod status)"
-	}
-
-	// Read config for upstream counts.
-	erpcConfig, readErr := readERPCConfig(cfg)
-	if readErr != nil {
-		return podStatus, nil, nil //nolint:nilerr // config unreadable; return pod status without upstream counts
-	}
-
-	upstreamCounts = make(map[int]int)
-
-	projects, ok := erpcConfig["projects"].([]any)
-	if !ok || len(projects) == 0 {
-		return podStatus, upstreamCounts, nil
-	}
-
-	project, ok := projects[0].(map[string]any)
-	if !ok {
-		return podStatus, upstreamCounts, nil
-	}
-
-	upstreams, _ := project["upstreams"].([]any)
-	for _, u := range upstreams {
-		um, ok := u.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		if evm, ok := um["evm"].(map[string]any); ok {
-			chainID := yamlInt(evm["chainId"])
-			if chainID > 0 {
-				upstreamCounts[chainID]++
-			}
-		}
-	}
-
-	return podStatus, upstreamCounts, nil
-}
-
 // readERPCConfig reads and parses the eRPC ConfigMap YAML.
 func readERPCConfig(cfg *config.Config) (map[string]any, error) {
 	if err := kubectl.EnsureCluster(cfg); err != nil {
 		return nil, err
 	}
 
+	return fetchERPCConfig(cfg)
+}
+
+// fetchERPCConfig is readERPCConfig without the cluster check, for callers
+// that already made it (network status --watch reads it every tick).
+func fetchERPCConfig(cfg *config.Config) (map[string]any, error) {
 	kubectlBin, kubeconfigPath := kubectl.Paths(cfg)
 
 	configYAML, err := kubectl.Output(kubectlBin, kubeconfigPath,
