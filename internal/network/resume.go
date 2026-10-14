@@ -16,6 +16,7 @@ import (
 // Swappable for tests.
 var (
 	resumeSyncFn          = Sync
+	resumeRegisterERPCFn  = RegisterERPCUpstream
 	resumeReleaseHealthFn = func(cfg *config.Config, namespace string) (helmcmd.ReleaseHealth, error) {
 		return helmcmd.NamespaceReleaseHealth(cfg.ToolPath("helm"), filepath.Join(cfg.ConfigDir, "kubeconfig.yaml"), namespace)
 	}
@@ -50,11 +51,12 @@ func ListDeployments(cfg *config.Config) []string {
 
 // ResumeInstalled re-deploys installed local networks whose helm releases are
 // missing (fresh / recreated cluster) or not in "deployed" state. Healthy
-// deployments are left alone: a per-network `helmfile sync` renders and
-// upgrades the node charts and restarts eRPC to re-register the local
-// upstream, which is too costly to pay on every `obol stack up` when
-// nothing was lost. `obol network sync --all` remains the explicit "force
-// re-sync everything" path.
+// deployments skip the costly per-network `helmfile sync`, but ethereum ones
+// are re-registered with eRPC: `obol stack up` re-renders the eRPC ConfigMap
+// without local upstreams (they aren't recorded), so without this a healthy
+// node silently drops out of /rpc after the next eRPC restart. Registration
+// merges by id and only rolls eRPC when the config changed. `obol network
+// sync --all` remains the explicit "force re-sync everything" path.
 //
 // Best-effort per deployment; failures warn and are joined into the result.
 func ResumeInstalled(cfg *config.Config, u *ui.UI) error {
@@ -68,6 +70,16 @@ func ResumeInstalled(cfg *config.Config, u *ui.UI) error {
 			continue
 		}
 		if health == helmcmd.ReleasesDeployed {
+			networkType, id, _ := strings.Cut(ident, "/")
+			if networkType != "ethereum" {
+				continue
+			}
+
+			if err := resumeRegisterERPCFn(cfg, networkType, id); err != nil {
+				u.Warnf("Could not re-register %s with eRPC (run 'obol network sync %s'): %v", ident, ident, err)
+				errs = append(errs, fmt.Errorf("%s: %w", ident, err))
+			}
+
 			continue
 		}
 		u.Infof("Re-deploying network %s (release %s)...", ident, health)
