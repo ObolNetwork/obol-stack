@@ -72,8 +72,11 @@ func TestParseManifestRejectsBadEntries(t *testing.T) {
 const sha64 = "0000000000000000000000000000000000000000000000000000000000000000"
 
 // TestManifestMatchesObolup keeps manifest.yaml and the obolup.sh pins in
-// lockstep. If this fails,
-// bump the manifest version AND all four sha256 values in the same commit.
+// lockstep. obolup.sh no longer downloads the tools (it runs
+// `obol upgrade --tools-only`, which installs from manifest.yaml), but its
+// pins are what Renovate bumps, so a Renovate PR fails here until the
+// manifest is updated too. If this fails, bump the manifest version AND all
+// four sha256 values in the same commit.
 func TestManifestMatchesObolup(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {

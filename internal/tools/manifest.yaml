@@ -3,9 +3,11 @@
 # `obol upgrade` / `obol stack up` download these into the obol bin dir
 # (OBOL_BIN_DIR, default ~/.local/bin), verify the sha256 below (fail closed)
 # and install atomically. `obol update` reports drift against these pins.
+# obolup.sh installs them the same way (`obol upgrade --tools-only`); it never
+# downloads them itself (TestObolupDoesNotDownloadTools).
 #
-# Every `version` MUST equal the matching pin in obolup.sh (`obolupVar`);
-# TestManifestMatchesObolup enforces it. When bumping a version, update ALL
+# Every `version` MUST equal the matching pin in obolup.sh (`obolupVar`, the
+# value Renovate bumps); TestManifestMatchesObolup enforces it. When bumping a version, update ALL
 # four platform sha256 values from the upstream release checksum files:
 #   kubectl  https://dl.k8s.io/release/v<V>/bin/<os>/<arch>/kubectl.sha256
 #   helm     https://get.helm.sh/helm-v<V>-<os>-<arch>.tar.gz.sha256sum
@@ -145,7 +147,7 @@ tools:
         sha256: 9b8c0e8f461e5d33aeee43a67f5ef4aff646a008a786887b8266cbb153c610cc
 
   # helm plugin: installed into `helm env HELM_PLUGINS` (helm's default
-  # plugin dir, same place obolup.sh's `helm plugin install` puts it).
+  # plugin dir, where older obolup.sh versions' `helm plugin install` put it).
   - name: helm-diff
     version: "3.15.15"
     obolupVar: HELM_DIFF_VERSION

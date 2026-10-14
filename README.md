@@ -48,7 +48,7 @@ Pin a release (use the current tag from the [releases page](https://github.com/O
 curl -fsSL https://stack.obol.org/v0.15.0 | bash
 ```
 
-The installer sets up the `obol` CLI and all dependencies (`kubectl`, `helm`, `k3d`, `helmfile`, `k9s`) into `~/.local/bin/`, verifies release checksums, configures your PATH, tries to add `obol.stack` to `/etc/hosts`, and offers to start the cluster.
+The installer sets up the `obol` CLI (checksum-verified) and then runs `obol upgrade --tools-only`, which installs the pinned dependencies (`kubectl`, `helm`, `k3d`, `helmfile`, `k9s`, the `helm-diff` plugin) into `~/.local/bin/`, each verified against a pinned sha256. It then configures your PATH, tries to add `obol.stack` to `/etc/hosts`, and offers to start the cluster (or, if your stack is already running, points you at `obol upgrade` / `obol doctor`). Ollama is only installed when you say yes at the prompt or set `OBOL_INSTALL_OLLAMA=true`.
 
 If `/etc/hosts` cannot be updated (no sudo / you cancel), the install still finishes — add the host, then start the stack yourself:
 
@@ -60,7 +60,7 @@ obol stack up
 obol agent init   # if the default agent was skipped (no model yet)
 ```
 
-Non-interactive / CI: set `OBOL_NONINTERACTIVE=true` so hosts updates do not prompt for a sudo password (they fail fast if credentials are not already cached). Combine with a pre-written `/etc/hosts` entry or run `sudo -v` first.
+Non-interactive / CI: set `OBOL_NONINTERACTIVE=true` so the installer never prompts: optional steps (Ollama, starting the stack, editing your shell profile) are skipped with the command to run later, and hosts updates do not prompt for a sudo password (they fail fast if credentials are not already cached). The same applies automatically when no terminal is available. Combine with a pre-written `/etc/hosts` entry or run `sudo -v` first.
 
 Verify:
 

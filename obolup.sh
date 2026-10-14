@@ -52,8 +52,14 @@ else
 	OBOL_BIN_DIR="${OBOL_BIN_DIR:-$XDG_BIN_HOME}"
 fi
 
-# Pinned dependency versions
-# Update these versions to upgrade dependencies across all installations
+# Pinned host tool versions.
+# obolup.sh does not download these tools itself: after the obol binary is
+# installed, `obol upgrade --tools-only` installs them from
+# internal/tools/manifest.yaml, which pins the same versions together with a
+# per-platform sha256 (verification fails closed). The values here are kept
+# for Renovate and for the summary printed before installation;
+# TestManifestMatchesObolup keeps them equal to manifest.yaml, so a version
+# bump here must be paired with the manifest version AND sha256 update.
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
 readonly KUBECTL_VERSION="1.37.1"
 # renovate: datasource=github-releases depName=helm/helm
@@ -109,10 +115,104 @@ for arg in "$@"; do
 done
 readonly ASSUME_YES
 
+# OBOL_NONINTERACTIVE=true never prompts: every question takes its safe
+# default (no for anything that installs extra software or starts/stops
+# services) and the installer prints the command to run later instead. The
+# same applies automatically when no terminal is available (CI, pipes without
+# a controlling terminal). --yes still accepts prompts explicitly.
+NONINTERACTIVE=false
+if [[ "${OBOL_NONINTERACTIVE:-}" == "1" || "${OBOL_NONINTERACTIVE:-}" == "true" ]]; then
+	NONINTERACTIVE=true
+fi
+readonly NONINTERACTIVE
 
 # Check if command exists
 command_exists() {
 	command -v "$1" >/dev/null 2>&1
+}
+
+# can_prompt succeeds when the user can be asked a question. Prompts read from
+# /dev/tty rather than stdin, because under `curl ... | bash` stdin is the
+# script itself. `[[ -c /dev/tty ]]` only checks the device node exists; in
+# containers and some CI runners it exists but cannot be opened (no
+# controlling terminal), so also check that it actually opens.
+can_prompt() {
+	[[ "$NONINTERACTIVE" != "true" ]] || return 1
+	[[ -c /dev/tty ]] || return 1
+	{ true </dev/tty; } 2>/dev/null
+}
+
+# prompt_read <var> <prompt> <default>
+# The only place obolup.sh reads user input. Stores the answer (or <default>
+# when the user just presses enter, input ends, or prompting is impossible)
+# in the variable named <var>. Never blocks without a terminal.
+prompt_read() {
+	local __var="$1" __prompt="$2" __default="$3" __reply=""
+	if can_prompt; then
+		if ! read -r -p "$__prompt" __reply </dev/tty 2>/dev/tty; then
+			__reply=""
+		fi
+	fi
+	if [[ -z "$__reply" ]]; then
+		__reply="$__default"
+	fi
+	printf -v "$__var" '%s' "$__reply"
+}
+
+# confirm <question> <default y|n>
+# Returns 0 for yes. --yes answers yes; without a terminal (or with
+# OBOL_NONINTERACTIVE=true) the default is used, so callers must pass "n" for
+# anything that installs extra software or starts/stops services.
+confirm() {
+	local question="$1" default="$2" hint="[y/N]" answer=""
+	if [[ "$default" == "y" ]]; then
+		hint="[Y/n]"
+	fi
+	if [[ "$ASSUME_YES" == "true" ]]; then
+		log_info "$question — yes (--yes)"
+		return 0
+	fi
+	if ! can_prompt; then
+		return 1
+	fi
+	prompt_read answer "  $question $hint: " "$default"
+	[[ "$answer" == [Yy]* ]]
+}
+
+# sudo_available succeeds when a sudo command can run without hanging:
+# either credentials are cached / NOPASSWD (`sudo -n true`), or a terminal is
+# available for the password prompt. Without a terminal, sudo would fail or
+# wait for a password nobody can type, so callers skip the step and print
+# the command for the user to run instead.
+sudo_available() {
+	if [[ "$(id -u)" == "0" ]]; then
+		return 0
+	fi
+	command_exists sudo || return 1
+	if sudo -n true 2>/dev/null; then
+		return 0
+	fi
+	can_prompt
+}
+
+# sudo_cmd runs a command as root (directly when already root).
+sudo_cmd() {
+	if [[ "$(id -u)" == "0" ]]; then
+		"$@"
+	else
+		sudo "$@"
+	fi
+}
+
+# run_obol runs the installed obol binary against the directories this script
+# installed into (they may come from XDG defaults or the dev .workspace and
+# are not necessarily exported).
+run_obol() {
+	env OBOL_CONFIG_DIR="$OBOL_CONFIG_DIR" \
+		OBOL_DATA_DIR="$OBOL_DATA_DIR" \
+		OBOL_STATE_DIR="$OBOL_STATE_DIR" \
+		OBOL_BIN_DIR="$OBOL_BIN_DIR" \
+		"$OBOL_BIN_DIR/obol" "$@"
 }
 
 # Check host prerequisites that the installer cannot provide itself.
@@ -207,12 +307,19 @@ check_docker() {
 		fi
 
 		if [[ "$(uname -s)" == "Linux" ]]; then
-			log_warn "Docker daemon is not running — attempting to start..."
-			# Try systemd first (apt/yum installs), then snap
-			if command_exists systemctl && systemctl list-unit-files docker.service >/dev/null 2>&1; then
-				sudo systemctl start docker 2>/dev/null && sleep 2
-			elif snap list docker >/dev/null 2>&1; then
-				sudo snap start docker 2>/dev/null && sleep 3
+			# Starting the daemon needs root. Only try when sudo cannot
+			# hang (cached credentials, NOPASSWD, or a terminal for the
+			# password prompt); otherwise fall through to the instructions.
+			if sudo_available; then
+				log_warn "Docker daemon is not running — attempting to start..."
+				# Try systemd first (apt/yum installs), then snap
+				if command_exists systemctl && systemctl list-unit-files docker.service >/dev/null 2>&1; then
+					sudo_cmd systemctl start docker 2>/dev/null && sleep 2
+				elif command_exists snap && snap list docker >/dev/null 2>&1; then
+					sudo_cmd snap start docker 2>/dev/null && sleep 3
+				fi
+			else
+				log_warn "Docker daemon is not running and sudo needs a password, which cannot be entered without a terminal"
 			fi
 		elif [[ "$(uname -s)" == "Darwin" ]]; then
 			# Start Docker Desktop if it's installed but not running
@@ -280,89 +387,6 @@ check_docker() {
 
 	log_success "Docker is installed and running (version $docker_version)"
 	return 0
-}
-
-# Check if binary exists globally in PATH (excluding OBOL_BIN_DIR)
-check_global_binary() {
-	local binary_name="$1"
-
-	# Get all matching binaries in PATH
-	local all_paths
-	all_paths=$(type -a -P "$binary_name" 2>/dev/null || true)
-
-	# Find first path that's NOT in OBOL_BIN_DIR
-	while IFS= read -r path; do
-		if [[ -n "$path" && "$path" != "$OBOL_BIN_DIR/$binary_name" ]]; then
-			# Found a global binary outside OBOL_BIN_DIR
-			echo "$path"
-			return 0
-		fi
-	done <<<"$all_paths"
-
-	return 1
-}
-
-# Create symlink to global binary in OBOL_BIN_DIR
-create_binary_symlink() {
-	local binary_name="$1"
-	local global_path="$2"
-	local local_path="$OBOL_BIN_DIR/$binary_name"
-
-	# Detect and prevent circular symlinks.
-	# This can happen if a global binary path (e.g. from a previous dev install)
-	# already points to the location this script is trying to manage.
-	if [[ -L "$global_path" ]]; then
-		local link_target
-		link_target=$(readlink "$global_path" || echo "") # Handle readlink failure
-
-		if [[ "$link_target" == "$local_path" ]]; then
-			log_warn "Circular symlink detected for $binary_name."
-			log_warn "  $global_path -> $local_path"
-			log_warn "Ignoring global binary to prevent loop. Will install fresh copy."
-			return 1 # Signal failure to prevent using this global binary
-		fi
-	fi
-
-	# Check if local path already exists
-	if [[ -e "$local_path" || -L "$local_path" ]]; then
-		# Check if it's already a symlink to the correct target
-		if [[ -L "$local_path" ]]; then
-			local current_target
-			current_target=$(readlink "$local_path")
-			if [[ "$current_target" == "$global_path" ]]; then
-				# Already correctly symlinked
-				return 0
-			fi
-		fi
-		# Remove existing file/symlink
-		rm -f "$local_path"
-	fi
-
-	# Create symlink
-	if ln -s "$global_path" "$local_path"; then
-		return 0
-	else
-		log_warn "Failed to create symlink for $binary_name"
-		return 1
-	fi
-}
-
-# Remove binary from OBOL_BIN_DIR if it's a broken symlink
-remove_broken_symlink() {
-	local binary_name="$1"
-	local local_path="$OBOL_BIN_DIR/$binary_name"
-
-	# Check if it's a symlink
-	if [[ -L "$local_path" ]]; then
-		# Check if the symlink is broken (target doesn't exist)
-		if [[ ! -e "$local_path" ]]; then
-			rm -f "$local_path"
-			log_info "Removed broken symlink for $binary_name"
-			return 0
-		fi
-	fi
-
-	return 1
 }
 
 # Create directory structure
@@ -812,42 +836,6 @@ copy_bootstrap_script() {
 	fi
 }
 
-# Detect platform
-detect_platform() {
-	local platform
-	case "$(uname -s)" in
-	Linux*)
-		platform="linux"
-		;;
-	Darwin*)
-		platform="darwin"
-		;;
-	*)
-		log_error "Unsupported platform: $(uname -s)"
-		exit 1
-		;;
-	esac
-	echo "$platform"
-}
-
-# Detect architecture
-detect_arch() {
-	local arch
-	case "$(uname -m)" in
-	x86_64 | amd64)
-		arch="amd64"
-		;;
-	aarch64 | arm64)
-		arch="arm64"
-		;;
-	*)
-		log_error "Unsupported architecture: $(uname -m)"
-		exit 1
-		;;
-	esac
-	echo "$arch"
-}
-
 # Compare semantic versions (returns 0 if v1 >= v2, 1 otherwise)
 version_ge() {
 	local v1="$1"
@@ -865,399 +853,107 @@ version_ge() {
 	fi
 }
 
-# Install kubectl
-install_kubectl() {
-	local platform=$(detect_platform)
-	local arch=$(detect_arch)
-	local current_version=""
 
-	# Remove broken symlink if exists
-	remove_broken_symlink "kubectl"
+# Install the pinned host tools (kubectl, helm, k3d, helmfile, k9s and the
+# helm-diff plugin) through the obol CLI. `obol upgrade --tools-only`
+# downloads the versions pinned in internal/tools/manifest.yaml, verifies each
+# download against its sha256 (fail closed) and installs it atomically into
+# the obol bin dir. Compatible copies already on $PATH (or set via
+# OBOL_<TOOL>) are used as they are and never modified.
+install_tools() {
+	log_info "Installing pinned tools..."
+	log_dim "  kubectl v$KUBECTL_VERSION, helm v$HELM_VERSION, k3d v$K3D_VERSION, helmfile v$HELMFILE_VERSION, k9s v$K9S_VERSION, helm-diff v$HELM_DIFF_VERSION (sha256-verified)"
 
-	# Check for global kubectl first
-	local global_kubectl
-	if global_kubectl=$(check_global_binary "kubectl"); then
-		local global_version
-		global_version=$("$global_kubectl" version --client=true --output=json 2>/dev/null | grep gitVersion | head -1 | sed 's/.*"v\([0-9.]*\)".*/\1/' || echo "")
-		if [[ -n "$global_version" ]] && version_ge "$global_version" "$KUBECTL_VERSION"; then
-			if create_binary_symlink "kubectl" "$global_kubectl"; then
-				log_success "kubectl v$global_version already installed at: $global_kubectl (symlinked)"
-			else
-				log_success "kubectl v$global_version already installed at: $global_kubectl"
-			fi
-			return 0
-		fi
-	fi
-
-	# Check current version in OBOL_BIN_DIR
-	if [[ -f "$OBOL_BIN_DIR/kubectl" ]]; then
-		current_version=$("$OBOL_BIN_DIR/kubectl" version --client=true --output=json 2>/dev/null | grep gitVersion | head -1 | sed 's/.*"v\([0-9.]*\)".*/\1/' || echo "")
-	fi
-
-	# Use pinned version
-	local target_version="$KUBECTL_VERSION"
-
-	# Check if update needed
-	if [[ -n "$current_version" ]] && version_ge "$current_version" "$target_version"; then
-		log_success "kubectl v$current_version is up to date"
-		return 0
-	fi
-
-	if [[ -n "$current_version" ]]; then
-		log_info "Upgrading kubectl from v$current_version to v$target_version..."
-	else
-		log_info "Installing kubectl v$target_version..."
-	fi
-
-	# Download kubectl
-	local download_url="https://dl.k8s.io/release/v${target_version}/bin/${platform}/${arch}/kubectl"
-
-	if curl -fsSL "$download_url" -o "$OBOL_BIN_DIR/kubectl.tmp"; then
-		chmod +x "$OBOL_BIN_DIR/kubectl.tmp"
-		mv "$OBOL_BIN_DIR/kubectl.tmp" "$OBOL_BIN_DIR/kubectl"
-		log_success "kubectl v$target_version installed"
-	else
-		log_error "Failed to download kubectl"
-		rm -f "$OBOL_BIN_DIR/kubectl.tmp"
+	if [[ ! -x "$OBOL_BIN_DIR/obol" ]]; then
+		log_warn "obol binary not found in $OBOL_BIN_DIR, cannot install tools"
 		return 1
 	fi
+
+	if [[ "${OBOL_DEVELOPMENT:-false}" == "true" ]]; then
+		log_dim "  Development mode: the first obol invocation compiles the CLI with 'go run', this can take a while"
+	fi
+
+	if run_obol upgrade --tools-only; then
+		return 0
+	fi
+
+	log_warn "Tool installation did not complete (continuing...)"
+	echo ""
+	echo "  Retry later with:"
+	echo "    obol upgrade --tools-only"
+	echo ""
+	log_dim "  'obol stack init' and 'obol stack up' also install missing required tools."
+	echo ""
+	return 1
 }
 
-# Install helm
-install_helm() {
-	local platform=$(detect_platform)
-	local arch=$(detect_arch)
-	local current_version=""
+readonly OLLAMA_INSTALL_URL="https://ollama.com/install.sh"
 
-	# Remove broken symlink if exists
-	remove_broken_symlink "helm"
-
-	# Check for global helm first
-	local global_helm
-	if global_helm=$(check_global_binary "helm"); then
-		local global_version
-		global_version=$("$global_helm" version --short 2>/dev/null | sed -n 's/v\([0-9.]*\).*/\1/p' || echo "")
-		if [[ -n "$global_version" ]] && version_ge "$global_version" "$HELM_VERSION"; then
-			if create_binary_symlink "helm" "$global_helm"; then
-				log_success "helm v$global_version already installed at: $global_helm (symlinked)"
-			else
-				log_success "helm v$global_version already installed at: $global_helm"
-			fi
-			return 0
-		fi
-		if [[ -n "$global_version" ]]; then
-			log_info "Ignoring helm v$global_version at $global_helm (obol needs v$HELM_VERSION or newer); installing a managed copy into $OBOL_BIN_DIR"
-		fi
-	fi
-
-	# Check current version in OBOL_BIN_DIR
-	if [[ -f "$OBOL_BIN_DIR/helm" ]]; then
-		current_version=$("$OBOL_BIN_DIR/helm" version --short 2>/dev/null | sed -n 's/v\([0-9.]*\).*/\1/p' || echo "")
-	fi
-
-	# Use pinned version
-	local target_version="$HELM_VERSION"
-
-	# Check if update needed
-	if [[ -n "$current_version" ]] && version_ge "$current_version" "$target_version"; then
-		log_success "helm v$current_version is up to date"
-		return 0
-	fi
-
-	if [[ -n "$current_version" ]]; then
-		log_info "Upgrading helm from v$current_version to v$target_version..."
-	else
-		log_info "Installing helm v$target_version..."
-	fi
-
-	# Download and extract helm
-	local tmp_dir=$(mktemp -d)
-	local download_url="https://get.helm.sh/helm-v${target_version}-${platform}-${arch}.tar.gz"
-
-	if curl -fsSL "$download_url" | tar xz -C "$tmp_dir" 2>/dev/null; then
-		mv "$tmp_dir/${platform}-${arch}/helm" "$OBOL_BIN_DIR/helm"
-		chmod +x "$OBOL_BIN_DIR/helm"
-		rm -rf "$tmp_dir"
-		log_success "helm v$target_version installed"
-	else
-		log_error "Failed to download helm"
-		rm -rf "$tmp_dir"
-		return 1
-	fi
-}
-
-# Install k3d
-install_k3d() {
-	local platform=$(detect_platform)
-	local arch=$(detect_arch)
-	local current_version=""
-
-	# Remove broken symlink if exists
-	remove_broken_symlink "k3d"
-
-	# Check for global k3d first
-	local global_k3d
-	if global_k3d=$(check_global_binary "k3d"); then
-		local global_version
-		global_version=$("$global_k3d" version 2>/dev/null | sed -n 's/k3d version v\([0-9.]*\).*/\1/p' || echo "")
-		if [[ -n "$global_version" ]] && version_ge "$global_version" "$K3D_VERSION"; then
-			if create_binary_symlink "k3d" "$global_k3d"; then
-				log_success "k3d v$global_version already installed at: $global_k3d (symlinked)"
-			else
-				log_success "k3d v$global_version already installed at: $global_k3d"
-			fi
-			return 0
-		fi
-	fi
-
-	# Check current version in OBOL_BIN_DIR
-	if [[ -f "$OBOL_BIN_DIR/k3d" ]]; then
-		current_version=$("$OBOL_BIN_DIR/k3d" version 2>/dev/null | sed -n 's/k3d version v\([0-9.]*\).*/\1/p' || echo "")
-	fi
-
-	# Use pinned version
-	local target_version="$K3D_VERSION"
-
-	# Check if update needed
-	if [[ -n "$current_version" ]] && version_ge "$current_version" "$target_version"; then
-		log_success "k3d v$current_version is up to date"
-		return 0
-	fi
-
-	if [[ -n "$current_version" ]]; then
-		log_info "Upgrading k3d from v$current_version to v$target_version..."
-	else
-		log_info "Installing k3d v$target_version..."
-	fi
-
-	# Map platform/arch to k3d naming
-	local k3d_platform="$platform"
-	local k3d_arch="$arch"
-
-	# Download k3d
-	local download_url="https://github.com/k3d-io/k3d/releases/download/v${target_version}/k3d-${k3d_platform}-${k3d_arch}"
-
-	if curl -fsSL "$download_url" -o "$OBOL_BIN_DIR/k3d.tmp"; then
-		chmod +x "$OBOL_BIN_DIR/k3d.tmp"
-		mv "$OBOL_BIN_DIR/k3d.tmp" "$OBOL_BIN_DIR/k3d"
-		log_success "k3d v$target_version installed"
-	else
-		log_error "Failed to download k3d"
-		rm -f "$OBOL_BIN_DIR/k3d.tmp"
-		return 1
-	fi
-}
-
-# Install helmfile
-install_helmfile() {
-	local platform=$(detect_platform)
-	local arch=$(detect_arch)
-	local current_version=""
-
-	# Remove broken symlink if exists
-	remove_broken_symlink "helmfile"
-
-	# Check for global helmfile first
-	local global_helmfile
-	if global_helmfile=$(check_global_binary "helmfile"); then
-		local global_version
-		global_version=$("$global_helmfile" version 2>/dev/null | sed -n 's/.*Version[[:space:]]*v*\([0-9.]*\).*/\1/p' | head -1 || echo "")
-		if [[ -n "$global_version" ]] && version_ge "$global_version" "$HELMFILE_VERSION"; then
-			if create_binary_symlink "helmfile" "$global_helmfile"; then
-				log_success "helmfile v$global_version already installed at: $global_helmfile (symlinked)"
-			else
-				log_success "helmfile v$global_version already installed at: $global_helmfile"
-			fi
-			return 0
-		fi
-	fi
-
-	# Check current version in OBOL_BIN_DIR
-	if [[ -f "$OBOL_BIN_DIR/helmfile" ]]; then
-		current_version=$("$OBOL_BIN_DIR/helmfile" version 2>/dev/null | sed -n 's/.*Version[[:space:]]*v*\([0-9.]*\).*/\1/p' | head -1 || echo "")
-	fi
-
-	# Use pinned version
-	local target_version="$HELMFILE_VERSION"
-
-	# Check if update needed
-	if [[ -n "$current_version" ]] && version_ge "$current_version" "$target_version"; then
-		log_success "helmfile v$current_version is up to date"
-		return 0
-	fi
-
-	if [[ -n "$current_version" ]]; then
-		log_info "Upgrading helmfile from v$current_version to v$target_version..."
-	else
-		log_info "Installing helmfile v$target_version..."
-	fi
-
-	# Map platform/arch to helmfile naming
-	local helmfile_platform="$platform"
-	local helmfile_arch="$arch"
-
-	# Helmfile uses different naming for architectures
-	if [[ "$arch" == "amd64" ]]; then
-		helmfile_arch="amd64"
-	elif [[ "$arch" == "arm64" ]]; then
-		helmfile_arch="arm64"
-	fi
-
-	# Download and extract helmfile
-	local tmp_dir=$(mktemp -d)
-	local download_url="https://github.com/helmfile/helmfile/releases/download/v${target_version}/helmfile_${target_version}_${helmfile_platform}_${helmfile_arch}.tar.gz"
-
-	if curl -fsSL "$download_url" | tar xz -C "$tmp_dir" 2>/dev/null; then
-		mv "$tmp_dir/helmfile" "$OBOL_BIN_DIR/helmfile"
-		chmod +x "$OBOL_BIN_DIR/helmfile"
-		rm -rf "$tmp_dir"
-		log_success "helmfile v$target_version installed"
-	else
-		log_error "Failed to download helmfile"
-		rm -rf "$tmp_dir"
-		return 1
-	fi
-}
-
-# Install helm-diff plugin
-install_helm_diff() {
-	# Find helm binary (check OBOL_BIN_DIR first, then global PATH)
-	local helm_bin="$OBOL_BIN_DIR/helm"
-	if [[ ! -f "$helm_bin" ]]; then
-		helm_bin=$(check_global_binary "helm") || {
-			log_warn "helm not found, skipping helm-diff plugin"
-			return 1
-		}
-	fi
-
-	# Try to check plugin list - if this fails, the plugin directory may be corrupted
-	local plugin_check
-	plugin_check=$("$helm_bin" plugin list 2>&1)
-	local check_exit=$?
-
-	# If plugin check succeeded and diff is already installed, we're done
-	if [[ $check_exit -eq 0 ]] && echo "$plugin_check" | grep -q "diff"; then
-		log_success "helm-diff plugin already installed"
-		return 0
-	fi
-
-	# If plugin check failed with corruption error, try to remove the corrupted plugin
-	if echo "$plugin_check" | grep -q "failed to load plugin"; then
-		log_info "Detected corrupted helm-diff plugin, attempting to clean up..."
-
-		# Get helm plugin directory (usually ~/.local/share/helm/plugins)
-		local helm_plugins_dir
-		helm_plugins_dir=$(dirname "$("$helm_bin" env 2>/dev/null | grep HELM_PLUGINS | cut -d'=' -f2 | tr -d '"' || echo "$HOME/.local/share/helm/plugins")")
-
-		# Remove corrupted helm-diff plugin if it exists
-		if [[ -d "$helm_plugins_dir/plugins/helm-diff" ]]; then
-			rm -rf "$helm_plugins_dir/plugins/helm-diff"
-			log_info "Removed corrupted plugin"
-		fi
-	fi
-
-	log_info "Installing helm-diff plugin v${HELM_DIFF_VERSION}..."
-
-	# Helm 4 verifies plugin signatures by default and refuses VCS sources
-	# ("plugin source does not support verification"); helm-diff ships no
-	# provenance, so opt out explicitly. Helm 3 has no --verify flag.
-	# (${arr[@]+...} expansion: empty arrays trip set -u on macOS bash 3.2.)
-	local verify_args=()
-	local helm_major
-	helm_major=$("$helm_bin" version --short 2>/dev/null | sed -n 's/^v\([0-9]*\)\..*/\1/p')
-	if [[ -n "$helm_major" ]] && [[ "$helm_major" -ge 4 ]]; then
-		verify_args=(--verify=false)
-	fi
-
-	# Install the plugin with pinned version
-	if "$helm_bin" plugin install https://github.com/databus23/helm-diff --version "v${HELM_DIFF_VERSION}" ${verify_args[@]+"${verify_args[@]}"} 2>&1 | grep -q "Installed plugin"; then
-		log_success "helm-diff plugin v${HELM_DIFF_VERSION} installed"
-		return 0
-	else
-		log_warn "helm-diff plugin installation failed (non-critical, continuing...)"
-		return 1
-	fi
-}
-
-# Install k9s
-install_k9s() {
-	local platform=$(detect_platform)
-	local arch=$(detect_arch)
-	local current_version=""
-
-	# Remove broken symlink if exists
-	remove_broken_symlink "k9s"
-
-	# Check for global k9s first
-	local global_k9s
-	if global_k9s=$(check_global_binary "k9s"); then
-		local global_version
-		global_version=$("$global_k9s" version --short 2>/dev/null | sed -n 's/.*v\([0-9.]*\).*/\1/p' | head -1 || echo "")
-		if [[ -n "$global_version" ]] && version_ge "$global_version" "$K9S_VERSION"; then
-			if create_binary_symlink "k9s" "$global_k9s"; then
-				log_success "k9s v$global_version already installed at: $global_k9s (symlinked)"
-			else
-				log_success "k9s v$global_version already installed at: $global_k9s"
-			fi
-			return 0
-		fi
-	fi
-
-	# Check current version in OBOL_BIN_DIR
-	if [[ -f "$OBOL_BIN_DIR/k9s" ]]; then
-		current_version=$("$OBOL_BIN_DIR/k9s" version --short 2>/dev/null | sed -n 's/.*v\([0-9.]*\).*/\1/p' | head -1 || echo "")
-	fi
-
-	# Use pinned version
-	local target_version="$K9S_VERSION"
-
-	# Check if update needed
-	if [[ -n "$current_version" ]] && version_ge "$current_version" "$target_version"; then
-		log_success "k9s v$current_version is up to date"
-		return 0
-	fi
-
-	if [[ -n "$current_version" ]]; then
-		log_info "Upgrading k9s from v$current_version to v$target_version..."
-	else
-		log_info "Installing k9s v$target_version..."
-	fi
-
-	# Map platform/arch to k9s naming
-	local k9s_platform
-	case "$platform" in
-	darwin)
-		k9s_platform="Darwin"
+# Describe what Ollama's official installer does before asking to run it.
+describe_ollama_installer() {
+	echo "  This runs Ollama's official installer ($OLLAMA_INSTALL_URL), which:"
+	case "$(uname -s)" in
+	Darwin*)
+		echo "    • installs the Ollama app and the ollama CLI"
+		echo "    • starts the Ollama server"
 		;;
-	linux)
-		k9s_platform="Linux"
+	Linux*)
+		echo "    • installs ollama under /usr/local (needs sudo)"
+		echo "    • creates an 'ollama' system user and a systemd service, and starts it"
+		echo "    • may install GPU driver packages through your package manager if it"
+		echo "      detects a GPU without drivers"
+		echo "  On systemd hosts obolup.sh then offers to make Ollama listen on 0.0.0.0"
+		echo "  so the cluster can reach it."
 		;;
 	esac
+	log_dim "  Review the script first with: curl -fsSL $OLLAMA_INSTALL_URL | less"
+}
 
-	local k9s_arch
-	case "$arch" in
-	amd64)
-		k9s_arch="amd64"
+# Print how to install or upgrade Ollama later.
+print_ollama_later() {
+	echo ""
+	echo "  Install it later with either of:"
+	echo "    curl -fsSL $OLLAMA_INSTALL_URL | OLLAMA_VERSION=$OLLAMA_VERSION sh"
+	echo "    OBOL_INSTALL_OLLAMA=true obolup.sh"
+	echo "  Then pull a model: obol model pull"
+	echo ""
+}
+
+# ollama_consent <question>
+# Ollama is optional, so it is installed or upgraded only on explicit consent:
+# OBOL_INSTALL_OLLAMA=true, or "y" at a terminal prompt (default No).
+# --yes does not imply it, and without a terminal the answer is No.
+ollama_consent() {
+	local question="$1" choice=""
+	case "${OBOL_INSTALL_OLLAMA:-}" in
+	1 | true | yes)
+		log_info "OBOL_INSTALL_OLLAMA set — $question yes"
+		return 0
 		;;
-	arm64)
-		k9s_arch="arm64"
+	0 | false | no)
+		return 1
 		;;
 	esac
-
-	# Download and extract k9s
-	local tmp_dir=$(mktemp -d)
-	local download_url="https://github.com/derailed/k9s/releases/download/v${target_version}/k9s_${k9s_platform}_${k9s_arch}.tar.gz"
-
-	if curl -fsSL "$download_url" | tar xz -C "$tmp_dir" 2>/dev/null; then
-		mv "$tmp_dir/k9s" "$OBOL_BIN_DIR/k9s"
-		chmod +x "$OBOL_BIN_DIR/k9s"
-		rm -rf "$tmp_dir"
-		log_success "k9s v$target_version installed"
-	else
-		log_error "Failed to download k9s"
-		rm -rf "$tmp_dir"
+	if [[ "$ASSUME_YES" == "true" ]]; then
+		log_dim "  --yes does not install Ollama; set OBOL_INSTALL_OLLAMA=true to include it"
 		return 1
 	fi
+	if ! can_prompt; then
+		log_dim "  Non-interactive: not installing Ollama (set OBOL_INSTALL_OLLAMA=true to include it)"
+		return 1
+	fi
+	prompt_read choice "  $question [y/N]: " "n"
+	[[ "$choice" == [Yy]* ]]
+}
+
+# Run Ollama's official installer for the pinned version.
+run_ollama_installer() {
+	if [[ "$(uname -s)" == "Linux" ]] && ! sudo_available; then
+		log_warn "Ollama's installer needs sudo, which would prompt for a password without a terminal — skipping"
+		print_ollama_later
+		return 1
+	fi
+	env OLLAMA_VERSION="$OLLAMA_VERSION" bash -c "curl -fsSL $OLLAMA_INSTALL_URL | sh"
 }
 
 # Configure Ollama to listen on 0.0.0.0 so k3d containers can reach it.
@@ -1278,18 +974,40 @@ configure_ollama_host_binding() {
 		return 0
 	fi
 
-	log_info "Configuring Ollama to listen on 0.0.0.0 (required for k3d)..."
+	echo ""
+	log_info "Ollama must listen on 0.0.0.0 for the k3d cluster to reach it"
+	echo "  This writes $override_file, which makes Ollama listen on all"
+	echo "  network interfaces, and restarts the ollama service if it is running."
 
-	if sudo mkdir -p "$override_dir" && \
-	   sudo tee "$override_file" >/dev/null <<'OVERRIDE'
+	local can_configure=false
+	if ! sudo_available; then
+		log_warn "Skipping: sudo needs a password and there is no terminal to enter it"
+	elif confirm "Configure and restart Ollama now?" "y"; then
+		can_configure=true
+	else
+		log_warn "Skipping Ollama host binding"
+	fi
+
+	if [[ "$can_configure" != "true" ]]; then
+		echo ""
+		echo "  To do it yourself, run:"
+		echo "    sudo mkdir -p $override_dir"
+		printf '    %s\n' "printf '[Service]\\nEnvironment=\"OLLAMA_HOST=0.0.0.0\"\\n' | sudo tee $override_file"
+		echo "    sudo systemctl daemon-reload && sudo systemctl restart ollama"
+		echo ""
+		return 0
+	fi
+
+	if sudo_cmd mkdir -p "$override_dir" &&
+		sudo_cmd tee "$override_file" >/dev/null <<'OVERRIDE'
 [Service]
 Environment="OLLAMA_HOST=0.0.0.0"
 OVERRIDE
 	then
-		sudo systemctl daemon-reload
+		sudo_cmd systemctl daemon-reload
 		if systemctl is-active --quiet ollama; then
 			log_warn "Restarting Ollama service to apply new bind address..."
-			sudo systemctl restart ollama 2>/dev/null || true
+			sudo_cmd systemctl restart ollama 2>/dev/null || true
 		fi
 		log_success "Ollama configured to listen on all interfaces"
 	else
@@ -1298,173 +1016,133 @@ OVERRIDE
 	fi
 }
 
-# Install Ollama (host runtime for local AI inference)
-# Unlike other dependencies, Ollama is a full application with a background server.
-# On macOS it installs Ollama.app; on Linux it sets up a systemd service.
-# We delegate to Ollama's official installer rather than downloading a binary ourselves.
+# Check whether the Ollama server answers and print how to start it if not.
+check_ollama_server() {
+	if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
+		log_success "Ollama server is running"
+	else
+		log_warn "Ollama is installed but the server is not running"
+		echo ""
+		case "$(uname -s)" in
+		Darwin*)
+			echo "  Start it with: open -a Ollama"
+			;;
+		Linux*)
+			echo "  Start it with: ollama serve"
+			;;
+		esac
+		echo ""
+	fi
+}
+
+# Install or upgrade Ollama (host runtime for local AI inference).
+# Unlike the pinned tools, Ollama is a full application with a background
+# server (Ollama.app on macOS, a systemd service on Linux), so it is optional
+# and only installed with explicit consent (see ollama_consent). We delegate
+# to Ollama's official installer rather than downloading a binary ourselves.
 install_ollama() {
 	local target_version="$OLLAMA_VERSION"
-
-	# Helper: check if server is running and print status
-	check_ollama_server() {
-		if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
-			log_success "Ollama server is running"
-		else
-			log_warn "Ollama is installed but the server is not running"
-			echo ""
-			case "$(uname -s)" in
-			Darwin*)
-				echo "  Start it with: open -a Ollama"
-				;;
-			Linux*)
-				echo "  Start it with: ollama serve"
-				;;
-			esac
-			echo ""
-		fi
-	}
 
 	# Check for existing ollama installation
 	if command_exists ollama; then
 		local version
 		version=$(ollama --version 2>/dev/null | sed 's/ollama version is //' || echo "unknown")
 
-		# Check if upgrade is needed
-		if [[ "$version" != "unknown" ]] && version_ge "$version" "$target_version"; then
+		if [[ -z "$version" || "$version" == "unknown" ]]; then
+			log_success "Ollama already installed (version unknown)"
+			check_ollama_server
+			return 0
+		fi
+
+		if version_ge "$version" "$target_version"; then
 			log_success "Ollama v$version is up to date"
 			configure_ollama_host_binding
 			check_ollama_server
 			return 0
 		fi
 
-		if [[ "$version" != "unknown" ]]; then
-			log_warn "Ollama v$version is older than pinned v$target_version"
-
-			# Prompt for upgrade if interactive
-			if [[ "$ASSUME_YES" == "true" ]]; then
-				log_info "--yes set — upgrading Ollama to v$target_version"
-			elif [[ -c /dev/tty ]] && { true </dev/tty; } 2>/dev/null; then
-				local choice
-				read -p "  Upgrade Ollama to v$target_version? [Y/n]: " choice </dev/tty
-
-				case "$choice" in
-				[Nn]*)
-					log_warn "Skipping Ollama upgrade"
-					check_ollama_server
-					return 0
-					;;
-				esac
-			else
-				log_warn "Non-interactive — skipping Ollama upgrade"
-				check_ollama_server
-				return 0
-			fi
-
-			log_info "Upgrading Ollama to v$target_version..."
-			echo ""
-			if env OLLAMA_VERSION="$target_version" bash -c 'curl -fsSL https://ollama.com/install.sh | sh'; then
-				echo ""
-				log_success "Ollama upgraded to v$target_version"
-				configure_ollama_host_binding
-				check_ollama_server
-				return 0
-			else
-				log_warn "Ollama upgrade failed — continuing with v$version"
-				check_ollama_server
-				return 0
-			fi
-		else
-			log_success "Ollama already installed (version unknown)"
+		log_warn "Ollama v$version is older than pinned v$target_version"
+		describe_ollama_installer
+		if ! ollama_consent "Upgrade Ollama to v$target_version?"; then
+			log_warn "Skipping Ollama upgrade"
+			echo "  Upgrade later with: curl -fsSL $OLLAMA_INSTALL_URL | OLLAMA_VERSION=$target_version sh"
 			check_ollama_server
 			return 0
 		fi
+
+		log_info "Upgrading Ollama to v$target_version..."
+		echo ""
+		if run_ollama_installer; then
+			echo ""
+			log_success "Ollama upgraded to v$target_version"
+			configure_ollama_host_binding
+		else
+			log_warn "Ollama upgrade did not complete — continuing with v$version"
+		fi
+		check_ollama_server
+		return 0
 	fi
 
-	# Ollama not found — ask user if they want to install it
+	# Ollama not found — ask the user whether to install it
 	echo ""
-	log_info "Ollama is not installed"
+	log_info "Ollama is not installed (optional)"
 	echo ""
 	echo "  Ollama provides local AI inference for the Obol Stack."
 	echo "  Without it, you can still use cloud providers (Anthropic, OpenAI)"
 	echo "  via 'obol model setup'."
 	echo ""
+	describe_ollama_installer
+	echo ""
 
-	# Check if we can prompt the user (tty available or --yes given)
-	local can_install=false choice=""
-	if [[ "$ASSUME_YES" == "true" ]]; then
-		log_info "--yes set — installing Ollama"
-		can_install=true
-		choice="y"
-	elif [[ -c /dev/tty ]] && { true </dev/tty; } 2>/dev/null; then
-		can_install=true
-		read -p "  Install Ollama now? [Y/n]: " choice </dev/tty
-	fi
-	if [[ "$can_install" == "true" ]]; then
-		case "$choice" in
-		[Nn]*)
-			log_warn "Skipping Ollama — local AI inference will be unavailable"
-			echo ""
-			echo "  Install later: curl -fsSL https://ollama.com/install.sh | sh"
-			echo "  Then pull a model: obol model pull"
-			echo ""
-			return 0
-			;;
-		*)
-			# Yes — delegate to official installer
-			log_info "Installing Ollama v$target_version..."
-			echo ""
-			if env OLLAMA_VERSION="$target_version" bash -c 'curl -fsSL https://ollama.com/install.sh | sh'; then
-				echo ""
-				log_success "Ollama v$target_version installed"
-				configure_ollama_host_binding
-
-				# On macOS, the installer starts Ollama.app automatically.
-				# On Linux with systemd, the installer enables and starts the service.
-				# Give it a moment to come up.
-				local attempts=0
-				while [[ $attempts -lt 10 ]]; do
-					if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
-						log_success "Ollama server is running"
-						echo ""
-						echo "  Pull a model later with: obol model pull"
-						echo ""
-						return 0
-					fi
-					sleep 1
-					attempts=$((attempts + 1))
-				done
-
-				log_warn "Ollama installed but server not yet responding"
-				echo ""
-				case "$(uname -s)" in
-				Darwin*)
-					echo "  Start it with: open -a Ollama"
-					;;
-				Linux*)
-					echo "  Start it with: ollama serve"
-					;;
-				esac
-				echo "  Then pull a model with: obol model pull"
-				echo ""
-				return 0
-			else
-				log_warn "Ollama installation failed"
-				echo ""
-				echo "  Install manually: https://ollama.com/download"
-				echo ""
-				return 1
-			fi
-			;;
-		esac
-	else
-		# Non-interactive — just warn
-		log_warn "Ollama not found — local AI inference will be unavailable"
-		echo ""
-		echo "  Install Ollama: curl -fsSL https://ollama.com/install.sh | sh"
-		echo "  Then pull a model: obol model pull"
-		echo ""
+	if ! ollama_consent "Install Ollama v$target_version now?"; then
+		log_warn "Skipping Ollama — local AI inference will be unavailable"
+		print_ollama_later
 		return 0
 	fi
+
+	log_info "Installing Ollama v$target_version..."
+	echo ""
+	if ! run_ollama_installer; then
+		log_warn "Ollama installation did not complete"
+		echo ""
+		echo "  Install manually: https://ollama.com/download"
+		echo ""
+		return 1
+	fi
+
+	echo ""
+	log_success "Ollama v$target_version installed"
+	configure_ollama_host_binding
+
+	# On macOS, the installer starts Ollama.app automatically.
+	# On Linux with systemd, the installer enables and starts the service.
+	# Give it a moment to come up.
+	local attempts=0
+	while [[ $attempts -lt 10 ]]; do
+		if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
+			log_success "Ollama server is running"
+			echo ""
+			echo "  Pull a model later with: obol model pull"
+			echo ""
+			return 0
+		fi
+		sleep 1
+		attempts=$((attempts + 1))
+	done
+
+	log_warn "Ollama installed but server not yet responding"
+	echo ""
+	case "$(uname -s)" in
+	Darwin*)
+		echo "  Start it with: open -a Ollama"
+		;;
+	Linux*)
+		echo "  Start it with: ollama serve"
+		;;
+	esac
+	echo "  Then pull a model with: obol model pull"
+	echo ""
+	return 0
 }
 
 # Install all dependencies
@@ -1479,17 +1157,7 @@ install_dependencies() {
 		export PATH="$OBOL_BIN_DIR:$PATH"
 	fi
 
-	# Install each dependency
-	install_kubectl || log_warn "kubectl installation failed (continuing...)"
-	install_helm || log_warn "helm installation failed (continuing...)"
-	if [[ "${OBOL_BACKEND:-k3d}" != "k3s" ]]; then
-		install_k3d || log_warn "k3d installation failed (continuing...)"
-	else
-		log_info "Skipping k3d (using k3s backend)"
-	fi
-	install_helmfile || log_warn "helmfile installation failed (continuing...)"
-	install_k9s || log_warn "k9s installation failed (continuing...)"
-	install_helm_diff || log_warn "helm-diff plugin installation failed (continuing...)"
+	install_tools || true
 	install_ollama || log_warn "Ollama installation skipped (continuing...)"
 
 	echo ""
@@ -1516,6 +1184,19 @@ check_hosts_file() {
 	return 1
 }
 
+# Print the manual /etc/hosts instructions.
+print_hosts_instructions() {
+	local hosts_entry="$1"
+	echo ""
+	echo "Please add this line to /etc/hosts yourself:"
+	echo ""
+	echo "  $hosts_entry"
+	echo ""
+	echo "For example:"
+	echo "  echo '$hosts_entry' | sudo tee -a /etc/hosts"
+	echo ""
+}
+
 # Add obol.stack entry to /etc/hosts
 update_hosts_file() {
 	log_info "Adding obol.stack to /etc/hosts..."
@@ -1529,20 +1210,21 @@ update_hosts_file() {
 		return 0
 	fi
 
-	# Check if sudo is available
-	if ! command_exists sudo; then
-		log_error "sudo not available, cannot update /etc/hosts automatically"
-		echo ""
-		echo "Please manually add this line to /etc/hosts:"
-		echo ""
-		echo "  $hosts_entry"
-		echo ""
+	if [[ "$(id -u)" != "0" ]] && ! command_exists sudo; then
+		log_warn "sudo not available, cannot update /etc/hosts automatically"
+		print_hosts_instructions "$hosts_entry"
 		return 1
 	fi
 
-	# Check if we need password (sudo -n tests non-interactive)
-	if sudo -n true 2>/dev/null; then
-		# Already have sudo privileges or NOPASSWD configured
+	# Never let sudo wait for a password nobody can type.
+	if ! sudo_available; then
+		log_warn "Skipping /etc/hosts update: sudo needs a password and there is no terminal to enter it"
+		print_hosts_instructions "$hosts_entry"
+		return 1
+	fi
+
+	if [[ "$(id -u)" == "0" ]] || sudo -n true 2>/dev/null; then
+		# Already root, cached credentials, or NOPASSWD configured
 		log_info "Updating /etc/hosts with existing privileges..."
 	else
 		# Will need password - inform user
@@ -1555,27 +1237,21 @@ update_hosts_file() {
 	fi
 
 	# Try to append to /etc/hosts with sudo
-	if echo "$hosts_entry" | sudo tee -a /etc/hosts >/dev/null 2>&1; then
+	if echo "$hosts_entry" | sudo_cmd tee -a /etc/hosts >/dev/null 2>&1; then
 		log_success "Added obol.stack to /etc/hosts"
 		return 0
-	else
-		log_warn "Failed to update /etc/hosts"
-		echo ""
-		echo "Please manually add this line to /etc/hosts:"
-		echo ""
-		echo "  $hosts_entry"
-		echo ""
-		echo "Example command:"
-		echo "  echo '$hosts_entry' | sudo tee -a /etc/hosts"
-		echo ""
-		return 1
 	fi
+
+	log_warn "Failed to update /etc/hosts"
+	print_hosts_instructions "$hosts_entry"
+	return 1
 }
 
 # Check and configure /etc/hosts entry for obol.stack
 configure_hosts_file() {
 	if ! check_hosts_file; then
-		update_hosts_file
+		# Non-fatal: the stack works without it, and `obol stack up` retries.
+		update_hosts_file || true
 	fi
 
 	# Note: wildcard *.obol.stack DNS is handled by a local DNS resolver
@@ -1583,6 +1259,7 @@ configure_hosts_file() {
 	# above provides baseline resolution for the root domain (obol.stack).
 	log_info "Wildcard *.obol.stack DNS will be configured on first 'obol stack up'"
 }
+
 
 # Detect appropriate shell profile file (NVM-style detection)
 detect_shell_profile() {
@@ -1672,6 +1349,7 @@ add_to_profile() {
 	log_success "Added to PATH in $profile"
 }
 
+
 # Configure PATH with shell detection and user consent
 # Detects the appropriate shell profile file based on $SHELL and existing files.
 # In interactive mode, asks user whether to auto-modify or show manual instructions.
@@ -1688,16 +1366,15 @@ configure_path() {
 	fi
 
 	# Check if already on the current PATH (e.g. set by a prior run or parent
-	# shell).  No point prompting if the binary is already reachable — and
-	# prompting crashes in non-interactive shells that lack /dev/tty.
+	# shell). No point prompting if the binary is already reachable.
 	if echo "$PATH" | grep -qF "$OBOL_BIN_DIR"; then
 		log_success "$OBOL_BIN_DIR is already on PATH"
 		return 0
 	fi
 
-	# Check if we can prompt the user via /dev/tty (works even with curl | bash).
+	# Prompt via /dev/tty when possible (works even with curl | bash).
 	# --yes auto-picks option 1 (add to profile).
-	if [[ "$ASSUME_YES" == "true" || -c /dev/tty ]]; then
+	if [[ "$ASSUME_YES" == "true" ]] || can_prompt; then
 		echo ""
 		log_info "To use 'obol' command, $OBOL_BIN_DIR needs to be in your PATH"
 		echo ""
@@ -1708,12 +1385,12 @@ configure_path() {
 		echo "    2. Show manual instructions"
 		echo ""
 
-		local choice
+		local choice=""
 		if [[ "$ASSUME_YES" == "true" ]]; then
 			choice="1"
 			log_info "--yes set — adding $OBOL_BIN_DIR to $profile"
 		else
-			read -p "Choose [1/2]: " choice </dev/tty
+			prompt_read choice "Choose [1/2]: " "2"
 		fi
 
 		case "$choice" in
@@ -1727,23 +1404,58 @@ configure_path() {
 			echo "    export PATH=\"$OBOL_BIN_DIR:\$PATH\""
 			echo ""
 			;;
-		2)
-			print_path_instructions "$profile"
-			;;
 		*)
 			print_path_instructions "$profile"
 			;;
 		esac
 	else
-		# Truly non-interactive (CI/CD, no terminal): check environment variable override
+		# Non-interactive (CI/CD, no terminal, OBOL_NONINTERACTIVE=true):
+		# only modify the profile when explicitly asked.
 		if [[ "${OBOL_MODIFY_PATH:-no}" == "yes" ]]; then
 			add_to_profile "$profile"
 			log_info "Will be available in new shell sessions"
 		else
-			# Default: print instructions for non-interactive contexts
 			print_path_instructions "$profile"
 		fi
 	fi
+}
+
+# stack_state prints the state of the stack configured in OBOL_CONFIG_DIR:
+#   none     no stack initialised (no .stack-id)
+#   running  initialised and the cluster API answers
+#   stopped  initialised but the cluster API does not answer
+stack_state() {
+	if [[ ! -f "$OBOL_CONFIG_DIR/.stack-id" ]]; then
+		echo "none"
+		return 0
+	fi
+
+	local kubeconfig="$OBOL_CONFIG_DIR/kubeconfig.yaml"
+	local kubectl_bin="${OBOL_KUBECTL:-}"
+	if [[ -z "$kubectl_bin" && -x "$OBOL_BIN_DIR/kubectl" ]]; then
+		kubectl_bin="$OBOL_BIN_DIR/kubectl"
+	fi
+	if [[ -z "$kubectl_bin" ]]; then
+		kubectl_bin=$(command -v kubectl 2>/dev/null || true)
+	fi
+
+	if [[ -f "$kubeconfig" && -n "$kubectl_bin" ]] &&
+		"$kubectl_bin" --kubeconfig "$kubeconfig" --request-timeout=5s get --raw=/readyz >/dev/null 2>&1; then
+		echo "running"
+	else
+		echo "stopped"
+	fi
+}
+
+# Print the manual "start the stack" instructions.
+print_start_instructions() {
+	echo "  To start the cluster, run:"
+	echo ""
+	echo "    obol stack init"
+	echo "    obol stack up"
+	echo ""
+	log_dim "  Then open your browser to: http://obol.stack"
+	echo ""
 }
 
 # Print post-install instructions
@@ -1758,81 +1470,100 @@ print_instructions() {
 	fi
 	echo ""
 
-	# Check if we can prompt the user for bootstrap (works with curl | bash via /dev/tty).
-	# [[ -c /dev/tty ]] only tests that the file is a char device — it does not test
-	# whether /dev/tty can actually be opened.  In some environments (Docker containers,
-	# certain CI setups) /dev/tty exists but is inaccessible, causing the subsequent
-	# `read </dev/tty` to crash.  The redirect test `{ true </dev/tty; } 2>/dev/null`
-	# confirms the fd can actually be opened before we attempt any interactive prompt.
-	local can_prompt=false
-	if [[ "$ASSUME_YES" == "true" || ( -c /dev/tty && "$({ true </dev/tty; } 2>/dev/null; echo $?)" == "0" ) ]]; then
-		can_prompt=true
-	fi
-	if [[ "$can_prompt" == "true" && -f "$OBOL_BIN_DIR/obol" ]]; then
-		echo ""
-		log_info "Would you like to start the cluster now?"
-		echo ""
-		echo "  This will:"
-		echo "    • Initialize cluster configuration"
-		echo "    • Start the Obol Stack"
-		echo "    • Open your browser to http://obol.stack"
-		echo ""
-
-		local choice
-		if [[ "$ASSUME_YES" == "true" ]]; then
-			choice="y"
-			log_info "--yes set — starting cluster"
-		else
-			read -p "Start cluster now? [y/N]: " choice </dev/tty
-		fi
-
-		case "$choice" in
-		[Yy]*)
-			echo ""
-			log_info "Starting bootstrap process..."
-
-			# Run obol bootstrap
-			if "$OBOL_BIN_DIR/obol" bootstrap; then
-				# Bootstrap succeeded, we're done
-				return 0
-			else
-				log_error "Bootstrap failed"
-				echo ""
-				log_info "You can start the cluster manually with:"
-				echo ""
-				echo "    obol stack init"
-				echo "    obol stack up"
-				echo "    obol agent init"
-				echo ""
-				return 1
-			fi
-			;;
-		*)
-			# User declined, show manual instructions
-			echo ""
-			log_info "To start the cluster later, run:"
-			echo ""
-			echo "    obol stack init"
-			echo "    obol stack up"
-			echo ""
-			log_dim "  Then open your browser to: http://obol.stack"
-			echo ""
-			;;
-		esac
-	else
-		# Truly non-interactive (CI/CD, no terminal) or no binary - show manual instructions
+	if [[ ! -x "$OBOL_BIN_DIR/obol" ]]; then
 		log_dim "  Verify installation:"
 		echo ""
 		echo "    obol version"
 		echo ""
-		echo "  To start the cluster, run:"
+		print_start_instructions
+		return 0
+	fi
+
+	local state
+	state=$(stack_state)
+
+	case "$state" in
+	running)
+		# Never offer to init/start a stack that is already up.
+		log_success "Your Obol Stack is already running"
+		echo ""
+		echo "  Apply chart upgrades for this version:  obol upgrade"
+		echo "  Check the stack's health:               obol doctor"
+		echo ""
+		return 0
+		;;
+	stopped)
+		log_info "An Obol Stack is configured but not running"
+		echo ""
+		if confirm "Start it now (obol stack up)?" "y"; then
+			echo ""
+			if run_obol stack up; then
+				return 0
+			fi
+			log_error "obol stack up failed"
+			echo ""
+			log_info "Check what is wrong with: obol doctor"
+			log_info "Then retry with:          obol stack up"
+			echo ""
+			return 1
+		fi
+		log_dim "  Not starting the stack now. Start it later with:"
+		echo ""
+		echo "    obol stack up"
+		echo ""
+		return 0
+		;;
+	esac
+
+	# No stack yet: offer the full bootstrap (init + up + open the browser).
+	if [[ "$ASSUME_YES" != "true" ]] && ! can_prompt; then
+		# Non-interactive (CI/CD, no terminal) - show manual instructions
+		log_dim "  Verify installation:"
+		echo ""
+		echo "    obol version"
+		echo ""
+		print_start_instructions
+		return 0
+	fi
+
+	echo ""
+	log_info "Would you like to start the cluster now?"
+	echo ""
+	echo "  This will:"
+	echo "    • Initialize cluster configuration"
+	echo "    • Start the Obol Stack"
+	echo "    • Open your browser to http://obol.stack"
+	echo ""
+
+	if ! confirm "Start cluster now?" "n"; then
+		echo ""
+		log_info "To start the cluster later, run:"
 		echo ""
 		echo "    obol stack init"
 		echo "    obol stack up"
 		echo ""
 		log_dim "  Then open your browser to: http://obol.stack"
 		echo ""
+		return 0
 	fi
+
+	echo ""
+	log_info "Starting bootstrap process..."
+
+	# Run obol bootstrap
+	if run_obol bootstrap; then
+		return 0
+	fi
+
+	log_error "Bootstrap failed"
+	echo ""
+	log_info "You can start the cluster manually with:"
+	echo ""
+	echo "    obol stack init"
+	echo "    obol stack up"
+	echo "    obol agent init"
+	echo ""
+	return 1
 }
 
 # Main installation flow
@@ -1873,6 +1604,12 @@ main() {
 		fi
 	else
 		log_info "Fresh installation starting..."
+	fi
+
+	if [[ "$NONINTERACTIVE" == "true" ]]; then
+		log_dim "  OBOL_NONINTERACTIVE=true: no prompts, optional steps are skipped"
+	elif [[ "$ASSUME_YES" != "true" ]] && ! can_prompt; then
+		log_dim "  No terminal available: no prompts, optional steps are skipped"
 	fi
 
 	# Check Docker prerequisites (only required for k3d backend, not k3s)

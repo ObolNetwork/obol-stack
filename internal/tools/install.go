@@ -354,7 +354,7 @@ type PluginInfo struct {
 
 // HelmPluginsDir returns the plugin directory helm uses (`helm env
 // HELM_PLUGINS`), honouring HELM_PLUGINS / HELM_DATA_HOME like helm does.
-// This is the same directory obolup.sh's `helm plugin install` writes to.
+// Older obolup.sh versions ran `helm plugin install`, which writes here too.
 func (in *Installer) HelmPluginsDir() (string, error) {
 	if in.PluginsDir != "" {
 		return in.PluginsDir, nil
