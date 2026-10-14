@@ -8,7 +8,7 @@ import (
 // RateTracker turns successive status samples into per-stage rates and
 // ETAs over a sliding window (network status --watch).
 type RateTracker struct {
-	// Window is how far back samples count (default 2m).
+	// Window is how far back samples count (default 10m).
 	Window time.Duration
 
 	mu      sync.Mutex
@@ -24,9 +24,18 @@ type rateSample struct {
 // before a rate is reported.
 const minRateSpan = 4 * time.Second
 
-// NewRateTracker returns a tracker with a 2 minute window.
+// minStallSpan is how long a stage must show no progress before a zero rate
+// is reported. reth only moves a stage checkpoint when it commits a batch
+// (Execution can sit on one value for minutes while it executes blocks).
+const minStallSpan = 5 * time.Minute
+
+// defaultRateWindow spans several reth commits so a rate doesn't swing
+// between zero and a burst.
+const defaultRateWindow = 10 * time.Minute
+
+// NewRateTracker returns a tracker with a 10 minute window.
 func NewRateTracker() *RateTracker {
-	return &RateTracker{Window: 2 * time.Minute, samples: map[string][]rateSample{}}
+	return &RateTracker{Window: defaultRateWindow, samples: map[string][]rateSample{}}
 }
 
 // Annotate records the current stage of each probed node and sets
@@ -78,7 +87,7 @@ func (r *RateTracker) observe(key string, at time.Time, block, target uint64) (r
 
 	window := r.Window
 	if window <= 0 {
-		window = 2 * time.Minute
+		window = defaultRateWindow
 	}
 
 	s := r.samples[key]
@@ -100,6 +109,10 @@ func (r *RateTracker) observe(key string, at time.Time, block, target uint64) (r
 
 	span := last.at.Sub(first.at).Seconds()
 	if span < minRateSpan.Seconds() {
+		return 0, 0, false
+	}
+
+	if last.block == first.block && span < minStallSpan.Seconds() {
 		return 0, 0, false
 	}
 

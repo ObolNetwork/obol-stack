@@ -608,12 +608,19 @@ func renderNodeFooter(b *statusBuilder, n network.NodeStatus, o renderOptions) {
 	b.blank()
 
 	if s := n.Storage; s != nil {
-		prefix := ""
-		if s.Partial {
-			prefix = "≥"
+		size := func(n uint64) string {
+			switch {
+			case !s.Partial:
+				return network.FormatBytes(n)
+			case n == 0:
+				// The node's uid owns the dirs, so nothing was readable.
+				return "unknown"
+			default:
+				return "≥" + network.FormatBytes(n)
+			}
 		}
 
-		line := fmt.Sprintf("exec %s%s · cons %s%s", prefix, network.FormatBytes(s.ExecutionBytes), prefix, network.FormatBytes(s.ConsensusBytes))
+		line := fmt.Sprintf("exec %s · cons %s", size(s.ExecutionBytes), size(s.ConsensusBytes))
 		if s.FreeBytes != nil {
 			line += fmt.Sprintf(" · %s free", network.FormatBytes(*s.FreeBytes))
 		}

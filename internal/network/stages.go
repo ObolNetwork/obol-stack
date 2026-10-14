@@ -3,6 +3,7 @@ package network
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 )
 
 // Stage states.
@@ -48,10 +49,15 @@ func (s SyncStage) Pct() (float64, bool) {
 // header download finished) or highestBlock if that is further. A stage is
 // done once it reached the target, or once a later stage has gone past it
 // (stages the node's prune config skips can keep a 0 checkpoint).
+//
+// reth reports its stages alphabetically, so they are first put back in
+// pipeline order; "passed by a later stage" only means something there.
 func annotateExecutionStages(el *ExecutionStatus) {
 	if len(el.Stages) == 0 {
 		return
 	}
+
+	sortRethStages(el.Stages)
 
 	target := el.HighestBlock
 	for _, s := range el.Stages {
@@ -81,6 +87,30 @@ func annotateExecutionStages(el *ExecutionStatus) {
 			s.State = StagePending
 		}
 	}
+}
+
+// rethPipelineOrder is reth's default pipeline (crates/stages/stages/src/sets.rs).
+var rethPipelineOrder = []string{
+	"Era", "Headers", "Bodies", "SenderRecovery", "Execution",
+	"PruneSenderRecovery", "MerkleUnwind", "AccountHashing", "StorageHashing",
+	"MerkleExecute", "TransactionLookup", "IndexStorageHistory",
+	"IndexAccountHistory", "Prune", "Finish",
+}
+
+// sortRethStages orders stages by rethPipelineOrder; unknown stages keep
+// their relative order after the known ones.
+func sortRethStages(stages []SyncStage) {
+	rank := func(name string) int {
+		if i := slices.Index(rethPipelineOrder, name); i >= 0 {
+			return i
+		}
+
+		return len(rethPipelineOrder)
+	}
+
+	slices.SortStableFunc(stages, func(a, b SyncStage) int {
+		return rank(a.Name) - rank(b.Name)
+	})
 }
 
 // executionStage returns reth's "Execution" stage and the sync target.

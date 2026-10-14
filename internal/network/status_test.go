@@ -505,3 +505,82 @@ func TestRateTracker(t *testing.T) {
 		t.Fatal("rate after an unwind must be re-measured")
 	}
 }
+
+func TestAnnotateExecutionStages_AlphabeticalFromReth(t *testing.T) {
+	// reth v2.7 eth_syncing.stages, as returned (alphabetical), mid-Execution.
+	const tip = 26187032
+	in := []struct {
+		name  string
+		block uint64
+	}{
+		{"AccountHashing", 0},
+		{"Bodies", tip},
+		{"Era", 0},
+		{"Execution", 6349777},
+		{"Finish", 0},
+		{"Headers", tip},
+		{"IndexAccountHistory", 0},
+		{"IndexStorageHistory", 0},
+		{"MerkleExecute", 0},
+		{"MerkleUnwind", 0},
+		{"Prune", 0},
+		{"PruneSenderRecovery", 0},
+		{"SenderRecovery", tip},
+		{"StorageHashing", 0},
+		{"TransactionLookup", 0},
+	}
+
+	el := ExecutionStatus{}
+	for _, s := range in {
+		el.Stages = append(el.Stages, SyncStage{Name: s.name, Block: s.block})
+	}
+
+	annotateExecutionStages(&el)
+
+	var order []string
+	states := map[string]string{}
+	for _, s := range el.Stages {
+		order = append(order, s.Name)
+		states[s.Name] = s.State
+	}
+
+	if !reflect.DeepEqual(order, rethPipelineOrder) {
+		t.Fatalf("order = %v", order)
+	}
+
+	for name, want := range map[string]string{
+		"Era": StageDone, "Headers": StageDone, "Bodies": StageDone, "SenderRecovery": StageDone,
+		"Execution": StageCurrent, "AccountHashing": StagePending, "StorageHashing": StagePending,
+		"TransactionLookup": StagePending, "Finish": StagePending,
+	} {
+		if states[name] != want {
+			t.Errorf("%s = %q, want %q", name, states[name], want)
+		}
+	}
+}
+
+func TestRateTracker_CheckpointPausesAreNotStalls(t *testing.T) {
+	// reth's Execution checkpoint only moves on commit: a flat minute is
+	// normal, a flat five minutes is worth flagging.
+	r := NewRateTracker()
+	t0 := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	stage := func() []NodeStatus {
+		return []NodeStatus{{Namespace: "n", Execution: &ExecutionStatus{Stages: []SyncStage{
+			{Name: "Execution", State: StageCurrent, Block: 6349777, Target: 26187032},
+		}}}}
+	}
+
+	for _, at := range []time.Duration{0, 30 * time.Second, time.Minute} {
+		n := stage()
+		r.Annotate(n, t0.Add(at))
+		if n[0].Execution.Stages[0].RatePerSec != nil {
+			t.Fatalf("at %v: rate %v, want none yet", at, *n[0].Execution.Stages[0].RatePerSec)
+		}
+	}
+
+	n := stage()
+	r.Annotate(n, t0.Add(6*time.Minute))
+	if got := n[0].Execution.Stages[0].RatePerSec; got == nil || *got != 0 {
+		t.Fatalf("after 6 flat minutes: rate %v, want 0 (stalled?)", got)
+	}
+}

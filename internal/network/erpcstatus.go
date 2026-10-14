@@ -126,7 +126,7 @@ func (r StatusReport) Unhealthy() []string {
 // fails; problems are reported inside the result.
 func (p *NodeProber) Gather(ctx context.Context, deployments []Deployment, opts StatusOptions) StatusReport {
 	report := StatusReport{
-		Time:  p.now(),
+		Time:  p.now().UTC(),
 		ERPC:  ERPCStatus{Endpoint: ERPCEndpoint, Health: ERPCUnknown, Pods: []ERPCPod{}, Upstreams: []ERPCChainCount{}, Chains: []ERPCChain{}},
 		Nodes: []NodeStatus{},
 	}
