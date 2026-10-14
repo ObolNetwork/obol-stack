@@ -239,6 +239,7 @@ func newRootCommand(cfg *config.Config) *cli.Command {
 			hermesCommand(cfg),
 			sellCommand(cfg),
 			buyCommand(cfg),
+			researchCommand(cfg),
 			modelCommand(cfg),
 			{
 				Name:  "app",
