@@ -9,3 +9,9 @@
 1c8471cb64065774ee29a4d10b91a91be4ede96f:src/components/atoms/.gitkeep:http-basic-auth-in-log:2
 fcd949aa4f96554face436360ed0fd94c26f2f77:.gitleaksignore:http-basic-auth-in-log:4
 a10a8f7597c804001ae5e8863e0d5d7254e788e1:.gitleaksignore:http-basic-auth-in-log:4
+
+# Wallet export/import: Go struct fields set from variables, and one synthetic test value; no credential.
+ea783359e4dd9ec7aea5b320b121fb2b6cdcd2af:internal/hermes/wallet_export.go:bls-keystore-password:75
+ea783359e4dd9ec7aea5b320b121fb2b6cdcd2af:internal/stackbackup/wallets_test.go:bls-keystore-password:116
+ea783359e4dd9ec7aea5b320b121fb2b6cdcd2af:internal/walletbackup/verify_test.go:bls-keystore-password:15
+ea783359e4dd9ec7aea5b320b121fb2b6cdcd2af:internal/walletbackup/verify_test.go:bls-keystore-password:27
