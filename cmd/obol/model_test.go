@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/ObolNetwork/obol-stack/internal/model"
+	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/urfave/cli/v3"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -112,6 +113,64 @@ func TestModelSetup_BYOKFlags(t *testing.T) {
 		}
 		if p.BaseURL == "" {
 			t.Errorf("provider %q has no BaseURL", id)
+		}
+	}
+}
+
+// Adding a model to an already-keyed provider must not ask for the key
+// again (it failed outright without a TTY, v0.16.0-rc2).
+func TestExistingAPIKey_EnvThenStored(t *testing.T) {
+	prof, ok := model.ProviderByID("openrouter")
+	if !ok {
+		t.Fatal("openrouter not in the provider registry")
+	}
+
+	orig := storedAPIKeyFn
+	t.Cleanup(func() { storedAPIKeyFn = orig })
+
+	stored := "stored-key"
+	storedAPIKeyFn = func(_ *config.Config, provider string) string {
+		if provider != "openrouter" {
+			t.Fatalf("stored key looked up for %q", provider)
+		}
+		return stored
+	}
+
+	u := ui.New(false)
+	t.Setenv("OPENROUTER_API_KEY", "")
+	if got := existingAPIKey(&config.Config{}, u, prof); got != "stored-key" {
+		t.Fatalf("no env var: got %q, want the stored key", got)
+	}
+
+	t.Setenv("OPENROUTER_API_KEY", "env-key")
+	if got := existingAPIKey(&config.Config{}, u, prof); got != "env-key" {
+		t.Fatalf("env var set: got %q, want it to win", got)
+	}
+
+	t.Setenv("OPENROUTER_API_KEY", "")
+	stored = ""
+	if got := existingAPIKey(&config.Config{}, u, prof); got != "" {
+		t.Fatalf("nothing available: got %q, want empty (prompt)", got)
+	}
+}
+
+func TestSetupProviderArg(t *testing.T) {
+	for _, tc := range []struct {
+		flag    string
+		args    []string
+		want    string
+		wantErr bool
+	}{
+		{"", nil, "", false},
+		{"openrouter", nil, "openrouter", false},
+		{"", []string{"anthropic"}, "anthropic", false},
+		{"anthropic", []string{"anthropic"}, "anthropic", false},
+		{"openrouter", []string{"anthropic"}, "", true},
+		{"", []string{"anthropic", "extra"}, "", true},
+	} {
+		got, err := setupProviderArg(tc.flag, tc.args)
+		if (err != nil) != tc.wantErr || got != tc.want {
+			t.Errorf("setupProviderArg(%q, %q) = %q, %v; want %q, err=%t", tc.flag, tc.args, got, err, tc.want, tc.wantErr)
 		}
 	}
 }

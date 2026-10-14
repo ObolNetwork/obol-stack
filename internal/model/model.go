@@ -354,7 +354,7 @@ func PatchLiteLLMProvider(cfg *config.Config, u *ui.UI, provider, apiKey string,
 		u.Infof("Setting %s API key", provider)
 
 		patchJSON := fmt.Sprintf(`{"stringData":{"%s":"%s"}}`, envVar, apiKey)
-		if err := kubectl.Run(kubectlBinary, kubeconfigPath,
+		if err := kubectl.RunSilent(kubectlBinary, kubeconfigPath,
 			"patch", "secret", secretName, "-n", namespace,
 			"-p", patchJSON, "--type=merge"); err != nil {
 			return fmt.Errorf("failed to patch secret: %w", err)
@@ -819,7 +819,7 @@ func PreferModels(cfg *config.Config, u *ui.UI, names []string) error {
 	patchJSON := fmt.Sprintf(`{"data":{"config.yaml":%s}}`, escapedYAML)
 
 	u.Infof("Promoting %s to head of LiteLLM model_list", strings.Join(names, ", "))
-	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
+	if err := kubectl.RunSilent(kubectlBinary, kubeconfigPath,
 		"patch", "configmap", configMapName, "-n", namespace,
 		"-p", patchJSON, "--type=merge", "--field-manager=helm"); err != nil {
 		return fmt.Errorf("failed to patch ConfigMap: %w", err)
@@ -891,7 +891,7 @@ func RemoveModel(cfg *config.Config, u *ui.UI, modelName string) error {
 
 	u.Infof("Removing model %q from LiteLLM config", modelName)
 
-	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
+	if err := kubectl.RunSilent(kubectlBinary, kubeconfigPath,
 		"patch", "configmap", configMapName, "-n", namespace,
 		"-p", patchJSON, "--type=merge", "--field-manager=helm"); err != nil {
 		return fmt.Errorf("failed to patch ConfigMap: %w", err)
@@ -1328,6 +1328,18 @@ func ProviderFromModelName(name string) string {
 
 // --- Internal helpers ---
 
+// StoredAPIKey returns the provider's key already held in litellm-secrets,
+// or "" when none is stored or the cluster can't be read.
+func StoredAPIKey(cfg *config.Config, provider string) string {
+	for _, p := range knownProviders {
+		if p.ID == provider && p.EnvVar != "" {
+			return readReferencedSecrets(cfg, []string{p.EnvVar})[p.EnvVar]
+		}
+	}
+
+	return ""
+}
+
 // ResolveAPIKey checks the primary env var and each AltEnvVar in order for
 // the given provider. Returns the key value and the env var it was found in.
 // Both are empty if no key is available.
@@ -1563,7 +1575,7 @@ func patchLiteLLMConfig(kubectlBinary, kubeconfigPath string, entries []ModelEnt
 
 	patchJSON := fmt.Sprintf(`{"data":{"config.yaml":%s}}`, escapedYAML)
 
-	return kubectl.Run(kubectlBinary, kubeconfigPath,
+	return kubectl.RunSilent(kubectlBinary, kubeconfigPath,
 		"patch", "configmap", configMapName, "-n", namespace,
 		"-p", patchJSON, "--type=merge", "--field-manager=helm")
 }

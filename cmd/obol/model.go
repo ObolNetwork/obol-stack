@@ -61,8 +61,9 @@ func modelTokenCommand(cfg *config.Config) *cli.Command {
 
 func modelSetupCommand(cfg *config.Config) *cli.Command {
 	return &cli.Command{
-		Name:  "setup",
-		Usage: "Configure an LLM provider in the LiteLLM gateway",
+		Name:      "setup",
+		Usage:     "Configure an LLM provider in the LiteLLM gateway",
+		ArgsUsage: "[provider]",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
 				Name:  "provider",
@@ -70,7 +71,7 @@ func modelSetupCommand(cfg *config.Config) *cli.Command {
 			},
 			&cli.StringFlag{
 				Name:    "api-key",
-				Usage:   "API key for the provider (BYOK; also read from the provider's env var if set)",
+				Usage:   "API key for the provider (BYOK). Without it: the provider's env var (e.g. OPENROUTER_API_KEY), then the key already configured, then a prompt",
 				Sources: cli.EnvVars("LLM_API_KEY"),
 			},
 			&cli.StringSliceFlag{
@@ -87,9 +88,13 @@ func modelSetupCommand(cfg *config.Config) *cli.Command {
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
-			provider := cmd.String("provider")
+			provider, err := setupProviderArg(cmd.String("provider"), cmd.Args().Slice())
+			if err != nil {
+				return err
+			}
 			apiKey := cmd.String("api-key")
 			models := cmd.StringSlice("model")
+			declinedDetected := false
 
 			// Interactive mode if flags not provided
 			if provider == "" {
@@ -127,6 +132,8 @@ func modelSetupCommand(cfg *config.Config) *cli.Command {
 
 					if u.Confirm("Use detected credential?", true) {
 						apiKey = det.key
+					} else {
+						declinedDetected = true
 					}
 				}
 			}
@@ -140,6 +147,9 @@ func modelSetupCommand(cfg *config.Config) *cli.Command {
 			}
 			if prof.ID == model.ProviderOllama {
 				return setupOllama(cfg, u, models)
+			}
+			if apiKey == "" && !declinedDetected {
+				apiKey = existingAPIKey(cfg, u, prof)
 			}
 			return setupCloudProvider(cfg, u, prof, apiKey, models, cmd.Bool("free"))
 		},
@@ -198,6 +208,42 @@ func setupOllama(cfg *config.Config, u *ui.UI, models []string) error {
 	u.Successf("Ollama configured. To change later, run: obol model setup (or obol model remove <name>)")
 
 	return promoteAndSync(cfg, u, explicit)
+}
+
+// setupProviderArg accepts the provider as --provider or a single positional
+// (`obol model setup openrouter --model …`). A stray positional used to be
+// ignored, so the picker silently fell back to its default provider.
+func setupProviderArg(flag string, args []string) (string, error) {
+	switch {
+	case len(args) == 0:
+		return flag, nil
+	case len(args) > 1:
+		return "", fmt.Errorf("unexpected arguments %q; usage: obol model setup [provider] [--model <id>]", strings.Join(args, " "))
+	case flag != "" && flag != args[0]:
+		return "", fmt.Errorf("provider given twice: %q and --provider %q", args[0], flag)
+	default:
+		return args[0], nil
+	}
+}
+
+// storedAPIKeyFn is swappable for tests.
+var storedAPIKeyFn = model.StoredAPIKey
+
+// existingAPIKey finds a key for prof without prompting: the provider's env
+// var (or an alternate), else the key already stored in litellm-secrets, so
+// adding a model to a configured provider doesn't ask for the key again.
+func existingAPIKey(cfg *config.Config, u *ui.UI, prof model.ProviderInfo) string {
+	if key, envVar := model.ResolveAPIKey(prof.ID); key != "" {
+		u.Infof("Using %s API key from %s", prof.Name, envVar)
+		return key
+	}
+
+	if key := storedAPIKeyFn(cfg, prof.ID); key != "" {
+		u.Infof("Using the %s API key already configured in LiteLLM", prof.Name)
+		return key
+	}
+
+	return ""
 }
 
 func setupCloudProvider(cfg *config.Config, u *ui.UI, prof model.ProviderInfo, apiKey string, models []string, free bool) error {

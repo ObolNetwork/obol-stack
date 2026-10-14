@@ -262,7 +262,7 @@ func applyRecordedSecrets(cfg *config.Config, secrets map[string]string) (bool, 
 		return false, err
 	}
 	kubectlBinary, kubeconfigPath := kubectl.Paths(cfg)
-	if err := kubectl.Run(kubectlBinary, kubeconfigPath,
+	if err := kubectl.RunSilent(kubectlBinary, kubeconfigPath,
 		"patch", "secret", secretName, "-n", namespace,
 		"-p", string(patch), "--type=merge"); err != nil {
 		return false, err
@@ -360,7 +360,7 @@ func writeLiteLLMConfig(kubectlBinary, kubeconfigPath string, litellmConfig *Lit
 		return fmt.Errorf("escape YAML: %w", err)
 	}
 	patchJSON := fmt.Sprintf(`{"data":{"config.yaml":%s}}`, escapedYAML)
-	return kubectl.Run(kubectlBinary, kubeconfigPath,
+	return kubectl.RunSilent(kubectlBinary, kubeconfigPath,
 		"patch", "configmap", configMapName, "-n", namespace,
 		"-p", patchJSON, "--type=merge", "--field-manager=helm")
 }
