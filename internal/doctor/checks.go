@@ -552,7 +552,44 @@ func checkOllama(ctx context.Context, e *Env) Result {
 		return info("not running (only needed for local models)")
 	}
 
+	if r, exposed := ollamaListensOnAllInterfaces(ctx, e); exposed {
+		return r
+	}
+
 	return info(fmt.Sprintf("running, %d model(s) pulled", len(ms)))
+}
+
+// ollamaGOOS is swappable for tests.
+var ollamaGOOS = runtime.GOOS
+
+// ollamaListensOnAllInterfaces flags a Linux Ollama bound to every interface
+// (OLLAMA_HOST=0.0.0.0, needed so the k3d cluster can reach it over the
+// Docker bridge). Ollama has no authentication, so that also serves anyone
+// on the local network unless a firewall limits the port.
+func ollamaListensOnAllInterfaces(ctx context.Context, e *Env) (Result, bool) {
+	if ollamaGOOS != "linux" {
+		return Result{}, false
+	}
+
+	out, err := e.Run(ctx, "ss", "-Hltn", "sport = :11434")
+	if err != nil {
+		return Result{}, false
+	}
+
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 4 {
+			continue
+		}
+
+		switch fields[3] {
+		case "0.0.0.0:11434", "*:11434", "[::]:11434":
+			return warn("listening on all interfaces, so anyone on your network can use it (Ollama has no authentication)",
+				"limit port 11434 to Docker networks, e.g.: sudo ufw allow from 172.16.0.0/12 to any port 11434 proto tcp && sudo ufw deny 11434/tcp"), true
+		}
+	}
+
+	return Result{}, false
 }
 
 func checkCABundle(ctx context.Context, e *Env) Result {

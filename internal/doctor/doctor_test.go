@@ -270,3 +270,32 @@ func TestRun_GatesClusterChecksAndRepairs(t *testing.T) {
 		t.Errorf("summary = %+v", s)
 	}
 }
+
+func TestOllamaListensOnAllInterfaces(t *testing.T) {
+	orig := ollamaGOOS
+	t.Cleanup(func() { ollamaGOOS = orig })
+
+	cases := []struct {
+		name    string
+		goos    string
+		ss      string
+		exposed bool
+	}{
+		{"linux all interfaces", "linux", "LISTEN 0 4096 0.0.0.0:11434 0.0.0.0:*\n", true},
+		{"linux ipv6 any", "linux", "LISTEN 0 4096 *:11434 *:*\n", true},
+		{"linux loopback", "linux", "LISTEN 0 4096 127.0.0.1:11434 0.0.0.0:*\n", false},
+		{"linux bridge only", "linux", "LISTEN 0 4096 172.17.0.1:11434 0.0.0.0:*\n", false},
+		{"linux ss missing", "linux", "ERR", false},
+		{"darwin skipped", "darwin", "LISTEN 0 4096 0.0.0.0:11434 0.0.0.0:*\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ollamaGOOS = tc.goos
+			e := fakeEnv(t, map[string]string{"ss -Hltn": tc.ss})
+			r, exposed := ollamaListensOnAllInterfaces(context.Background(), e)
+			if exposed != tc.exposed {
+				t.Fatalf("exposed = %v, want %v (result %+v)", exposed, tc.exposed, r)
+			}
+		})
+	}
+}

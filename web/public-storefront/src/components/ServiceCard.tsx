@@ -104,14 +104,13 @@ function quoteAgentTask(task: string): string {
   return JSON.stringify(resolvedAgentTask(task));
 }
 
+// Agent offers pin the model seller-side, so the command carries no --model.
 function buildAgentPayAgentCommand(
   endpoint: string,
-  model: string | undefined,
   agentTask: string,
   maxPrice: string,
 ): string {
-  const modelId = model || "<model-id>";
-  return `pay-agent ${endpoint} --model ${JSON.stringify(modelId)} --message ${quoteAgentTask(agentTask)}${maxPrice}`;
+  return `pay-agent ${endpoint} --message ${quoteAgentTask(agentTask)}${maxPrice}`;
 }
 
 function buildAgentObolPrompt(
@@ -121,7 +120,7 @@ function buildAgentObolPrompt(
   const maxPrice = maxPriceFlag(service.priceRaw, service.priceUnit);
   return `Use the buy-x402 skill's \`pay-agent\` command to buy one round of work from this Obol Agent (skills, tools, and memory — not a raw LLM):
 
-${buildAgentPayAgentCommand(service.endpoint, service.model, agentTask, maxPrice)}`;
+${buildAgentPayAgentCommand(service.endpoint, agentTask, maxPrice)}`;
 }
 
 function httpMaxPriceClause(opt: ServicePayment): string {

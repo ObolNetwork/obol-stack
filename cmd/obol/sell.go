@@ -3035,6 +3035,14 @@ func sellDeleteCommand(cfg *config.Config) *cli.Command {
 				if updErr := inference.NewStore(cfg.ConfigDir).Update(legacy); updErr != nil {
 					u.Warnf("could not tombstone inference descriptor for %s: %v", name, updErr)
 				}
+				// The old cluster mode also created a host-routed Service +
+				// Endpoints next to the offer.
+				if svcErr := kubectlRun(cfg, "delete", "service,endpoints", name, "-n", ns, "--ignore-not-found"); svcErr != nil {
+					u.Warnf("could not remove the host Service/Endpoints for %s: %v", name, svcErr)
+				}
+				if hint := legacyGatewayProcessHint(cfg, name); hint != "" {
+					u.Warnf("%s", hint)
+				}
 			}
 
 			// Clean up demo backend resources if this is a demo service.
@@ -4414,19 +4422,40 @@ func warnLegacyInferenceOffers(cfg *config.Config, u *ui.UI) {
 	}
 	for _, d := range activeInferenceDeployments(all) {
 		if d.LegacyClusterRouted() {
-			u.Warnf("%s", legacyInferenceResumeWarning(d))
+			u.Warnf("%s", legacyInferenceResumeWarning(cfg, d))
 		}
 	}
 }
 
 // legacyInferenceResumeWarning is the one-line resume warning for a legacy
 // cluster-routed `sell inference` descriptor.
-func legacyInferenceResumeWarning(d *inference.Deployment) string {
+func legacyInferenceResumeWarning(cfg *config.Config, d *inference.Deployment) string {
 	ns := legacyInferenceNamespace(d)
 	recipe := liteLLMSellRecipe(inferenceRecipeFromDeployment(d))
-	return fmt.Sprintf("not resuming sell-inference offer %q: cluster routing for `obol sell inference` was removed. "+
+	msg := fmt.Sprintf("not resuming sell-inference offer %q: cluster routing for `obol sell inference` was removed. "+
 		"Remove the old offer (`obol sell delete %s -n %s`) and re-create it via LiteLLM: `%s` then `%s`",
 		d.Name, d.Name, ns, recipe[0], recipe[1])
+	if hint := legacyGatewayProcessHint(cfg, d.Name); hint != "" {
+		msg += ". " + hint
+	}
+	return msg
+}
+
+// legacyGatewayProcessHint names a host gateway started by an older release
+// (detached, listening on all interfaces) that may still be running. obol
+// does not signal it: the recorded PID may have been reused.
+func legacyGatewayProcessHint(cfg *config.Config, name string) string {
+	pidPath := filepath.Join(cfg.StateDir, "sell-inference", name, "gateway.pid")
+	data, err := os.ReadFile(pidPath)
+	if err != nil {
+		return ""
+	}
+	pid := strings.TrimSpace(string(data))
+	if pid == "" {
+		return ""
+	}
+	return fmt.Sprintf("An older `obol sell inference` gateway for %q may still be running (pid %s, recorded in %s): "+
+		"check it with `ps -p %s -o args=` and stop it with `kill %s`, then delete the pid file", name, pid, pidPath, pid, pid)
 }
 
 // legacyInferenceNamespace is the namespace a legacy cluster-routed

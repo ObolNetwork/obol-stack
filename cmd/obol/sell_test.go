@@ -2579,3 +2579,25 @@ func TestBuildSellRegistrationConfig_RejectsNonPlainTextName(t *testing.T) {
 		t.Fatalf("registration.name = %v", reg["name"])
 	}
 }
+
+func TestLegacyGatewayProcessHint(t *testing.T) {
+	cfg := &config.Config{StateDir: t.TempDir()}
+	if got := legacyGatewayProcessHint(cfg, "qwen"); got != "" {
+		t.Fatalf("no pid file: hint = %q, want empty", got)
+	}
+
+	dir := filepath.Join(cfg.StateDir, "sell-inference", "qwen")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "gateway.pid"), []byte("4242\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := legacyGatewayProcessHint(cfg, "qwen")
+	for _, want := range []string{"pid 4242", "ps -p 4242", "kill 4242"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("hint %q missing %q", got, want)
+		}
+	}
+}
