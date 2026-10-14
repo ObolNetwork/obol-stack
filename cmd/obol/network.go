@@ -668,7 +668,7 @@ func printERPCStatus(u *ui.UI, st networkERPCStatus) {
 	u.Bold("eRPC gateway")
 	if st.Pod != "" {
 		for line := range strings.SplitSeq(st.Pod, "\n") {
-			u.Printf("  %s", strings.TrimSpace(line))
+			u.Printf("  %s", erpcPodLine(line, u.IsVerbose()))
 		}
 	} else {
 		u.Dim("  (no pods found)")
@@ -682,6 +682,55 @@ func printERPCStatus(u *ui.UI, st networkERPCStatus) {
 	for _, c := range st.Upstreams {
 		u.Printf("  %-20s (chain %d): %d upstream(s)", c.Name, c.ChainID, c.Upstreams)
 	}
+}
+
+// erpcPodLine turns a NAME STATUS READY RESTARTS row from GetERPCStatus into
+// "pod Running · ready"; the pod name only shows under --verbose.
+func erpcPodLine(line string, verbose bool) string {
+	f := strings.Fields(line)
+	if len(f) != 4 {
+		return strings.TrimSpace(line)
+	}
+
+	out := "pod " + f[1]
+	if f[2] == "true" {
+		out += " · ready"
+	} else {
+		out += " · not ready"
+	}
+
+	if f[3] != "0" {
+		out += " · " + f[3] + " restarts"
+	}
+
+	if verbose {
+		out += " (" + f[0] + ")"
+	}
+
+	return out
+}
+
+// shortClientVersion keeps "client/version" from a web3_clientVersion or
+// beacon version string ("reth/v2.7.0-3d592ec/x86_64-unknown-linux-gnu").
+func shortClientVersion(v string) string {
+	parts := strings.SplitN(v, "/", 3)
+	if len(parts) < 3 {
+		return v
+	}
+
+	return parts[0] + "/" + parts[1]
+}
+
+// podsNeedLine reports whether the Pods detail adds anything: the verdict
+// warnings already name every not-ready pod that has a reason or restarts.
+func podsNeedLine(pods []network.PodStatus) bool {
+	for _, p := range pods {
+		if !p.Ready && p.Reason == "" && p.Restarts == 0 {
+			return true
+		}
+	}
+
+	return false
 }
 
 func printNodeStatus(u *ui.UI, n network.NodeStatus) {
@@ -718,14 +767,14 @@ func printNodeStatus(u *ui.UI, n network.NodeStatus) {
 
 	if n.PodsError != "" {
 		u.Detail("Pods", "(unavailable: "+n.PodsError+")")
-	} else if len(n.Pods) > 0 {
+	} else if len(n.Pods) > 0 && (u.IsVerbose() || podsNeedLine(n.Pods)) {
 		var pods []string
 		for _, p := range n.Pods {
 			s := p.Component + " " + p.Phase
 			if p.Ready {
 				s += " ready"
 			} else if p.Reason != "" {
-				s += " " + p.Reason
+				s = p.Component + " " + p.Reason
 			}
 			if p.Restarts > 0 {
 				s += fmt.Sprintf(" (%d restarts)", p.Restarts)
@@ -747,7 +796,12 @@ func printNodeStatus(u *ui.UI, n network.NodeStatus) {
 				line += fmt.Sprintf(" · %d peers", *el.Peers)
 			}
 			if el.ClientVersion != "" {
-				line += " · " + el.ClientVersion
+				v := el.ClientVersion
+				if !u.IsVerbose() {
+					v = shortClientVersion(v)
+				}
+
+				line += " · " + v
 			}
 			u.Detail("Execution", line)
 		}
@@ -757,13 +811,32 @@ func printNodeStatus(u *ui.UI, n network.NodeStatus) {
 		if !cl.Reachable {
 			u.Detail("Consensus", "unreachable: "+cl.Error)
 		} else {
-			line := fmt.Sprintf("head slot %d · distance %d · syncing=%t optimistic=%t el_offline=%t",
-				cl.HeadSlot, cl.SyncDistance, cl.IsSyncing, cl.IsOptimistic, cl.ELOffline)
+			line := fmt.Sprintf("head slot %d · synced", cl.HeadSlot)
+			if cl.IsSyncing {
+				line = fmt.Sprintf("syncing, head slot %d · %d slots behind", cl.HeadSlot, cl.SyncDistance)
+			}
+
+			if cl.IsOptimistic {
+				line += " · optimistic"
+			}
+
+			if cl.ELOffline {
+				line += " · execution offline"
+			}
 			if cl.Peers != nil {
 				line += fmt.Sprintf(" · %d peers", *cl.Peers)
 			}
 			if cl.Version != "" {
-				line += " · " + cl.Version
+				v := cl.Version
+				if !u.IsVerbose() {
+					v = shortClientVersion(v)
+				}
+
+				line += " · " + v
+			}
+
+			if u.IsVerbose() {
+				line += fmt.Sprintf(" · syncing=%t optimistic=%t el_offline=%t", cl.IsSyncing, cl.IsOptimistic, cl.ELOffline)
 			}
 			u.Detail("Consensus", line)
 		}
