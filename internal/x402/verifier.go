@@ -662,6 +662,7 @@ func (v *Verifier) resolvePaidRoute(cfg *PricingConfig, rule *RouteRule) (*match
 	var primaryChain ChainInfo
 	var primaryAsset AssetInfo
 	var extensions map[string]any
+	seen := make(map[paymentRequirementKey]bool, len(opts))
 	for i := range opts {
 		opt := opts[i]
 		chainName := cfg.Chain
@@ -692,6 +693,14 @@ func (v *Verifier) resolvePaidRoute(cfg *PricingConfig, rule *RouteRule) (*match
 			log.Printf("x402-verifier: invalid price %q for route %q option %d: %v", opt.Price, rule.Pattern, i, err)
 			continue
 		}
+		// An option repeated in the offer (e.g. spec.payments listing the
+		// same scheme/network/asset/amount/payTo twice, or once by CAIP-2
+		// and once by legacy alias) is advertised once.
+		key := requirementKey(req)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		mergeAgentExtras(&req, rule)
 		mergeModelExtra(&req, rule)
 		reqs = append(reqs, req)

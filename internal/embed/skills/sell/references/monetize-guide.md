@@ -259,7 +259,7 @@ Buyers can discover this service at:
 
 To check status:  obol sell status <name> -n <namespace>
 To stop selling:  obol sell stop <name> -n <namespace>
-To delete:        obol sell delete <name> -n <namespace>
+To delete:        obol sell delete <name> -n <namespace> --force
 ```
 
 ## OASF Skills & Domains Reference

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/tools"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
@@ -648,16 +649,36 @@ func fallback(s, def string) string {
 // --- Wallets ------------------------------------------------------------
 
 // checkWallets lists agent wallet addresses (public) so the operator knows
-// what a backup must cover. Only each keystore's "address" field is read.
+// what a backup must cover. Only the "address" field of a keystore or of the
+// agent's wallet.json metadata is read. Each Hermes instance (the default
+// agent included) is looked up by its keystore directory, then its
+// wallet.json; a keystore directory this user cannot read (the remote-signer
+// runs as UID 65532) is still reported as present.
 func checkWallets(ctx context.Context, e *Env) Result {
+	var entries []string
+
+	seen := map[string]bool{}
+
+	ids, _ := agentruntime.ListInstanceIDs(e.Cfg, agentruntime.Hermes)
+	for _, id := range ids {
+		seen[agentruntime.Namespace(agentruntime.Hermes, id)] = true
+
+		if entry := hermesWalletEntry(e, id); entry != "" {
+			entries = append(entries, entry)
+		}
+	}
+
+	// Keystores of agents without a local instance dir (e.g. restored data).
 	matches, _ := filepath.Glob(filepath.Join(e.Cfg.DataDir, "*", "remote-signer-keystores", "*.json"))
-
-	var addrs []string
-
 	for _, m := range matches {
+		ns := filepath.Base(filepath.Dir(filepath.Dir(m)))
+		if seen[ns] {
+			continue
+		}
+
 		if a := keystoreAddress(m); a != "" {
-			ns := filepath.Base(filepath.Dir(filepath.Dir(m)))
-			addrs = append(addrs, fmt.Sprintf("%s %s", strings.TrimPrefix(ns, "hermes-"), shortAddr(a)))
+			seen[ns] = true
+			entries = append(entries, fmt.Sprintf("%s %s", strings.TrimPrefix(ns, "hermes-"), shortAddr(a)))
 		}
 	}
 
@@ -669,11 +690,11 @@ func checkWallets(ctx context.Context, e *Env) Result {
 		}
 	}
 
-	if len(addrs) == 0 && subAgents == 0 {
+	if len(entries) == 0 && subAgents == 0 {
 		return info("none yet")
 	}
 
-	msg := strings.Join(addrs, ", ")
+	msg := strings.Join(entries, ", ")
 	if subAgents > 0 {
 		msg = strings.TrimPrefix(msg+fmt.Sprintf(", %d sub-agent wallet(s) held only in the cluster", subAgents), ", ")
 	}
@@ -682,6 +703,38 @@ func checkWallets(ctx context.Context, e *Env) Result {
 	r.Fix = "back up: obol agent wallet backup --file <path>; sub-agents: obol stack export --file <path> (stack running)"
 
 	return r
+}
+
+// hermesWalletEntry describes one Hermes instance's wallet as
+// "<id> <short address>", "<id> wallet present (not readable by this user)",
+// or "" when the instance has no wallet.
+func hermesWalletEntry(e *Env, id string) string {
+	dir := agentruntime.KeystoreVolumePath(e.Cfg, agentruntime.Hermes, id)
+
+	matches, _ := filepath.Glob(filepath.Join(dir, "*.json"))
+	for _, m := range matches {
+		if a := keystoreAddress(m); a != "" {
+			return fmt.Sprintf("%s %s", id, shortAddr(a))
+		}
+	}
+
+	if a := keystoreAddress(filepath.Join(agentruntime.DeploymentPath(e.Cfg, agentruntime.Hermes, id), "wallet.json")); a != "" {
+		return fmt.Sprintf("%s %s", id, shortAddr(a))
+	}
+
+	// Keystore files we could not read, or a directory we cannot list.
+	unreadable := len(matches) > 0
+	if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+		if _, err := os.ReadDir(dir); err != nil {
+			unreadable = true
+		}
+	}
+
+	if unreadable {
+		return id + " wallet present (not readable by this user)"
+	}
+
+	return ""
 }
 
 func keystoreAddress(path string) string {

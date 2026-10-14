@@ -54,6 +54,10 @@ func checkLiteLLMModelName(modelName string, configured []string, listErr error)
 	return nil
 }
 
+// liteLLMConfiguredModelsFn reads LiteLLM's configured model names;
+// overridable in tests.
+var liteLLMConfiguredModelsFn = model.GetConfiguredModels
+
 // configuredLiteLLMModels reads LiteLLM's model list for --model validation,
 // noting (not failing) when it can't be read.
 func configuredLiteLLMModels(cfg *config.Config, u *ui.UI) ([]string, error) {

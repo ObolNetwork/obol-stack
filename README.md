@@ -229,7 +229,7 @@ obol sell list                          # everything on sale
 obol sell status <name>                 # operator health and conditions
 obol sell update <name> --price 0.002   # change price or payout wallet in place
 obol sell stop <name>                   # take an offer off sale (keeps it)
-obol sell delete <name>                 # remove an offer
+obol sell delete <name> [--force]       # remove an offer (--force skips the prompt; needed in scripts)
 obol sell resume                        # replay all offers after a host reboot
 ```
 

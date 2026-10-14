@@ -314,12 +314,22 @@ func facilitatorURLFrom(r *http.Request) string {
 // when the canonical network is CAIP-2. Bankr's docs and some hosted examples
 // still teach the legacy names, so advertising both gives buyers a compatible
 // option without dropping the standard CAIP-2 form other clients already use.
+//
+// Entries that describe the same payment (see requirementKey) are emitted
+// once: the canonical entry is kept and at most one legacy alias is added
+// for it, so a duplicated option never shows up as two identical choices.
 func legacyCompatRequirements(requirements []x402types.PaymentRequirements) []x402types.PaymentRequirements {
 	if len(requirements) == 0 {
 		return nil
 	}
 	out := make([]x402types.PaymentRequirements, 0, len(requirements)*2)
+	seen := make(map[paymentRequirementKey]bool, len(requirements))
 	for _, req := range requirements {
+		key := requirementKey(req)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		out = append(out, req)
 		chain, err := ResolveChainInfo(req.Network)
 		if err != nil || chain.Name == "" || chain.Name == req.Network {
@@ -330,6 +340,26 @@ func legacyCompatRequirements(requirements []x402types.PaymentRequirements) []x4
 		out = append(out, alias)
 	}
 	return out
+}
+
+// paymentRequirementKey identifies one payment option independent of how
+// its network is spelled (CAIP-2 vs legacy alias) or address case.
+type paymentRequirementKey struct {
+	scheme, network, asset, amount, payTo string
+}
+
+func requirementKey(req x402types.PaymentRequirements) paymentRequirementKey {
+	network := req.Network
+	if chain, err := ResolveChainInfo(network); err == nil && chain.CAIP2Network != "" {
+		network = chain.CAIP2Network
+	}
+	return paymentRequirementKey{
+		scheme:  strings.ToLower(strings.TrimSpace(req.Scheme)),
+		network: strings.ToLower(strings.TrimSpace(network)),
+		asset:   strings.ToLower(strings.TrimSpace(req.Asset)),
+		amount:  strings.TrimSpace(req.Amount),
+		payTo:   strings.ToLower(strings.TrimSpace(req.PayTo)),
+	}
 }
 
 func paymentRequiredBody(r *http.Request, requirements []x402types.PaymentRequirements, extensions map[string]any) map[string]any {

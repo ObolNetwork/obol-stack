@@ -1611,21 +1611,70 @@ def _reconcile_purchase_autorefill(pr, live_status, signer_address):
 # Probe
 # ---------------------------------------------------------------------------
 
-def _probe_endpoint(endpoint_url, model_id="test", kind="inference", method=None, quiet=False):
+def _resolve_pay_method(method, data, kind="http"):
+    """HTTP method for a one-shot paid call: an explicit --method wins;
+    otherwise a request body (--data) or the inference contract implies POST,
+    and a bodyless http call is a GET."""
+    if isinstance(method, str) and method.strip():
+        return method.strip().upper()
+    if data or kind == "inference":
+        return "POST"
+    return "GET"
+
+
+def _payment_option_key(acc):
+    """Identity of one accepts[] entry for de-duplication: two entries with the
+    same scheme, network, asset, amount and payTo are the same option. The
+    network is compared by chain, so a seller's CAIP-2 entry ("eip155:84532")
+    and its legacy-alias copy ("base-sepolia") count as one option."""
+    return (
+        str(acc.get("scheme") or "").strip().lower(),
+        _option_chain(acc).lower(),
+        str(acc.get("asset") or "").strip().lower(),
+        str(acc.get("amount", acc.get("maxAmountRequired", "")) or "").strip(),
+        str(acc.get("payTo") or "").strip().lower(),
+    )
+
+
+def _dedupe_accepts(accepts):
+    """Drop repeated payment options, keeping the first occurrence (and order)."""
+    seen = set()
+    out = []
+    for acc in accepts or []:
+        if not isinstance(acc, dict):
+            out.append(acc)
+            continue
+        key = _payment_option_key(acc)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(acc)
+    return out
+
+
+def _probe_endpoint(endpoint_url, model_id="test", kind="inference", method=None, quiet=False, data=None):
     """Probe an endpoint for x402 pricing. Returns parsed 402 body or None.
 
     kind="inference" appends /v1/chat/completions and POSTs a chat-completions
     body (the inference contract). kind="http" sends the URL as-is using `method`
-    (default GET) with no body — appropriate for `type:http` ServiceOffers.
+    (default GET) — appropriate for `type:http` ServiceOffers. When `data` is
+    given it is sent as the probe body (Content-Type: application/json): a
+    seller's body policy (e.g. LiteLLM-fronting offers) validates the body
+    before answering 402, so a bodyless probe would be rejected with 400.
 
     quiet=True suppresses the failure prints — used by `go`, which probes two
     URL shapes and only wants noise from the attempt that mattered.
     """
     if kind == "http":
         url = endpoint_url.rstrip("/")
+        headers = {"User-Agent": USER_AGENT}
+        probe_body = None
+        if data:
+            probe_body = data.encode() if isinstance(data, str) else data
+            headers["Content-Type"] = "application/json"
         request = urllib.request.Request(
-            url, method=(method or "GET").upper(),
-            headers={"User-Agent": USER_AGENT},
+            url, data=probe_body, method=(method or "GET").upper(),
+            headers=headers,
         )
     else:
         base = _normalize_endpoint(endpoint_url)
@@ -1664,6 +1713,9 @@ def _probe_endpoint(endpoint_url, model_id="test", kind="inference", method=None
                 print("402 response has no 'accepts' array.", file=sys.stderr)
             return None
 
+        # Defensive: a seller that lists the same option twice would otherwise
+        # show the buyer two identical choices.
+        pricing["accepts"] = _dedupe_accepts(pricing["accepts"])
         return pricing
     except urllib.error.URLError as e:
         if not quiet:
@@ -2592,7 +2644,7 @@ def _print_async_job_guidance(request_url, body_text):
         print(f"  2. Fetch:  curl {result_url}")
 
 
-def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=None, token=None, payment_option=None,
+def cmd_pay(url, method=None, data=None, kind="http", network=None, timeout=None, token=None, payment_option=None,
             max_price=None):
     """Single-shot paid HTTP request: probe → pre-sign one auth → send with X-PAYMENT.
 
@@ -2626,10 +2678,14 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=Non
             print("Note: non-streaming inference call, timeout 600s — prefer `go`/`pay-agent` (streaming) for slow models.")
     else:
         timeout = float(timeout)
-    method = (method or "GET").upper()
+    # --data implies POST unless --method was given explicitly; the inference
+    # contract is always POST /v1/chat/completions.
+    method = _resolve_pay_method(method, data, kind)
 
     print(f"Probing {url} ...")
-    pricing = _probe_endpoint(url, kind=kind, method=method)
+    # The probe carries the caller's body: sellers validate it (body policy)
+    # before answering 402, so a bodyless probe of a POST route fails with 400.
+    pricing = _probe_endpoint(url, kind=kind, method=method, data=data)
     if not pricing:
         print("Failed to get x402 pricing.", file=sys.stderr)
         sys.exit(1)
@@ -3090,12 +3146,18 @@ def cmd_go(url, opts):
     # cluster offers, which gate every sub-path); fall back to the
     # chat-completions probe shape for standalone inference gateways that
     # only gate /v1/chat/completions.
-    pricing = _probe_endpoint(url, kind="http", method="GET", quiet=True)
+    data = opts.get("data")
+    method = _resolve_pay_method(opts.get("method"), data)
+    # With --data (or an explicit --method) probe the request the caller will
+    # actually send, body included, then fall back to a plain GET.
+    pricing = _probe_endpoint(url, kind="http", method=method, data=data, quiet=True)
+    if not pricing and (method != "GET" or data):
+        pricing = _probe_endpoint(url, kind="http", method="GET", quiet=True)
     if not pricing:
         pricing = _probe_endpoint(url, kind="inference", quiet=True)
     if not pricing:
         # Re-run the primary probe loudly so the caller sees the real error.
-        pricing = _probe_endpoint(url, kind="http", method="GET")
+        pricing = _probe_endpoint(url, kind="http", method=method, data=data)
         if not pricing:
             print("Failed to get x402 pricing. Check the URL is the service base "
                   "(e.g. https://seller.example.com/services/<name>) and reachable.", file=sys.stderr)
@@ -3103,7 +3165,6 @@ def cmd_go(url, opts):
 
     shape, model = _offer_shape(pricing)
     message = opts.get("message")
-    data = opts.get("data")
 
     if shape in ("agent", "chat"):
         label = "Obol Agent" if shape == "agent" else "chat-completions (inference)"
@@ -3136,7 +3197,6 @@ def cmd_go(url, opts):
     if message and not data:
         print("Note: --message is for chat/agent offers; this HTTP offer gets a "
               "plain request. Pass --data '<json>' to send a body.", file=sys.stderr)
-    method = opts.get("method") or ("POST" if data else "GET")
     cmd_pay(
         url,
         method=method,
@@ -3196,6 +3256,7 @@ def usage():
     print("  probe <endpoint-url> [--model <id>] [--type http|inference|agent] [--method GET|POST]")
     print("                                               Probe x402 pricing without paying (default --type inference)")
     print("  pay <url> [--type http|inference] [--method GET|POST] [--data '<body>'] [--timeout <seconds>]")
+    print("                                               (--data implies POST unless --method is given)")
     print("       [--token <SYMBOL>] [--network <name>] [--payment-option <N>] [--max-price <token units>]")
     print("                                               Single-shot paid request (sign 1 auth, attach X-PAYMENT)")
     print("                                               Multi-currency offers: pick which asset/price to pay with")
@@ -3291,7 +3352,7 @@ if __name__ == "__main__":
             sys.exit(1)
         cmd_pay(
             positional[0],
-            method=opts.get("method", "GET"),
+            method=opts.get("method"),
             data=opts.get("data"),
             kind=kind,
             network=opts.get("network"),

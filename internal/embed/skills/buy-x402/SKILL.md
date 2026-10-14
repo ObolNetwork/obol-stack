@@ -92,7 +92,8 @@ Permit2 approval above).
   `POST /v1/chat/completions`; HTTP services typically expect `GET /` (or
   a service-specific path). Pass `--type http` to `probe` for HTTP services
   so the CLI does not append `/v1/chat/completions` to the URL. `pay`
-  defaults to `--type http` and `--method GET`.
+  defaults to `--type http` and `--method GET`; `--data` implies `POST`
+  (unless `--method` is given), and the 402 probe sends the same body.
 - **`pay` is stateless; `buy` is persistent.** Do not use `buy` for a
   `type:http` endpoint — its pipeline is inference-shaped (creates a
   PurchaseRequest, expects a model name, publishes a `paid/<model>`

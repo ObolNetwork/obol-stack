@@ -905,7 +905,7 @@ manifest. Do not paper over smoke-test failures with an ad hoc patch.
 | `obol sell list` | List all ServiceOffers |
 | `obol sell status <name> -n <ns>` | Show conditions for an offer |
 | `obol sell stop <name> -n <ns> [--grace 1h] [--force]` | Drain an offer (advertise wind-down via discovery, then tear down the route after the grace period). `--force`/`--now` skips the grace window. |
-| `obol sell delete <name> -n <ns>` | Delete an offer and cleanup |
+| `obol sell delete <name> -n <ns> [--force]` | Delete an offer and cleanup (prompts on a TTY; pass `--force` in scripts and other non-interactive use) |
 | `obol sell status` | Show cluster pricing and registration |
 | `obol sell register --private-key-file ...` | Advanced/manual registration or repair path |
 

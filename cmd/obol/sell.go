@@ -1540,12 +1540,26 @@ func humanAge(t time.Time) string {
 	}
 }
 
+const conditionStatusTrue = "True"
+
 // conditionIcon picks a glyph based on the condition's status + reason. The
 // glyphs are plain unicode (no lipgloss) so the function is safe to call from
 // pure unit tests; coloring is applied at print time via the ui package.
 func conditionIcon(cond monetizeapi.Condition) string {
+	// Draining has inverted polarity: False/Active is the healthy state;
+	// draining (True) or a finished drain (Drained) is what to flag.
+	if cond.Type == "Draining" {
+		switch {
+		case cond.Status == conditionStatusTrue, cond.Reason == "Drained":
+			return "⚠"
+		case cond.Status == "False":
+			return "✓"
+		default:
+			return "⏳"
+		}
+	}
 	switch cond.Status {
-	case "True":
+	case conditionStatusTrue:
 		switch cond.Reason {
 		case "Skipped", "Disabled":
 			return "ℹ"
@@ -4568,6 +4582,20 @@ func refuseSellInferenceWithStack(cfg *config.Config, cmd *cli.Command, name str
 		r.PerMTok = ""
 	}
 	recipe := liteLLMSellRecipe(r)
+
+	// A model LiteLLM already serves (e.g. auto-configured from host Ollama)
+	// must not be registered again: a second model_list entry for the same
+	// name with a different api_base poisons the model group. Read errors
+	// (cluster down, kubectl missing) fall back to the full recipe.
+	if r.Model != "" {
+		if configured, err := liteLLMConfiguredModelsFn(cfg); err == nil && isModelConfigured(r.Model, configured) {
+			return fmt.Errorf("this host runs an Obol Stack, so `obol sell inference` will not start a host gateway here.\n"+
+				"Model %q is already configured in LiteLLM; sell it through LiteLLM (seller-pinned model, inference-only routes, settle on delivery):\n\n"+
+				"  %s\n\n"+
+				"To run the standalone gateway with its own x402 gate on this host anyway, re-run with --standalone",
+				r.Model, recipe[1])
+		}
+	}
 
 	return fmt.Errorf("this host runs an Obol Stack, so `obol sell inference` will not start a host gateway here.\n"+
 		"Sell the inference server through LiteLLM instead (seller-pinned model, inference-only routes, settle on delivery):\n\n"+

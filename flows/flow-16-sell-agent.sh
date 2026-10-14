@@ -267,7 +267,7 @@ pass "Paid path coverage remains in flow-08-buy.sh until agent-commerce smoke is
 
 # §5: Cleanup — opt-in so a successful run leaves the agent for inspection.
 if [ "${FLOW_CLEANUP:-0}" = "1" ]; then
-    "$OBOL" sell delete "$OFFER_NAME" -n "$AGENT_NS" >/dev/null 2>&1 || true
+    "$OBOL" sell delete "$OFFER_NAME" -n "$AGENT_NS" --force >/dev/null 2>&1 || true
     "$OBOL" agent delete --force "$AGENT_NAME" >/dev/null 2>&1 || true
 fi
 

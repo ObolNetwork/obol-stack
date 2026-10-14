@@ -443,6 +443,32 @@ func TestFormatConditionLine_ShowsAge(t *testing.T) {
 	}
 }
 
+// TestConditionIcon_Draining: Draining is negative-polarity — the normal
+// False/Active state is OK, only an active or finished drain warns.
+func TestConditionIcon_Draining(t *testing.T) {
+	for _, tc := range []struct {
+		status, reason, want string
+	}{
+		{"False", "Active", "✓"},
+		{"True", "Draining", "⚠"},
+		{"False", "Drained", "⚠"},
+		{"Unknown", "", "⏳"},
+	} {
+		got := conditionIcon(monetizeapi.Condition{Type: "Draining", Status: tc.status, Reason: tc.reason})
+		if got != tc.want {
+			t.Errorf("Draining %s/%s icon = %q, want %q", tc.status, tc.reason, got, tc.want)
+		}
+	}
+	// Positive-polarity conditions keep the usual mapping.
+	if got := conditionIcon(monetizeapi.Condition{Type: "Ready", Status: "False"}); got != "⚠" {
+		t.Errorf("Ready False icon = %q, want ⚠", got)
+	}
+	line := formatConditionLine(monetizeapi.Condition{Type: "Draining", Status: "False", Reason: "Active", Message: "Offer is active"})
+	if !strings.HasPrefix(line, "  ✓ Draining: Active") {
+		t.Errorf("healthy drain line = %q", line)
+	}
+}
+
 func TestServiceOfferStatusLines_SnapshotCaveat(t *testing.T) {
 	withConditions := monetizeapi.ServiceOffer{
 		Status: monetizeapi.ServiceOfferStatus{
@@ -1001,6 +1027,16 @@ func writeStackKubeconfig(t *testing.T, cfg *config.Config) {
 	if err := os.WriteFile(filepath.Join(cfg.ConfigDir, "kubeconfig.yaml"), []byte("apiVersion: v1\n"), 0o600); err != nil {
 		t.Fatalf("write kubeconfig: %v", err)
 	}
+	// No live LiteLLM in unit tests: reading its model list fails, as on a
+	// host whose cluster is down.
+	stubLiteLLMConfiguredModels(t, nil, errors.New("cluster not running"))
+}
+
+func stubLiteLLMConfiguredModels(t *testing.T, models []string, err error) {
+	t.Helper()
+	prev := liteLLMConfiguredModelsFn
+	liteLLMConfiguredModelsFn = func(*config.Config) ([]string, error) { return models, err }
+	t.Cleanup(func() { liteLLMConfiguredModelsFn = prev })
 }
 
 // TestSellInference_RefusesWithStack pins that `obol sell inference` does
@@ -1085,6 +1121,68 @@ func TestRefuseSellInferenceWithStack(t *testing.T) {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("refusal missing %q:\n%s", want, err)
 			}
+		}
+	})
+}
+
+// TestRefuseSellInferenceWithStack_ModelAlreadyConfigured: when LiteLLM
+// already serves the model, the refusal prints only the `sell http` step —
+// re-registering it via `model setup custom` would add a second model_list
+// entry with a different api_base (poisoned model group).
+func TestRefuseSellInferenceWithStack_ModelAlreadyConfigured(t *testing.T) {
+	run := func(t *testing.T, cfg *config.Config, args ...string) error {
+		t.Helper()
+		var refuseErr error
+		c := sellInferenceCommand(cfg)
+		c.Action = func(_ context.Context, cmd *cli.Command) error {
+			refuseErr = refuseSellInferenceWithStack(cfg, cmd, cmd.Args().First())
+			return nil
+		}
+		if err := c.Run(context.Background(), append([]string{"inference", "my-gemma"}, args...)); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		return refuseErr
+	}
+
+	t.Run("configured model skips setup step", func(t *testing.T) {
+		cfg := newTestConfig(t)
+		writeStackKubeconfig(t, cfg)
+		stubLiteLLMConfiguredModels(t, []string{"qwen3.5:4b", "gemma4:26b"}, nil)
+		err := run(t, cfg, "--model", "gemma4:26b", "--per-mtok", "0.5")
+		if err == nil {
+			t.Fatal("expected refusal")
+		}
+		msg := err.Error()
+		if strings.Contains(msg, "obol model setup custom") {
+			t.Errorf("refusal must not suggest re-registering a configured model:\n%s", msg)
+		}
+		for _, want := range []string{
+			`Model "gemma4:26b" is already configured in LiteLLM`,
+			"obol sell http my-gemma --upstream litellm --port 4000 --namespace llm --model gemma4:26b --per-mtok 0.5",
+			"--standalone",
+		} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("refusal missing %q:\n%s", want, msg)
+			}
+		}
+	})
+
+	t.Run("unconfigured model keeps setup step", func(t *testing.T) {
+		cfg := newTestConfig(t)
+		writeStackKubeconfig(t, cfg)
+		stubLiteLLMConfiguredModels(t, []string{"qwen3.5:4b"}, nil)
+		err := run(t, cfg, "--model", "gemma4:26b", "--per-mtok", "0.5")
+		if err == nil || !strings.Contains(err.Error(), "obol model setup custom --endpoint http://localhost:11434/v1 --model gemma4:26b") {
+			t.Fatalf("expected full recipe, got: %v", err)
+		}
+	})
+
+	t.Run("unreadable model list keeps setup step", func(t *testing.T) {
+		cfg := newTestConfig(t)
+		writeStackKubeconfig(t, cfg)
+		err := run(t, cfg, "--model", "gemma4:26b", "--per-mtok", "0.5")
+		if err == nil || !strings.Contains(err.Error(), "obol model setup custom") {
+			t.Fatalf("expected full recipe, got: %v", err)
 		}
 	})
 }
