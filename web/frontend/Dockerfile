@@ -68,6 +68,10 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
+# No source maps in the image: they publish the server source and nothing
+# reads them at runtime.
+RUN find . -name '*.map' -type f -delete
+
 # Ensure ownership recursively (in case any files/folders are missing ownership)
 RUN chown -R nextjs:nodejs .next ./.next/static ./public
 
