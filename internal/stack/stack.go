@@ -29,6 +29,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/stackbackup"
+	"github.com/ObolNetwork/obol-stack/internal/stackversion"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/update"
@@ -306,6 +307,8 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS, resetDefaults bool) error {
 	// OpenClaw was removed in v0.16: tell anyone still running instances
 	// how to keep the wallet. Best effort, never fails up.
 	warnLeftoverOpenClawNamespaces(cfg, u)
+
+	stackversion.Record(cfg)
 
 	return nil
 }

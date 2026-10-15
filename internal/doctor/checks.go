@@ -15,6 +15,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/model"
+	"github.com/ObolNetwork/obol-stack/internal/stackversion"
 	"github.com/ObolNetwork/obol-stack/internal/tools"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/update"
@@ -37,6 +38,7 @@ func Checks(r Repairs) []Check {
 		{ID: "obol", Group: GroupTools, Title: "obol version", Online: true, Run: checkObolVersion},
 		{ID: "tools", Group: GroupTools, Title: "Pinned tools", Run: checkTools, Repair: r.InstallTools},
 		{ID: ClusterCheckID, Group: GroupStack, Title: "Cluster", Run: checkCluster, Repair: r.RefreshKubeconfig},
+		{ID: "stack-version", Group: GroupStack, Title: "Stack version", Run: checkStackVersion},
 		{ID: "nodes", Group: GroupStack, Title: "Node", NeedsCluster: true, Run: checkNodes},
 		{ID: "pods", Group: GroupStack, Title: "Pods", NeedsCluster: true, Run: checkPods},
 		{ID: "releases", Group: GroupStack, Title: "Helm releases", NeedsCluster: true, Run: checkReleases},
@@ -226,6 +228,26 @@ func checkObolVersion(ctx context.Context, e *Env) Result {
 
 	return warn(fmt.Sprintf("%s installed, %s available", current, latest.TagName),
 		update.CLIUpgradeCommand(method, latest.TagName))
+}
+
+// checkStackVersion reports a stack not yet brought up by this CLI version:
+// new defaults, charts and migrations only land on `obol stack up`.
+func checkStackVersion(_ context.Context, e *Env) Result {
+	if v := version.Short(); v == "" || v == "dev" {
+		return info("development build")
+	}
+
+	stackVersion, skewed := stackversion.Skew(e.Cfg)
+	switch {
+	case skewed && stackVersion == "":
+		return warn("last brought up by an earlier obol release", "obol stack up")
+	case skewed:
+		return warn(fmt.Sprintf("last brought up by obol %s, this is %s", stackVersion, version.Short()), "obol stack up")
+	case stackVersion != "":
+		return ok("brought up by obol " + stackVersion)
+	default:
+		return skip("no stack yet")
+	}
 }
 
 func checkTools(ctx context.Context, e *Env) Result {
