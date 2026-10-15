@@ -78,7 +78,7 @@ The runner has a `warn_unpaid_base_sepolia_rpc` preflight. The CLI scrubs paid-R
 | Path | Use case | What gates payment |
 |---|---|---|
 | **`obol sell http`** + `x402-buyer` sidecar | cluster-routed paid traffic (default, validated) | Traefik ForwardAuth → `x402-verifier` (verify-only) → upstream → buyer settles after `<400` |
-| **`obol sell inference`** | direct raw `X-PAYMENT` buyers / standalone host gateway | gateway runs x402 middleware in-process |
+| **`obol sell inference`** | direct raw `X-PAYMENT` buyers / standalone host gateway on hosts without a stack (refuses next to a stack unless `--standalone`) | gateway runs x402 middleware in-process; serves only the paid OpenAI routes + `/health` |
 
 Do **not** treat raw `X-PAYMENT` through Traefik ForwardAuth as a supported production path — `x402-verifier` runs `verifyOnly: true` and does not settle. If you must port-forward to the verifier and POST `/verify` directly, set `X-Forwarded-Uri` (and usually `X-Forwarded-Host`) like Traefik does or you'll get `403 forbidden: missing forwarded URI`.
 
@@ -97,7 +97,7 @@ obol kubectl create configmap ca-certificates -n x402 \
 ## Quick Full-Cycle Smoke
 
 1. **Configure model**: `obol model setup custom --endpoint <url>/v1 --model <id>`; then `obol model prefer <id>` and `obol model sync`.
-2. **Sell**: use `obol sell inference` or `obol sell demo <type>`; wait for `obol sell status <name> -n <ns>` to show `Ready=True`.
+2. **Sell**: use `obol sell http <name> --upstream litellm --port 4000 --namespace llm --model <id> ...` or `obol sell demo <type>`; wait for `obol sell status <name> -n <ns>` to show `Ready=True`.
 3. **Unpaid gate**: `obol sell test <name> -n <ns>`; expect HTTP 402 + accepts requirements.
 4. **Buy**: use `obol buy inference <seller-url> --yes --count <N>` when testing buyer flow through the CLI. Confirm `PurchaseRequest Ready=True` with `obol kubectl get purchaserequest -A`.
 5. **Paid call and spend proof**: call LiteLLM with `paid/<model>` and verify HTTP 200, sidecar `/status` spend counters, and on-chain balance deltas when the test is live-settlement gated.

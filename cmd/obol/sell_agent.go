@@ -199,6 +199,9 @@ Examples:
 				if aerr != nil {
 					return aerr
 				}
+				if err := validatePriceForAsset(price, assetTerms); err != nil {
+					return fmt.Errorf("invalid --price/--per-request value %q: %w", price, err)
+				}
 				payment = map[string]any{
 					"scheme":            "exact",
 					"network":           chain,

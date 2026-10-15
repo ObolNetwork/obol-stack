@@ -11,6 +11,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/agentruntime"
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/fsutil"
 	"github.com/ObolNetwork/obol-stack/internal/keystore"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
@@ -70,7 +71,7 @@ func ImportPrivateKeyWalletCmd(cfg *config.Config, id string, opts ImportPrivate
 	}
 
 	rsValues := generateRemoteSignerValues(wallet)
-	if err := os.WriteFile(filepath.Join(deployDir, "values-remote-signer.yaml"), []byte(rsValues), 0o600); err != nil {
+	if err := fsutil.WriteSecret(filepath.Join(deployDir, "values-remote-signer.yaml"), []byte(rsValues)); err != nil {
 		return fmt.Errorf("failed to write values-remote-signer.yaml: %w", err)
 	}
 

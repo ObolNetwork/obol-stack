@@ -1486,6 +1486,30 @@ func catalogModelName(offer *monetizeapi.ServiceOffer) string {
 	return offer.Spec.Model.Name
 }
 
+// offerPerCallPrice is the highest flat per-request price (whole token
+// units) a one-shot buyer may be quoted for this offer: the primary paid
+// route's override when it has one, else the maximum perRequest across the
+// accepted payment options (buy.py may auto-select any of them). Used to
+// add --max-price to generated buy.py commands; "" when not per-request.
+func offerPerCallPrice(offer *monetizeapi.ServiceOffer) string {
+	if rt, ok := primaryPaidRoute(offer); ok && rt.HasPriceOverride() {
+		return strings.TrimSpace(rt.Price.PerRequest)
+	}
+	var best *big.Rat
+	bestRaw := ""
+	for _, p := range offer.EffectivePayments() {
+		raw := strings.TrimSpace(p.Price.PerRequest)
+		v, err := schemas.ParseDecimalAmount(raw, 18, "")
+		if raw == "" || err != nil {
+			continue
+		}
+		if best == nil || v.Cmp(best) > 0 {
+			best, bestRaw = v, raw
+		}
+	}
+	return bestRaw
+}
+
 // skillMarkdownTryIt renders the per-offer "Try it" subsection: one curl that
 // probes the 402 pricing, and one worked paid request. The paid example for
 // chat-shaped offers is buyprompts.Build's Example — the exact same bytes
@@ -1803,6 +1827,7 @@ func buildServiceCatalogJSON(offers []*monetizeapi.ServiceOffer, baseURL string,
 			Model:        modelName,
 			PriceDisplay: svc.Price,
 			NetworkLabel: offer.Spec.Payment.Network,
+			PerCallPrice: offerPerCallPrice(offer),
 		})
 		svc.Buy = &buy
 		svc.OpenAPIPath = openAPIPrimaryPathForOffer(offer)
@@ -2013,26 +2038,19 @@ func defaultUSDCForNetwork(network string) (schemas.ServiceCatalogAsset, bool) {
 }
 
 // decimalToAtomicString converts a decimal token amount (e.g. "0.001") to
-// atomic units using big.Float to avoid floating-point truncation. Returns
-// "" on parse error so callers can omit the field.
+// atomic units exactly (no floating point), rounding a sub-atomic remainder
+// up. Returns "" on parse error so callers can omit the field. Display-only:
+// the verifier enforces the strict per-token precision when it builds the
+// payment requirement.
 func decimalToAtomicString(amount string, decimals int) string {
-	if amount == "" || decimals < 0 {
+	if amount == "" || decimals < 0 || decimals > schemas.MaxPriceDecimals {
 		return ""
 	}
-	parsed, _, err := big.ParseFloat(amount, 10, 128, big.ToNearestEven)
-	if err != nil || parsed == nil {
+	parsed, err := schemas.ParseDecimalAmount(amount, schemas.MaxPriceDecimals, "")
+	if err != nil {
 		return ""
 	}
-	multiplier := new(big.Float).SetPrec(128).SetInt(
-		new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(decimals)), nil),
-	)
-	atomic := new(big.Float).SetPrec(128).Mul(parsed, multiplier)
-	atomic.Add(atomic, new(big.Float).SetPrec(128).SetFloat64(0.5))
-	out, _ := atomic.Int(nil)
-	if out == nil {
-		return ""
-	}
-	return out.String()
+	return schemas.CeilAtomic(parsed, decimals).String()
 }
 
 func describeOfferPrice(offer *monetizeapi.ServiceOffer) string {

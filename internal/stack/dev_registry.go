@@ -33,9 +33,11 @@ var devRegistryMirrors = []registryMirror{
 	{upstreamHost: "docker.io", remoteURL: "https://registry-1.docker.io", name: "obol-docker-io.localhost", port: 54100},
 	{upstreamHost: "ghcr.io", remoteURL: "https://ghcr.io", name: "obol-ghcr-io.localhost", port: 54101},
 	{upstreamHost: "quay.io", remoteURL: "https://quay.io", name: "obol-quay-io.localhost", port: 54102},
-	// Local push target (no upstream proxy). Lets `just dev-frontend` swap
+	// Local push target (no upstream proxy). Lets ad-hoc dev loops swap
 	// layered diffs into the cluster via `docker push localhost:54103/...`
-	// instead of `k3d image import`'s full-tarball round-trip. The host
+	// instead of `k3d image import`'s full-tarball round-trip (stack-owned
+	// images, incl. the front-end, are imported under their ghcr.io dev tag
+	// instead — see buildAndImportLocalImages / `just dev-frontend`). The host
 	// reaches it on localhost:54103; the k3d node sees the same image name
 	// resolved via this mirror to http://k3d-obol-local.localhost:5000.
 	{upstreamHost: "localhost:54103", name: "obol-local.localhost", port: 54103},

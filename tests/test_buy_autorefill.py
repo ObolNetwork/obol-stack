@@ -235,23 +235,23 @@ class BuyAutorefillHelpersTest(unittest.TestCase):
         self.assertIsNone(mod._find_purchase_by_model(purchases, "qwen3.6:9b", exclude_name="gamma"))
         self.assertEqual(mod._find_purchase_by_model(purchases, "qwen3.7:9b"), "draining")
 
-    def test_get_litellm_pod_skips_terminating_pods(self):
+    def test_get_buyer_pod_skips_terminating_pods(self):
         mod = load_buy_module()
         pods = {
             "items": [
                 {
-                    "metadata": {"name": "litellm-old", "deletionTimestamp": "2026-04-23T00:00:00Z"},
+                    "metadata": {"name": "x402-buyer-old", "deletionTimestamp": "2026-04-23T00:00:00Z"},
                     "status": {"phase": "Running", "podIP": "10.0.0.1"},
                 },
                 {
-                    "metadata": {"name": "litellm-new"},
+                    "metadata": {"name": "x402-buyer-new"},
                     "status": {"phase": "Running", "podIP": "10.0.0.2"},
                 },
             ],
         }
         with mock.patch.object(mod, "api_get", return_value=pods):
-            pod = mod._get_litellm_pod("token", object())
-        self.assertEqual(pod["metadata"]["name"], "litellm-new")
+            pod = mod._get_buyer_pod("token", object())
+        self.assertEqual(pod["metadata"]["name"], "x402-buyer-new")
 
     def test_purchase_ready_requires_current_generation_and_pool_sync(self):
         mod = load_buy_module()
@@ -289,6 +289,7 @@ class BuyLifecycleCommandTest(unittest.TestCase):
 
         with mock.patch.object(mod, "_probe_endpoint", return_value=make_pricing()), \
              mock.patch.object(mod, "_get_signer_address", return_value="0xsigner"), \
+             mock.patch.object(mod, "_validate_contract_exists", return_value=True), \
              mock.patch.object(mod, "_get_usdc_balance", return_value=str(10_000)), \
              mock.patch.object(mod, "load_sa", return_value=("token", None)), \
              mock.patch.object(mod, "make_ssl_context", return_value=object()), \
@@ -300,7 +301,12 @@ class BuyLifecycleCommandTest(unittest.TestCase):
              mock.patch.object(sys, "argv", ["buy.py", "buy", "solo"]):
             mod.cmd_buy("solo", "http://seller/v1/chat/completions", "qwen3.5:9b", count="3", opts={})
 
-        presign.assert_called_once_with("0xsigner", "0xpayto", "1000", "base-sepolia", "0xasset", 3)
+        presign.assert_called_once()
+        self.assertEqual(
+            presign.call_args.args,
+            ("0xsigner", "0xpayto", "1000", "base-sepolia", "0xasset", 3),
+        )
+        self.assertEqual(presign.call_args.kwargs["payment"]["payTo"], "0xpayto")
         args = create_purchase.call_args.args
         self.assertEqual(args[0], "solo")
         self.assertEqual(args[1], "http://seller")
@@ -314,6 +320,7 @@ class BuyLifecycleCommandTest(unittest.TestCase):
 
         with mock.patch.object(mod, "_probe_endpoint", return_value=make_pricing(amount="1000")), \
              mock.patch.object(mod, "_get_signer_address", return_value="0xsigner"), \
+             mock.patch.object(mod, "_validate_contract_exists", return_value=True), \
              mock.patch.object(mod, "_get_usdc_balance", return_value=str(10_000)), \
              mock.patch.object(mod, "load_sa", return_value=("token", None)), \
              mock.patch.object(mod, "make_ssl_context", return_value=object()), \
@@ -325,7 +332,12 @@ class BuyLifecycleCommandTest(unittest.TestCase):
              mock.patch.object(sys, "argv", ["buy.py", "buy", "solo"]):
             mod.cmd_buy("solo", "http://seller", "qwen3.5:9b", budget="4000", opts={})
 
-        presign.assert_called_once_with("0xsigner", "0xpayto", "1000", "base-sepolia", "0xasset", 4)
+        presign.assert_called_once()
+        self.assertEqual(
+            presign.call_args.args,
+            ("0xsigner", "0xpayto", "1000", "base-sepolia", "0xasset", 4),
+        )
+        self.assertEqual(presign.call_args.kwargs["payment"]["payTo"], "0xpayto")
 
     def test_cmd_buy_rejects_duplicate_model_before_signing(self):
         mod = load_buy_module()
@@ -333,6 +345,7 @@ class BuyLifecycleCommandTest(unittest.TestCase):
 
         with mock.patch.object(mod, "_probe_endpoint", return_value=make_pricing()), \
              mock.patch.object(mod, "_get_signer_address", return_value="0xsigner"), \
+             mock.patch.object(mod, "_validate_contract_exists", return_value=True), \
              mock.patch.object(mod, "_get_usdc_balance", return_value=str(10_000)), \
              mock.patch.object(mod, "load_sa", return_value=("token", None)), \
              mock.patch.object(mod, "make_ssl_context", return_value=object()), \
@@ -351,6 +364,7 @@ class BuyLifecycleCommandTest(unittest.TestCase):
 
         with mock.patch.object(mod, "_probe_endpoint", return_value=make_pricing()), \
              mock.patch.object(mod, "_get_signer_address", return_value="0xsigner"), \
+             mock.patch.object(mod, "_validate_contract_exists", return_value=True), \
              mock.patch.object(mod, "_get_usdc_balance", return_value=str(10_000)), \
              mock.patch.object(mod, "load_sa", return_value=("token", None)), \
              mock.patch.object(mod, "make_ssl_context", return_value=object()), \
@@ -371,6 +385,7 @@ class BuyLifecycleCommandTest(unittest.TestCase):
 
         with mock.patch.object(mod, "_probe_endpoint", return_value=make_pricing()), \
              mock.patch.object(mod, "_get_signer_address", return_value="0xsigner"), \
+             mock.patch.object(mod, "_validate_contract_exists", return_value=True), \
              mock.patch.object(mod, "_get_usdc_balance", return_value=str(10_000)), \
              mock.patch.object(mod, "load_sa", return_value=("token", None)), \
              mock.patch.object(mod, "make_ssl_context", return_value=object()), \
@@ -398,6 +413,7 @@ class BuyLifecycleCommandTest(unittest.TestCase):
 
         with mock.patch.object(mod, "_probe_endpoint", return_value=make_pricing()), \
              mock.patch.object(mod, "_get_signer_address", return_value="0xsigner"), \
+             mock.patch.object(mod, "_validate_contract_exists", return_value=True), \
              mock.patch.object(mod, "_get_usdc_balance", return_value=str(10_000)), \
              mock.patch.object(mod, "load_sa", return_value=("token", None)), \
              mock.patch.object(mod, "make_ssl_context", return_value=object()), \
@@ -419,6 +435,7 @@ class BuyLifecycleCommandTest(unittest.TestCase):
 
         with mock.patch.object(mod, "_probe_endpoint", return_value=make_pricing()), \
              mock.patch.object(mod, "_get_signer_address", return_value="0xsigner"), \
+             mock.patch.object(mod, "_validate_contract_exists", return_value=True), \
              mock.patch.object(mod, "_get_usdc_balance", return_value=str(10_000)), \
              mock.patch.object(mod, "load_sa", return_value=("token", None)), \
              mock.patch.object(mod, "make_ssl_context", return_value=object()), \
@@ -450,6 +467,7 @@ class BuyLifecycleCommandTest(unittest.TestCase):
 
         with mock.patch.object(mod, "_probe_endpoint", return_value=make_pricing()), \
              mock.patch.object(mod, "_get_signer_address", return_value="0xsigner"), \
+             mock.patch.object(mod, "_validate_contract_exists", return_value=True), \
              mock.patch.object(mod, "_get_usdc_balance", return_value=str(10_000)), \
              mock.patch.object(mod, "load_sa", return_value=("token", None)), \
              mock.patch.object(mod, "make_ssl_context", return_value=object()), \
@@ -478,6 +496,7 @@ class BuyLifecycleCommandTest(unittest.TestCase):
 
         with mock.patch.object(mod, "_probe_endpoint", return_value=make_pricing(amount="1000")), \
              mock.patch.object(mod, "_get_signer_address", return_value="0xsigner"), \
+             mock.patch.object(mod, "_validate_contract_exists", return_value=True), \
              mock.patch.object(mod, "_get_usdc_balance", return_value="500"), \
              mock.patch.object(mod, "load_sa", return_value=("token", None)), \
              mock.patch.object(mod, "make_ssl_context", return_value=object()), \
@@ -575,7 +594,8 @@ class BuyLifecycleCommandTest(unittest.TestCase):
         updated = make_purchase(name="solo")
         updated["spec"] = dict(purchase["spec"])
 
-        with mock.patch.object(mod, "_get_usdc_balance", return_value=str(10_000)), \
+        with mock.patch.object(mod, "_probe_endpoint", return_value=None), \
+             mock.patch.object(mod, "_get_usdc_balance", return_value=str(10_000)), \
              mock.patch.object(mod, "_presign_auths", return_value=new_auths), \
              mock.patch.object(mod, "load_sa", return_value=("token", None)), \
              mock.patch.object(mod, "make_ssl_context", return_value=object()), \
@@ -623,7 +643,8 @@ class BuyLifecycleCommandTest(unittest.TestCase):
         mod = load_buy_module()
         purchase = make_purchase(name="solo")
 
-        with mock.patch.object(mod, "_get_usdc_balance", return_value="0"), \
+        with mock.patch.object(mod, "_probe_endpoint", return_value=None), \
+             mock.patch.object(mod, "_get_usdc_balance", return_value="0"), \
              mock.patch.object(mod, "_presign_auths") as presign:
             changed = mod._reconcile_purchase_autorefill(
                 purchase,
@@ -699,7 +720,7 @@ class BuyLifecycleCommandTest(unittest.TestCase):
                      "network": "base-sepolia",
                  },
              }), \
-             mock.patch.object(mod, "_get_litellm_pod", return_value={"status": {"phase": "Running"}}), \
+             mock.patch.object(mod, "_get_buyer_pod", return_value={"status": {"phase": "Running"}}), \
              mock.patch.object(sys, "stdout", out):
             mod.cmd_status("solo")
 

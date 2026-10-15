@@ -1,0 +1,370 @@
+import React, { useEffect } from 'react';
+import { Image, Button, Flex, Text, styled, theme } from '@obolnetwork/obol-ui';
+import { Button as BaseButton } from '@/components/atoms/Button';
+import { Close } from '@/icons';
+import { ObolAmountSwitch } from '@/components/atoms/ObolAmountSwitch';
+import {
+  useBalance,
+  UseBalanceReturnType,
+  useChainId,
+  useReadContract,
+} from 'wagmi';
+import { erc20Abi, formatUnits } from 'viem';
+import { useTokenPrices } from '../../../hooks/useTokenPrices';
+import { ChainIcon } from '../../atoms/ChainIcon';
+import { getChainName } from '../../../types/dashboard';
+import { TOKEN_ADDRESSES } from '../../../lib/constants/tokens';
+import { truncateAddress } from '../../../utils/address';
+
+const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
+
+interface WalletModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  account: {
+    address?: string;
+    displayName?: string;
+    ensAvatar?: string;
+  };
+  onDisconnect: () => void;
+}
+
+// Helper function to calculate and format USD balance
+const calculateUsdBalance = (
+  ethBalance: UseBalanceReturnType['data'],
+  ethPrice: number
+): string => {
+  if (!ethBalance) return '0.000';
+
+  const ethValue =
+    parseFloat(formatUnits(ethBalance.value, ethBalance.decimals)) * ethPrice;
+  return ethValue.toLocaleString('en-US', {
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3,
+  });
+};
+
+type TokenBalance = {
+  value: bigint;
+  decimals: number;
+  symbol: string;
+};
+
+const calculateTokenUsdBalance = (
+  balance: TokenBalance | undefined,
+  price: number
+): string => {
+  if (!balance) return '0.000';
+
+  const value =
+    parseFloat(formatUnits(balance.value, balance.decimals)) * price;
+  return value.toLocaleString('en-US', {
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3,
+  });
+};
+
+// Helper functions for dynamic change display
+const getChangeColor = (change: number): 'green' | 'orange' | 'body' => {
+  if (change > 0) return 'green';
+  if (change < 0) return 'orange';
+  return 'body';
+};
+
+const getChangeArrow = (change: number): string => {
+  if (change > 0) return '▲';
+  if (change < 0) return '▼';
+  return '';
+};
+
+const formatChange = (change: number): string => {
+  const arrow = getChangeArrow(change);
+  const percentage = Math.abs(change).toFixed(2);
+  return `${arrow} ${percentage}%`;
+};
+
+const ModalContent = styled('div', {
+  position: 'absolute',
+  top: 'calc(100% + $sm)',
+  right: 0,
+  display: 'flex',
+  width: '351px',
+  padding: '$lg',
+  flexDirection: 'column',
+  alignItems: 'center',
+  gap: '$sm',
+  borderRadius: '$3',
+  border: '1px solid $bg05',
+  background: '$bg01',
+  zIndex: 1000,
+});
+
+// Bare icon Button pinned to the modal corner.
+const CloseButton = styled(BaseButton, {
+  position: 'absolute',
+  top: '$sm',
+  right: '$sm',
+});
+
+const Avatar = styled('div', {
+  width: '$5xl', // 74px approximated to 80px
+  height: '$5xl',
+  borderRadius: '$round',
+  backgroundImage: 'url(/avatar.png)',
+  backgroundSize: 'cover',
+  backgroundPosition: 'center',
+  backgroundRepeat: 'no-repeat',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+});
+
+const WalletName = styled(Text, {
+  fontFamily: '$fonts$body',
+  fontSize: '$4',
+  fontWeight: '$semibold',
+  lineHeight: '$base',
+  color: '$white',
+  textAlign: 'center',
+});
+
+const BalanceText = styled(Text, {
+  fontFamily: '$fonts$body',
+  fontSize: '$4',
+  fontWeight: '$semibold',
+  lineHeight: '$base',
+  color: '$body',
+  textAlign: 'center',
+});
+
+const TokenRow = styled('div', {
+  display: 'flex',
+  padding: '$xs',
+  flexDirection: 'column',
+  alignItems: 'flex-end',
+  gap: '$xxs',
+  alignSelf: 'stretch',
+  borderRadius: '$3',
+  background: '$bg02',
+});
+
+const TokenText = styled(Text, {
+  fontFamily: '$fonts$body',
+  fontSize: '$4',
+  fontWeight: '$semibold',
+  color: '$white',
+  lineHeight: '$base',
+});
+
+const TokenInfo = styled(Flex, {
+  alignItems: 'center',
+  gap: '$xxs',
+  flex: 0,
+  fontFamily: '$fonts$body',
+  fontSize: '$4',
+  fontWeight: '$semibold',
+  color: '$white',
+  lineHeight: '$base',
+});
+
+const TokenRowFlex = styled(Flex, {
+  width: '100%',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  alignSelf: 'stretch',
+});
+
+const TokenChangeText = styled(Text, {
+  textAlign: 'center',
+  fontFamily: '$fonts$body',
+  fontSize: '$2',
+  fontWeight: '$medium',
+  lineHeight: '$shorter',
+
+  variants: {
+    color: {
+      green: {
+        color: '$obolGreen',
+      },
+      orange: {
+        color: '$orange',
+      },
+      body: {
+        color: '$body',
+      },
+    },
+  },
+
+  defaultVariants: {
+    color: 'body',
+  },
+});
+
+export function WalletModal({
+  isOpen,
+  onClose,
+  account,
+  onDisconnect,
+}: WalletModalProps) {
+  const walletAddress = account.address as `0x${string}` | undefined;
+  const balanceAddress = walletAddress ?? ZERO_ADDRESS;
+
+  // Get ETH balance
+  const { data: ethBalance } = useBalance({
+    address: walletAddress,
+  });
+
+  // Get Obol token balance
+  const { data: obolRawBalance } = useReadContract({
+    abi: erc20Abi,
+    address: TOKEN_ADDRESSES.OBOL,
+    functionName: 'balanceOf',
+    args: [balanceAddress],
+    query: {
+      enabled: Boolean(walletAddress),
+    },
+  });
+  const obolBalance =
+    obolRawBalance !== undefined
+      ? {
+          value: obolRawBalance,
+          decimals: 18,
+          symbol: 'OBOL',
+        }
+      : undefined;
+
+  const chainId = useChainId();
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [isOpen, onClose]);
+
+  // Get token prices using combined hook
+  const { ethPrice, ethChange24h, obolPrice, obolChange24h } = useTokenPrices();
+
+  // Calculate balances in USD
+  const ethBalanceUsd = calculateUsdBalance(ethBalance, ethPrice);
+  const obolBalanceUsd = calculateTokenUsdBalance(obolBalance, obolPrice);
+  const obolBalanceAmount = obolBalance
+    ? parseFloat(formatUnits(obolBalance.value, obolBalance.decimals)).toFixed(
+        4
+      )
+    : '0.0000';
+
+  // Calculate total balance in USD
+  const totalBalanceUsd = (
+    parseFloat(ethBalanceUsd.replace(/,/g, '')) +
+    parseFloat(obolBalanceUsd.replace(/,/g, ''))
+  ).toLocaleString('en-US', {
+    minimumFractionDigits: 3,
+    maximumFractionDigits: 3,
+  });
+
+  if (!isOpen) return null;
+
+  const handleDisconnect = () => {
+    onDisconnect();
+    onClose();
+  };
+  return (
+    <ModalContent role="dialog" aria-label="Wallet details">
+      <CloseButton
+        type="button"
+        variant="bare"
+        size="sm"
+        iconOnly
+        aria-label="Close wallet modal"
+        onClick={onClose}
+      >
+        <Close size="xs" color={theme.colors.body.value} />
+      </CloseButton>
+
+      <Avatar>
+        {account.ensAvatar && (
+          <Image
+            src={account.ensAvatar}
+            alt="ENS Avatar"
+            width={74}
+            height={74}
+            style={{
+              width: 74,
+              height: 74,
+              borderRadius: '$round',
+            }}
+          />
+        )}
+      </Avatar>
+
+      <WalletName>
+        {account.displayName ||
+          (account.address ? truncateAddress(account.address) : 'Unknown')}
+      </WalletName>
+
+      <BalanceText>$ {totalBalanceUsd}</BalanceText>
+
+      <Flex css={{ width: '100%', flexDirection: 'column', gap: '$xxs' }}>
+        <TokenRow>
+          <TokenRowFlex>
+            <TokenInfo>
+              <ChainIcon chain={getChainName(chainId)} size={32} />
+              <TokenText>Ethereum</TokenText>
+            </TokenInfo>
+            <TokenText>$ {ethBalanceUsd}</TokenText>
+          </TokenRowFlex>
+
+          <TokenRowFlex>
+            <TokenChangeText color={getChangeColor(ethChange24h)}>
+              {formatChange(ethChange24h)}
+            </TokenChangeText>
+            <TokenChangeText color="body">
+              {ethBalance
+                ? parseFloat(
+                    formatUnits(ethBalance.value, ethBalance.decimals)
+                  ).toFixed(4)
+                : '0.0000'}{' '}
+              ETH
+            </TokenChangeText>
+          </TokenRowFlex>
+        </TokenRow>
+
+        <TokenRow>
+          <TokenRowFlex>
+            <TokenInfo>
+              <Image
+                src="/obol-logo.png"
+                alt="Obol"
+                width={32}
+                height={32}
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: '$round',
+                }}
+              />
+              <TokenText>Obol</TokenText>
+            </TokenInfo>
+            <TokenText>$ {obolBalanceUsd}</TokenText>
+          </TokenRowFlex>
+
+          <TokenRowFlex>
+            <TokenChangeText color={getChangeColor(obolChange24h)}>
+              {formatChange(obolChange24h)}
+            </TokenChangeText>
+            <TokenChangeText color="body">
+              <ObolAmountSwitch amount={obolBalanceAmount} symbol="OBOL" />
+            </TokenChangeText>
+          </TokenRowFlex>
+        </TokenRow>
+      </Flex>
+
+      <Button fullWidth color="secondary" onClick={handleDisconnect}>
+        Disconnect
+      </Button>
+    </ModalContent>
+  );
+}

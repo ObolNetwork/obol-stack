@@ -203,8 +203,9 @@ func (c *Controller) reconcileAgent(ctx context.Context, key string) error {
 	// asked for it at agent-creation time. Failure here is recorded as a
 	// WalletError condition but does not roll back Hermes provisioning —
 	// the agent can still serve cached / deterministic answers without a
-	// signing wallet. Operators flip wallet.create=false then re-run if
-	// they need to abandon the keystore.
+	// signing wallet. wallet.create cannot be cleared once true (CRD
+	// validation rule); operators abandon the keystore by deleting the
+	// Agent.
 	if agent.Spec.Wallet.Create {
 		address, walletErr := c.ensureAgentWallet(ctx, agent)
 		if walletErr != nil {
@@ -226,6 +227,14 @@ func (c *Controller) reconcileAgent(ctx context.Context, key string) error {
 		return err
 	}
 
+	signerReady := true
+	if agent.Spec.Wallet.Create && status.WalletAddress != "" {
+		signerReady, err = c.isAgentSignerReady(ctx, agent.Namespace)
+		if err != nil {
+			return err
+		}
+	}
+
 	if deploymentReady {
 		setAgentCondition(&status, agentConditionProvisioned, "True", "Provisioned", "Hermes deployment reports ready replicas")
 		if agent.Spec.Wallet.Create && status.WalletAddress == "" {
@@ -235,6 +244,17 @@ func (c *Controller) reconcileAgent(ctx context.Context, key string) error {
 			// load-bearing.
 			setAgentCondition(&status, agentConditionReady, "False", "WaitingForWallet", "wallet.create=true but status.walletAddress is unset")
 			status.Phase = monetizeapi.AgentPhaseProvisioning
+		} else if !signerReady {
+			// status.walletAddress stays populated (the keystore exists and
+			// the address is stable), but the agent cannot sign until the
+			// remote-signer serves, so Ready waits for it.
+			setAgentCondition(&status, agentConditionReady, "False", "WaitingForSigner", "remote-signer deployment has no ready replicas yet")
+			status.Phase = monetizeapi.AgentPhaseProvisioning
+			if err := c.updateAgentStatus(ctx, raw, status); err != nil {
+				return err
+			}
+			c.requeueAgentAfter(key, agentReadinessRequeueDelay)
+			return nil
 		} else {
 			setAgentCondition(&status, agentConditionReady, "True", "Reconciled", "Agent is serving on the cluster endpoint")
 			status.Phase = monetizeapi.AgentPhaseReady
@@ -463,11 +483,6 @@ func (c *Controller) removeAgentFinalizer(ctx context.Context, raw *unstructured
 // Idempotent: NotFound responses from the apiserver are treated as
 // success, so re-runs after a partial sweep complete cleanly.
 func (c *Controller) tearDownAgent(ctx context.Context, agent *monetizeapi.Agent) error {
-	type victim struct {
-		gvr      string
-		resource dynamic.NamespaceableResourceInterface
-		name     string
-	}
 	dynNs := func(r dynamic.NamespaceableResourceInterface) dynamic.ResourceInterface {
 		return r.Namespace(agent.Namespace)
 	}
@@ -497,7 +512,6 @@ func (c *Controller) tearDownAgent(ctx context.Context, agent *monetizeapi.Agent
 	// host-side cleanup) to remove. Deleting the namespace from the
 	// controller would race with any other Agent CRs that might share
 	// it — unlikely under our current naming, but cheap to be careful.
-	_ = victim{} // keep the local type referenced; future kinds slot in here
 	return nil
 }
 
@@ -672,7 +686,18 @@ func (c *Controller) readLiteLLMMasterKey(ctx context.Context) (string, error) {
 // Ready condition; absence of the Deployment (e.g. mid-provision) is
 // treated as not-ready, not as an error.
 func (c *Controller) isAgentDeploymentReady(ctx context.Context, namespace string) (bool, error) {
-	dep, err := c.deployments.Namespace(namespace).Get(ctx, hermesServiceName, metav1.GetOptions{})
+	return c.isDeploymentReady(ctx, namespace, hermesServiceName)
+}
+
+// isAgentSignerReady reports whether the per-agent remote-signer
+// Deployment has at least one ready replica. Only Deployment status is
+// read; the keystore Secret is never touched here.
+func (c *Controller) isAgentSignerReady(ctx context.Context, namespace string) (bool, error) {
+	return c.isDeploymentReady(ctx, namespace, remoteSignerName)
+}
+
+func (c *Controller) isDeploymentReady(ctx context.Context, namespace, name string) (bool, error) {
+	dep, err := c.deployments.Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return false, nil
 	}

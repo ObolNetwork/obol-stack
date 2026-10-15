@@ -57,6 +57,12 @@ type Verifier struct {
 	// quota tracks per-wallet free-tier usage on paid routes with a
 	// freeQuota (in-memory, UTC-day windows).
 	quota *freeQuotaCounter
+
+	// inUse rejects a payment authorization presented on a second request
+	// while the first is still being served (or after it settled). It is
+	// per-process memory: correct for the single-replica verifier, but
+	// scaling out needs a shared store (see x402.yaml replicas).
+	inUse *PaymentInUseRegistry
 }
 
 // MarkRoutesLoaded signals that the route source has produced its first
@@ -70,7 +76,7 @@ func NewVerifier(cfg *PricingConfig) (*Verifier, error) {
 	if err != nil {
 		return nil, err
 	}
-	v := &Verifier{metrics: newVerifierMetrics(), siwx: siwx, quota: newFreeQuotaCounter()}
+	v := &Verifier{metrics: newVerifierMetrics(), siwx: siwx, quota: newFreeQuotaCounter(), inUse: NewPaymentInUseRegistry()}
 	if err := v.load(cfg); err != nil {
 		return nil, err
 	}
@@ -323,6 +329,7 @@ func (v *Verifier) HandleVerify(w http.ResponseWriter, r *http.Request) {
 		OnPaymentVerified: func(payer string) {
 			w.Header().Set(HeaderPaymentPayer, payer)
 		},
+		InUse: v.inUse,
 	}, mr.requirements)
 
 	upstreamAuth := mr.rule.UpstreamAuth
@@ -541,6 +548,7 @@ func (v *Verifier) HandleProxy(w http.ResponseWriter, r *http.Request) {
 				r.Header.Set(HeaderPaymentPayer, payer)
 			}
 		},
+		InUse: v.inUse,
 	}, mr.requirements)
 
 	// Gate the funnel metrics on both payment headers (hadPayment), else
@@ -654,6 +662,7 @@ func (v *Verifier) resolvePaidRoute(cfg *PricingConfig, rule *RouteRule) (*match
 	var primaryChain ChainInfo
 	var primaryAsset AssetInfo
 	var extensions map[string]any
+	seen := make(map[paymentRequirementKey]bool, len(opts))
 	for i := range opts {
 		opt := opts[i]
 		chainName := cfg.Chain
@@ -673,7 +682,7 @@ func (v *Verifier) resolvePaidRoute(cfg *PricingConfig, rule *RouteRule) (*match
 			wallet = opt.PayTo
 		}
 		asset := ResolveAssetInfoForPayment(chain, opt)
-		req, err := BuildV2RequirementWithAsset(chain, asset, opt.Price, wallet, opt.MaxTimeoutSeconds)
+		req, err := BuildV2RequirementForPayment(chain, asset, opt, wallet)
 		if err != nil {
 			// Skip this option rather than serving it free or panicking —
 			// a malformed stored price (e.g. a ServiceOffer applied
@@ -684,6 +693,14 @@ func (v *Verifier) resolvePaidRoute(cfg *PricingConfig, rule *RouteRule) (*match
 			log.Printf("x402-verifier: invalid price %q for route %q option %d: %v", opt.Price, rule.Pattern, i, err)
 			continue
 		}
+		// An option repeated in the offer (e.g. spec.payments listing the
+		// same scheme/network/asset/amount/payTo twice, or once by CAIP-2
+		// and once by legacy alias) is advertised once.
+		key := requirementKey(req)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		mergeAgentExtras(&req, rule)
 		mergeModelExtra(&req, rule)
 		reqs = append(reqs, req)
@@ -808,6 +825,7 @@ func buildPaymentDisplay(rule *RouteRule, chain ChainInfo, asset AssetInfo, payT
 		AssetSymbol:      asset.Symbol,
 		AssetAddress:     asset.Address,
 		PriceDisplay:     FormatPriceDisplay(atomicAmount, asset.Decimals, asset.Symbol),
+		PriceUnits:       formatAmount(atomicAmount, asset.Decimals, ""),
 		PriceAtomic:      atomicAmount,
 		PayToFull:        payTo,
 		ExplorerURL:      explorerAddressURL(chain.Name, payTo),

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
@@ -45,10 +46,10 @@ func ResolvePublished(explicit *schemas.StorefrontProfile, baseURL string) schem
 	if explicit == nil {
 		return profile
 	}
-	if v := strings.TrimSpace(explicit.DisplayName); v != "" {
+	if v := strings.TrimSpace(explicit.DisplayName); v != "" && ValidateBrandingText(v, "") == nil {
 		profile.DisplayName = v
 	}
-	if v := strings.TrimSpace(explicit.Tagline); v != "" {
+	if v := strings.TrimSpace(explicit.Tagline); v != "" && ValidateBrandingText(v, "") == nil {
 		profile.Tagline = v
 	}
 	if v := strings.TrimSpace(explicit.LogoURL); v != "" {
@@ -78,6 +79,46 @@ func ResolvePublished(explicit *schemas.StorefrontProfile, baseURL string) schem
 	return profile
 }
 
+// ValidateBrandingText checks a single-line plain-text branding field
+// (display name, tagline, registration name). These values are rendered on
+// public pages, in metadata and inside inline JSON, so they must stay plain
+// text: no control characters (including newlines/tabs) and no '<' or '>'.
+// what names the field in errors ("display name", "tagline", ...).
+func ValidateBrandingText(raw, what string) error {
+	if what == "" {
+		what = "branding text"
+	}
+	for _, r := range raw {
+		switch {
+		case r == '<' || r == '>':
+			return fmt.Errorf("%s must be plain text: '<' and '>' are not allowed", what)
+		case unicode.IsControl(r) || r == '\u2028' || r == '\u2029':
+			return fmt.Errorf("%s must be a single line of plain text: control characters are not allowed", what)
+		}
+	}
+	return nil
+}
+
+// DropInvalidBrandingText clears single-line text fields (display name,
+// tagline) that fail ValidateBrandingText and returns the JSON names of the
+// cleared fields, so callers reading a stored profile can log and fall back
+// to defaults instead of publishing the value.
+func DropInvalidBrandingText(p *schemas.StorefrontProfile) []string {
+	if p == nil {
+		return nil
+	}
+	var dropped []string
+	if ValidateBrandingText(p.DisplayName, "") != nil {
+		p.DisplayName = ""
+		dropped = append(dropped, "displayName")
+	}
+	if ValidateBrandingText(p.Tagline, "") != nil {
+		p.Tagline = ""
+		dropped = append(dropped, "tagline")
+	}
+	return dropped
+}
+
 // MarshalProfile serialises a profile for ConfigMap storage.
 func MarshalProfile(p schemas.StorefrontProfile) (string, error) {
 	data, err := json.MarshalIndent(p, "", "  ")
@@ -103,10 +144,10 @@ func ParseProfile(raw string) (*schemas.StorefrontProfile, error) {
 // MergeProfile overlays non-empty patch fields onto base.
 func MergeProfile(base, patch schemas.StorefrontProfile) schemas.StorefrontProfile {
 	out := base
-	if v := strings.TrimSpace(patch.DisplayName); v != "" {
+	if v := strings.TrimSpace(patch.DisplayName); v != "" && ValidateBrandingText(v, "") == nil {
 		out.DisplayName = v
 	}
-	if v := strings.TrimSpace(patch.Tagline); v != "" {
+	if v := strings.TrimSpace(patch.Tagline); v != "" && ValidateBrandingText(v, "") == nil {
 		out.Tagline = v
 	}
 	if v := strings.TrimSpace(patch.LogoURL); v != "" {

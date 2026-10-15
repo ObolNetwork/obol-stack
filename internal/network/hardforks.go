@@ -83,6 +83,40 @@ func HardforkByName(name string) *Hardfork {
 	return nil
 }
 
+// HardforkByBlock returns the mainnet hardfork activating at exactly the
+// given block, or nil. Used to name the scope of nodes installed before
+// `since` was recorded in values.yaml.
+func HardforkByBlock(block uint64) *Hardfork {
+	for i := range MainnetHardforks {
+		if MainnetHardforks[i].Block == block {
+			return &MainnetHardforks[i]
+		}
+	}
+	return nil
+}
+
+// ArchiveScope kinds (and the pruneKind stored in a node's values.yaml).
+const (
+	PruneAll      = "all"
+	PruneBefore   = "before"
+	PruneDistance = "distance"
+)
+
+// scope returns the partial-archive scope that keeps history from hf on.
+func (hf Hardfork) scope() ArchiveScope {
+	return ArchiveScope{
+		Kind:  PruneBefore,
+		Block: hf.Block,
+		Label: fmt.Sprintf("since %s (block %d, %s)", hf.DisplayName, hf.Block, hf.Date),
+		Since: hf.Name,
+	}
+}
+
+// genesisScope is the full-archive (all history) scope.
+func genesisScope() ArchiveScope {
+	return ArchiveScope{Kind: PruneAll, Label: "all history (from genesis)", Since: "genesis"}
+}
+
 // ArchiveScope is the resolved meaning of --since after parsing.
 type ArchiveScope struct {
 	// Kind is one of: "all" (full archive from genesis), "before" (prune
@@ -94,6 +128,11 @@ type ArchiveScope struct {
 	Distance uint64
 	// Label is a human-readable description for logs/picker confirmation.
 	Label string
+	// Since is the canonical human token for the scope (a hardfork name
+	// like "cancun", a duration like "365d", a raw block number, or
+	// "genesis"). Written back to values.yaml so `network list|status` can
+	// show what the user chose rather than only the resolved block.
+	Since string
 }
 
 // ParseSince resolves a --since value into an ArchiveScope. Accepted
@@ -111,34 +150,32 @@ func ParseSince(raw string) (ArchiveScope, error) {
 		return ArchiveScope{}, fmt.Errorf("--since cannot be empty")
 	}
 
-	if v == "genesis" || v == "all" {
-		return ArchiveScope{Kind: "all", Label: "all history (from genesis)"}, nil
+	if v == "genesis" || v == PruneAll {
+		return genesisScope(), nil
 	}
 
 	if hf := HardforkByName(v); hf != nil {
-		return ArchiveScope{
-			Kind:  "before",
-			Block: hf.Block,
-			Label: fmt.Sprintf("since %s (block %d, %s)", hf.DisplayName, hf.Block, hf.Date),
-		}, nil
+		return hf.scope(), nil
 	}
 
 	// Duration: <N>{d,mo,y}. Translates to block distance using the
 	// post-merge slot time of 12s. "mo" is 30 days; "y" is 365 days.
 	if blocks, ok := parseDurationBlocks(v); ok {
 		return ArchiveScope{
-			Kind:     "distance",
+			Kind:     PruneDistance,
 			Distance: blocks,
 			Label:    fmt.Sprintf("last %s (~%d blocks from tip)", v, blocks),
+			Since:    v,
 		}, nil
 	}
 
 	// Raw block number.
 	if n, err := strconv.ParseUint(v, 10, 64); err == nil {
 		return ArchiveScope{
-			Kind:  "before",
+			Kind:  PruneBefore,
 			Block: n,
 			Label: fmt.Sprintf("since block %d", n),
+			Since: strconv.FormatUint(n, 10),
 		}, nil
 	}
 

@@ -3,9 +3,11 @@
 # `obol upgrade` / `obol stack up` download these into the obol bin dir
 # (OBOL_BIN_DIR, default ~/.local/bin), verify the sha256 below (fail closed)
 # and install atomically. `obol update` reports drift against these pins.
+# obolup.sh installs them the same way (`obol upgrade --tools-only`); it never
+# downloads them itself (TestObolupDoesNotDownloadTools).
 #
-# Every `version` MUST equal the matching pin in obolup.sh (`obolupVar`);
-# TestManifestMatchesObolup enforces it. When bumping a version, update ALL
+# Every `version` MUST equal the matching pin in obolup.sh (`obolupVar`, the
+# value Renovate bumps); TestManifestMatchesObolup enforces it. When bumping a version, update ALL
 # four platform sha256 values from the upstream release checksum files:
 #   kubectl  https://dl.k8s.io/release/v<V>/bin/<os>/<arch>/kubectl.sha256
 #   helm     https://get.helm.sh/helm-v<V>-<os>-<arch>.tar.gz.sha256sum
@@ -26,7 +28,7 @@
 #   url      {version} expands to the pinned version.
 tools:
   - name: kubectl
-    version: "1.36.5"
+    version: "1.37.1"
     obolupVar: KUBECTL_VERSION
     required: true
     compat: skew1
@@ -36,16 +38,16 @@ tools:
     assets:
       linux/amd64:
         url: https://dl.k8s.io/release/v{version}/bin/linux/amd64/kubectl
-        sha256: 33bc88a24c3b09cf55bfd59e6ca977881b61fc3f25ab65bc80c65b430248648e
+        sha256: 65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8
       linux/arm64:
         url: https://dl.k8s.io/release/v{version}/bin/linux/arm64/kubectl
-        sha256: 88fc1aca8fd0c1b44fe379f67c39bd6858bdfc50241dc55775f84d0f5b31da3a
+        sha256: ff749f4b78d9c4f1ec87307df9b50119ed819e2094aa9810cb9acffc3286c8c7
       darwin/amd64:
         url: https://dl.k8s.io/release/v{version}/bin/darwin/amd64/kubectl
-        sha256: 03338828c3ba74c37bf5964573fbfbab132eb5bb15da2f821c25a4043d6eb3f0
+        sha256: 6851381c486ff6edd691623e3d65c87cb9a5b02887ff8fbbb38d8a031b748387
       darwin/arm64:
         url: https://dl.k8s.io/release/v{version}/bin/darwin/arm64/kubectl
-        sha256: c5850a4a6b9469b26cce47c1ab456285f58e308283dcdf72b4ddda3db49b0ec0
+        sha256: fd65982c97ddad3106754b69ffa196d0e543aa591930ae52aed1adfb92f8c77f
 
   - name: helm
     version: "4.3.0"
@@ -145,7 +147,7 @@ tools:
         sha256: 9b8c0e8f461e5d33aeee43a67f5ef4aff646a008a786887b8266cbb153c610cc
 
   # helm plugin: installed into `helm env HELM_PLUGINS` (helm's default
-  # plugin dir, same place obolup.sh's `helm plugin install` puts it).
+  # plugin dir, where older obolup.sh versions' `helm plugin install` put it).
   - name: helm-diff
     version: "3.15.15"
     obolupVar: HELM_DIFF_VERSION

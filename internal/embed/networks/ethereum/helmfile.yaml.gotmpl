@@ -3,6 +3,40 @@
 {{- if not (has .Values.executionClient (list "reth" "geth" "nethermind" "besu" "erigon")) }}
 {{- fail (printf "execution client %q is no longer supported. Delete this deployment and reinstall with --execution-client reth, geth, nethermind, besu or erigon" .Values.executionClient) }}
 {{- end }}
+{{- /* `obol network stop` records stopped: true. Both clients then render
+  with 0 replicas (PVCs and data are kept) until `obol network start`. */}}
+{{- $replicas := 1 }}
+{{- if (index .Values "stopped" | default false) }}{{ $replicas = 0 }}{{ end }}
+{{- /* Resource REQUESTS, never limits: the scheduler and the user see the
+  node's footprint, and under host memory pressure the kernel prefers to
+  OOM-kill something else. Sized from client docs and observed steady
+  state, kept low enough that a laptop can still schedule a testnet node.
+  Override the memory per deployment with --execution-memory /
+  --consensus-memory at install, or executionMemory / consensusMemory in
+  values.yaml followed by obol network sync.
+    mainnet  EL 8Gi (archive or erigon 12Gi), 2 CPU   CL 6Gi (grandine 4Gi, nimbus 3Gi), 1 CPU
+    hoodi    EL 2Gi (archive 4Gi), 500m             CL 3Gi (nimbus 2Gi), 500m
+    sepolia  EL 2Gi (archive 4Gi), 500m             CL 2Gi (nimbus 1Gi), 500m */}}
+{{- $mode := index .Values "mode" | default "full" }}
+{{- $elMemory := "2Gi" }}
+{{- $elCPU := "500m" }}
+{{- $clMemory := "2Gi" }}
+{{- $clCPU := "500m" }}
+{{- if eq .Values.network "mainnet" }}
+  {{- $elCPU = "2" }}
+  {{- $clCPU = "1" }}
+  {{- $elMemory = "8Gi" }}
+  {{- if or (eq $mode "archive") (eq .Values.executionClient "erigon") }}{{ $elMemory = "12Gi" }}{{ end }}
+  {{- $clMemory = "6Gi" }}
+  {{- if eq .Values.consensusClient "grandine" }}{{ $clMemory = "4Gi" }}{{ end }}
+  {{- if eq .Values.consensusClient "nimbus" }}{{ $clMemory = "3Gi" }}{{ end }}
+{{- else }}
+  {{- if eq $mode "archive" }}{{ $elMemory = "4Gi" }}{{ end }}
+  {{- if eq .Values.network "hoodi" }}{{ $clMemory = "3Gi" }}{{ end }}
+  {{- if eq .Values.consensusClient "nimbus" }}{{ $clMemory = "1Gi" }}{{ if eq .Values.network "hoodi" }}{{ $clMemory = "2Gi" }}{{ end }}{{ end }}
+{{- end }}
+{{- $elMemory = index .Values "executionMemory" | default $elMemory }}
+{{- $clMemory = index .Values "consensusMemory" | default $clMemory }}
 repositories:
   - name: ethereum-helm-charts
     url: https://ethpandaops.github.io/ethereum-helm-charts
@@ -93,6 +127,11 @@ releases:
       # comment above).
       - {{ .Values.executionClient }}:
           enabled: true
+          replicas: {{ $replicas }}
+          resources:
+            requests:
+              cpu: {{ $elCPU | quote }}
+              memory: {{ $elMemory | quote }}
           image:
             {{- if eq .Values.executionClient "reth" }}
             # renovate: datasource=github-releases depName=paradigmxyz/reth
@@ -142,6 +181,11 @@ releases:
       # only; lighthouse and grandine are Gloas-ready only in pre-releases.
       - {{ .Values.consensusClient }}:
           enabled: true
+          replicas: {{ $replicas }}
+          resources:
+            requests:
+              cpu: {{ $clCPU | quote }}
+              memory: {{ $clMemory | quote }}
           image:
             {{- if eq .Values.consensusClient "lighthouse" }}
             # renovate: datasource=github-releases depName=sigp/lighthouse

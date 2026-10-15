@@ -15,7 +15,7 @@ build:
     set -e
     VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed "s/^v//" || true)
     [ -n "$VERSION" ] || VERSION=$(cat VERSION 2>/dev/null || echo "0.0.0")
-    COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    COMMIT=$(git rev-parse --short=7 HEAD 2>/dev/null || echo "unknown")
     BUILD_TIME=$(date -u +%Y%m%d%H%M%S)
     DIRTY="false"
     git diff --quiet 2>/dev/null || DIRTY="true"
@@ -36,77 +36,37 @@ down:
     obol stack down
     obol stack purge
 
-# Path to the frontend repo (override with FRONTEND_DIR=../path just dev-frontend)
-frontend_dir := env("FRONTEND_DIR", justfile_directory() / "../obol-stack-front-end")
-# Push target = the obol-local k3d registry mirror set up during `obol stack up`
-# (see internal/stack/dev_registry.go). Pushing only transfers changed layers,
-# which is much faster than `k3d image import`'s full-tarball round-trip.
-dev_image    := "localhost:54103/obol-stack-front-end:dev"
+# Front-end (web/frontend) dev loop. `OBOL_DEVELOPMENT=true obol stack up`
+# already builds + imports the front-end like every other stack-owned image
+# (force a rebuild of uncommitted UI changes with
+# OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=frontend). These targets are the faster
+# inner loop: docker build → k3d image import → rollout restart, no helmfile.
+frontend_dir   := justfile_directory() / "web/frontend"
+frontend_image := "ghcr.io/obolnetwork/obol-stack-front-end"
 
-# Build frontend from local source, push to local registry, and restart the pod
-dev-frontend: (_dev-frontend-build "false" "true")
+# Build the front-end from web/frontend, import it into the stack's k3d cluster and restart the pod
+dev-frontend: (_dev-frontend-build "false")
 
-# Rebuild and hot-swap frontend (forces docker --no-cache; use after code changes)
-dev-frontend-rebuild: (_dev-frontend-build "true" "false")
+# Same as dev-frontend but with docker build --no-cache
+dev-frontend-rebuild: (_dev-frontend-build "true")
 
-# Internal: build the frontend dev image, push it, and roll out the deployment.
-#   no_cache="true"   -> docker build --no-cache (forces a clean rebuild)
-#   set_image="true"  -> repoint the deployment at the dev tag (first build);
-#                        rebuilds skip this since the tag is already wired.
+# Internal: build, import and roll out the front-end dev image.
 #
-# The WalletConnect project ID is baked into the Next.js client bundle at build
-# time (it's public by design — browsers use it to reach WalletConnect). We keep
-# it out of tracked obol-stack files by resolving it at build time, in order:
-#   1. NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID env var
-#   2. WALLET_CONNECT_PROJECT_ID env var
-#   3. the frontend repo's .env.local
-_dev-frontend-build no_cache set_image:
+# The image is tagged with the stack's dev tag (.dev-image-tag, written by
+# `obol stack init/up` under OBOL_DEVELOPMENT) so it replaces the image the
+# Helm release already pins: no `kubectl set image`, and the next
+# `obol stack up` keeps it. On a non-dev stack (release pin) it falls back to
+# `:dev` and repoints the deployment; `obol stack up` / `just dev-frontend-reset`
+# restores the release pin.
+#
+# The WalletConnect project ID (public; baked into the client bundle) is
+# resolved by web/frontend/scripts/build-frontend-image.sh from
+# NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID, WALLET_CONNECT_PROJECT_ID or
+# web/frontend/.env.local.
+_dev-frontend-build no_cache:
     #!/usr/bin/env bash
-    set -e
+    set -euo pipefail
 
-    resolve_wallet_connect_project_id() {
-        if [ -n "${NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID:-}" ]; then
-            printf '%s' "$NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID"
-            return
-        fi
-        if [ -n "${WALLET_CONNECT_PROJECT_ID:-}" ]; then
-            printf '%s' "$WALLET_CONNECT_PROJECT_ID"
-            return
-        fi
-
-        local env_file="{{ frontend_dir }}/.env.local"
-        if [ -f "$env_file" ]; then
-            local line
-            line="$(grep -E '^(NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID|WALLET_CONNECT_PROJECT_ID)=' "$env_file" | tail -n 1 || true)"
-            line="${line#*=}"
-            line="${line%\"}"
-            line="${line#\"}"
-            printf '%s' "$line"
-        fi
-    }
-
-    build_args=()
-    wallet_connect_project_id="$(resolve_wallet_connect_project_id)"
-    if [ -n "$wallet_connect_project_id" ]; then
-        echo "→ WalletConnect project ID found; baking wallet UI into the Next.js bundle"
-        build_args+=(--build-arg "NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=$wallet_connect_project_id")
-    else
-        echo "→ WalletConnect project ID not found; wallet UI will be disabled"
-    fi
-
-    if [ "{{ no_cache }}" = "true" ]; then
-        echo "→ Rebuilding {{ dev_image }} (no cache) from {{ frontend_dir }}"
-        build_args+=(--no-cache)
-    else
-        echo "→ Building {{ dev_image }} from {{ frontend_dir }}"
-    fi
-
-    docker build "${build_args[@]}" -t {{ dev_image }} {{ frontend_dir }}
-    echo "→ Pushing {{ dev_image }} to local registry"
-    docker push {{ dev_image }}
-
-    # k3s caches images by tag (imagePullPolicy: IfNotPresent). Pushing a new
-    # digest to :dev does not replace the node's copy — import forces the update.
     cfg_dir="${OBOL_CONFIG_DIR:-}"
     if [ -z "$cfg_dir" ] && [ "${OBOL_DEVELOPMENT:-}" = "true" ]; then
         cfg_dir="{{ justfile_directory() }}/.workspace/config"
@@ -116,28 +76,42 @@ _dev-frontend-build no_cache set_image:
     fi
     stack_id="$(cat "$cfg_dir/.stack-id")"
     cluster="obol-stack-${stack_id}"
-    echo "→ Importing {{ dev_image }} into ${cluster}"
-    k3d image import {{ dev_image }} -c "${cluster}"
 
-    echo "→ Restarting frontend deployment"
-    if [ "{{ set_image }}" = "true" ]; then
-        obol kubectl set image deployment/obol-frontend-obol-app \
-            obol-app={{ dev_image }} -n obol-frontend
+    tag="dev"
+    if [ -s "$cfg_dir/.dev-image-tag" ]; then
+        tag="$(cat "$cfg_dir/.dev-image-tag")"
     fi
+    image="{{ frontend_image }}:${tag}"
+
+    build_flags=(--tag "$image")
+    if [ "{{ no_cache }}" = "true" ]; then
+        build_flags+=(--no-cache)
+    fi
+    "{{ frontend_dir }}/scripts/build-frontend-image.sh" "${build_flags[@]}"
+
+    # k3s caches images by tag (imagePullPolicy: IfNotPresent): importing is
+    # what replaces the node's copy of an existing tag.
+    echo "→ Importing ${image} into ${cluster}"
+    k3d image import "$image" -c "$cluster"
+
+    current="$(obol kubectl get deployment/obol-frontend-obol-app -n obol-frontend \
+        -o jsonpath='{.spec.template.spec.containers[?(@.name=="obol-app")].image}')"
+    if [ "$current" != "$image" ]; then
+        echo "→ Repointing obol-frontend at ${image} (was ${current})"
+        obol kubectl set image deployment/obol-frontend-obol-app \
+            obol-app="$image" -n obol-frontend
+    fi
+    echo "→ Restarting frontend deployment"
     obol kubectl rollout restart deployment/obol-frontend-obol-app -n obol-frontend
     obol kubectl rollout status deployment/obol-frontend-obol-app -n obol-frontend --timeout=120s
     echo "✓ Frontend dev build live at http://obol.stack:8080"
 
-# Reset frontend back to the released image
+# Reset the front-end to the image the stack pins (re-syncs the Helm releases)
 dev-frontend-reset:
     #!/usr/bin/env bash
-    set -e
-    echo "→ Resetting frontend to released image"
-    obol kubectl set image deployment/obol-frontend-obol-app \
-        obol-app=obolnetwork/obol-stack-front-end:v0.1.25 -n obol-frontend
-    obol kubectl rollout restart deployment/obol-frontend-obol-app -n obol-frontend
-    obol kubectl rollout status deployment/obol-frontend-obol-app -n obol-frontend --timeout=120s
-    echo "✓ Frontend reset to released image"
+    set -euo pipefail
+    echo "→ Re-running obol stack up to restore the pinned front-end image"
+    obol stack up
 
 # Dev builds tag images `dev-<git-sha>` (internal/defaults/defaults.go::
 # DevImageTag) and nothing GCs them, so every commit you ran `obol stack up`
@@ -200,7 +174,7 @@ dev-prune-registries:
 
 # Regenerate CRD manifests + DeepCopy methods from kubebuilder markers
 # in internal/monetizeapi/. The Go types are the single source of truth;
-# CI (.github/workflows/lint-test.yaml::generate-check) fails if the
+# CI (.github/workflows/ci.yml, job "go") fails if the
 # working tree is dirty after this command runs. See CLAUDE.md for the
 # edit-types -> just generate -> commit-both workflow.
 generate:

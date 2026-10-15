@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 
 	signinwithx "github.com/x402-foundation/x402/go/v2/extensions/signinwithx"
 )
@@ -197,7 +198,10 @@ func (v *Verifier) writeSIWXChallenge(w http.ResponseWriter, r *http.Request, ru
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
-	resourceURI := "https://" + host + publicPrefix(rule, host) + stripRoutePrefix(rule.StripPrefix, r.URL.Path)
+	// Same public-scheme rule as the 402 challenge (resolveScheme): http for
+	// hosts the stack serves locally, https otherwise or when forwarded so.
+	scheme := resolveScheme(r, host)
+	resourceURI := scheme + "://" + host + publicPrefix(rule, host) + stripRoutePrefix(rule.StripPrefix, r.URL.Path)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"error":  "authentication_required",
 		"detail": reason.Error(),
@@ -206,8 +210,8 @@ func (v *Verifier) writeSIWXChallenge(w http.ResponseWriter, r *http.Request, ru
 			"version":       "eip4361",
 			"domain":        host,
 			"windowSeconds": windowSecs,
-			"signInUrl":     "https://" + host + authPath,
-			"verifyUrl":     "https://" + host + authPath + "/verify",
+			"signInUrl":     scheme + "://" + host + authPath,
+			"verifyUrl":     scheme + "://" + host + authPath + "/verify",
 			"hint": "Sign an EIP-4361 message (domain must equal the host above, Version 1, fresh Nonce, " +
 				"Issued At within the window) with EIP-191 personal_sign, then send " +
 				"`Authorization: SIWX <base64 message>.<base64 signature>`. Or POST {message, signature} " +
@@ -319,7 +323,7 @@ func (v *Verifier) handleAuthEndpoints(w http.ResponseWriter, r *http.Request) b
 		"version":       "eip4361",
 		"domain":        host,
 		"windowSeconds": int(v.siwx.Window().Seconds()),
-		"verifyUrl":     "https://" + host + publicPrefix(rule, host) + authVerifySuffix,
+		"verifyUrl":     resolveScheme(r, host) + "://" + host + publicPrefix(rule, host) + authVerifySuffix,
 	})
 	return true
 }
@@ -360,7 +364,7 @@ func (v *Verifier) handleAuthVerify(w http.ResponseWriter, r *http.Request, rule
 
 	wallet, err := v.siwx.VerifyMessage(body.Message, body.Signature, requestHost(r), time.Now())
 	if err != nil {
-		log.Printf("x402-verifier: siwx verify failed for %s/%s: %v", rule.OfferNamespace, rule.OfferName, err)
+		log.Printf("x402-verifier: siwx verify failed for %s/%s: %s", rule.OfferNamespace, rule.OfferName, logSafe(err.Error()))
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
 		_ = json.NewEncoder(w).Encode(map[string]any{"error": "siwx_verification_failed", "detail": err.Error()})
@@ -389,6 +393,12 @@ func (v *Verifier) handleAuthVerify(w http.ResponseWriter, r *http.Request, rule
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"wallet": wallet, "sessionToken": token})
+}
+
+// logSafe strips line breaks from request-derived text before it is
+// logged, so a caller cannot forge log entries.
+func logSafe(s string) string {
+	return strings.NewReplacer("\n", " ", "\r", " ").Replace(s)
 }
 
 // renderSIWXPage renders the browser sign-in page.
@@ -432,11 +442,15 @@ func (v *Verifier) authRuleForPrefix(prefix string) *RouteRule {
 // rejected outright: Go's url.Parse treats "\" as a path byte, but WHATWG
 // browsers normalize it to "/", so "/\evil.com" would pass the checks here
 // yet resolve to "//evil.com" → https://evil.com in the browser.
+//
+// Control characters are rejected too: browsers drop tabs and newlines
+// while parsing, so "/\t/evil.com" would also become "//evil.com".
 func sanitizeNextPath(next string) string {
-	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") {
+	// A single leading slash, not followed by '/' or '\'.
+	if len(next) == 0 || next[0] != '/' || (len(next) > 1 && (next[1] == '/' || next[1] == '\\')) {
 		return ""
 	}
-	if strings.Contains(next, "\\") {
+	if strings.ContainsAny(next, "\\") || strings.ContainsFunc(next, unicode.IsControl) {
 		return ""
 	}
 	if u, err := url.Parse(next); err != nil || u.Host != "" || u.Scheme != "" {

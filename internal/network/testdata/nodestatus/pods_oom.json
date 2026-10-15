@@ -1,0 +1,14 @@
+{"apiVersion":"v1","kind":"List","items":[
+ {"metadata":{"name":"ethereum-execution-0","labels":{"app.kubernetes.io/name":"execution"}},
+  "spec":{"containers":[{"resources":{"requests":{"cpu":"2","memory":"12Gi"}}}]},
+  "status":{"phase":"Running","containerStatuses":[{"ready":true,"restartCount":0,"state":{"running":{}}}]}},
+ {"metadata":{"name":"ethereum-beacon-0","labels":{"app.kubernetes.io/name":"beacon"}},
+  "spec":{"containers":[{"resources":{"requests":{"cpu":"1","memory":"6Gi"}}}]},
+  "status":{"phase":"Running","containerStatuses":[{"ready":false,"restartCount":9,
+    "state":{"waiting":{"reason":"CrashLoopBackOff"}},
+    "lastState":{"terminated":{"reason":"OOMKilled","exitCode":137,"finishedAt":"2026-10-14T11:57:00Z"}}}]}},
+ {"metadata":{"name":"ethereum-snapshotter-0","labels":{"app.kubernetes.io/name":"snapshotter"}},
+  "spec":{"containers":[{"resources":{"requests":{"memory":"64Gi"}}}]},
+  "status":{"phase":"Pending","conditions":[{"type":"PodScheduled","status":"False","reason":"Unschedulable",
+    "message":"0/1 nodes are available: 1 Insufficient memory. preemption: 0/1 nodes are available: 1 No preemption victims found for incoming pod."}]}}
+]}

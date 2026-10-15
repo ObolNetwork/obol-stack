@@ -1,6 +1,9 @@
 package images
 
 import (
+	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +28,7 @@ func withVersion(t *testing.T, commit, dirty string) {
 }
 
 func TestResolve_DevModeForcesLatest(t *testing.T) {
-	// Resolve itself returns :latest under OBOL_DEVELOPMENT; CopyInfrastructure
+	// Resolve itself returns :latest under OBOL_DEVELOPMENT; RefreshInfrastructure
 	// uses ResolveDev with the per-commit dev tag instead.
 	withVersion(t, "abc1234", "false")
 	t.Setenv("OBOL_DEVELOPMENT", "true")
@@ -221,5 +224,76 @@ func TestPersistDigest_WritesFile(t *testing.T) {
 	ClearPersistedDigests()
 	if got := loadPersistedDigest(repo, tag); got != digest {
 		t.Fatalf("loadPersistedDigest = %q, want %q", got, digest)
+	}
+}
+
+func TestPinCommit_TruncatesToPublishedTagLength(t *testing.T) {
+	// v0.17.0-rc1: goreleaser's .ShortCommit was 8 chars once the repo grew,
+	// while every publisher tags the first 7.
+	t.Setenv("OBOL_DEVELOPMENT", "")
+	t.Setenv("OBOL_SKIP_IMAGE_DIGEST", "true")
+	for _, tc := range []struct{ commit, want string }{
+		{"f5c2252a", "f5c2252"},
+		{"f5c2252a127ae7e0da59a660ec75810f8a02dd4d", "f5c2252"},
+		{"abc1234", "abc1234"},
+	} {
+		withVersion(t, tc.commit, "false")
+		if got := PinTag(); got != tc.want {
+			t.Errorf("PinTag() with GitCommit=%q = %q, want %q", tc.commit, got, tc.want)
+		}
+		want := "ghcr.io/obolnetwork/x402-verifier:" + tc.want
+		if got := Resolve("ghcr.io/obolnetwork/x402-verifier"); got != want {
+			t.Errorf("Resolve with GitCommit=%q = %q, want %q", tc.commit, got, want)
+		}
+		if got := StampIdentity(); got != "sha:"+tc.want {
+			t.Errorf("StampIdentity with GitCommit=%q = %q", tc.commit, got)
+		}
+	}
+}
+
+// fakeGHCR answers the token endpoint and HEADs every manifest with status.
+type fakeGHCR struct{ status int }
+
+func (f fakeGHCR) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Path == "/token" {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"token":"t"}`)), Header: http.Header{}, Request: req}, nil
+	}
+	return &http.Response{StatusCode: f.status, Body: io.NopCloser(strings.NewReader("")), Header: http.Header{}, Request: req}, nil
+}
+
+func withFakeGHCR(t *testing.T, status int) {
+	t.Helper()
+	prev := httpClient
+	httpClient = &http.Client{Transport: fakeGHCR{status: status}}
+	t.Cleanup(func() { httpClient = prev })
+	t.Setenv("OBOL_IMAGE_DIGESTS_FILE", filepath.Join(t.TempDir(), "image-digests.json"))
+	t.Setenv("OBOL_DEVELOPMENT", "")
+	t.Setenv("OBOL_SKIP_IMAGE_DIGEST", "")
+	t.Setenv("OBOL_REFRESH_IMAGE_DIGESTS", "")
+	withVersion(t, "abc1234", "false")
+	ClearDigestCache()
+	ClearPersistedDigests()
+}
+
+func TestResolveChecked_MissingTagIsAnError(t *testing.T) {
+	withFakeGHCR(t, http.StatusNotFound)
+	ref, err := ResolveChecked("ghcr.io/obolnetwork/x402-verifier")
+	if !errors.Is(err, ErrTagNotFound) {
+		t.Fatalf("err = %v, want ErrTagNotFound", err)
+	}
+	if ref != "ghcr.io/obolnetwork/x402-verifier:abc1234" {
+		t.Errorf("ref = %q", ref)
+	}
+}
+
+func TestResolveChecked_RegistryErrorFallsBackToTag(t *testing.T) {
+	// Outages and rate limits keep the offline behaviour: bare tag, no error.
+	withFakeGHCR(t, http.StatusServiceUnavailable)
+	ref, err := ResolveChecked("ghcr.io/obolnetwork/x402-verifier")
+	if err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+	if ref != "ghcr.io/obolnetwork/x402-verifier:abc1234" {
+		t.Errorf("ref = %q", ref)
 	}
 }

@@ -34,7 +34,7 @@ builds:
       - arm64
     ldflags:
       - -X github.com/ObolNetwork/obol-stack/internal/version.Version={{ .Version }}
-      - -X github.com/ObolNetwork/obol-stack/internal/version.GitCommit={{ .ShortCommit }}
+      - -X github.com/ObolNetwork/obol-stack/internal/version.GitCommit={{ slice .FullCommit 0 7 }}
       - -X github.com/ObolNetwork/obol-stack/internal/version.BuildTime={{ .Now.Format "20060102150405" }}
       - -X github.com/ObolNetwork/obol-stack/internal/version.GitDirty=false
     mod_timestamp: "{{ .CommitTimestamp }}"

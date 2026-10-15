@@ -24,3 +24,11 @@ mode: {{.Mode}}
 # @default
 # @description Archive scope (only used with --mode=archive). Accepts: 'merge', 'shanghai', 'cancun', 'prague', 'osaka' (EL fork name); duration like '365d', '1y', '6mo'; raw block number; or 'genesis' for all history. Prompts interactively on TTY if omitted.
 since: {{.Since}}
+
+# @default
+# @description Memory request for the execution client, e.g. 16Gi (default sized per network, mode and client: mainnet 8Gi, archive 12Gi, testnets 2Gi)
+executionMemory: {{.ExecutionMemory}}
+
+# @default
+# @description Memory request for the consensus client, e.g. 8Gi (default sized per network and client: mainnet 6Gi, hoodi 3Gi, sepolia 2Gi)
+consensusMemory: {{.ConsensusMemory}}

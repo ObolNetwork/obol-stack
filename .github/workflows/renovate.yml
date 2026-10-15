@@ -1,8 +1,15 @@
 name: Renovate
 
+# Self-hosted (not the Renovate app): postUpgradeTasks need
+# RENOVATE_ALLOWED_COMMANDS below. Every packageRule in renovate.json is
+# scheduled "before 6am on monday" (UTC), so hourly runs only matter in that
+# window; the 4-hourly run covers unscheduled updates (github-actions,
+# security alerts), rebases and Dependency Dashboard approvals. Need it now?
+# Run the workflow manually.
 on:
   schedule:
-    - cron: "0 * * * *" # hourly
+    - cron: "0 0-5 * * 1"   # Monday 00:00–05:00 UTC, hourly: the update window
+    - cron: "30 */4 * * *"  # every 4h: dashboard approvals, rebases, unscheduled updates
   workflow_dispatch:
     inputs:
       dry_run:

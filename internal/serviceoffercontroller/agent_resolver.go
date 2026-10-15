@@ -79,9 +79,9 @@ func (c *Controller) resolveAgentOffer(ctx context.Context, offer *monetizeapi.S
 	// without an agent-specific branch. We never write these back to the
 	// CRD's spec — that's user input.
 	offer.Spec.Upstream = monetizeapi.ServiceOfferUpstream{
-		Service:    "hermes",
-		Namespace:  ref.Namespace,
-		Port:       hermesPort,
+		Service:   "hermes",
+		Namespace: ref.Namespace,
+		Port:      hermesPort,
 		// Hermes API (port hermesPort) serves unauthenticated /health.
 		// /api/status is the dashboard probe path on a different port and
 		// returns 404 on the API — that used to slip past as "healthy"
@@ -94,4 +94,15 @@ func (c *Controller) resolveAgentOffer(ctx context.Context, offer *monetizeapi.S
 	}
 
 	return true, nil
+}
+
+// clearNonAgentResolution drops status.AgentResolution from an offer that is
+// not type=agent (for example one edited from agent to http). The field is
+// read by the catalog/OpenAPI renderers and the verifier route source, so a
+// leftover value would keep advertising an agent the offer no longer fronts.
+func clearNonAgentResolution(offer *monetizeapi.ServiceOffer, status *monetizeapi.ServiceOfferStatus) {
+	if offer.IsAgent() {
+		return
+	}
+	status.AgentResolution = nil
 }

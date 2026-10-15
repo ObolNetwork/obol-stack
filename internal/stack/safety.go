@@ -4,12 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
@@ -27,32 +23,24 @@ type LiveServiceOffer struct {
 	Price     string
 }
 
-// LiveHostGateway is a sell-inference offer with a still-running host
-// gateway process (PID file present and alive). These survive `obol stack
-// down` of the cluster and need a separate signal.
-type LiveHostGateway struct {
-	Name string
-	PID  int
-}
-
 // LiveServices captures the snapshot used by ConfirmRunningServicesLoss.
 type LiveServices struct {
-	Offers   []LiveServiceOffer
-	Gateways []LiveHostGateway
+	Offers []LiveServiceOffer
 }
 
-// Empty returns true when no live cluster services and no live host
-// gateways were found. The caller treats this as "safe to proceed without
-// prompting".
-func (s LiveServices) Empty() bool { return len(s.Offers) == 0 && len(s.Gateways) == 0 }
+// Empty returns true when no live cluster services were found. The caller
+// treats this as "safe to proceed without prompting".
+func (s LiveServices) Empty() bool { return len(s.Offers) == 0 }
 
-// ConfirmRunningServicesLoss warns the operator when a destructive action
-// (`obol stack down` / `obol stack purge`) is about to tear down a cluster
-// that is currently serving traffic, and asks whether to proceed.
+// ConfirmRunningServicesLoss warns the operator when `obol stack down` is
+// about to stop a cluster that is currently serving traffic, and asks
+// whether to proceed. Stopping preserves config and data, so a failed
+// discovery (cluster already unreachable) is not a reason to prompt here;
+// commands that DESTROY a cluster use ConfirmClusterDestroy instead.
 //
 // Returns true when the caller should continue. The rules:
 //
-//   - No live offers and no live gateways -> pass through (no prompt).
+//   - No live offers -> pass through (no prompt).
 //   - skipConfirm (operator passed --yes) -> pass through.
 //   - Interactive TTY -> render the list and ask `ui.Confirm` (default N).
 //   - Non-interactive without --yes -> return a non-nil error so the
@@ -60,63 +48,103 @@ func (s LiveServices) Empty() bool { return len(s.Offers) == 0 && len(s.Gateways
 //     `ssh host '<obol stack down>'` from a non-prod worktree wiping the
 //     production stack without an explicit operator decision.
 func ConfirmRunningServicesLoss(cfg *config.Config, u *ui.UI, action string, skipConfirm bool) (bool, error) {
-	services := DiscoverLiveServices(cfg)
+	services, _ := discoverLiveServicesFn(cfg)
 	if services.Empty() {
 		return true, nil
 	}
+	return confirmLoss(u, action, skipConfirm, services, nil)
+}
+
+// ConfirmClusterDestroy gates an action that deletes the cluster (and with
+// it every in-cluster resource, including sub-agent wallet Secrets).
+//
+// Live services are always listed when found, and a discovery failure
+// (cluster unreachable, listing error) is reported as "could not check what
+// is running" and treated like live services: it needs an explicit yes.
+// With always=true confirmation is required even when the cluster was
+// positively checked and found idle. In every gated case: --yes proceeds
+// with a warning, a TTY gets a default-No prompt, and a non-interactive run
+// fails closed with an error naming --yes.
+func ConfirmClusterDestroy(cfg *config.Config, u *ui.UI, action string, skipConfirm, always bool) (bool, error) {
+	services, discoverErr := discoverLiveServicesFn(cfg)
+	if services.Empty() && discoverErr == nil && !always {
+		return true, nil
+	}
+	return confirmLoss(u, action, skipConfirm, services, discoverErr)
+}
+
+func confirmLoss(u *ui.UI, action string, skipConfirm bool, services LiveServices, discoverErr error) (bool, error) {
 	if skipConfirm {
-		u.Warnf("%s: %d live offer(s), %d host gateway(s) — proceeding because --yes was passed",
-			action, len(services.Offers), len(services.Gateways))
+		switch {
+		case !services.Empty():
+			u.Warnf("%s: %d live offer(s) — proceeding because --yes was passed",
+				action, len(services.Offers))
+		case discoverErr != nil:
+			u.Warnf("%s: could not check what is running on the cluster (%v) — proceeding because --yes was passed", action, discoverErr)
+		default:
+			u.Warnf("%s: destroying the cluster — proceeding because --yes was passed", action)
+		}
 		return true, nil
 	}
 
 	if !u.CanPrompt() {
-		return false, fmt.Errorf("refusing to run %q non-interactively while %d live offer(s) and %d host gateway(s) are serving traffic: pass --yes to confirm",
-			action, len(services.Offers), len(services.Gateways))
+		switch {
+		case !services.Empty():
+			return false, fmt.Errorf("refusing to run %q non-interactively while %d live offer(s) are serving traffic: pass --yes to confirm",
+				action, len(services.Offers))
+		case discoverErr != nil:
+			return false, fmt.Errorf("refusing to run %q non-interactively: could not check what is running on the cluster (%w): pass --yes to confirm", action, discoverErr)
+		default:
+			return false, fmt.Errorf("refusing to run %q non-interactively: it destroys the existing cluster: pass --yes to confirm", action)
+		}
 	}
 
 	u.Blank()
-	u.Warnf("The following services are currently live on this stack:")
-	u.Blank()
-	for _, o := range services.Offers {
-		ns := o.Namespace
-		if ns == "" {
-			ns = "default"
+	if !services.Empty() {
+		u.Warnf("The following services are currently live on this stack:")
+		u.Blank()
+		for _, o := range services.Offers {
+			ns := o.Namespace
+			if ns == "" {
+				ns = "default"
+			}
+			summary := o.Type
+			if o.Model != "" {
+				summary = fmt.Sprintf("%s, %s", summary, o.Model)
+			}
+			if o.Price != "" {
+				summary = fmt.Sprintf("%s, %s", summary, o.Price)
+			}
+			u.Printf("  • %s/%s", ns, o.Name)
+			if o.Path != "" {
+				u.Dim("      endpoint: " + o.Path)
+			}
+			u.Dim("      " + summary)
 		}
-		summary := o.Type
-		if o.Model != "" {
-			summary = fmt.Sprintf("%s, %s", summary, o.Model)
-		}
-		if o.Price != "" {
-			summary = fmt.Sprintf("%s, %s", summary, o.Price)
-		}
-		u.Printf("  • %s/%s", ns, o.Name)
-		if o.Path != "" {
-			u.Dim("      endpoint: " + o.Path)
-		}
-		u.Dim("      " + summary)
+		u.Blank()
+		u.Dim(fmt.Sprintf("  After `%s`, external buyers will see 402/530 errors until `obol stack up`.", action))
 	}
-	for _, g := range services.Gateways {
-		u.Printf("  • sell-inference gateway %s (pid %d) will be orphaned", g.Name, g.PID)
+	if discoverErr != nil {
+		u.Warnf("Could not check what is running on the cluster: %v", discoverErr)
+		u.Dim("  Live offers and in-cluster wallets (sub-agent Secrets) may be lost.")
+	} else if services.Empty() {
+		u.Warnf("%s destroys the existing cluster and everything in it (including sub-agent wallet Secrets).", action)
 	}
-	u.Blank()
-	u.Dim(fmt.Sprintf("  After `%s`, external buyers will see 402/530 errors until `obol stack up`.", action))
 	u.Blank()
 
 	return u.Confirm(fmt.Sprintf("Proceed with %s?", action), false), nil
 }
 
-// DiscoverLiveServices snapshots cluster-side ServiceOffers in a
-// payment-gate-ready state and host-side sell-inference gateways with
-// alive PID files. Errors are intentionally swallowed: a discovery failure
-// must not block `obol stack down`. A best-effort empty snapshot is
-// returned so the caller falls through to "no prompt needed" only when we
-// have positive evidence of nothing live.
-func DiscoverLiveServices(cfg *config.Config) LiveServices {
-	return LiveServices{
-		Offers:   discoverLiveOffers(cfg),
-		Gateways: discoverLiveHostGateways(cfg),
-	}
+// discoverLiveServicesFn is swappable in tests.
+var discoverLiveServicesFn = discoverLiveServicesChecked
+
+// discoverLiveServicesChecked snapshots cluster-side ServiceOffers in a
+// payment-gate-ready state, plus the reason the
+// cluster half could not be checked (unreachable cluster, listing or
+// decoding failure).
+func discoverLiveServicesChecked(cfg *config.Config) (LiveServices, error) {
+	offers, err := discoverLiveOffers(cfg)
+	return LiveServices{Offers: offers}, err
 }
 
 // discoverLiveOffers returns ServiceOffers whose PaymentGateReady AND
@@ -124,23 +152,25 @@ func DiscoverLiveServices(cfg *config.Config) LiveServices {
 // `Ready=True` — the `Registered` condition stays False for unregistered
 // offers indefinitely, and excluding those would let `obol stack down`
 // silently nuke real production traffic (which is exactly the regression
-// this gate exists to prevent).
-func discoverLiveOffers(cfg *config.Config) []LiveServiceOffer {
+// this gate exists to prevent). A cluster without the ServiceOffer CRD has
+// no offers (not an error).
+func discoverLiveOffers(cfg *config.Config) ([]LiveServiceOffer, error) {
 	if err := kubectl.EnsureCluster(cfg); err != nil {
-		// Cluster already unreachable: down/purge is a no-op for the
-		// in-cluster side. Caller will still see host gateways.
-		return nil
+		return nil, err
 	}
 	bin, kc := kubectl.Paths(cfg)
 	raw, err := kubectl.Output(bin, kc, "get", "serviceoffers.obol.org", "-A", "-o", "json")
 	if err != nil {
-		return nil
+		if strings.Contains(err.Error(), "doesn't have a resource type") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("list ServiceOffers: %w", err)
 	}
 	var list struct {
 		Items []rawOffer `json:"items"`
 	}
 	if err := json.Unmarshal([]byte(raw), &list); err != nil {
-		return nil
+		return nil, fmt.Errorf("decode ServiceOffers: %w", err)
 	}
 
 	out := make([]LiveServiceOffer, 0, len(list.Items))
@@ -163,7 +193,7 @@ func discoverLiveOffers(cfg *config.Config) []LiveServiceOffer {
 		}
 		return out[i].Namespace < out[j].Namespace
 	})
-	return out
+	return out, nil
 }
 
 // rawOffer mirrors the subset of monetizeapi.ServiceOffer used here. We
@@ -230,50 +260,7 @@ func (o rawOffer) priceSummary() string {
 	return ""
 }
 
-// discoverLiveHostGateways walks <StateDir>/sell-inference/<name>/gateway.pid
-// for each persisted sell-inference deployment and reports those with a
-// PID file pointing at an alive process. Mirrors the readGatewayPID +
-// processAlive logic in cmd/obol/sell.go to avoid an import-from-cmd
-// cycle.
-func discoverLiveHostGateways(cfg *config.Config) []LiveHostGateway {
-	root := filepath.Join(cfg.StateDir, "sell-inference")
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil
-	}
-	out := make([]LiveHostGateway, 0, len(entries))
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		pidPath := filepath.Join(root, e.Name(), "gateway.pid")
-		data, err := os.ReadFile(pidPath)
-		if err != nil {
-			continue
-		}
-		pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
-		if err != nil || pid <= 0 {
-			continue
-		}
-		if !pidAlive(pid) {
-			continue
-		}
-		out = append(out, LiveHostGateway{Name: e.Name(), PID: pid})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
-	return out
-}
-
-func pidAlive(pid int) bool {
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return false
-	}
-	// Signal 0 doesn't deliver — just probes existence/permission on Unix.
-	return p.Signal(syscall.Signal(0)) == nil
-}
-
-// errSafetyAborted is a sentinel for "user declined a ConfirmRunningServicesLoss
+// errSafetyAborted is a sentinel for "user declined a ConfirmClusterDestroy
 // prompt". destroyOldBackendIfSwitching returns it so Init stops the whole
 // command before switching backends (Down/Purge instead return nil directly
 // from their own top-level check); Init maps it to a clean exit-0.

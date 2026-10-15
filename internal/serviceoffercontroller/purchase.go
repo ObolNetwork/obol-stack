@@ -361,11 +361,18 @@ func (c *Controller) reconcilePurchaseConfigure(ctx context.Context, status *mon
 
 func (c *Controller) reconcilePurchaseReady(ctx context.Context, status *monetizeapi.PurchaseRequestStatus, pr *monetizeapi.PurchaseRequest) {
 	buyerNS := pr.EffectiveBuyerNamespace()
-	syncedBefore := purchaseConditionIsTrue(status.Conditions, "Ready")
+	// A purchase that was Ready and then lost its buyer status keeps the
+	// "already synced" treatment: when the buyer answers again, spent auths
+	// mean remaining is legitimately below the pre-signed count.
+	syncedBefore := purchaseConditionIsTrue(status.Conditions, "Ready") ||
+		purchaseConditionReason(status.Conditions, "Ready") == purchaseReasonBuyerUnavailable
 
 	remaining, spent, err := c.checkBuyerStatus(ctx, buyerNS, pr.Name)
 	if err != nil {
-		if !syncedBefore {
+		if syncedBefore {
+			setPurchaseCondition(&status.Conditions, "Ready", "False", purchaseReasonBuyerUnavailable,
+				fmt.Sprintf("x402-buyer status check failed: %v", err))
+		} else {
 			setPurchaseCondition(&status.Conditions, "Ready", "False", "SidecarNotReady", err.Error())
 		}
 		return
@@ -399,6 +406,19 @@ func (c *Controller) updatePurchaseStatus(ctx context.Context, raw *unstructured
 		Namespace(patched.GetNamespace()).
 		UpdateStatus(ctx, patched, metav1.UpdateOptions{})
 	return err
+}
+
+// purchaseReasonBuyerUnavailable marks a purchase that was Ready but whose
+// x402-buyer status can no longer be read.
+const purchaseReasonBuyerUnavailable = "BuyerUnavailable"
+
+func purchaseConditionReason(conditions []monetizeapi.Condition, condType string) string {
+	for _, c := range conditions {
+		if c.Type == condType {
+			return c.Reason
+		}
+	}
+	return ""
 }
 
 func purchaseConditionIsTrue(conditions []monetizeapi.Condition, condType string) bool {

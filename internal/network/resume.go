@@ -57,12 +57,21 @@ func ListDeployments(cfg *config.Config) []string {
 // node silently drops out of /rpc after the next eRPC restart. Registration
 // merges by id and only rolls eRPC when the config changed. `obol network
 // sync --all` remains the explicit "force re-sync everything" path.
+// Deployments recorded as stopped (`obol network stop`) are skipped.
 //
 // Best-effort per deployment; failures warn and are joined into the result.
 func ResumeInstalled(cfg *config.Config, u *ui.UI) error {
 	var errs []error
 	for _, ident := range ListDeployments(cfg) {
 		namespace := deploymentNamespace(ident)
+
+		// A stopped node (obol network stop) stays down: no sync, no
+		// eRPC registration. obol network start brings it back.
+		if networkType, id, _ := strings.Cut(ident, "/"); deploymentStopped(cfg, networkType, id) {
+			u.Infof("Network %s is stopped; leaving it down (obol network start %s)", ident, ident)
+			continue
+		}
+
 		health, err := resumeReleaseHealthFn(cfg, namespace)
 		if err != nil {
 			u.Warnf("Could not check network %s release status: %v", ident, err)
@@ -71,7 +80,7 @@ func ResumeInstalled(cfg *config.Config, u *ui.UI) error {
 		}
 		if health == helmcmd.ReleasesDeployed {
 			networkType, id, _ := strings.Cut(ident, "/")
-			if networkType != "ethereum" {
+			if networkType != TypeEthereum {
 				continue
 			}
 

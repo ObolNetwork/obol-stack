@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -71,7 +72,7 @@ func TestParseBeaconSyncing(t *testing.T) {
 		if err := parseBeaconSyncing(fixture(t, name), &got); err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		if got != want {
+		if !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: got %+v, want %+v", name, got, want)
 		}
 	}

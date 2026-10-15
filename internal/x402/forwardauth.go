@@ -95,6 +95,15 @@ type ForwardAuthConfig struct {
 	// chat-shaped fail open (any non-empty body settles). Meant for
 	// chat-shaped routes; generic byte proxies leave it false.
 	SettleOnDelivery bool
+
+	// InUse, if non-nil, rejects a verified payment whose authorization is
+	// already being served by another request (or recently settled) with
+	// 409 payment_in_use, before the request reaches the upstream. The key
+	// is claimed after verify and released when the request finishes
+	// unsettled; a settled key stays blocked until the authorization
+	// expires. Share one registry across every middleware instance that
+	// gates the same payments (the registry is per-process).
+	InUse *PaymentInUseRegistry
 }
 
 // facilitatorVerifyRequest is the JSON body sent to POST /verify and /settle.
@@ -305,12 +314,22 @@ func facilitatorURLFrom(r *http.Request) string {
 // when the canonical network is CAIP-2. Bankr's docs and some hosted examples
 // still teach the legacy names, so advertising both gives buyers a compatible
 // option without dropping the standard CAIP-2 form other clients already use.
+//
+// Entries that describe the same payment (see requirementKey) are emitted
+// once: the canonical entry is kept and at most one legacy alias is added
+// for it, so a duplicated option never shows up as two identical choices.
 func legacyCompatRequirements(requirements []x402types.PaymentRequirements) []x402types.PaymentRequirements {
 	if len(requirements) == 0 {
 		return nil
 	}
 	out := make([]x402types.PaymentRequirements, 0, len(requirements)*2)
+	seen := make(map[paymentRequirementKey]bool, len(requirements))
 	for _, req := range requirements {
+		key := requirementKey(req)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		out = append(out, req)
 		chain, err := ResolveChainInfo(req.Network)
 		if err != nil || chain.Name == "" || chain.Name == req.Network {
@@ -321,6 +340,26 @@ func legacyCompatRequirements(requirements []x402types.PaymentRequirements) []x4
 		out = append(out, alias)
 	}
 	return out
+}
+
+// paymentRequirementKey identifies one payment option independent of how
+// its network is spelled (CAIP-2 vs legacy alias) or address case.
+type paymentRequirementKey struct {
+	scheme, network, asset, amount, payTo string
+}
+
+func requirementKey(req x402types.PaymentRequirements) paymentRequirementKey {
+	network := req.Network
+	if chain, err := ResolveChainInfo(network); err == nil && chain.CAIP2Network != "" {
+		network = chain.CAIP2Network
+	}
+	return paymentRequirementKey{
+		scheme:  strings.ToLower(strings.TrimSpace(req.Scheme)),
+		network: strings.ToLower(strings.TrimSpace(network)),
+		asset:   strings.ToLower(strings.TrimSpace(req.Asset)),
+		amount:  strings.TrimSpace(req.Amount),
+		payTo:   strings.ToLower(strings.TrimSpace(req.PayTo)),
+	}
 }
 
 func paymentRequiredBody(r *http.Request, requirements []x402types.PaymentRequirements, extensions map[string]any) map[string]any {
@@ -735,6 +774,48 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 				return
 			}
 
+			// One signed authorization serves one request. Verify cannot
+			// tell concurrent copies apart (the nonce is spent only at
+			// settlement), so claim the authorization before anything is
+			// forwarded and refuse a second concurrent use.
+			var (
+				inUseKey      string
+				interceptor   *settlementInterceptor
+				settleOnChain bool
+			)
+			if cfg.InUse != nil {
+				inUseKey = paymentInUseKey(payload, paymentHeader)
+				switch cfg.InUse.claim(inUseKey) {
+				case claimInUse:
+					log.Printf("x402: payment authorization already in use; payload summary %s", paymentPayloadSummary(payload))
+					reportFailure("payment_in_use")
+					writePaymentError(w, http.StatusConflict, paymentErrorBody{
+						Error:  "Payment already in use",
+						Reason: "payment_in_use",
+						Hint:   "this signed payment is already attached to another request — sign a fresh authorization (new nonce) for each request, or retry this one after the other request finishes unsettled",
+					})
+					return
+				case claimFull:
+					log.Printf("x402: payment in-use registry at capacity, refusing request")
+					reportFailure("payment_registry_full")
+					writePaymentError(w, http.StatusServiceUnavailable, paymentErrorBody{
+						Error:     "Payment gateway busy",
+						Reason:    "payment_registry_full",
+						Hint:      "the seller is tracking too many in-flight payments — retry the same request shortly",
+						Retriable: true,
+					})
+					return
+				case claimOK:
+				}
+				deadline := paymentDeadline(payload)
+				// Deferred so a panicking handler (ReverseProxy aborts with
+				// http.ErrAbortHandler on a dropped client) still releases.
+				defer func() {
+					settled := settleOnChain || (interceptor != nil && interceptor.settled)
+					cfg.InUse.release(inUseKey, settled, deadline)
+				}()
+			}
+
 			if cfg.OnPaymentVerified != nil {
 				cfg.OnPaymentVerified(verifyResp.Payer)
 			}
@@ -746,7 +827,6 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 			// and judged in finalize() too; otherwise it settles on WriteHeader.
 			// Either way a settle failure can return 503 before the status is
 			// committed. Verify ≠ charge.
-			var interceptor *settlementInterceptor
 			interceptor = &settlementInterceptor{
 				w:           w,
 				deferSettle: !cfg.VerifyOnly,
@@ -787,6 +867,9 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 						settledOnChain := false
 						if settleResp != nil && settleResp.Transaction != "" {
 							settledOnChain = true
+							// Keep the authorization blocked: the settle
+							// tx may have landed even though the call failed.
+							settleOnChain = true
 							settleJSON, _ := json.Marshal(settleResp)
 							encodedSettle := base64.StdEncoding.EncodeToString(settleJSON)
 							w.Header().Set("X-PAYMENT-RESPONSE", encodedSettle)

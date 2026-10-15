@@ -8,7 +8,7 @@
 // Edit a field or marker here, then run `just generate` to regenerate
 // the CRD YAML manifests + zz_generated_deepcopy.go from kubebuilder
 // markers. CI fails if the working tree is dirty after that command
-// runs (see .github/workflows/lint-test.yaml::generate-check).
+// runs (see .github/workflows/ci.yml, job "go").
 //
 // +kubebuilder:object:generate=true
 // +groupName=obol.org

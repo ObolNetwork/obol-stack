@@ -14,7 +14,7 @@ import (
 
 // newTestCfg returns a Config rooted at t.TempDir() so safety_test does not
 // touch real cluster paths. ConfigDir has no kubeconfig.yaml so the cluster
-// half of DiscoverLiveServices short-circuits via kubectl.EnsureCluster.
+// half of discoverLiveServicesChecked short-circuits via kubectl.EnsureCluster.
 func newTestCfg(t *testing.T) *config.Config {
 	t.Helper()
 	tmp := t.TempDir()
@@ -26,15 +26,15 @@ func newTestCfg(t *testing.T) *config.Config {
 	}
 }
 
-func writeGatewayPID(t *testing.T, cfg *config.Config, name string, pid int) {
+// withLiveOffer makes the safety snapshot report one live ServiceOffer for
+// the duration of the test, standing in for a reachable cluster.
+func withLiveOffer(t *testing.T) {
 	t.Helper()
-	dir := filepath.Join(cfg.StateDir, "sell-inference", name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
+	prev := discoverLiveServicesFn
+	discoverLiveServicesFn = func(*config.Config) (LiveServices, error) {
+		return LiveServices{Offers: []LiveServiceOffer{{Namespace: "llm", Name: "aeon", Type: "http"}}}, nil
 	}
-	if err := os.WriteFile(filepath.Join(dir, "gateway.pid"), []byte(strconv.Itoa(pid)), 0o644); err != nil {
-		t.Fatalf("write pid: %v", err)
-	}
+	t.Cleanup(func() { discoverLiveServicesFn = prev })
 }
 
 func TestConfirmRunningServicesLoss_EmptyPassesThrough(t *testing.T) {
@@ -56,14 +56,14 @@ func TestConfirmRunningServicesLoss_EmptyPassesThrough(t *testing.T) {
 
 func TestConfirmRunningServicesLoss_NonInteractiveLiveServiceFailsClosed(t *testing.T) {
 	cfg := newTestCfg(t)
-	writeGatewayPID(t, cfg, "aeon", os.Getpid()) // our own PID is guaranteed alive
+	withLiveOffer(t)
 
 	var buf bytes.Buffer
 	u := ui.NewForTest(&buf, &buf) // isTTY defaults false
 
 	proceed, err := ConfirmRunningServicesLoss(cfg, u, "obol stack down", false)
 	if err == nil {
-		t.Fatal("expected non-nil error when live gateways exist in non-interactive shell without --yes")
+		t.Fatal("expected non-nil error when live offers exist in non-interactive shell without --yes")
 	}
 	if !strings.Contains(err.Error(), "--yes") {
 		t.Errorf("error must mention --yes (operator escape hatch): %v", err)
@@ -75,7 +75,7 @@ func TestConfirmRunningServicesLoss_NonInteractiveLiveServiceFailsClosed(t *test
 
 func TestConfirmRunningServicesLoss_SkipConfirmPassesThrough(t *testing.T) {
 	cfg := newTestCfg(t)
-	writeGatewayPID(t, cfg, "aeon", os.Getpid())
+	withLiveOffer(t)
 
 	var buf bytes.Buffer
 	u := ui.NewForTest(&buf, &buf)
@@ -92,11 +92,20 @@ func TestConfirmRunningServicesLoss_SkipConfirmPassesThrough(t *testing.T) {
 	}
 }
 
-func TestConfirmRunningServicesLoss_DeadGatewayDoesNotTrigger(t *testing.T) {
+// TestConfirmRunningServicesLoss_IgnoresSellInferenceStateDir pins that
+// leftover <state>/sell-inference/<name>/gateway.pid files (written by
+// releases that ran sell-inference gateways as detached processes) no
+// longer count as live services: standalone gateways do not depend on the
+// cluster, so tearing it down is not gated on them.
+func TestConfirmRunningServicesLoss_IgnoresSellInferenceStateDir(t *testing.T) {
 	cfg := newTestCfg(t)
-	// PID 0 is treated as invalid; reserve a fresh PID by forking would be
-	// flaky in unit tests, so use a definitely-not-existing PID.
-	writeGatewayPID(t, cfg, "stale", 2147483645)
+	dir := filepath.Join(cfg.StateDir, "sell-inference", "aeon")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "gateway.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644); err != nil {
+		t.Fatalf("write pid: %v", err)
+	}
 
 	var buf bytes.Buffer
 	u := ui.NewForTest(&buf, &buf)
@@ -106,7 +115,7 @@ func TestConfirmRunningServicesLoss_DeadGatewayDoesNotTrigger(t *testing.T) {
 		t.Fatalf("unexpected err: %v", err)
 	}
 	if !proceed {
-		t.Fatal("dead PID file must be ignored — should pass through")
+		t.Fatal("a sell-inference PID file must not gate stack down")
 	}
 }
 

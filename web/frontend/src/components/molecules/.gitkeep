@@ -1,0 +1,11 @@
+# Molecules
+
+Groups of atoms that work together. These are simple combinations of basic components.
+
+Examples:
+
+- Search forms (input + button)
+- Card headers (icon + title + badge)
+- Navigation items
+- Form fields (label + input + error message)
+

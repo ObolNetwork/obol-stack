@@ -155,53 +155,6 @@ func ReadInfrastructureFile(path string) ([]byte, error) {
 	return content, nil
 }
 
-// CopySkills recursively copies all embedded skills to the destination directory.
-// If a skill directory already exists at the destination, it is skipped (user skills
-// take precedence over embedded defaults).
-func CopySkills(destDir string) error {
-	return fs.WalkDir(skillsFS, "skills", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		// Skip root skills directory
-		if path == "skills" {
-			return nil
-		}
-
-		// Get relative path within skills/
-		relPath := strings.TrimPrefix(path, "skills/")
-		destPath := filepath.Join(destDir, relPath)
-
-		if d.IsDir() {
-			if err := os.MkdirAll(destPath, 0o755); err != nil {
-				return fmt.Errorf("failed to create directory %s: %w", destPath, err)
-			}
-
-			return nil
-		}
-
-		// Ensure parent directory exists
-		parentDir := filepath.Dir(destPath)
-		if err := os.MkdirAll(parentDir, 0o755); err != nil {
-			return fmt.Errorf("failed to create parent directory %s: %w", parentDir, err)
-		}
-
-		// Read embedded file
-		data, err := skillsFS.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("failed to read embedded file %s: %w", path, err)
-		}
-
-		// Write to destination
-		if err := os.WriteFile(destPath, data, 0o600); err != nil {
-			return fmt.Errorf("failed to write file %s: %w", destPath, err)
-		}
-
-		return nil
-	})
-}
-
 // WriteSkillSubset copies the named embedded skills into dst, overwriting any
 // per-skill files already present for the named skills. It does NOT delete
 // skills already at dst that aren't in names — agents own the dir after the

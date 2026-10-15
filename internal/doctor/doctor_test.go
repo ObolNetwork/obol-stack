@@ -217,6 +217,77 @@ func TestCheckWallets_AddressOnly(t *testing.T) {
 	}
 }
 
+// TestCheckWallets_DefaultAgentUnreadableKeystore: the default agent's
+// keystore dir is owned by the remote-signer UID and unreadable to the
+// operator; its address still comes from wallet.json (address field only),
+// and without wallet.json the wallet is reported as present.
+func TestCheckWallets_DefaultAgentUnreadableKeystore(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads any directory")
+	}
+
+	setup := func(t *testing.T, withMetadata bool) *Env {
+		t.Helper()
+
+		e := fakeEnv(t, nil)
+		deployDir := filepath.Join(e.Cfg.ConfigDir, "applications", "hermes", "obol-agent")
+		if err := os.MkdirAll(deployDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+
+		if withMetadata {
+			meta := `{"address":"0xd0391eedc3268f3deef1f05fff5d7aef82f64ccf","password":"SECRET-PASSWORD"}`
+			if err := os.WriteFile(filepath.Join(deployDir, "wallet.json"), []byte(meta), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		ksDir := filepath.Join(e.Cfg.DataDir, "hermes-obol-agent", "remote-signer-keystores")
+		if err := os.MkdirAll(ksDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.WriteFile(filepath.Join(ksDir, "k.json"), []byte(`{"address":"ffffffffffffffffffffffffffffffffffffffff"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		if err := os.Chmod(ksDir, 0); err != nil {
+			t.Fatal(err)
+		}
+
+		t.Cleanup(func() { _ = os.Chmod(ksDir, 0o700) })
+
+		return e
+	}
+
+	t.Run("wallet.json", func(t *testing.T) {
+		r := checkWallets(context.Background(), setup(t, true))
+		if r.Message != "obol-agent 0xd039…4ccf" || strings.Contains(r.Message+r.Fix, "SECRET") {
+			t.Fatalf("got %+v; want the default agent's short address only", r)
+		}
+	})
+
+	t.Run("no metadata", func(t *testing.T) {
+		r := checkWallets(context.Background(), setup(t, false))
+		if !strings.Contains(r.Message, "obol-agent wallet present (not readable by this user)") {
+			t.Fatalf("got %+v; want the wallet reported as present", r)
+		}
+	})
+}
+
+// TestCheckWallets_NoWallet: an instance without keystore or metadata is
+// not counted.
+func TestCheckWallets_NoWallet(t *testing.T) {
+	e := fakeEnv(t, nil)
+	if err := os.MkdirAll(filepath.Join(e.Cfg.ConfigDir, "applications", "hermes", "obol-agent"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if r := checkWallets(context.Background(), e); r.Message != "none yet" {
+		t.Fatalf("got %+v; want none yet", r)
+	}
+}
+
 func TestRun_GatesClusterChecksAndRepairs(t *testing.T) {
 	e := fakeEnv(t, nil)
 	repaired := false
@@ -268,5 +339,34 @@ func TestRun_GatesClusterChecksAndRepairs(t *testing.T) {
 
 	if s := Summarize(res); s.Fail != 1 || s.Skip != 2 {
 		t.Errorf("summary = %+v", s)
+	}
+}
+
+func TestOllamaListensOnAllInterfaces(t *testing.T) {
+	orig := ollamaGOOS
+	t.Cleanup(func() { ollamaGOOS = orig })
+
+	cases := []struct {
+		name    string
+		goos    string
+		ss      string
+		exposed bool
+	}{
+		{"linux all interfaces", "linux", "LISTEN 0 4096 0.0.0.0:11434 0.0.0.0:*\n", true},
+		{"linux ipv6 any", "linux", "LISTEN 0 4096 *:11434 *:*\n", true},
+		{"linux loopback", "linux", "LISTEN 0 4096 127.0.0.1:11434 0.0.0.0:*\n", false},
+		{"linux bridge only", "linux", "LISTEN 0 4096 172.17.0.1:11434 0.0.0.0:*\n", false},
+		{"linux ss missing", "linux", "ERR", false},
+		{"darwin skipped", "darwin", "LISTEN 0 4096 0.0.0.0:11434 0.0.0.0:*\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ollamaGOOS = tc.goos
+			e := fakeEnv(t, map[string]string{"ss -Hltn": tc.ss})
+			r, exposed := ollamaListensOnAllInterfaces(context.Background(), e)
+			if exposed != tc.exposed {
+				t.Fatalf("exposed = %v, want %v (result %+v)", exposed, tc.exposed, r)
+			}
+		})
 	}
 }

@@ -116,6 +116,8 @@ func TestAgentManifests_DeploymentEnvCarriesContext(t *testing.T) {
 		// Must track HERMES_HOME: the upstream image bakes /opt/data and
 		// denies all file-tool writes outside the safe root.
 		"HERMES_WRITE_SAFE_ROOT": "/data/.hermes:/tmp",
+		// No messaging platforms are configured; the gateway stays closed.
+		"GATEWAY_ALLOW_ALL_USERS": "false",
 	}
 	got := make(map[string]string)
 	for _, e := range envs {

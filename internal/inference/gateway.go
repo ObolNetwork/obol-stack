@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
-	"strings"
 	"time"
 
 	x402pkg "github.com/ObolNetwork/obol-stack/internal/x402"
@@ -45,11 +44,15 @@ type GatewayConfig struct {
 	// VerifyOnly skips blockchain settlement after successful verification.
 	// Useful for testing and staging environments where no real funds are involved.
 	VerifyOnly bool
+}
 
-	// NoPaymentGate disables the built-in x402 payment middleware. Use this
-	// when the gateway runs behind the cluster's x402 verifier (via Traefik
-	// ForwardAuth) to avoid double-gating requests.
-	NoPaymentGate bool
+// PaidRoutes are the "METHOD /path" patterns the gateway proxies to the
+// upstream, each behind the x402 payment gate. Nothing else is forwarded.
+var PaidRoutes = []string{
+	"POST /v1/chat/completions",
+	"POST /v1/completions",
+	"POST /v1/embeddings",
+	"GET /v1/models",
 }
 
 // Gateway is an x402-enabled reverse proxy for LLM inference.
@@ -134,73 +137,33 @@ func (g *Gateway) buildHandler(upstreamURL string) (http.Handler, error) {
 		// or an empty completion. Non-chat JSON (embeddings, model lists)
 		// fails open: any non-empty body still settles.
 		SettleOnDelivery: true,
+		// One signed authorization per request: a concurrent duplicate is
+		// refused with 409 before it reaches the inference server. The
+		// registry is in-process; the gateway is a single process.
+		InUse: x402pkg.NewPaymentInUseRegistry(),
 	}, []x402types.PaymentRequirements{requirement})
 
-	// protect wraps a handler with the payment gate unless the gateway runs
-	// behind the cluster's x402 verifier.
-	protect := func(h http.Handler) http.Handler {
-		if !g.config.NoPaymentGate {
-			h = paymentMiddleware(h)
-		}
-
-		return h
-	}
-
-	// Build HTTP mux.
+	// Build HTTP mux. The gateway serves an explicit allowlist: the paid
+	// OpenAI-compatible inference routes plus an unpaid health check. Every
+	// other path or method (including an upstream's native API, e.g.
+	// Ollama's /api/*) returns 404 without reaching the upstream.
 	mux := http.NewServeMux()
 
-	// Health check — no payment or encryption required.
+	// Health check — no payment required. Answered by the gateway itself.
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, `{"status":"ok"}`)
 	})
 
-	// Protected inference endpoints (x402 payment).
-	mux.Handle("POST /v1/chat/completions", protect(proxy))
-	mux.Handle("POST /v1/completions", protect(proxy))
-	mux.Handle("POST /v1/embeddings", protect(proxy))
-	mux.Handle("GET /v1/models", protect(proxy))
-
-	// Unprotected OpenAI-compat metadata passthrough.
-	mux.Handle("/", proxy)
-
-	// Some gateway stacks preserve the original storefront prefix
-	// (/services/<offer-name>/...) even when URLRewrite is configured.
-	// Normalize that prefix so requests still hit the intended protected
-	// OpenAI routes instead of falling through to the catch-all upstream
-	// proxy path (which would return 404 from Ollama).
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if normalized, ok := normalizeServicePrefixedPath(r.URL.Path); ok {
-			r.URL.Path = normalized
-			if r.URL.RawQuery != "" {
-				r.RequestURI = normalized + "?" + r.URL.RawQuery
-			} else {
-				r.RequestURI = normalized
-			}
-		}
-		mux.ServeHTTP(w, r)
-	})
-
-	return handler, nil
-}
-
-func normalizeServicePrefixedPath(path string) (string, bool) {
-	if !strings.HasPrefix(path, "/services/") {
-		return "", false
+	// Paid inference endpoints (x402 payment).
+	for _, route := range PaidRoutes {
+		mux.Handle(route, paymentMiddleware(proxy))
 	}
 
-	rest := strings.TrimPrefix(path, "/services/")
-	slash := strings.IndexByte(rest, '/')
-	if slash < 0 {
-		return "/", true
-	}
+	// Anything outside the allowlist is not served.
+	mux.Handle("/", http.NotFoundHandler())
 
-	normalized := rest[slash:]
-	if normalized == "" {
-		return "/", true
-	}
-
-	return normalized, true
+	return mux, nil
 }
 
 // Start begins serving the gateway. Blocks until the server is shut down.

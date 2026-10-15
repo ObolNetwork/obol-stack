@@ -114,20 +114,22 @@ When `OBOL_DEVELOPMENT=true`, `obol stack up` creates k3d pull-through caches an
 
 Caveats:
 
-- Pull-through caches do **not** speed up local-build flows (`docker build` runs on the host daemon). `just dev-frontend` pushes to `localhost:54103` **and** runs `k3d image import` so k3s picks up the new `:dev` digest (`imagePullPolicy: IfNotPresent` otherwise serves a stale image).
+- Pull-through caches do **not** speed up local-build flows (`docker build` runs on the host daemon). `just dev-frontend` runs `k3d image import` so k3s picks up the rebuilt image under the same tag (`imagePullPolicy: IfNotPresent` otherwise serves a stale image).
 - Registry config is only set up at cluster create. If `obol stack up` is starting an existing cluster, registry setup is skipped — recreate (`obol stack down && obol stack up`) once to pick up new entries.
 
-### Local frontend (`obol-stack-front-end`)
+### Local frontend (`web/frontend`, image `obol-stack-front-end`)
+
+The dashboard is built from `web/frontend` like the other stack-owned images: `OBOL_DEVELOPMENT=true obol stack up` builds/imports `ghcr.io/obolnetwork/obol-stack-front-end:dev-<sha>` (force uncommitted UI changes with `OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES=frontend`). Faster inner loop without helmfile:
 
 ```bash
-# From obol-stack — use .envrc.local so OBOL_CONFIG_DIR points at ~/.config/obol (one cluster)
+# use .envrc.local so OBOL_CONFIG_DIR points at ~/.config/obol (one cluster)
 source .envrc.local
-FRONTEND_DIR=../obol-stack-front-end just dev-frontend-rebuild
+just dev-frontend
 open http://obol.stack:8080
 ```
 
-- `dev-frontend` — build (may use Docker cache) + push + import + rollout
-- `dev-frontend-rebuild` — same with `--no-cache` (use after editing frontend source)
-- `dev-frontend-reset` — restore released chart image
+- `dev-frontend` — build `web/frontend` under the stack's dev tag (Docker cache) + `k3d image import` + rollout restart
+- `dev-frontend-rebuild` — same with `--no-cache`
+- `dev-frontend-reset` — `obol stack up` (restores the pinned image)
 
-Host `pnpm run dev` on `:3000` is optional for HMR; see frontend repo `.env.example` for kubeconfig/Prometheus port-forwards.
+Host `pnpm --dir web/frontend dev` on `:3000` is optional for HMR; see `web/frontend/.env.example` for kubeconfig/Prometheus port-forwards.

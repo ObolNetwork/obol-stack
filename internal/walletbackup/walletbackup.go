@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/ObolNetwork/obol-stack/internal/fsutil"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"golang.org/x/crypto/scrypt"
 	"gopkg.in/yaml.v3"
@@ -162,7 +163,7 @@ func ReadKeystorePassword(deployDir string) (string, error) {
 // deployDir. Callers pass the runtime-specific rendered content (the YAML
 // shape is identical across runtimes, but the comment header differs).
 func WriteValuesRemoteSigner(deployDir, content string) error {
-	return os.WriteFile(filepath.Join(deployDir, "values-remote-signer.yaml"), []byte(content), 0o600)
+	return fsutil.WriteSecret(filepath.Join(deployDir, "values-remote-signer.yaml"), []byte(content))
 }
 
 // Encrypt wraps plaintext with AES-256-GCM under a scrypt-derived key.

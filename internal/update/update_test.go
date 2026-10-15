@@ -324,7 +324,7 @@ func TestCollectHelmfiles(t *testing.T) {
 	}
 
 	// Create an app instance helmfile
-	appDir := filepath.Join(tmpDir, "applications", "openclaw", "my-instance")
+	appDir := filepath.Join(tmpDir, "applications", "hermes", "my-instance")
 	if err := os.MkdirAll(appDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

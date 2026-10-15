@@ -48,7 +48,7 @@ Pin a release (use the current tag from the [releases page](https://github.com/O
 curl -fsSL https://stack.obol.org/v0.15.0 | bash
 ```
 
-The installer sets up the `obol` CLI and all dependencies (`kubectl`, `helm`, `k3d`, `helmfile`, `k9s`) into `~/.local/bin/`, verifies release checksums, configures your PATH, tries to add `obol.stack` to `/etc/hosts`, and offers to start the cluster.
+The installer sets up the `obol` CLI (checksum-verified) and then runs `obol upgrade --tools-only`, which installs the pinned dependencies (`kubectl`, `helm`, `k3d`, `helmfile`, `k9s`, the `helm-diff` plugin) into `~/.local/bin/`, each verified against a pinned sha256. It then configures your PATH, tries to add `obol.stack` to `/etc/hosts`, and offers to start the cluster (or, if your stack is already running, points you at `obol upgrade` / `obol doctor`). Ollama is only installed when you say yes at the prompt or set `OBOL_INSTALL_OLLAMA=true`.
 
 If `/etc/hosts` cannot be updated (no sudo / you cancel), the install still finishes — add the host, then start the stack yourself:
 
@@ -60,7 +60,7 @@ obol stack up
 obol agent init   # if the default agent was skipped (no model yet)
 ```
 
-Non-interactive / CI: set `OBOL_NONINTERACTIVE=true` so hosts updates do not prompt for a sudo password (they fail fast if credentials are not already cached). Combine with a pre-written `/etc/hosts` entry or run `sudo -v` first.
+Non-interactive / CI: set `OBOL_NONINTERACTIVE=true` so the installer never prompts: optional steps (Ollama, starting the stack, editing your shell profile) are skipped with the command to run later, and hosts updates do not prompt for a sudo password (they fail fast if credentials are not already cached). The same applies automatically when no terminal is available. Combine with a pre-written `/etc/hosts` entry or run `sudo -v` first.
 
 Verify:
 
@@ -118,12 +118,20 @@ The core loop: put a service on sale → get a public URL → get registered →
 ### 1. Put a model up for sale
 
 ```bash
-# Sell local Ollama inference, priced per request (USDC on Base by default)
-obol sell inference my-qwen --model qwen3:8b --price 0.001 --pay-to 0x...
+# Sell a model LiteLLM serves (host Ollama models are added on `obol stack up`),
+# priced per request (USDC on Base by default)
+obol sell http my-qwen --upstream litellm --port 4000 --namespace llm \
+  --model qwen3:8b --price 0.001 --pay-to 0x...
 
 # Or price per million tokens, or accept OBOL instead of USDC
-obol sell inference my-qwen --model qwen3:8b --per-mtok 0.50 --token OBOL --pay-to 0x...
+obol sell http my-qwen --upstream litellm --port 4000 --namespace llm \
+  --model qwen3:8b --per-mtok 0.50 --token OBOL --pay-to 0x...
+
+# Selling a vLLM / llama.cpp server? Register it with LiteLLM first:
+obol model setup custom --endpoint http://192.168.1.20:8000/v1 --model qwen36-deep
 ```
+
+`obol sell inference` is the standalone gateway for hosts without a stack (its own x402 gate in front of a host inference server); on a stack host it refuses and prints the commands above unless you pass `--standalone`.
 
 If you omit `--pay-to`, the agent's own wallet address is auto-detected from the remote signer — your agent earns for itself. Set defaults once with `obol sell pricing --pay-to 0x... --chain base`.
 
@@ -131,7 +139,7 @@ Check it's live:
 
 ```bash
 obol sell list
-obol sell status my-qwen
+obol sell status my-qwen -n llm
 obol sell info          # buyer's-eye view of everything on sale
 ```
 
@@ -221,7 +229,7 @@ obol sell list                          # everything on sale
 obol sell status <name>                 # operator health and conditions
 obol sell update <name> --price 0.002   # change price or payout wallet in place
 obol sell stop <name>                   # take an offer off sale (keeps it)
-obol sell delete <name>                 # remove an offer
+obol sell delete <name> [--force]       # remove an offer (--force skips the prompt; needed in scripts)
 obol sell resume                        # replay all offers after a host reboot
 ```
 
@@ -538,7 +546,7 @@ OBOL_DEVELOPMENT=true ./obolup.sh
 
 Development mode uses `.workspace/` instead of XDG directories and runs `go run` on every `obol` invocation — no build step needed.
 
-**Already have a stack in `~/.config/obol`?** Copy `.envrc.local.example` → `.envrc.local` and `source` it so dev commands use that cluster (avoids a second k3d stack in `.workspace/config`). **Frontend in-cluster:** `FRONTEND_DIR=../obol-stack-front-end just dev-frontend-rebuild` → `http://obol.stack:8080` (see `CLAUDE.md` → Local frontend development).
+**Already have a stack in `~/.config/obol`?** Copy `.envrc.local.example` → `.envrc.local` and `source` it so dev commands use that cluster (avoids a second k3d stack in `.workspace/config`). **Frontend:** the dashboard lives in `web/frontend` and `OBOL_DEVELOPMENT=true obol stack up` builds it like the other stack images; after UI changes, `just dev-frontend` rebuilds, imports and restarts it → `http://obol.stack:8080` (see `CLAUDE.md` → Local frontend development).
 
 Networks are embedded at `internal/embed/networks/`. Each uses annotated Go templates that auto-generate CLI flags:
 

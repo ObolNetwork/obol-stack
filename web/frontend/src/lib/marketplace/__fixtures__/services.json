@@ -1,0 +1,119 @@
+[
+  {
+    "name": "demo-quant",
+    "namespace": "agent-demo-quant",
+    "type": "agent",
+    "agentRuntime": "hermes",
+    "agentModel": "qwen3.5:9b",
+    "model": "qwen3.5:9b",
+    "agentSkills": ["addresses", "ethereum-networks"],
+    "skills": ["addresses"],
+    "endpoint": "https://demo.obol.tech/services/demo-quant",
+    "price": "10",
+    "priceRaw": "10",
+    "priceUnit": "agent-turn",
+    "priceAtomicUnits": "10000000000000000000",
+    "payTo": "0x1111111111111111111111111111111111111111",
+    "network": "ethereum",
+    "caip2Network": "eip155:1",
+    "chainId": 1,
+    "asset": {
+      "symbol": "OBOL",
+      "address": "0x0B010000b7624eb9B3DfBC279673C76E9D29D5F7",
+      "decimals": 18,
+      "transferMethod": "permit2",
+      "eip712Domain": {
+        "name": "Obol Network",
+        "version": "1"
+      }
+    },
+    "description": "Agent-backed quant analyst for on-chain OBOL payment tests.",
+    "isDemo": false,
+    "registrationPending": true
+  },
+  {
+    "name": "rs-7b",
+    "namespace": "llm",
+    "type": "inference",
+    "model": "qwen2.5-coder",
+    "skills": [],
+    "endpoint": "https://demo.obol.tech/services/rs-7b",
+    "price": "0.001",
+    "priceUnit": "request",
+    "priceAtomicUnits": "1000",
+    "payTo": "0x3333333333333333333333333333333333333333",
+    "network": "base-sepolia",
+    "caip2Network": "eip155:84532",
+    "chainId": 84532,
+    "asset": {
+      "symbol": "USDC",
+      "address": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+      "decimals": 6,
+      "transferMethod": "eip3009",
+      "eip712Domain": {
+        "name": "USDC",
+        "version": "2"
+      }
+    },
+    "description": "Self-hosted coder model with a 32k context window.",
+    "isDemo": false,
+    "registrationPending": false
+  },
+  {
+    "name": "ollama-gated",
+    "namespace": "llm",
+    "type": "http",
+    "model": "ollama:11434",
+    "endpoint": "https://demo.obol.tech/services/ollama-gated",
+    "price": "0.001",
+    "priceUnit": "request",
+    "priceAtomicUnits": "1000",
+    "payTo": "0x3333333333333333333333333333333333333333",
+    "network": "base-sepolia",
+    "caip2Network": "eip155:84532",
+    "chainId": 84532,
+    "asset": {
+      "symbol": "USDC",
+      "address": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+      "decimals": 6,
+      "transferMethod": "eip3009",
+      "eip712Domain": {
+        "name": "USDC",
+        "version": "2"
+      }
+    },
+    "description": "Bare Ollama endpoint, x402-gated.",
+    "isDemo": true,
+    "registrationPending": false
+  },
+  {
+    "name": "legal-summarizer",
+    "namespace": "agent-legal-summarizer",
+    "type": "agent",
+    "agentRuntime": "hermes",
+    "agentModel": "llama3.1:8b",
+    "agentSkills": ["legal-research"],
+    "endpoint": "https://demo.obol.tech/services/legal-summarizer",
+    "price": "2.5",
+    "priceUnit": "agent-turn",
+    "priceAtomicUnits": "2500000",
+    "payTo": "0x4444444444444444444444444444444444444444",
+    "network": "base",
+    "caip2Network": "eip155:8453",
+    "chainId": 8453,
+    "asset": {
+      "symbol": "USDC",
+      "address": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      "decimals": 6,
+      "transferMethod": "eip3009",
+      "eip712Domain": {
+        "name": "USD Coin",
+        "version": "2"
+      }
+    },
+    "description": "Agent that summarises legal documents.",
+    "isDemo": false,
+    "registrationPending": false,
+    "drainEndsAt": "2026-05-29T12:00:00Z"
+  }
+]

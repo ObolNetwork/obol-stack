@@ -15,8 +15,15 @@ package buyprompts
 
 import (
 	"fmt"
+	"math/big"
 	"strings"
 )
+
+// DefaultMaxPrice is buy.py's default per-call ceiling for one-shot
+// `go` / `pay` / `pay-agent`, in whole token units (OBOL_BUY_MAX_PRICE
+// overrides it in-pod). Keep in lockstep with DEFAULT_MAX_PRICE in
+// internal/embed/skills/buy-x402/scripts/buy.py.
+const DefaultMaxPrice = "1"
 
 // DefaultTaskExample is the placeholder task used in copy-paste prompts and
 // wire examples wherever the buyer hasn't supplied a real one.
@@ -61,6 +68,10 @@ type Input struct {
 	PriceDisplay string
 	// NetworkLabel is the human-friendly chain name (e.g. "Base Sepolia").
 	NetworkLabel string
+	// PerCallPrice is the one-shot per-request price in whole token units
+	// (e.g. "2.5"). When it exceeds DefaultMaxPrice, generated buy.py
+	// command lines carry a matching --max-price. "" = unknown.
+	PerCallPrice string
 	// TaskExample overrides DefaultTaskExample in prompts and examples.
 	TaskExample string
 }
@@ -143,6 +154,25 @@ X-PAYMENT: <pre-signed-EIP-3009-or-Permit2-voucher>
 }`, ChatCompletionsURL(url), modelClause, task)
 }
 
+// MaxPriceFlag returns " --max-price <price>" when perCallPrice (whole token
+// units) exceeds buy.py's default per-call ceiling, else "". Unparseable or
+// empty prices yield "".
+func MaxPriceFlag(perCallPrice string) string {
+	perCallPrice = strings.TrimSpace(perCallPrice)
+	if perCallPrice == "" || strings.Trim(perCallPrice, "0123456789.") != "" {
+		return "" // plain decimals only
+	}
+	price, ok := new(big.Rat).SetString(perCallPrice)
+	if !ok {
+		return ""
+	}
+	ceiling, _ := new(big.Rat).SetString(DefaultMaxPrice)
+	if price.Cmp(ceiling) <= 0 {
+		return ""
+	}
+	return " --max-price " + perCallPrice
+}
+
 func normalizeType(t string) string {
 	switch t {
 	case "inference", "agent", "fine-tuning":
@@ -183,8 +213,8 @@ func agentBlock(in Input) Block {
 				"Use the buy-x402 skill's `pay-agent` command to buy one round of work from this "+
 					"Obol Agent — it has its own skills, tools, and memory, not just a model. Edit the "+
 					"message, then run:\n\n"+
-					"pay-agent %s --message %q",
-				in.URL, task(in),
+					"pay-agent %s --message %q%s",
+				in.URL, task(in), MaxPriceFlag(in.PerCallPrice),
 			),
 			PromptGenericLLM: fmt.Sprintf(
 				"Help me call the Obol Agent at %s — it's an autonomous agent (tools + skills + memory), "+
@@ -195,8 +225,8 @@ func agentBlock(in Input) Block {
 				in.URL, GuideRef(in.SiteURL), ChatCompletionsURL(in.URL), task(in),
 			),
 			PromptCLI: fmt.Sprintf(
-				"python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py go %s --message %q",
-				in.URL, task(in),
+				"python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py go %s --message %q%s",
+				in.URL, task(in), MaxPriceFlag(in.PerCallPrice),
 			),
 			PromptAgentCash: fmt.Sprintf(
 				"Call the Obol Agent at %s — gated by %s (OpenAPI `x-payment-info` + `/.well-known/x402`). "+
@@ -296,6 +326,12 @@ func httpBlock(in Input) Block {
 	if in.NetworkLabel != "" {
 		netClause = " Network: " + in.NetworkLabel + "."
 	}
+	maxPriceFlag := MaxPriceFlag(in.PerCallPrice)
+	maxPriceClause := ""
+	if maxPriceFlag != "" {
+		maxPriceClause = " Pass `" + strings.TrimSpace(maxPriceFlag) + "` — the price is above the skill's default " +
+			DefaultMaxPrice + "-token per-call ceiling."
+	}
 	return Block{
 		CallShape: CallShape{
 			Method:   "GET",
@@ -303,9 +339,9 @@ func httpBlock(in Input) Block {
 		},
 		Prompts: map[string]string{
 			PromptObolAgent: fmt.Sprintf(
-				"Use the buy-x402 skill's `pay` command to call %s once.%s%s "+
+				"Use the buy-x402 skill's `pay` command to call %s once.%s%s%s "+
 					"Use the method and payload the seller documents, and report what it returns.",
-				in.URL, priceClause, netClause,
+				in.URL, priceClause, netClause, maxPriceClause,
 			),
 			PromptGenericLLM: fmt.Sprintf(
 				"Call the paid HTTP endpoint at %s once. It's gated by %s.%s%s "+
@@ -315,8 +351,8 @@ func httpBlock(in Input) Block {
 				in.URL, GuideRef(in.SiteURL), priceClause, netClause,
 			),
 			PromptCLI: fmt.Sprintf(
-				"python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py go %s",
-				in.URL,
+				"python3 ${OBOL_SKILLS_DIR:-/data/.hermes/obol-skills}/buy-x402/scripts/buy.py go %s%s",
+				in.URL, maxPriceFlag,
 			),
 			PromptAgentCash: fmt.Sprintf(
 				"Call the paid HTTP endpoint at %s once. It's gated by %s.%s%s "+

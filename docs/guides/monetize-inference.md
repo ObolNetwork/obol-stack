@@ -194,6 +194,35 @@ obol sell http my-qwen \
 
 When `--token OBOL` is used without `--chain`, the chain defaults to `ethereum`.
 
+#### Selling a host inference server (vLLM, llama.cpp, sglang, ...)
+
+To sell an OpenAI-compatible server running on the host (or another machine on
+your network), register it with LiteLLM first, then sell it through LiteLLM:
+
+```bash
+obol model setup custom --endpoint http://192.168.18.23:8000/v1 --model qwen36-deep
+
+obol sell http my-qwen \
+    --upstream litellm --port 4000 --namespace llm \
+    --model qwen36-deep \
+    --per-mtok 1.25 \
+    --chain base-sepolia \
+    --pay-to 0x70997970C51812dc3A010C7d01b50e0d17dc79C8
+```
+
+With `--upstream litellm` the seller pins the model (the buyer's `model` field
+is overwritten with `--model`), only the chat/completions/embeddings routes are
+reachable, and a payment settles only when the upstream delivers a completion.
+
+> [!NOTE]
+> `obol sell inference` is a standalone gateway for hosts **without** an Obol
+> Stack: it runs its own x402 gate in front of a host inference server and only
+> serves `POST /v1/chat/completions`, `/v1/completions`, `/v1/embeddings`,
+> `GET /v1/models` (all paid) and `GET /health`. On a host with a stack it
+> refuses and prints the two commands above, filled in with your values; pass
+> `--standalone` to run the standalone gateway there anyway. It is a foreground
+> process and is not replayed by `obol stack up` / `obol sell resume`.
+
 For the USDC examples above, the pricing config stores both values:
 
 - source model: `perMTok = 1.25 USDC / 1M tokens`
@@ -876,7 +905,7 @@ manifest. Do not paper over smoke-test failures with an ad hoc patch.
 | `obol sell list` | List all ServiceOffers |
 | `obol sell status <name> -n <ns>` | Show conditions for an offer |
 | `obol sell stop <name> -n <ns> [--grace 1h] [--force]` | Drain an offer (advertise wind-down via discovery, then tear down the route after the grace period). `--force`/`--now` skips the grace window. |
-| `obol sell delete <name> -n <ns>` | Delete an offer and cleanup |
+| `obol sell delete <name> -n <ns> [--force]` | Delete an offer and cleanup (prompts on a TTY; pass `--force` in scripts and other non-interactive use) |
 | `obol sell status` | Show cluster pricing and registration |
 | `obol sell register --private-key-file ...` | Advanced/manual registration or repair path |
 

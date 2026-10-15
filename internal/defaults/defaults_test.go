@@ -13,12 +13,12 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/version"
 )
 
-func TestCopyInfrastructure_DevModeRewritesManagedImages(t *testing.T) {
+func TestRefreshInfrastructure_DevModeRewritesManagedImages(t *testing.T) {
 	t.Setenv("OBOL_DEVELOPMENT", "true")
 
 	cfg := &config.Config{ConfigDir: t.TempDir()}
-	if err := CopyInfrastructure(cfg, backendK3s, "test-stack"); err != nil {
-		t.Fatalf("CopyInfrastructure: %v", err)
+	if _, err := RefreshInfrastructure(cfg, backendK3s, "test-stack", RefreshOptions{Force: true, Reset: true}); err != nil {
+		t.Fatalf("RefreshInfrastructure: %v", err)
 	}
 
 	x402Path := filepath.Join(cfg.ConfigDir, "defaults", "base", "templates", "x402.yaml")
@@ -64,6 +64,21 @@ func TestCopyInfrastructure_DevModeRewritesManagedImages(t *testing.T) {
 	}
 	if strings.Contains(string(llmData), buyer+":"+devTag+"@sha256:") {
 		t.Errorf("dev mode left orphan @sha256 on x402-buyer")
+	}
+
+	// The front-end pin lives in a helmfile .yaml.gotmpl values file; dev
+	// mode must point it at the locally-built web/frontend image too.
+	frontendPath := filepath.Join(cfg.ConfigDir, "defaults", "values", "obol-frontend.yaml.gotmpl")
+	frontendData, err := os.ReadFile(frontendPath)
+	if err != nil {
+		t.Fatalf("read obol-frontend values: %v", err)
+	}
+	frontend := "ghcr.io/obolnetwork/obol-stack-front-end"
+	if !strings.Contains(string(frontendData), frontend+":"+devTag) {
+		t.Errorf("dev mode did not rewrite %s to :%s", frontend, devTag)
+	}
+	if strings.Contains(string(frontendData), images.PlaceholderTag) {
+		t.Errorf("dev mode left placeholder in %s", frontendPath)
 	}
 }
 
@@ -121,7 +136,7 @@ func TestResolveWorkloadImage_ProductionDelegatesToResolve(t *testing.T) {
 	}
 }
 
-func TestCopyInfrastructure_ProductionUsesCommitSHA(t *testing.T) {
+func TestRefreshInfrastructure_ProductionUsesCommitSHA(t *testing.T) {
 	// Production path: rewrite placeholder → :GitCommit (digest skipped for
 	// offline unit tests). Never :latest, never leave the placeholder.
 	t.Setenv("OBOL_DEVELOPMENT", "")
@@ -131,8 +146,8 @@ func TestCopyInfrastructure_ProductionUsesCommitSHA(t *testing.T) {
 	t.Cleanup(func() { version.GitCommit = prev })
 
 	cfg := &config.Config{ConfigDir: t.TempDir()}
-	if err := CopyInfrastructure(cfg, backendK3s, "test-stack"); err != nil {
-		t.Fatalf("CopyInfrastructure: %v", err)
+	if _, err := RefreshInfrastructure(cfg, backendK3s, "test-stack", RefreshOptions{Force: true, Reset: true}); err != nil {
+		t.Fatalf("RefreshInfrastructure: %v", err)
 	}
 	data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, "defaults", "base", "templates", "x402.yaml"))
 	if err != nil {
@@ -157,12 +172,12 @@ func TestCopyInfrastructure_ProductionUsesCommitSHA(t *testing.T) {
 	}
 }
 
-func TestCopyInfrastructureRendersStackPlaceholders(t *testing.T) {
+func TestRefreshInfrastructureRendersStackPlaceholders(t *testing.T) {
 	t.Setenv("OBOL_SKIP_IMAGE_DIGEST", "true")
 	cfg := &config.Config{ConfigDir: t.TempDir()}
 
-	if err := CopyInfrastructure(cfg, backendK3s, "test-stack"); err != nil {
-		t.Fatalf("CopyInfrastructure: %v", err)
+	if _, err := RefreshInfrastructure(cfg, backendK3s, "test-stack", RefreshOptions{Force: true, Reset: true}); err != nil {
+		t.Fatalf("RefreshInfrastructure: %v", err)
 	}
 
 	data, err := os.ReadFile(filepath.Join(cfg.ConfigDir, "defaults", "base", "templates", "llm.yaml"))
@@ -287,5 +302,18 @@ func TestHostPrimaryIPIsRoutable(t *testing.T) {
 	parsed := net.ParseIP(ip)
 	if parsed == nil || parsed.IsLoopback() || parsed.To4() == nil {
 		t.Fatalf("hostPrimaryIP returned %q, want a non-loopback IPv4 address", ip)
+	}
+}
+
+func TestCheckPublishedImages_DevAndSkipPass(t *testing.T) {
+	// The 404 path is covered in internal/images (ResolveChecked).
+	t.Setenv("OBOL_DEVELOPMENT", "true")
+	if err := CheckPublishedImages(); err != nil {
+		t.Fatalf("dev mode: %v", err)
+	}
+	t.Setenv("OBOL_DEVELOPMENT", "")
+	t.Setenv("OBOL_SKIP_IMAGE_DIGEST", "true")
+	if err := CheckPublishedImages(); err != nil {
+		t.Fatalf("OBOL_SKIP_IMAGE_DIGEST: %v", err)
 	}
 }

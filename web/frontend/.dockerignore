@@ -1,0 +1,23 @@
+Dockerfile
+.dockerignore
+node_modules
+npm-debug.log
+.env
+.env.local
+.env.production.local
+.git
+.gitignore
+.next
+.vercel
+.DS_Store
+
+# Not part of the image. Keep in step with the front-end inputs in
+# .github/scripts/image-plan.sh (a change here must not be able to change the
+# image, or the publish workflow's retag would reuse a stale build).
+*.md
+docs
+e2e
+playwright-report
+test-results
+.agents
+.claude

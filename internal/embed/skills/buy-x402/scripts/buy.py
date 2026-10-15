@@ -30,6 +30,7 @@ Commands:
 
 import base64
 import http.client
+from decimal import Decimal, InvalidOperation, localcontext
 import json
 import os
 import re
@@ -335,6 +336,91 @@ def _parse_money_amount(value, asset, extra=None):
     if len(frac) > decimals:
         raise ValueError(f"amount {raw!r} has more precision than {symbol}'s {decimals} decimals")
     return int(whole or "0") * (10 ** decimals) + int(frac or "0")
+
+
+# ---------------------------------------------------------------------------
+# Per-call price ceiling (one-shot pay / pay-agent / go)
+# ---------------------------------------------------------------------------
+
+# Default ceiling, in whole token units (1 USDC / 1 OBOL), for one-shot
+# commands that sign the seller-quoted price as-is. Override per call with
+# --max-price, or for the whole environment with OBOL_BUY_MAX_PRICE.
+DEFAULT_MAX_PRICE = "1"
+MAX_PRICE_ENV = "OBOL_BUY_MAX_PRICE"
+
+
+def _resolve_max_price(value=None):
+    """Return the per-call ceiling as an exact Decimal in token units.
+
+    Precedence: explicit value (--max-price) > $OBOL_BUY_MAX_PRICE > 1.
+    Accepts a plain non-negative decimal ("0.05", "2", "1.5"). Raises
+    ValueError with a corrective message on anything else.
+    """
+    if isinstance(value, Decimal):
+        return value
+    if value is True:
+        raise ValueError("--max-price needs a value in token units, e.g. --max-price 0.5")
+    if value is None or str(value).strip() == "":
+        raw = os.environ.get(MAX_PRICE_ENV, "").strip() or DEFAULT_MAX_PRICE
+        source = MAX_PRICE_ENV if os.environ.get(MAX_PRICE_ENV, "").strip() else "default"
+    else:
+        raw, source = str(value).strip(), "--max-price"
+    try:
+        ceiling = Decimal(raw)
+    except InvalidOperation:
+        ceiling = None
+    if ceiling is None or not ceiling.is_finite() or ceiling < 0:
+        raise ValueError(
+            f"{source} must be a non-negative decimal in token units (e.g. 0.5), got {raw!r}"
+        )
+    return ceiling
+
+
+def _price_exceeds_ceiling(price_atomic, decimals, ceiling):
+    """Exact check: does price_atomic / 10**decimals exceed ceiling (Decimal)?"""
+    with localcontext() as ctx:
+        ctx.prec = 200  # wide enough that scaling 18-decimal amounts is exact
+        return Decimal(int(price_atomic)) > ceiling.scaleb(int(decimals))
+
+
+def _max_price_refusal(price_atomic, asset, extra, max_price=None):
+    """Return an error message when the quoted price must not be signed, else None.
+
+    The quoted atomic price is converted with the token's decimals and
+    compared to the ceiling using exact Decimal arithmetic. A token with
+    unknown decimals cannot be compared and is refused.
+    """
+    ceiling = _resolve_max_price(max_price)
+    symbol, decimals, units_label = _asset_display_meta(asset, extra)
+    if decimals is None:
+        return (
+            f"Error: cannot compare the quoted price ({int(price_atomic)} {units_label}) with the "
+            f"per-call ceiling: decimals for token {asset} are unknown. Nothing was signed."
+        )
+    if not _price_exceeds_ceiling(price_atomic, decimals, ceiling):
+        return None
+    quoted = _format_amount(price_atomic, asset, extra)
+    with localcontext() as ctx:
+        ctx.prec = 200
+        quoted_units = Decimal(int(price_atomic)).scaleb(-int(decimals)).normalize()
+    return (
+        f"Error: quoted price {quoted} exceeds the per-call ceiling of "
+        f"{ceiling.normalize():f} {symbol}. Nothing was signed.\n"
+        f"To pay this price, re-run with --max-price {quoted_units:f} "
+        f"(or set {MAX_PRICE_ENV}={quoted_units:f})."
+    )
+
+
+def _enforce_max_price(price_atomic, asset, extra, max_price=None):
+    """Exit before signing when the quoted price exceeds the ceiling."""
+    try:
+        refusal = _max_price_refusal(price_atomic, asset, extra, max_price)
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    if refusal:
+        print(refusal, file=sys.stderr)
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -1525,21 +1611,70 @@ def _reconcile_purchase_autorefill(pr, live_status, signer_address):
 # Probe
 # ---------------------------------------------------------------------------
 
-def _probe_endpoint(endpoint_url, model_id="test", kind="inference", method=None, quiet=False):
+def _resolve_pay_method(method, data, kind="http"):
+    """HTTP method for a one-shot paid call: an explicit --method wins;
+    otherwise a request body (--data) or the inference contract implies POST,
+    and a bodyless http call is a GET."""
+    if isinstance(method, str) and method.strip():
+        return method.strip().upper()
+    if data or kind == "inference":
+        return "POST"
+    return "GET"
+
+
+def _payment_option_key(acc):
+    """Identity of one accepts[] entry for de-duplication: two entries with the
+    same scheme, network, asset, amount and payTo are the same option. The
+    network is compared by chain, so a seller's CAIP-2 entry ("eip155:84532")
+    and its legacy-alias copy ("base-sepolia") count as one option."""
+    return (
+        str(acc.get("scheme") or "").strip().lower(),
+        _option_chain(acc).lower(),
+        str(acc.get("asset") or "").strip().lower(),
+        str(acc.get("amount", acc.get("maxAmountRequired", "")) or "").strip(),
+        str(acc.get("payTo") or "").strip().lower(),
+    )
+
+
+def _dedupe_accepts(accepts):
+    """Drop repeated payment options, keeping the first occurrence (and order)."""
+    seen = set()
+    out = []
+    for acc in accepts or []:
+        if not isinstance(acc, dict):
+            out.append(acc)
+            continue
+        key = _payment_option_key(acc)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(acc)
+    return out
+
+
+def _probe_endpoint(endpoint_url, model_id="test", kind="inference", method=None, quiet=False, data=None):
     """Probe an endpoint for x402 pricing. Returns parsed 402 body or None.
 
     kind="inference" appends /v1/chat/completions and POSTs a chat-completions
     body (the inference contract). kind="http" sends the URL as-is using `method`
-    (default GET) with no body — appropriate for `type:http` ServiceOffers.
+    (default GET) — appropriate for `type:http` ServiceOffers. When `data` is
+    given it is sent as the probe body (Content-Type: application/json): a
+    seller's body policy (e.g. LiteLLM-fronting offers) validates the body
+    before answering 402, so a bodyless probe would be rejected with 400.
 
     quiet=True suppresses the failure prints — used by `go`, which probes two
     URL shapes and only wants noise from the attempt that mattered.
     """
     if kind == "http":
         url = endpoint_url.rstrip("/")
+        headers = {"User-Agent": USER_AGENT}
+        probe_body = None
+        if data:
+            probe_body = data.encode() if isinstance(data, str) else data
+            headers["Content-Type"] = "application/json"
         request = urllib.request.Request(
-            url, method=(method or "GET").upper(),
-            headers={"User-Agent": USER_AGENT},
+            url, data=probe_body, method=(method or "GET").upper(),
+            headers=headers,
         )
     else:
         base = _normalize_endpoint(endpoint_url)
@@ -1578,6 +1713,9 @@ def _probe_endpoint(endpoint_url, model_id="test", kind="inference", method=None
                 print("402 response has no 'accepts' array.", file=sys.stderr)
             return None
 
+        # Defensive: a seller that lists the same option twice would otherwise
+        # show the buyer two identical choices.
+        pricing["accepts"] = _dedupe_accepts(pricing["accepts"])
         return pricing
     except urllib.error.URLError as e:
         if not quiet:
@@ -2506,7 +2644,8 @@ def _print_async_job_guidance(request_url, body_text):
         print(f"  2. Fetch:  curl {result_url}")
 
 
-def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=None, token=None, payment_option=None):
+def cmd_pay(url, method=None, data=None, kind="http", network=None, timeout=None, token=None, payment_option=None,
+            max_price=None):
     """Single-shot paid HTTP request: probe → pre-sign one auth → send with X-PAYMENT.
 
     Stateless. Does not create a PurchaseRequest, does not touch the buyer
@@ -2516,6 +2655,10 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=Non
 
     `network` is an optional safety guard: when set, the seller's advertised
     chain must match it or `pay` aborts before signing.
+
+    `max_price` is the per-call ceiling in token units (default
+    $OBOL_BUY_MAX_PRICE, else 1): a quoted price above it is refused before
+    anything is signed.
 
     `timeout` is the seconds to wait for the seller's response. Defaults to
     ~100s (Cloudflare's free-tier tunnel cap — longer requests are killed by
@@ -2535,10 +2678,14 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=Non
             print("Note: non-streaming inference call, timeout 600s — prefer `go`/`pay-agent` (streaming) for slow models.")
     else:
         timeout = float(timeout)
-    method = (method or "GET").upper()
+    # --data implies POST unless --method was given explicitly; the inference
+    # contract is always POST /v1/chat/completions.
+    method = _resolve_pay_method(method, data, kind)
 
     print(f"Probing {url} ...")
-    pricing = _probe_endpoint(url, kind=kind, method=method)
+    # The probe carries the caller's body: sellers validate it (body policy)
+    # before answering 402, so a bodyless probe of a POST route fails with 400.
+    pricing = _probe_endpoint(url, kind=kind, method=method, data=data)
     if not pricing:
         print("Failed to get x402 pricing.", file=sys.stderr)
         sys.exit(1)
@@ -2572,6 +2719,7 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=Non
         )
         sys.exit(1)
     usdc_addr = asset
+    _enforce_max_price(price, usdc_addr, payment.get("extra", {}) or {}, max_price)
     if not _validate_contract_exists(usdc_addr, chain):
         print(f"Error: token contract {usdc_addr} not found on {chain}.", file=sys.stderr)
         sys.exit(1)
@@ -2647,7 +2795,8 @@ def cmd_pay(url, method="GET", data=None, kind="http", network=None, timeout=Non
         sys.exit(1)
 
 
-def cmd_pay_agent(url, messages=None, network=None, timeout=None, body=None, token=None, payment_option=None):
+def cmd_pay_agent(url, messages=None, network=None, timeout=None, body=None, token=None, payment_option=None,
+                  max_price=None):
     """Single-shot paid streaming agent call: probe -> sign one auth -> SSE-stream.
 
     Sibling of `cmd_pay` for `type=agent` ServiceOffers. Differences from
@@ -2671,6 +2820,10 @@ def cmd_pay_agent(url, messages=None, network=None, timeout=None, body=None, tok
     field: a type=agent offer runs its own model and ignores any `model` sent.
     When provided, the body is parsed and `"stream": true` is forced onto
     whatever the caller passed.
+
+    `max_price` is the per-call ceiling in token units (default
+    $OBOL_BUY_MAX_PRICE, else 1): a quoted price above it is refused before
+    anything is signed.
     """
     if timeout is None or float(timeout) <= 0:
         timeout = 3600.0
@@ -2732,6 +2885,7 @@ def cmd_pay_agent(url, messages=None, network=None, timeout=None, body=None, tok
             file=sys.stderr,
         )
         sys.exit(1)
+    _enforce_max_price(price, asset, payment.get("extra", {}) or {}, max_price)
 
     print("Getting agent wallet ...")
     signer_address = _get_signer_address()
@@ -2972,7 +3126,7 @@ def cmd_go(url, opts):
     - agent / chat-completions offer, no --message → explain + exact next command
     - plain http offer                            → single-shot pay flow
     All pay/pay-agent selector flags (--token/--network/--payment-option,
-    --timeout, --data, --method) pass through.
+    --timeout, --data, --method, --max-price) pass through.
     """
     timeout = opts.get("timeout")
     if timeout is not None:
@@ -2981,18 +3135,29 @@ def cmd_go(url, opts):
         except ValueError:
             print(f"Error: --timeout must be a number of seconds, got '{timeout}'", file=sys.stderr)
             sys.exit(1)
+    try:
+        max_price = _resolve_max_price(opts.get("max_price"))
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     print(f"Probing {url} ...")
     # Try the URL exactly as given first (correct for http offers and for
     # cluster offers, which gate every sub-path); fall back to the
     # chat-completions probe shape for standalone inference gateways that
     # only gate /v1/chat/completions.
-    pricing = _probe_endpoint(url, kind="http", method="GET", quiet=True)
+    data = opts.get("data")
+    method = _resolve_pay_method(opts.get("method"), data)
+    # With --data (or an explicit --method) probe the request the caller will
+    # actually send, body included, then fall back to a plain GET.
+    pricing = _probe_endpoint(url, kind="http", method=method, data=data, quiet=True)
+    if not pricing and (method != "GET" or data):
+        pricing = _probe_endpoint(url, kind="http", method="GET", quiet=True)
     if not pricing:
         pricing = _probe_endpoint(url, kind="inference", quiet=True)
     if not pricing:
         # Re-run the primary probe loudly so the caller sees the real error.
-        pricing = _probe_endpoint(url, kind="http", method="GET")
+        pricing = _probe_endpoint(url, kind="http", method=method, data=data)
         if not pricing:
             print("Failed to get x402 pricing. Check the URL is the service base "
                   "(e.g. https://seller.example.com/services/<name>) and reachable.", file=sys.stderr)
@@ -3000,7 +3165,6 @@ def cmd_go(url, opts):
 
     shape, model = _offer_shape(pricing)
     message = opts.get("message")
-    data = opts.get("data")
 
     if shape in ("agent", "chat"):
         label = "Obol Agent" if shape == "agent" else "chat-completions (inference)"
@@ -3020,12 +3184,12 @@ def cmd_go(url, opts):
         cmd_pay_agent(
             url,
             messages=message,
-            model_id=opts.get("model") or model or "auto",
             network=opts.get("network"),
             timeout=timeout,
             body=data,
             token=opts.get("token"),
             payment_option=opts.get("payment_option"),
+            max_price=max_price,
         )
         return
 
@@ -3033,7 +3197,6 @@ def cmd_go(url, opts):
     if message and not data:
         print("Note: --message is for chat/agent offers; this HTTP offer gets a "
               "plain request. Pass --data '<json>' to send a body.", file=sys.stderr)
-    method = opts.get("method") or ("POST" if data else "GET")
     cmd_pay(
         url,
         method=method,
@@ -3043,6 +3206,7 @@ def cmd_go(url, opts):
         timeout=timeout,
         token=opts.get("token"),
         payment_option=opts.get("payment_option"),
+        max_price=max_price,
     )
 
 
@@ -3085,18 +3249,20 @@ def usage():
     print("                                               the right flow with sane path, streaming, and timeout.")
     print("                                               Chat/agent offers need --message; HTTP offers take")
     print("                                               [--data '<json>'] [--method GET|POST].")
-    print("                                               Also accepts --token/--network/--payment-option/--timeout.")
+    print("                                               Also accepts --token/--network/--payment-option/--timeout")
+    print("                                               and --max-price <token units> (see below).")
     print()
     print("Expert commands (what `go` dispatches to):")
     print("  probe <endpoint-url> [--model <id>] [--type http|inference|agent] [--method GET|POST]")
     print("                                               Probe x402 pricing without paying (default --type inference)")
     print("  pay <url> [--type http|inference] [--method GET|POST] [--data '<body>'] [--timeout <seconds>]")
-    print("       [--token <SYMBOL>] [--network <name>] [--payment-option <N>]")
+    print("                                               (--data implies POST unless --method is given)")
+    print("       [--token <SYMBOL>] [--network <name>] [--payment-option <N>] [--max-price <token units>]")
     print("                                               Single-shot paid request (sign 1 auth, attach X-PAYMENT)")
     print("                                               Multi-currency offers: pick which asset/price to pay with")
     print("                                               --token/--network/--payment-option (probe to see options)")
     print("  pay-agent <url> [--message '<text>' | --data '<json>'] [--timeout <seconds>]")
-    print("       [--token <SYMBOL>] [--network <name>] [--payment-option <N>]")
+    print("       [--token <SYMBOL>] [--network <name>] [--payment-option <N>] [--max-price <token units>]")
     print("                                               Single-shot paid streaming agent call (POST /v1/chat/completions,")
     print("                                               stream: true). Each SSE event flushes to stdout. Default timeout 1h.")
     print("  buy <name> --endpoint <url> --model <id>     Pre-sign a batch + configure paid/<model> (persistent inference)")
@@ -3119,6 +3285,9 @@ def usage():
     print()
     print("Multi-currency offers auto-select the first affordable payment option when")
     print("no --token/--network/--payment-option is given (choice is printed).")
+    print()
+    print("Per-call ceiling: go/pay/pay-agent refuse, before signing, any quoted price above")
+    print("--max-price (token units, e.g. 0.25). Default: $OBOL_BUY_MAX_PRICE, else 1 (1 USDC / 1 OBOL).")
 
 
 if __name__ == "__main__":
@@ -3135,7 +3304,8 @@ if __name__ == "__main__":
         positional, opts = parse_flags(rest)
         if not positional:
             print("Usage: go <url> [--message '<text>'] [--data '<json>'] [--method GET|POST] "
-                  "[--token <SYMBOL>] [--network <name>] [--payment-option <N>] [--timeout <seconds>]",
+                  "[--token <SYMBOL>] [--network <name>] [--payment-option <N>] [--timeout <seconds>] "
+                  "[--max-price <token units>]",
                   file=sys.stderr)
             sys.exit(1)
         if opts.get("auth_ttl") is not None:
@@ -3160,7 +3330,7 @@ if __name__ == "__main__":
     elif cmd == "pay":
         positional, opts = parse_flags(rest)
         if not positional:
-            print("Usage: pay <url> [--type http|inference] [--method GET|POST] [--data '<body>'] [--network <name>] [--timeout <seconds>]", file=sys.stderr)
+            print("Usage: pay <url> [--type http|inference] [--method GET|POST] [--data '<body>'] [--network <name>] [--timeout <seconds>] [--max-price <token units>]", file=sys.stderr)
             sys.exit(1)
         kind = opts.get("type", "http")
         if kind not in ("http", "inference"):
@@ -3175,15 +3345,21 @@ if __name__ == "__main__":
             except ValueError:
                 print(f"Error: --timeout must be a number of seconds, got '{timeout}'", file=sys.stderr)
                 sys.exit(1)
+        try:
+            max_price = _resolve_max_price(opts.get("max_price"))
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
         cmd_pay(
             positional[0],
-            method=opts.get("method", "GET"),
+            method=opts.get("method"),
             data=opts.get("data"),
             kind=kind,
             network=opts.get("network"),
             timeout=timeout,
             token=opts.get("token"),
             payment_option=opts.get("payment_option"),
+            max_price=max_price,
         )
 
     elif cmd == "pay-agent":
@@ -3191,7 +3367,7 @@ if __name__ == "__main__":
         if not positional:
             print(
                 "Usage: pay-agent <url> [--message '<text>' | --data '<json>'] "
-                "[--network <name>] [--timeout <seconds>]",
+                "[--network <name>] [--timeout <seconds>] [--max-price <token units>]",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -3204,6 +3380,11 @@ if __name__ == "__main__":
             except ValueError:
                 print(f"Error: --timeout must be a number of seconds, got '{timeout}'", file=sys.stderr)
                 sys.exit(1)
+        try:
+            max_price = _resolve_max_price(opts.get("max_price"))
+        except ValueError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(1)
         cmd_pay_agent(
             positional[0],
             messages=opts.get("message"),
@@ -3212,6 +3393,7 @@ if __name__ == "__main__":
             body=opts.get("data"),
             token=opts.get("token"),
             payment_option=opts.get("payment_option"),
+            max_price=max_price,
         )
 
     elif cmd == "buy":

@@ -119,3 +119,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+      # The release is still a draft here. Check the tag the built binary
+      # really pins, not one re-derived from git (v0.17.0-rc1 shipped an
+      # 8-char pin that no publisher had tagged).
+      - name: Verify the built binary pins published images
+        run: .github/scripts/verify-release-images.sh --binary "$(find dist -path '*linux_amd64*' -type f -name obol | head -n1)"

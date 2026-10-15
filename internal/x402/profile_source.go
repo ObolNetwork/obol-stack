@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/storefront"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -50,6 +51,10 @@ func WatchStorefrontProfile(ctx context.Context, cfg *rest.Config) error {
 				storefront.ProfileNamespace, storefront.ProfileConfigMap, err)
 			SetStorefrontProfile(nil)
 			return
+		}
+		if dropped := storefront.DropInvalidBrandingText(profile); len(dropped) > 0 {
+			log.Printf("x402-profile-source: ignoring %s (must be single-line plain text without '<' or '>'); using defaults",
+				strings.Join(dropped, ", "))
 		}
 		SetStorefrontProfile(profile)
 		log.Printf("x402-profile-source: storefront branding reloaded")

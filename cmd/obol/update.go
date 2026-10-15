@@ -119,6 +119,10 @@ Examples:
 				Name:  "major",
 				Usage: "Allow upgrading across major version boundaries (may include breaking changes)",
 			},
+			&cli.BoolFlag{
+				Name:  "reset-defaults",
+				Usage: "Overwrite hand-edited files in the defaults tree with the shipped defaults (edited files are backed up first)",
+			},
 		},
 		Action: func(ctx context.Context, cmd *cli.Command) error {
 			u := getUI(cmd)
@@ -151,6 +155,9 @@ Examples:
 				Pinned:       cmd.Bool("pinned"),
 				Major:        cmd.Bool("major"),
 				ChartFilter:  chartFilter,
+				// Same defaults-tree rules as `obol stack up`: hand-edits
+				// are kept unless --reset-defaults.
+				ResetDefaults: cmd.Bool("reset-defaults"),
 			})
 		},
 	}

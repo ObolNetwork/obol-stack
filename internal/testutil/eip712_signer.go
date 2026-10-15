@@ -1,15 +1,12 @@
 package testutil
 
 import (
-	"crypto/ecdsa"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"math/big"
 	"testing"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/signer/core/apitypes"
@@ -146,143 +143,12 @@ func SignRealPaymentHeader(t *testing.T, signerKeyHex string, payTo string, amou
 	return encoded
 }
 
-// ParseAnvilKey converts a hex-encoded private key string to an ecdsa.PrivateKey.
-func ParseAnvilKey(t *testing.T, hexKey string) *ecdsa.PrivateKey {
-	t.Helper()
-
-	key, err := crypto.HexToECDSA(stripHexPrefix(hexKey))
-	if err != nil {
-		t.Fatalf("parse anvil key: %v", err)
-	}
-
-	return key
-}
-
-// AnvilKeyAddress returns the Ethereum address for an Anvil private key.
-func AnvilKeyAddress(t *testing.T, hexKey string) common.Address {
-	t.Helper()
-	key := ParseAnvilKey(t, hexKey)
-
-	return crypto.PubkeyToAddress(key.PublicKey)
-}
-
-// USDCMicroUnits converts a USDC amount (e.g. 1.0) to micro-units (1000000).
-func USDCMicroUnits(usdc float64) *big.Int {
-	// USDC has 6 decimals.
-	micro := new(big.Float).Mul(big.NewFloat(usdc), big.NewFloat(1e6))
-	result, _ := micro.Int(nil)
-
-	return result
-}
-
 func stripHexPrefix(s string) string {
 	if len(s) > 2 && (s[:2] == "0x" || s[:2] == "0X") {
 		return s[2:]
 	}
 
 	return s
-}
-
-// SignPaymentHeaderDirect is a non-test version of SignRealPaymentHeader.
-// It panics on error instead of calling t.Fatal.
-func SignPaymentHeaderDirect(signerKeyHex, payTo, amount string, chainID int64) string {
-	key, err := crypto.HexToECDSA(stripHexPrefix(signerKeyHex))
-	if err != nil {
-		panic(fmt.Sprintf("parse signer key: %v", err))
-	}
-
-	fromAddr := crypto.PubkeyToAddress(key.PublicKey)
-
-	nonce := make([]byte, 32)
-	if _, err := rand.Read(nonce); err != nil {
-		panic(fmt.Sprintf("generate nonce: %v", err))
-	}
-
-	nonceHex := fmt.Sprintf("0x%x", nonce)
-
-	typedData := apitypes.TypedData{
-		Types: apitypes.Types{
-			"EIP712Domain": {
-				{Name: "name", Type: "string"},
-				{Name: "version", Type: "string"},
-				{Name: "chainId", Type: "uint256"},
-				{Name: "verifyingContract", Type: "address"},
-			},
-			"TransferWithAuthorization": {
-				{Name: "from", Type: "address"},
-				{Name: "to", Type: "address"},
-				{Name: "value", Type: "uint256"},
-				{Name: "validAfter", Type: "uint256"},
-				{Name: "validBefore", Type: "uint256"},
-				{Name: "nonce", Type: "bytes32"},
-			},
-		},
-		PrimaryType: "TransferWithAuthorization",
-		Domain: apitypes.TypedDataDomain{
-			Name:              "USDC",
-			Version:           "2",
-			ChainId:           math.NewHexOrDecimal256(chainID),
-			VerifyingContract: USDCBaseSepolia,
-		},
-		Message: apitypes.TypedDataMessage{
-			"from":        fromAddr.Hex(),
-			"to":          payTo,
-			"value":       amount,
-			"validAfter":  "0",
-			"validBefore": "4294967295",
-			"nonce":       nonceHex,
-		},
-	}
-
-	hash, _, err := apitypes.TypedDataAndHash(typedData)
-	if err != nil {
-		panic(fmt.Sprintf("TypedDataAndHash: %v", err))
-	}
-
-	sig, err := crypto.Sign(hash, key)
-	if err != nil {
-		panic(fmt.Sprintf("sign: %v", err))
-	}
-
-	sig[64] += 27
-
-	envelope := map[string]any{
-		"x402Version": 2,
-		"accepted": map[string]any{
-			"scheme":            "exact",
-			"network":           chainCAIP2(chainID),
-			"amount":            amount,
-			"asset":             USDCBaseSepolia,
-			"payTo":             payTo,
-			"maxTimeoutSeconds": 60,
-			// x402-rs strict v2 deserialization requires the EIP-3009 marker.
-			// The signature itself intentionally uses the deployed USDC
-			// contract's EIP-712 domain above.
-			"extra": map[string]any{
-				"assetTransferMethod": "eip3009",
-				"name":                "USD Coin",
-				"version":             "2",
-			},
-		},
-		"payload": map[string]any{
-			"signature": fmt.Sprintf("0x%x", sig),
-			"authorization": map[string]any{
-				"from":        fromAddr.Hex(),
-				"to":          payTo,
-				"value":       amount,
-				"validAfter":  "0",
-				"validBefore": "4294967295",
-				"nonce":       nonceHex,
-			},
-		},
-	}
-
-	data, err := json.Marshal(envelope)
-	if err != nil {
-		panic(fmt.Sprintf("marshal: %v", err))
-	}
-
-	return base64.StdEncoding.EncodeToString(data)
 }
 
 func chainCAIP2(chainID int64) string {

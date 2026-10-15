@@ -427,12 +427,10 @@ func agentPodSpec(agent *monetizeapi.Agent) map[string]any {
 		map[string]any{"name": "OBOL_SKILLS_DIR", "value": "/data/.hermes/obol-skills"},
 		// CRD agents expose only the API (gated by API_SERVER_KEY and reached
 		// only through the in-cluster Traefik route + x402 ForwardAuth). No
-		// Telegram/Discord/dashboard platforms are wired, so Hermes' user
-		// gateway has nothing to actually gate — "allow all" silences its
-		// startup warning without opening any real surface. If platform
-		// integrations are ever added, swap this for explicit per-platform
-		// allowlists.
-		map[string]any{"name": "GATEWAY_ALLOW_ALL_USERS", "value": "true"},
+		// messaging platforms (Telegram/Discord/etc.) are configured by obol,
+		// so the messaging gateway stays closed by default. Operators who
+		// connect a platform must set that platform's allowlist.
+		map[string]any{"name": "GATEWAY_ALLOW_ALL_USERS", "value": "false"},
 	}
 	if agent.Status.WalletAddress != "" {
 		containerEnv = append(containerEnv, map[string]any{

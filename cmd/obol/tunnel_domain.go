@@ -20,7 +20,7 @@ func tunnelCommand(cfg *config.Config) *cli.Command {
 		Usage: "Manage Cloudflare tunnel for public access",
 		Commands: []*cli.Command{
 			{
-				Name:  "status",
+				Name:  statusCommandName,
 				Usage: "Show tunnel status and public URL",
 				Flags: []cli.Flag{
 					&cli.BoolFlag{Name: "no-probe", Usage: "Skip connector and public reachability probes (offline/fast)"},

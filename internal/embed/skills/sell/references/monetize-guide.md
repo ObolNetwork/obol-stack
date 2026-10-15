@@ -121,17 +121,22 @@ Only proceed after the user has confirmed the price.
 
 #### Inference (Ollama model)
 
+Host Ollama models are already in LiteLLM (`obol stack up` adds them; check with `obol model list`), so sell LiteLLM with the model pinned:
+
 ```bash
-obol sell inference <name> \
+obol sell http <name> \
+  --upstream litellm \
   --model <model_name> \
-  --price <confirmed_price> \
+  --port 4000 \
+  --namespace llm \
+  --per-request <confirmed_price> \
   --register-name "<descriptive name>" \
   --register-description "<what the model does>" \
   --register-skills natural_language_processing/natural_language_generation/text_completion \
   --register-domains technology/data_science
 ```
 
-The `--wallet` and `--chain` will be auto-resolved (remote-signer wallet, base-sepolia default).
+The `--pay-to` wallet is auto-resolved from the remote-signer. Do not use `obol sell inference` on the stack: it is a standalone gateway for hosts without a stack and refuses to run when the stack is present.
 
 #### External LAN Resource (GPU server, vLLM, etc.)
 
@@ -254,7 +259,7 @@ Buyers can discover this service at:
 
 To check status:  obol sell status <name> -n <namespace>
 To stop selling:  obol sell stop <name> -n <namespace>
-To delete:        obol sell delete <name> -n <namespace>
+To delete:        obol sell delete <name> -n <namespace> --force
 ```
 
 ## OASF Skills & Domains Reference

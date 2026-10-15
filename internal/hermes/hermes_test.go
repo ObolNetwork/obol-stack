@@ -342,6 +342,8 @@ func TestGenerateValues_UsesHermesNativeNames(t *testing.T) {
 		`- "obol-agent.obol.stack"`,
 		"name: hermes-dashboard",
 		"name: GATEWAY_HEALTH_URL",
+		// No messaging platforms are configured; the gateway stays closed.
+		"name: GATEWAY_ALLOW_ALL_USERS\n                  value: \"false\"",
 		"HERMES_DASHBOARD_BASIC_AUTH_USERNAME",
 		"HERMES_DASHBOARD_BASIC_AUTH_PASSWORD",
 		// Username is fixed; password is the agent API token (API_SERVER_KEY),
@@ -480,20 +482,6 @@ func TestDashboardHostname_UsesDefaultAgentHostAndHermesUIHostForNamedInstances(
 				t.Fatalf("dashboardHostname(%q) = %q, want %q", tt.id, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestDashboardPasswordLoginURL_UsesPasswordLoginPath(t *testing.T) {
-	got := dashboardPasswordLoginURL("obol-agent")
-	want := "http://obol-agent.obol.stack" + DashboardPasswordLoginPath
-	if got != want {
-		t.Fatalf("dashboardPasswordLoginURL(obol-agent) = %q, want %q", got, want)
-	}
-	if !strings.HasSuffix(got, "/auth/password-login") {
-		t.Fatalf("login URL must end with /auth/password-login, got %q", got)
-	}
-	if gotRoot := dashboardURL("obol-agent"); gotRoot != "http://obol-agent.obol.stack" {
-		t.Fatalf("dashboardURL(obol-agent) = %q, want pretty host root", gotRoot)
 	}
 }
 

@@ -54,7 +54,7 @@ func DevImageTag() string {
 	return "dev-" + sha
 }
 
-// ReadDevImageTag returns the dev image tag persisted at CopyInfrastructure
+// ReadDevImageTag returns the dev image tag persisted at RefreshInfrastructure
 // time, or "latest" if none was recorded (non-dev install, or pre-dates this
 // mechanism). internal/stack uses it to tag the images it builds.
 func ReadDevImageTag(cfg *config.Config) string {
@@ -72,7 +72,7 @@ func ReadDevImageTag(cfg *config.Config) string {
 // ResolveWorkloadImage returns the image reference for stack-owned workloads
 // created dynamically at runtime (tunnel storefront, demo-server) rather than
 // through the rendered defaults tree. Under OBOL_DEVELOPMENT it pins the
-// locally-imported tag recorded at CopyInfrastructure time, matching what
+// locally-imported tag recorded at RefreshInfrastructure time, matching what
 // `stack up` builds and imports into the cluster. images.Resolve alone returns
 // `:latest` in dev mode, which imagePullPolicy IfNotPresent then satisfies
 // from a stale registry pull instead of the local build.
@@ -84,31 +84,17 @@ func ResolveWorkloadImage(cfg *config.Config, repo string) string {
 }
 
 // RefreshInfrastructureIfChanged refreshes the generated defaults tree when
-// the embedded infrastructure assets, backend, or stack ID changed.
+// the embedded infrastructure assets, backend, or stack ID changed. Hand-edited
+// files are preserved (see RefreshInfrastructure); callers with a UI should
+// use RefreshInfrastructure + ReportRefresh so kept files are surfaced.
 func RefreshInfrastructureIfChanged(cfg *config.Config, backendName, stackID string) (bool, error) {
-	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
-	stamp, err := infrastructureStamp(backendName, stackID)
-	if err != nil {
-		return false, err
-	}
-
-	currentStamp, _ := os.ReadFile(filepath.Join(defaultsDir, stampFile))
-	_, helmfileErr := os.Stat(filepath.Join(defaultsDir, "helmfile.yaml"))
-	if string(currentStamp) == stamp && helmfileErr == nil {
-		return false, nil
-	}
-
-	if err := CopyInfrastructure(cfg, backendName, stackID); err != nil {
-		return false, err
-	}
-
-	return true, nil
+	res, err := RefreshInfrastructure(cfg, backendName, stackID, RefreshOptions{})
+	return res.Refreshed, err
 }
 
-// CopyInfrastructure renders the embedded infrastructure defaults for the
-// current stack and records the stamp that produced the copied tree.
-func CopyInfrastructure(cfg *config.Config, backendName, stackID string) error {
-	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
+// renderInfrastructure writes the embedded infrastructure defaults for the
+// current stack into defaultsDir, with placeholders and image refs resolved.
+func renderInfrastructure(cfg *config.Config, defaultsDir, backendName, stackID string) error {
 	replacements, err := InfrastructureReplacements(backendName, stackID)
 	if err != nil {
 		return err
@@ -133,17 +119,53 @@ func CopyInfrastructure(cfg *config.Config, backendName, stackID string) error {
 			return fmt.Errorf("persist dev image tag: %w", err)
 		}
 	} else {
-		if err := images.RewriteTree(defaultsDir, images.Resolve); err != nil {
+		var missing []string
+		resolve := func(repo string) string {
+			ref, err := images.ResolveChecked(repo)
+			if errors.Is(err, images.ErrTagNotFound) {
+				missing = append(missing, ref)
+			}
+			return ref
+		}
+		if err := images.RewriteTree(defaultsDir, resolve); err != nil {
 			return fmt.Errorf("rewrite managed image refs: %w", err)
+		}
+		// Fail before anything is applied: rolling workloads to a tag that
+		// was never published leaves them in ImagePullBackOff (and a fresh
+		// install with none of these components).
+		if err := unpublishedImagesError(missing); err != nil {
+			return err
 		}
 	}
 
-	stamp, err := infrastructureStamp(backendName, stackID)
-	if err != nil {
-		return err
-	}
+	return nil
+}
 
-	return os.WriteFile(filepath.Join(defaultsDir, stampFile), []byte(stamp), 0o600)
+// CheckPublishedImages fails when the registry has no image under a tag this
+// build pins (stack up runs it before starting the cluster). Dev builds and
+// OBOL_DEVELOPMENT pin :latest or local tags and always pass; registry
+// outages pass too (see images.ResolveChecked). Lookups are cached, so the
+// render that follows does not query the registry again.
+func CheckPublishedImages() error {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("OBOL_DEVELOPMENT")), "true") {
+		return nil
+	}
+	var missing []string
+	for _, repo := range images.Managed {
+		if ref, err := images.ResolveChecked(repo); errors.Is(err, images.ErrTagNotFound) {
+			missing = append(missing, ref)
+		}
+	}
+	return unpublishedImagesError(missing)
+}
+
+func unpublishedImagesError(missing []string) error {
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("this obol build (commit %s) pins images that are not published:\n  %s\n"+
+		"the release is incomplete; reinstall a published release, or set OBOL_SKIP_IMAGE_DIGEST=true to apply the tags anyway",
+		images.PinTag(), strings.Join(missing, "\n  "))
 }
 
 // InfrastructureReplacements returns the placeholder values used when copying

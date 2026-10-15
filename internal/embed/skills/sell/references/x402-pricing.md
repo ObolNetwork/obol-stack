@@ -17,7 +17,7 @@ x402 enables HTTP-native micropayments using the `402 Payment Required` status c
 Obol Stack supports two correct paid request models:
 
 - **Shared seller gateway path**: `sell http` routes through the shared `x402-verifier` resource server, which verifies, proxies, and settles after upstream success.
-- **`obol sell inference` path**: the standalone gateway runs x402 middleware in-process, so it also settles after upstream success. This is the right path for direct buyers that need to send raw `X-PAYMENT`.
+- **`obol sell inference` path** (hosts without a stack only; it refuses to run next to a stack unless `--standalone` is passed): the standalone gateway runs x402 middleware in-process, so it also settles after upstream success, and only serves the paid OpenAI-compatible routes plus `/health`. This is the right path for direct buyers that need to send raw `X-PAYMENT` to a bare-metal seller.
 
 ### Legacy `/verify` limitation
 
@@ -28,7 +28,7 @@ Obol Stack supports two correct paid request models:
 ### Choosing a path
 
 - Use `x402-buyer` plus the shared seller gateway for cluster-routed paid traffic.
-- Use `obol sell inference` for direct buyers that need raw `X-PAYMENT`.
+- Use `obol sell inference` (standalone, no stack) for direct buyers that need raw `X-PAYMENT`.
 - Keep the legacy `/verify` endpoint on `verifyOnly: true`.
 
 ## Configuration Model

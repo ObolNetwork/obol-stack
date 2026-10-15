@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copy each manifest of an image group (IMAGE_GROUP=x402|storefront, default
+# Copy each manifest of an image group (IMAGE_GROUP=x402|storefront|frontend, default
 # x402) from one tag to new tags in the same GHCR
 # repository. The manifest bytes are re-PUT unchanged, so every new tag has
 # exactly the source digest (provenance/SBOM attestations included) — no

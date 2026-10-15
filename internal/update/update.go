@@ -111,6 +111,9 @@ type UpgradeOptions struct {
 	Pinned       bool   // Deploy only the versions embedded in the binary
 	Major        bool   // Allow upgrading across major version boundaries
 	ChartFilter  string // If non-empty, only bump this chart (e.g. "obol/remote-signer")
+	// ResetDefaults overwrites hand-edited defaults files (backed up first)
+	// instead of keeping them.
+	ResetDefaults bool
 }
 
 // ApplyUpgrades runs helmfile sync on defaults and all installed deployments.
@@ -139,10 +142,15 @@ func ApplyUpgrades(cfg *config.Config, u *ui.UI, opts UpgradeOptions) error {
 		return fmt.Errorf("stack ID not found, run 'obol stack init' first")
 	}
 
-	if err := stackdefaults.CopyInfrastructure(cfg, stackdefaults.DetectedBackendName(cfg), stackID); err != nil {
+	// Same preserve rules as `obol stack up`: hand-edited files are kept
+	// (new default set aside and reported) unless --reset-defaults.
+	refresh, err := stackdefaults.RefreshInfrastructure(cfg, stackdefaults.DetectedBackendName(cfg), stackID,
+		stackdefaults.RefreshOptions{Force: true, Reset: opts.ResetDefaults})
+	if err != nil {
 		return fmt.Errorf("failed to refresh defaults: %w", err)
 	}
 
+	stackdefaults.ReportRefresh(u, refresh, "obol upgrade --reset-defaults")
 	u.Success("Defaults updated from embedded assets")
 
 	// 3. Bump chart version pins to latest (unless --pinned)

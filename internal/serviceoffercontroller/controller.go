@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -510,6 +511,8 @@ func (c *Controller) reconcileOffer(ctx context.Context, key string) error {
 			setCondition(&status, "Ready", "False", "WaitingForAgent", "Referenced Agent is not yet Ready")
 			return c.updateOfferStatus(ctx, raw, status)
 		}
+	} else {
+		clearNonAgentResolution(offer, &status)
 	}
 
 	if err := c.reconcileModel(&status, offer); err != nil {
@@ -1265,6 +1268,12 @@ func (c *Controller) recoverRegistration(ctx context.Context, client *erc8004.Cl
 		status.RegistrationURI,
 		uint64(status.RegistrationSearchFromBlock),
 	)
+	if mismatch, ok := errors.AsType[*erc8004.OwnerMismatchError](err); ok {
+		// Matching events exist but the minted token(s) no longer belong to
+		// the registration owner; never adopt someone else's agent ID.
+		log.Printf("serviceoffer-controller: registration recovery skipped: %v", mismatch)
+		return "", "", false, nil
+	}
 	if err != nil || !found {
 		return "", "", found, err
 	}
@@ -1326,7 +1335,15 @@ func (c *Controller) loadStorefrontProfile(ctx context.Context) (*schemas.Storef
 	if !found {
 		return nil, nil
 	}
-	return storefront.ParseProfile(raw)
+	profile, err := storefront.ParseProfile(raw)
+	if err != nil {
+		return nil, err
+	}
+	if dropped := storefront.DropInvalidBrandingText(profile); len(dropped) > 0 {
+		log.Printf("serviceoffer-controller: storefront profile: ignoring %s (must be single-line plain text without '<' or '>'); using defaults",
+			strings.Join(dropped, ", "))
+	}
+	return profile, nil
 }
 
 // reconcileStaticSite rebuilds the /skill.md ConfigMap/Deployment/Service/

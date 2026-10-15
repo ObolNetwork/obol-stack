@@ -1,0 +1,1 @@
+export { ObolWordmark } from './ObolWordmark';

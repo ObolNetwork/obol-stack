@@ -35,14 +35,18 @@ X402_IMAGES=(
 STOREFRONT_IMAGES=(
     obol-stack-public-storefront
 )
+FRONTEND_IMAGES=(
+    obol-stack-front-end
+)
 # shellcheck disable=SC2034 # used by scripts that source this file
-IMAGE_GROUPS=(x402 storefront)
+IMAGE_GROUPS=(x402 storefront frontend)
 
 # group_images <group> → image names, one per line.
 group_images() {
     case "$1" in
         x402) printf '%s\n' "${X402_IMAGES[@]}" ;;
         storefront) printf '%s\n' "${STOREFRONT_IMAGES[@]}" ;;
+        frontend) printf '%s\n' "${FRONTEND_IMAGES[@]}" ;;
         *) echo "unknown image group: $1" >&2; return 1 ;;
     esac
 }

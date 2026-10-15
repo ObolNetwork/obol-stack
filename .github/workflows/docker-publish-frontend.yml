@@ -6,10 +6,18 @@ name: Build and Publish Front End
 # .github/scripts/verify-release-images.sh.
 
 on:
-  # Dispatch-only on main until the front-end lives here: GitHub only lets a
-  # workflow be dispatched once it exists on the default branch, and runs the
-  # file from the dispatched ref (e.g. integration/v0.17). The full trigger
-  # set (main pushes, v* tags) arrives with the branch that adds web/frontend.
+  # Every main commit gets :<short-sha> (built, or retagged from an ancestor
+  # when web/frontend didn't change — see image-plan.sh). Deliberately NO
+  # path filter: the release gate needs an image at every main commit's short
+  # SHA, and the plan job makes unrelated commits a cheap manifest retag.
+  # v* tags only add semver tags to the commit's existing image — never a
+  # rebuild, which would overwrite the published short-SHA tag with a new
+  # digest.
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       force_build:
@@ -122,6 +130,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Images are built per main commit and only retagged at release, so the
+      # build can't know a release version: stamp the short SHA (the tag the
+      # CLI pins) instead of leaving the footer on "local".
+      - name: Build metadata
+        id: meta
+        run: |
+          echo "version=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "buildtime=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7.2.0
@@ -133,6 +150,8 @@ jobs:
           # public by design; without it the wallet UI is disabled.
           build-args: |
             GITCOMMIT=${{ github.sha }}
+            VERSION=${{ steps.meta.outputs.version }}
+            BUILDTIME=${{ steps.meta.outputs.buildtime }}
             NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=${{ secrets.WALLET_CONNECT_PROJECT_ID || '' }}
           labels: |
             org.opencontainers.image.title=obol-stack-front-end

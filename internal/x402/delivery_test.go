@@ -227,6 +227,12 @@ func (f *deliveryFixture) assertCharged(t *testing.T, resp *http.Response) {
 	if n := f.fac.settleCalls.Load(); n != 1 {
 		t.Fatalf("settle calls = %d, want 1", n)
 	}
+	// The counter is bumped after the middleware returns; with a declared
+	// Content-Length the client can finish reading the body first.
+	deadline := time.Now().Add(2 * time.Second)
+	for counterTotal(f.v.metrics.chargedRequests) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
 	if got := counterTotal(f.v.metrics.chargedRequests); got != 1 {
 		t.Fatalf("chargedRequests = %v, want 1", got)
 	}

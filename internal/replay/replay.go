@@ -81,15 +81,15 @@ var Order = []string{
 	// Installed obol-app deployments. Before offers: http offers can gate an
 	// app's Service as their upstream.
 	StepApps,
-	// Persisted ServiceOffers + sell-inference gateway relaunch. Last: it
+	// Persisted ServiceOffers (sell http/agent/demo). Last: it
 	// depends on everything above.
 	StepSellOffers,
 }
 
 // Options carries the steps implemented outside internal/ (package main).
 type Options struct {
-	// ResumeSellOffers replays persisted ServiceOffers and relaunches
-	// sell-inference host gateways (cmd/obol resumeSellOffers). nil skips
+	// ResumeSellOffers replays persisted ServiceOffers and warns about
+	// legacy cluster-routed sell-inference descriptors (cmd/obol resumeSellOffers). nil skips
 	// the step.
 	ResumeSellOffers func(ctx context.Context, cfg *config.Config, u *ui.UI) error
 }

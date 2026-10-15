@@ -7,10 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"slices"
-	"sort"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
@@ -19,6 +16,10 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/validate"
 	"github.com/urfave/cli/v3"
 )
+
+// deploymentArgsUsage is the ArgsUsage of network subcommands that take one
+// installed deployment.
+const deploymentArgsUsage = "[<network>/<id>]"
 
 // networkCommand returns the network management command group with dynamic subcommands
 func networkCommand(cfg *config.Config) *cli.Command {
@@ -41,7 +42,7 @@ func networkCommand(cfg *config.Config) *cli.Command {
 			{
 				Name:      "sync",
 				Usage:     "Deploy or update a network deployment to the cluster",
-				ArgsUsage: "[<network>/<id>]",
+				ArgsUsage: deploymentArgsUsage,
 				Flags: []cli.Flag{
 					&cli.BoolFlag{
 						Name:    "all",
@@ -66,7 +67,7 @@ func networkCommand(cfg *config.Config) *cli.Command {
 			{
 				Name:      "delete",
 				Usage:     "Remove network deployment and clean up cluster resources",
-				ArgsUsage: "[<network>/<id>]",
+				ArgsUsage: deploymentArgsUsage,
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					identifier, _, err := network.ResolveInstance(cfg, cmd.Args().Slice())
 					if err != nil {
@@ -76,10 +77,92 @@ func networkCommand(cfg *config.Config) *cli.Command {
 					return network.Delete(cfg, getUI(cmd), identifier)
 				},
 			},
+			networkStopStartCommand(cfg, verbStop),
+			networkStopStartCommand(cfg, verbStart),
 			networkAddCommand(cfg),
 			networkRemoveCommand(cfg),
 			networkStatusCommand(cfg),
 			networkERPCCommand(cfg),
+		},
+	}
+}
+
+// Verbs of networkStopStartCommand.
+const (
+	verbStop  = "stop"
+	verbStart = "start"
+)
+
+// networkStopStartCommand builds `network stop` / `network start`.
+func networkStopStartCommand(cfg *config.Config, verb string) *cli.Command {
+	run, usage, description := network.Stop, "Stop a local node: scale it to 0, keep its data, route RPC to remotes",
+		`Scales the node's execution and consensus clients to 0 replicas. Volumes and
+synced data are kept. Its local upstream is removed from eRPC, so
+/rpc/<network> is served by the remote upstreams. The deployment's
+values.yaml records stopped: true, so obol network sync and obol stack up
+keep it down until obol network start.
+
+With the cluster down, only the record is written; it applies on the next
+obol stack up.
+
+Examples:
+  obol network stop ethereum/mainnet
+  obol network stop --all`
+	if verb == verbStart {
+		run, usage, description = network.Start, "Start a stopped local node again (it resumes syncing where it stopped)",
+			`Clears the stopped record, scales the node's clients back to 1 replica (or
+deploys it if the cluster no longer has it) and registers it with eRPC
+again. eRPC prefers the local node once it serves data and falls back to
+remote upstreams until then.
+
+Examples:
+  obol network start ethereum/mainnet
+  obol network start --all`
+	}
+
+	return &cli.Command{
+		Name:        verb,
+		Usage:       usage,
+		ArgsUsage:   deploymentArgsUsage,
+		Description: description,
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:    "all",
+				Aliases: []string{"a"},
+				Usage:   capitalize(verb) + " every installed ethereum deployment",
+			},
+		},
+		Action: func(_ context.Context, cmd *cli.Command) error {
+			u := getUI(cmd)
+
+			if cmd.Bool("all") {
+				var errs []error
+				n := 0
+				for _, d := range network.InstalledDeployments(cfg) {
+					if d.Type != network.TypeEthereum || (verb == verbStop && d.Stopped) || (verb == verbStart && !d.Stopped) {
+						continue
+					}
+
+					n++
+					if err := run(cfg, u, d.Identifier()); err != nil {
+						u.Warnf("%s %s: %v", verb, d.Identifier(), err)
+						errs = append(errs, err)
+					}
+				}
+
+				if n == 0 {
+					u.Printf("No ethereum deployments to %s.", verb)
+				}
+
+				return errors.Join(errs...)
+			}
+
+			identifier, _, err := network.ResolveInstance(cfg, cmd.Args().Slice())
+			if err != nil {
+				return fmt.Errorf("%w\n\nOr use --all", err)
+			}
+
+			return run(cfg, u, identifier)
 		},
 	}
 }
@@ -290,6 +373,16 @@ func networkListCommand(cfg *config.Config) *cli.Command {
 	}
 }
 
+// modeLabel is the mode shown to humans: the archive scope where known
+// (so a partial archive doesn't read as a genesis archive), else the mode.
+func modeLabel(d network.Deployment) string {
+	if d.ArchiveScope != "" {
+		return d.ArchiveScope
+	}
+
+	return d.Mode
+}
+
 // printDeployments renders installed deployments as an aligned table.
 func printDeployments(u *ui.UI, deployments []network.Deployment) {
 	dash := func(s string) string {
@@ -306,8 +399,13 @@ func printDeployments(u *ui.UI, deployments []network.Deployment) {
 			continue
 		}
 
-		u.Printf("  %-26s %-9s %-11s %-11s %s", d.Identifier(), dash(d.Network),
-			dash(d.ExecutionClient), dash(d.ConsensusClient), dash(d.Mode))
+		line := fmt.Sprintf("  %-26s %-9s %-11s %-11s %s", d.Identifier(), dash(d.Network),
+			dash(d.ExecutionClient), dash(d.ConsensusClient), dash(modeLabel(d)))
+		if d.Stopped {
+			line += "  " + ui.Paint("dim", ui.GlyphStopped+" stopped (obol network start "+d.Identifier()+")")
+		}
+
+		u.Print(line)
 	}
 }
 
@@ -527,348 +625,6 @@ Examples:
 }
 
 // ---------------------------------------------------------------------------
-// network status — eRPC health + live local node sync state
-// ---------------------------------------------------------------------------
-
-// networkStatusResult is the JSON shape of `network status`.
-type networkStatusResult struct {
-	ERPC  networkERPCStatus    `json:"erpc"`
-	Nodes []network.NodeStatus `json:"nodes"`
-}
-
-type networkERPCStatus struct {
-	Pods      []networkERPCPod        `json:"pods"`
-	Upstreams []networkERPCChainCount `json:"upstreams"`
-}
-
-type networkERPCPod struct {
-	Name     string `json:"name"`
-	Phase    string `json:"phase"`
-	Ready    bool   `json:"ready"`
-	Restarts int    `json:"restarts"`
-}
-
-// parseERPCPods reads the NAME STATUS READY RESTARTS rows from
-// network.GetERPCStatus. Malformed rows are skipped.
-func parseERPCPods(raw string) []networkERPCPod {
-	pods := []networkERPCPod{}
-
-	for line := range strings.SplitSeq(raw, "\n") {
-		f := strings.Fields(line)
-		if len(f) != 4 {
-			continue
-		}
-
-		restarts, err := strconv.Atoi(f[3])
-		if err != nil {
-			continue
-		}
-
-		pods = append(pods, networkERPCPod{Name: f[0], Phase: f[1], Ready: f[2] == "true", Restarts: restarts})
-	}
-
-	return pods
-}
-
-type networkERPCChainCount struct {
-	ChainID   int    `json:"chain_id"`
-	Name      string `json:"name"`
-	Upstreams int    `json:"upstreams"`
-}
-
-func networkStatusCommand(cfg *config.Config) *cli.Command {
-	return &cli.Command{
-		Name:      "status",
-		Usage:     "Show eRPC gateway health and the sync state of installed local nodes",
-		ArgsUsage: "[<network>/<id>]",
-		Description: `Shows eRPC upstreams and, for each installed ethereum deployment, live
-execution (eth_syncing, head block, peers, client version) and consensus
-(/eth/v1/node/syncing, peers, version) state plus a one-line verdict.
-The node APIs are reached through short-lived kubectl port-forwards on the
-stack kubeconfig; nothing is exposed on obol.stack.
-
-Examples:
-  obol network status
-  obol network status ethereum/hoodi
-  obol -o json network status ethereum/hoodi`,
-		Flags: []cli.Flag{
-			&cli.BoolFlag{
-				Name:  "no-probe",
-				Usage: "Skip live node API probes (eRPC and installed deployments only)",
-			},
-		},
-		Action: func(ctx context.Context, cmd *cli.Command) error {
-			u := getUI(cmd)
-
-			deployments, err := selectDeployments(network.InstalledDeployments(cfg), cmd.Args().First())
-			if err != nil {
-				return err
-			}
-
-			podStatus, upstreamCounts, err := network.GetERPCStatus(cfg)
-			if err != nil {
-				return fmt.Errorf("failed to get eRPC status: %w", err)
-			}
-
-			result := networkStatusResult{
-				ERPC:  networkERPCStatus{Pods: parseERPCPods(podStatus), Upstreams: []networkERPCChainCount{}},
-				Nodes: []network.NodeStatus{},
-			}
-
-			var chainIDs []int
-			for id := range upstreamCounts {
-				chainIDs = append(chainIDs, id)
-			}
-			sort.Ints(chainIDs)
-			for _, id := range chainIDs {
-				result.ERPC.Upstreams = append(result.ERPC.Upstreams, networkERPCChainCount{
-					ChainID: id, Name: chainIDToName(id), Upstreams: upstreamCounts[id],
-				})
-			}
-
-			if cmd.Bool("no-probe") {
-				for _, d := range deployments {
-					result.Nodes = append(result.Nodes, network.NodeStatus{
-						Deployment: d,
-						Pods:       []network.PodStatus{},
-						Verdict:    network.Verdict{State: network.VerdictNotProbed, Summary: "not probed (--no-probe)"},
-					})
-				}
-			} else if len(deployments) > 0 {
-				probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-				defer cancel()
-				result.Nodes = network.NewKubectlNodeProber(cfg).ProbeAll(probeCtx, deployments)
-			}
-
-			if u.IsJSON() {
-				return u.JSON(result)
-			}
-
-			printERPCStatus(u, result.ERPC)
-			for _, n := range result.Nodes {
-				u.Blank()
-				printNodeStatus(u, n)
-			}
-
-			if len(deployments) == 0 {
-				u.Blank()
-				u.Dim("No local nodes installed (obol network install ethereum --help)")
-			}
-
-			return nil
-		},
-	}
-}
-
-// selectDeployments narrows deployments to the one named by arg: an exact
-// "<type>/<id>", its namespace "<type>-<id>", or a type with exactly one
-// deployment. An empty arg selects all.
-func selectDeployments(all []network.Deployment, arg string) ([]network.Deployment, error) {
-	if arg == "" {
-		return all, nil
-	}
-
-	var byType []network.Deployment
-	for _, d := range all {
-		if arg == d.Identifier() || arg == d.Namespace {
-			return []network.Deployment{d}, nil
-		}
-		if arg == d.Type {
-			byType = append(byType, d)
-		}
-	}
-
-	if len(byType) == 1 {
-		return byType, nil
-	}
-
-	ids := make([]string, 0, len(all))
-	for _, d := range all {
-		ids = append(ids, d.Identifier())
-	}
-
-	if len(ids) == 0 {
-		return nil, fmt.Errorf("no network deployment %q: none installed", arg)
-	}
-
-	return nil, fmt.Errorf("no single network deployment matches %q; installed: %s", arg, strings.Join(ids, ", "))
-}
-
-func printERPCStatus(u *ui.UI, st networkERPCStatus) {
-	u.Bold("eRPC gateway")
-	if len(st.Pods) > 0 {
-		for _, p := range st.Pods {
-			u.Printf("  %s", erpcPodLine(p, u.IsVerbose()))
-		}
-	} else {
-		u.Dim("  (no pods found)")
-	}
-
-	if len(st.Upstreams) == 0 {
-		u.Dim("  (no upstreams configured)")
-		return
-	}
-
-	for _, c := range st.Upstreams {
-		u.Printf("  %-20s (chain %d): %d upstream(s)", c.Name, c.ChainID, c.Upstreams)
-	}
-}
-
-// erpcPodLine renders an eRPC pod as "pod Running · ready"; the pod name
-// only shows under --verbose.
-func erpcPodLine(p networkERPCPod, verbose bool) string {
-	out := "pod " + p.Phase
-	if p.Ready {
-		out += " · ready"
-	} else {
-		out += " · not ready"
-	}
-
-	if p.Restarts > 0 {
-		out += fmt.Sprintf(" · %d restarts", p.Restarts)
-	}
-
-	if verbose {
-		out += " (" + p.Name + ")"
-	}
-
-	return out
-}
-
-// shortClientVersion keeps "client/version" from a web3_clientVersion or
-// beacon version string ("reth/v2.7.0-3d592ec/x86_64-unknown-linux-gnu").
-func shortClientVersion(v string) string {
-	parts := strings.SplitN(v, "/", 3)
-	if len(parts) < 3 {
-		return v
-	}
-
-	return parts[0] + "/" + parts[1]
-}
-
-// podsNeedLine reports whether the Pods detail adds anything: the verdict
-// warnings already name every not-ready pod that has a reason or restarts.
-func podsNeedLine(pods []network.PodStatus) bool {
-	for _, p := range pods {
-		if !p.Ready && p.Reason == "" && p.Restarts == 0 {
-			return true
-		}
-	}
-
-	return false
-}
-
-func printNodeStatus(u *ui.UI, n network.NodeStatus) {
-	head := n.Identifier()
-	if n.Network != "" {
-		parts := []string{n.Network}
-		if n.ExecutionClient != "" || n.ConsensusClient != "" {
-			parts = append(parts, n.ExecutionClient+" + "+n.ConsensusClient)
-		}
-		if n.Mode != "" {
-			parts = append(parts, n.Mode)
-		}
-		head += "  (" + strings.Join(parts, " · ") + ")"
-	}
-	u.Bold(head)
-
-	verdict := n.Verdict.State + ": " + n.Verdict.Summary
-	switch n.Verdict.State {
-	case network.VerdictSynced:
-		u.Success(verdict)
-	case network.VerdictSyncing, network.VerdictWaiting, network.VerdictNotProbed, network.VerdictNotSupported:
-		u.Info(verdict)
-	default:
-		u.Warn(verdict)
-	}
-
-	for _, w := range n.Verdict.Warnings {
-		u.Warn(w)
-	}
-
-	if n.Verdict.State == network.VerdictNotProbed || n.Verdict.State == network.VerdictNotSupported {
-		return
-	}
-
-	if n.PodsError != "" {
-		u.Detail("Pods", "(unavailable: "+n.PodsError+")")
-	} else if len(n.Pods) > 0 && (u.IsVerbose() || podsNeedLine(n.Pods)) {
-		var pods []string
-		for _, p := range n.Pods {
-			s := p.Component + " " + p.Phase
-			if p.Ready {
-				s += " ready"
-			} else if p.Reason != "" {
-				s = p.Component + " " + p.Reason
-			}
-			if p.Restarts > 0 {
-				s += fmt.Sprintf(" (%d restarts)", p.Restarts)
-			}
-			pods = append(pods, s)
-		}
-		u.Detail("Pods", strings.Join(pods, " · "))
-	}
-
-	if el := n.Execution; el != nil {
-		if !el.Reachable {
-			u.Detail("Execution", "unreachable: "+el.Error)
-		} else {
-			line := fmt.Sprintf("head %d", el.HeadBlock)
-			if el.Syncing {
-				line = fmt.Sprintf("syncing %d/%d", el.CurrentBlock, el.HighestBlock)
-			}
-			if el.Peers != nil {
-				line += fmt.Sprintf(" · %d peers", *el.Peers)
-			}
-			if el.ClientVersion != "" {
-				v := el.ClientVersion
-				if !u.IsVerbose() {
-					v = shortClientVersion(v)
-				}
-
-				line += " · " + v
-			}
-			u.Detail("Execution", line)
-		}
-	}
-
-	if cl := n.Consensus; cl != nil {
-		if !cl.Reachable {
-			u.Detail("Consensus", "unreachable: "+cl.Error)
-		} else {
-			line := fmt.Sprintf("head slot %d · synced", cl.HeadSlot)
-			if cl.IsSyncing {
-				line = fmt.Sprintf("syncing, head slot %d · %d slots behind", cl.HeadSlot, cl.SyncDistance)
-			}
-
-			if cl.IsOptimistic {
-				line += " · optimistic"
-			}
-
-			if cl.ELOffline {
-				line += " · execution offline"
-			}
-			if cl.Peers != nil {
-				line += fmt.Sprintf(" · %d peers", *cl.Peers)
-			}
-			if cl.Version != "" {
-				v := cl.Version
-				if !u.IsVerbose() {
-					v = shortClientVersion(v)
-				}
-
-				line += " · " + v
-			}
-
-			if u.IsVerbose() {
-				line += fmt.Sprintf(" · syncing=%t optimistic=%t el_offline=%t", cl.IsSyncing, cl.IsOptimistic, cl.ELOffline)
-			}
-			u.Detail("Consensus", line)
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
 // network erpc — durable operator eRPC config that survives stack up (#763).
 // Verbs match sell-info set/reset (host-side intent) + status.
 // ---------------------------------------------------------------------------
@@ -894,7 +650,7 @@ func networkERPCCommand(cfg *config.Config) *cli.Command {
 				},
 			},
 			{
-				Name:  "status",
+				Name:  statusCommandName,
 				Usage: "Show the durable eRPC config on disk",
 				Action: func(_ context.Context, cmd *cli.Command) error {
 					u := getUI(cmd)

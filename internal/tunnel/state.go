@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/fsutil"
 )
 
 const (
@@ -62,18 +63,6 @@ func remoteTunnelTokenPath(cfg *config.Config) string {
 	return filepath.Join(tunnelStateDir(cfg), "cloudflared-token")
 }
 
-func defaultPersistentTunnelName(stackID, management string) string {
-	base := "obol-stack-" + strings.TrimSpace(stackID)
-	switch management {
-	case tunnelManagementLocal:
-		return base + "-local"
-	case tunnelManagementRemote:
-		return base + "-remote"
-	default:
-		return base
-	}
-}
-
 func normalizeTunnelTransportProtocol(protocol string) string {
 	switch strings.ToLower(strings.TrimSpace(protocol)) {
 	case "", tunnelTransportAuto:
@@ -103,15 +92,6 @@ func tunnelTransportProtocol(st *tunnelState) string {
 	}
 
 	return normalized.TransportProtocol
-}
-
-func desiredPersistentTunnelName(stackID string, st *tunnelState, management string) string {
-	normalized := normalizeTunnelState(st)
-	if normalized != nil && normalized.ManagementMode == management && strings.TrimSpace(normalized.TunnelName) != "" {
-		return normalized.TunnelName
-	}
-
-	return defaultPersistentTunnelName(stackID, management)
 }
 
 func normalizeTunnelState(st *tunnelState) *tunnelState {
@@ -261,7 +241,7 @@ func saveRemoteTunnelToken(cfg *config.Config, token string) error {
 		return err
 	}
 
-	return os.WriteFile(remoteTunnelTokenPath(cfg), []byte(token), 0o600)
+	return fsutil.WriteSecret(remoteTunnelTokenPath(cfg), []byte(token))
 }
 
 func loadRemoteTunnelToken(cfg *config.Config) (string, error) {

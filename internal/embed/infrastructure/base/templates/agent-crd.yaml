@@ -62,6 +62,12 @@ spec:
           metadata:
             type: object
           spec:
+            description: |-
+              AgentSpec is the desired state of an Agent.
+
+              A provisioned wallet is permanent for the Agent's lifetime: once
+              wallet.create is true it cannot be cleared (set false, or the field or
+              wallet block removed). Delete the Agent to abandon its wallet.
             properties:
               disabledToolsets:
                 description: |-
@@ -175,10 +181,17 @@ spec:
                     default: false
                     description: |-
                       Provision a per-namespace remote-signer keystore. Address is
-                      published in status.walletAddress.
+                      published in status.walletAddress. Once true it cannot be set back
+                      to false (see the AgentSpec validation rule); delete the Agent to
+                      abandon the wallet.
                     type: boolean
                 type: object
             type: object
+            x-kubernetes-validations:
+            - message: wallet.create cannot be changed from true to false; delete
+                the Agent to abandon its wallet
+              rule: '!has(oldSelf.wallet) || !has(oldSelf.wallet.create) || !oldSelf.wallet.create
+                || (has(self.wallet) && has(self.wallet.create) && self.wallet.create)'
           status:
             properties:
               conditions:

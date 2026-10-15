@@ -96,8 +96,24 @@ func (c *Client) RegisterWithOptsDetailed(ctx context.Context, opts *bind.Transa
 	if err != nil {
 		return nil, "", fmt.Errorf("erc8004: wait mined: %w", err)
 	}
+	if err := checkReceiptStatus("register", receipt, tx.Hash()); err != nil {
+		return nil, "", err
+	}
 
 	return c.parseRegisteredEvent(receipt, tx.Hash())
+}
+
+// checkReceiptStatus returns an error when a mined transaction reverted.
+// bind.WaitMined only waits for inclusion; a reverted transaction is still
+// mined and must not be reported as success.
+func checkReceiptStatus(method string, receipt *types.Receipt, txHash common.Hash) error {
+	if receipt == nil {
+		return fmt.Errorf("erc8004: %s tx %s: no receipt", method, txHash.Hex())
+	}
+	if receipt.Status != types.ReceiptStatusSuccessful {
+		return fmt.Errorf("erc8004: %s tx %s reverted on-chain (receipt status %d)", method, txHash.Hex(), receipt.Status)
+	}
+	return nil
 }
 
 // CurrentBlockNumber returns the current tip height for the connected chain.
@@ -136,6 +152,9 @@ func (c *Client) FindRegistrationByTxHash(ctx context.Context, txHash string) (*
 	if err != nil {
 		return nil, "", false, fmt.Errorf("erc8004: transaction receipt %s: %w", txHash, err)
 	}
+	if err := checkReceiptStatus("register", receipt, hash); err != nil {
+		return nil, "", false, err
+	}
 
 	agentID, registeredTxHash, err := c.parseRegisteredEvent(receipt, hash)
 	if err != nil {
@@ -145,8 +164,38 @@ func (c *Client) FindRegistrationByTxHash(ctx context.Context, txHash string) (*
 	return agentID, registeredTxHash, true, nil
 }
 
+// OwnerMismatchError reports that historical Registered events matched the
+// expected owner and URI, but none of the minted tokens is currently owned by
+// that owner (for example, the token was transferred). Callers must treat it
+// as "not found" and must not adopt any of the candidate agent IDs.
+type OwnerMismatchError struct {
+	ExpectedOwner common.Address
+	// Candidates lists each matching agent ID with its current owner.
+	Candidates []OwnerMismatchCandidate
+}
+
+// OwnerMismatchCandidate is one rejected recovery candidate.
+type OwnerMismatchCandidate struct {
+	AgentID      *big.Int
+	TxHash       string
+	CurrentOwner common.Address
+}
+
+func (e *OwnerMismatchError) Error() string {
+	parts := make([]string, 0, len(e.Candidates))
+	for _, cand := range e.Candidates {
+		parts = append(parts, fmt.Sprintf("agent %s owned by %s", cand.AgentID, cand.CurrentOwner.Hex()))
+	}
+	return fmt.Sprintf("erc8004: matching Registered event(s) found but no longer owned by %s (%s)",
+		e.ExpectedOwner.Hex(), strings.Join(parts, ", "))
+}
+
 // FindRegistrationByOwnerAndURI recovers a registration by scanning recent
-// Registered events for the controller wallet and published URI.
+// Registered events for the controller wallet and published URI. Matches are
+// checked newest first and a candidate is only adopted when the registry's
+// ownerOf(agentId) still returns owner. When events match but every candidate
+// is now owned by another address, it returns found=false with an
+// *OwnerMismatchError so callers can report why recovery was refused.
 func (c *Client) FindRegistrationByOwnerAndURI(ctx context.Context, owner common.Address, agentURI string, fromBlock uint64) (*big.Int, string, bool, error) {
 	registeredEvent := c.parsedABI.Events["Registered"]
 	query := ethereum.FilterQuery{
@@ -165,6 +214,7 @@ func (c *Client) FindRegistrationByOwnerAndURI(ctx context.Context, owner common
 	}
 
 	wantURI := strings.TrimSpace(agentURI)
+	var mismatch *OwnerMismatchError
 	for i := len(logs) - 1; i >= 0; i-- {
 		agentID, loggedURI, loggedOwner, err := c.parseRegisteredLog(&logs[i])
 		if err != nil {
@@ -173,10 +223,44 @@ func (c *Client) FindRegistrationByOwnerAndURI(ctx context.Context, owner common
 		if loggedOwner != owner || strings.TrimSpace(loggedURI) != wantURI {
 			continue
 		}
+		currentOwner, err := c.OwnerOf(ctx, agentID)
+		if err != nil {
+			return nil, "", false, err
+		}
+		if currentOwner != owner {
+			if mismatch == nil {
+				mismatch = &OwnerMismatchError{ExpectedOwner: owner}
+			}
+			mismatch.Candidates = append(mismatch.Candidates, OwnerMismatchCandidate{
+				AgentID:      agentID,
+				TxHash:       logs[i].TxHash.Hex(),
+				CurrentOwner: currentOwner,
+			})
+			continue
+		}
 		return agentID, logs[i].TxHash.Hex(), true, nil
 	}
 
+	if mismatch != nil {
+		return nil, "", false, mismatch
+	}
 	return nil, "", false, nil
+}
+
+// OwnerOf returns the current ERC-721 owner of the agent NFT.
+func (c *Client) OwnerOf(ctx context.Context, agentID *big.Int) (common.Address, error) {
+	var out []any
+	if err := c.contract.Call(&bind.CallOpts{Context: ctx}, &out, "ownerOf", agentID); err != nil {
+		return common.Address{}, fmt.Errorf("erc8004: ownerOf %s: %w", agentID, err)
+	}
+	if len(out) == 0 {
+		return common.Address{}, fmt.Errorf("erc8004: ownerOf %s: empty return", agentID)
+	}
+	addr, ok := out[0].(common.Address)
+	if !ok {
+		return common.Address{}, fmt.Errorf("erc8004: ownerOf %s: unexpected type %T", agentID, out[0])
+	}
+	return addr, nil
 }
 
 func (c *Client) parseRegisteredLog(vLog *types.Log) (*big.Int, string, common.Address, error) {
@@ -220,10 +304,11 @@ func (c *Client) SetMetadataWithOpts(ctx context.Context, opts *bind.TransactOpt
 		return wrapTransactError("erc8004: setMetadata tx", err)
 	}
 
-	if _, err := bind.WaitMined(ctx, c.eth, tx); err != nil {
+	receipt, err := bind.WaitMined(ctx, c.eth, tx)
+	if err != nil {
 		return fmt.Errorf("erc8004: wait mined: %w", err)
 	}
-	return nil
+	return checkReceiptStatus("setMetadata", receipt, tx.Hash())
 }
 
 // SetAgentURIWithOpts updates the agentURI using a caller-supplied
@@ -235,8 +320,12 @@ func (c *Client) SetAgentURIWithOpts(ctx context.Context, opts *bind.TransactOpt
 	if err != nil {
 		return "", wrapTransactError("erc8004: setAgentURI tx", err)
 	}
-	if _, err := bind.WaitMined(ctx, c.eth, tx); err != nil {
+	receipt, err := bind.WaitMined(ctx, c.eth, tx)
+	if err != nil {
 		return "", fmt.Errorf("erc8004: wait mined: %w", err)
+	}
+	if err := checkReceiptStatus("setAgentURI", receipt, tx.Hash()); err != nil {
+		return "", err
 	}
 	return tx.Hash().Hex(), nil
 }

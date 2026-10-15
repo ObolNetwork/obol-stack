@@ -196,3 +196,50 @@ func TestBuild_GenericLLMMatchesMainStyle(t *testing.T) {
 		t.Errorf("http generic-llm missing main-style accepts[] flow:\n%s", http)
 	}
 }
+
+func TestMaxPriceFlag(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"", ""},
+		{"0.001", ""},
+		{"1", ""},
+		{"1.0", ""},
+		{"1.000001", " --max-price 1.000001"},
+		{"10", " --max-price 10"},
+		{" 2.5 ", " --max-price 2.5"},
+		{"abc", ""},
+		{"1/2", ""},
+		{"1e3", ""},
+	} {
+		if got := MaxPriceFlag(tc.in); got != tc.want {
+			t.Errorf("MaxPriceFlag(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// TestBuild_OneShotCommandsCarryMaxPriceAboveDefault pins that generated
+// buy.py command lines pass --max-price when the per-call price is above
+// buy.py's default 1-token ceiling (otherwise buy.py would refuse it), and
+// stay unchanged at or below it.
+func TestBuild_OneShotCommandsCarryMaxPriceAboveDefault(t *testing.T) {
+	url := "https://seller.example.com/services/demo"
+	for _, typ := range []string{"agent", "http"} {
+		cheap := Build(Input{Type: typ, URL: url, PerCallPrice: "0.5"})
+		pricey := Build(Input{Type: typ, URL: url, PerCallPrice: "10"})
+		for _, key := range []string{PromptCLI, PromptObolAgent} {
+			if strings.Contains(cheap.Prompts[key], "--max-price") {
+				t.Errorf("%s/%s: price within the default ceiling must not add --max-price:\n%s", typ, key, cheap.Prompts[key])
+			}
+			if !strings.Contains(pricey.Prompts[key], "--max-price 10") {
+				t.Errorf("%s/%s: price above the default ceiling must add --max-price 10:\n%s", typ, key, pricey.Prompts[key])
+			}
+		}
+	}
+	if !strings.HasSuffix(Build(Input{Type: "agent", URL: url, PerCallPrice: "10"}).Prompts[PromptCLI], " --max-price 10") {
+		t.Error("agent CLI command should end with the --max-price flag")
+	}
+	// Inference is bought with `obol buy inference`, which has its own
+	// pricing flow — no buy.py one-shot flag there.
+	if strings.Contains(Build(Input{Type: "inference", URL: url, PerCallPrice: "10"}).Prompts[PromptCLI], "--max-price") {
+		t.Error("inference CLI prompt must not carry --max-price")
+	}
+}

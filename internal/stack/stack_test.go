@@ -336,9 +336,9 @@ func TestDestroyOldBackendIfSwitching_CleansStaleConfigs(t *testing.T) {
 	k3dPath := filepath.Join(tmpDir, k3dConfigFile)
 	os.WriteFile(k3dPath, []byte("k3d config"), 0o644)
 
-	// Switch to k3s — k3d config should be cleaned up
-	// (Destroy will fail because no real cluster, but cleanup should still work)
-	if err := destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3s, "test-id", false); err != nil {
+	// Switch to k3s (confirmed with --yes) — k3d config should be cleaned up.
+	stubDestroy(t)
+	if err := destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3s, "test-id", true); err != nil {
 		t.Fatalf("destroyOldBackendIfSwitching: %v", err)
 	}
 
@@ -384,8 +384,9 @@ func TestDestroyOldBackendIfSwitching_K3sToK3d(t *testing.T) {
 		os.WriteFile(filepath.Join(tmpDir, f), []byte("data"), 0o644)
 	}
 
-	// Switch to k3d — k3s files should be cleaned up
-	if err := destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3d, "test-id", false); err != nil {
+	// Switch to k3d (confirmed with --yes) — k3s files should be cleaned up
+	stubDestroy(t)
+	if err := destroyOldBackendIfSwitching(cfg, ui.New(false), BackendK3d, "test-id", true); err != nil {
 		t.Fatalf("destroyOldBackendIfSwitching: %v", err)
 	}
 
@@ -430,8 +431,8 @@ func TestDestroyOldBackendIfSwitching_LiveServicesRefusesNonInteractiveWithoutYe
 	k3dPath := filepath.Join(tmpDir, k3dConfigFile)
 	os.WriteFile(k3dPath, []byte("k3d config"), 0o644)
 
-	// A live sell-inference gateway makes this stack "serving traffic".
-	writeGatewayPID(t, cfg, "aeon", os.Getpid())
+	// A live ServiceOffer makes this stack "serving traffic".
+	withLiveOffer(t)
 
 	var buf bytes.Buffer
 	u := ui.NewForTest(&buf, &buf) // isTTY defaults false, no --yes
@@ -467,7 +468,8 @@ func TestDestroyOldBackendIfSwitching_SkipConfirmStillDestroys(t *testing.T) {
 	k3dPath := filepath.Join(tmpDir, k3dConfigFile)
 	os.WriteFile(k3dPath, []byte("k3d config"), 0o644)
 
-	writeGatewayPID(t, cfg, "aeon", os.Getpid())
+	withLiveOffer(t)
+	stubDestroy(t) // never run the real k3d delete from a unit test
 
 	var buf bytes.Buffer
 	u := ui.NewForTest(&buf, &buf)
@@ -1117,6 +1119,52 @@ func TestForceRebuildSet_PublicStorefrontAlias(t *testing.T) {
 	}
 	if shouldForceRebuild("ghcr.io/obolnetwork/x402-verifier:latest") {
 		t.Fatal("public-storefront alias should not rebuild unrelated images")
+	}
+}
+
+func TestForceRebuildSet_FrontendAlias(t *testing.T) {
+	t.Setenv("OBOL_FORCE_REBUILD_LOCAL_DEV_IMAGES", "frontend")
+
+	shouldForceRebuild := forceRebuildSet()
+	if !shouldForceRebuild("ghcr.io/obolnetwork/obol-stack-front-end:dev-abc") {
+		t.Fatal("frontend alias should rebuild obol-stack-front-end")
+	}
+	if shouldForceRebuild("ghcr.io/obolnetwork/obol-stack-public-storefront:dev-abc") {
+		t.Fatal("frontend alias should not rebuild the public storefront")
+	}
+}
+
+func TestBaseLocalImages_FrontendBuiltFromWebFrontend(t *testing.T) {
+	for _, img := range baseLocalImages {
+		if localImageShortName(img.tag) != "obol-stack-front-end" {
+			continue
+		}
+		if img.contextDir != "web/frontend" || img.dockerfile != "web/frontend/Dockerfile" {
+			t.Fatalf("front-end must build from web/frontend, got dockerfile=%q context=%q", img.dockerfile, img.contextDir)
+		}
+		return
+	}
+	t.Fatal("obol-stack-front-end missing from baseLocalImages")
+}
+
+func TestFrontendBuildArgs_WalletConnectResolution(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID", "")
+	t.Setenv("WALLET_CONNECT_PROJECT_ID", "")
+	if got := frontendBuildArgs(dir); got != nil {
+		t.Fatalf("no project id configured: got %v, want nil", got)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, ".env.local"), []byte("FOO=bar\nWALLET_CONNECT_PROJECT_ID=\"from-file\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := frontendBuildArgs(dir); len(got) != 1 || got[0] != "NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=from-file" {
+		t.Fatalf(".env.local: got %v", got)
+	}
+
+	t.Setenv("WALLET_CONNECT_PROJECT_ID", "from-env")
+	if got := frontendBuildArgs(dir); len(got) != 1 || got[0] != "NEXT_PUBLIC_WALLET_CONNECT_PROJECT_ID=from-env" {
+		t.Fatalf("env: got %v", got)
 	}
 }
 

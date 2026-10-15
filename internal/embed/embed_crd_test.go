@@ -1,9 +1,12 @@
 package embed
 
 import (
+	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/ObolNetwork/obol-stack/internal/schemas"
 	"gopkg.in/yaml.v3"
 )
 
@@ -1320,4 +1323,108 @@ func TestAdmissionPolicy_Parses(t *testing.T) {
 	if actions[0] != "Deny" {
 		t.Errorf("validationActions[0] = %v, want Deny", actions[0])
 	}
+}
+
+// Every ServiceOffer price slot (spec.payment.price, spec.payments[].price,
+// spec.routes[].price) carries the exact decimal grammar shared with the CLI
+// and verifier (schemas.PriceDecimalPattern), a length bound, and a
+// greater-than-zero rule, so a ServiceOffer applied directly with a sign,
+// exponent, Inf/NaN, 19+ fractional digits or a zero price is refused at
+// admission.
+func TestServiceOfferCRD_PriceValidation(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/serviceoffer-crd.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+	crd := findDoc(multiDoc(data), "CustomResourceDefinition")
+	if crd == nil {
+		t.Fatal("no CRD document found")
+	}
+	v0 := nested(crd, "spec", "versions").([]any)[0].(map[string]any)
+	spec := nested(v0, "schema", "openAPIV3Schema", "properties", "spec", "properties").(map[string]any)
+
+	tables := map[string]any{
+		"payment.price":    nested(spec, "payment", "properties", "price", "properties"),
+		"payments[].price": nested(spec, "payments", "items", "properties", "price", "properties"),
+		"routes[].price":   nested(spec, "routes", "items", "properties", "price", "properties"),
+	}
+	for where, raw := range tables {
+		props, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("%s: price properties missing", where)
+		}
+		for _, field := range []string{"perRequest", "perMTok", "perHour", "perEpoch"} {
+			f, ok := props[field].(map[string]any)
+			if !ok {
+				t.Fatalf("%s.%s missing", where, field)
+			}
+			if got := f["pattern"]; got != schemas.PriceDecimalPattern {
+				t.Errorf("%s.%s pattern = %v, want %q", where, field, got, schemas.PriceDecimalPattern)
+			}
+			if got := f["maxLength"]; got != schemas.MaxPriceLength {
+				t.Errorf("%s.%s maxLength = %v, want %d", where, field, got, schemas.MaxPriceLength)
+			}
+			if !hasXValidation(f, "self.matches('[1-9]')") {
+				t.Errorf("%s.%s: missing greater-than-zero x-kubernetes-validations rule", where, field)
+			}
+		}
+	}
+
+	// The schema pattern must agree with the shared parser on edge cases.
+	re := regexp.MustCompile(schemas.PriceDecimalPattern)
+	for _, s := range []string{"0.000001", "0.000000000000000001", "1", ".5"} {
+		if !re.MatchString(s) {
+			t.Errorf("pattern rejects valid price %q", s)
+		}
+	}
+	for _, s := range []string{"-1", "+1", "1e3", "Inf", "NaN", "1,5", "$1", "", "0.0000000000000000001"} {
+		if re.MatchString(s) {
+			t.Errorf("pattern accepts invalid price %q", s)
+		}
+	}
+}
+
+// wallet.create is one-way: a CEL transition rule on the Agent spec refuses
+// clearing it once true (set false, or the field / wallet block removed),
+// while new Agents with or without the field still validate (transition
+// rules only run on update).
+func TestAgentCRD_WalletCreateIsOneWay(t *testing.T) {
+	data, err := ReadInfrastructureFile("base/templates/agent-crd.yaml")
+	if err != nil {
+		t.Fatalf("ReadInfrastructureFile: %v", err)
+	}
+	crd := findDoc(multiDoc(data), "CustomResourceDefinition")
+	if crd == nil {
+		t.Fatal("no CRD found")
+	}
+	v0 := nested(crd, "spec", "versions").([]any)[0].(map[string]any)
+	spec, ok := nested(v0, "schema", "openAPIV3Schema", "properties", "spec").(map[string]any)
+	if !ok {
+		t.Fatal("spec schema missing")
+	}
+	const rule = "!has(oldSelf.wallet) || !has(oldSelf.wallet.create) || !oldSelf.wallet.create || (has(self.wallet) && has(self.wallet.create) && self.wallet.create)"
+	if !hasXValidation(spec, rule) {
+		t.Fatalf("spec x-kubernetes-validations missing the wallet.create transition rule; got %v", spec["x-kubernetes-validations"])
+	}
+	for _, v := range spec["x-kubernetes-validations"].([]any) {
+		m := v.(map[string]any)
+		if m["rule"] == rule && !strings.Contains(fmt.Sprint(m["message"]), "delete the Agent") {
+			t.Errorf("rule message should point at deleting the Agent, got %q", m["message"])
+		}
+	}
+	// The rule must reference oldSelf so it is a transition rule: creating
+	// an Agent without spec.wallet is unaffected.
+	if !strings.Contains(rule, "oldSelf") {
+		t.Fatal("wallet.create rule must be a transition rule")
+	}
+}
+
+func hasXValidation(prop map[string]any, rule string) bool {
+	list, _ := prop["x-kubernetes-validations"].([]any)
+	for _, v := range list {
+		if m, ok := v.(map[string]any); ok && m["rule"] == rule {
+			return true
+		}
+	}
+	return false
 }

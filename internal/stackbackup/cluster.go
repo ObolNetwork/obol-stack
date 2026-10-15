@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/fsutil"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
@@ -128,7 +129,7 @@ func harvestAgentSecrets(cfg *config.Config, destDir string) string {
 	if err != nil {
 		return ""
 	}
-	if err := os.WriteFile(filepath.Join(destDir, "agent-secrets.json"), out, 0o600); err != nil {
+	if err := fsutil.WriteSecret(filepath.Join(destDir, "agent-secrets.json"), out); err != nil {
 		return ""
 	}
 	return fmt.Sprintf("agent-secrets.json (%d secrets from %d agent namespaces)", len(items), len(namespaces))

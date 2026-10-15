@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ObolNetwork/obol-stack/internal/hermes"
 )
 
 func TestSelectDataNamespaces(t *testing.T) {
@@ -45,10 +47,13 @@ func TestSkipConfigEntry(t *testing.T) {
 	cases := map[string]bool{
 		"kubeconfig.yaml":                  true,
 		"kubeconfig.yaml.bak":              true,
-		"defaults":                         true,
-		filepath.Join("defaults", "x.yml"): true,
-		".stack-id":                        false,
-		"k3d.yaml":                         false,
+		".defaults-render-123":             true,
+		"defaults":                         false,
+		filepath.Join("defaults", "x.yml"): false,
+		filepath.Join("defaults", ".obol-defaults-manifest.json"): false,
+		filepath.Join("defaults.obol-new", "values", "erpc.yaml"): false,
+		".stack-id": false,
+		"k3d.yaml":  false,
 		filepath.Join("applications", "hermes", "obol-agent", "values-hermes.yaml"): false,
 		filepath.Join("sell-http", "llm__ollama-gated.yaml"):                        false,
 	}
@@ -162,12 +167,12 @@ func TestArchiveRoundTrip(t *testing.T) {
 	if err := w.addBytes(ManifestFileName, manifest, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	warns, err := w.addTree(src, "data/ns1", func(rel string) bool { return rel == "skipme" })
+	skipped, err := w.addTree(src, "data/ns1", func(rel string) bool { return rel == "skipme" })
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(warns) != 0 {
-		t.Fatalf("unexpected warnings: %v", warns)
+	if len(skipped) != 0 {
+		t.Fatalf("unexpected skipped entries: %v", skipped)
 	}
 	if err := w.Close(); err != nil {
 		t.Fatal(err)
@@ -346,12 +351,22 @@ func TestWalkArchiveRejectsNonGzip(t *testing.T) {
 	}
 }
 
-func TestWalletNote(t *testing.T) {
-	if got := walletNote("hermes", "obol-agent", nil); got != "hermes/obol-agent" {
-		t.Fatalf("walletNote(ok) = %q", got)
+func TestWalletExportNote(t *testing.T) {
+	ok := walletExport{
+		wallet:  hermes.HostWallet{Namespace: "hermes-obol-agent"},
+		address: "0x1111111111111111111111111111111111111111",
+		file:    "wallets/hermes-obol-agent.enc",
+		route:   hermes.KeystoreRouteHost,
 	}
-	got := walletNote("openclaw", "quant", os.ErrPermission)
-	if !strings.HasPrefix(got, "openclaw/quant: FAILED") {
-		t.Fatalf("walletNote(err) = %q, want FAILED prefix", got)
+	if got := ok.note(); got != "hermes-obol-agent: 0x1111111111111111111111111111111111111111 wallets/hermes-obol-agent.enc (keystore also in data/)" {
+		t.Fatalf("note(host) = %q", got)
+	}
+	ok.route = hermes.KeystoreRouteK3dNode
+	if got := ok.note(); !strings.Contains(got, "only copy") {
+		t.Fatalf("note(k3d-node) = %q, want it to say wallets/ is the only copy", got)
+	}
+	failed := walletExport{wallet: hermes.HostWallet{Namespace: "openclaw-quant"}, err: os.ErrPermission}
+	if got := failed.note(); !strings.HasPrefix(got, "openclaw-quant: FAILED") {
+		t.Fatalf("note(err) = %q, want FAILED prefix", got)
 	}
 }
