@@ -48,7 +48,7 @@ Pin a release (use the current tag from the [releases page](https://github.com/O
 curl -fsSL https://stack.obol.org/v0.15.0 | bash
 ```
 
-The installer sets up the `obol` CLI (checksum-verified) and then runs `obol upgrade --tools-only`, which installs the pinned dependencies (`kubectl`, `helm`, `k3d`, `helmfile`, `k9s`, the `helm-diff` plugin) into `~/.local/bin/`, each verified against a pinned sha256. It then configures your PATH, tries to add `obol.stack` to `/etc/hosts`, and offers to start the cluster (or, if your stack is already running, points you at `obol upgrade` / `obol doctor`). Ollama is only installed when you say yes at the prompt or set `OBOL_INSTALL_OLLAMA=true`.
+The installer sets up the `obol` CLI (checksum-verified) and then runs `obol upgrade --tools-only`, which installs the pinned dependencies (`kubectl`, `helm`, `k3d`, `helmfile`, `k9s`, the `helm-diff` plugin) into `~/.local/bin/`, each verified against a pinned sha256. It then configures your PATH, tries to add `obol.stack` to `/etc/hosts`, and offers to start the cluster. If your stack is already running, it offers to upgrade it to the new version (`obol stack up`, which restarts LiteLLM and the x402 services); without a terminal it only does so with `--yes` or `OBOL_UPGRADE_STACK=true`. Until the stack has been brought up by the new version, `obol doctor` and other commands say so. Ollama is only installed when you say yes at the prompt or set `OBOL_INSTALL_OLLAMA=true`.
 
 If `/etc/hosts` cannot be updated (no sudo / you cancel), the install still finishes — add the host, then start the stack yourself:
 

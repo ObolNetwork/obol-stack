@@ -1447,6 +1447,58 @@ stack_state() {
 	fi
 }
 
+# upgrade_running_stack offers to bring an already-running stack up to the
+# obol version just installed (`obol stack up` applies the new defaults,
+# charts and migrations). It restarts services, so it is a question, default
+# yes, on a terminal; without one it only runs with --yes or
+# OBOL_UPGRADE_STACK=true and otherwise prints the command.
+upgrade_running_stack() {
+	local installed stack_version
+	installed=$("$OBOL_BIN_DIR/obol" version 2>/dev/null | awk '/^Version:/ {print $2; exit}')
+	# Written by `obol stack up` since 0.17.1; absent for older stacks.
+	stack_version=$(tr -d '[:space:]' <"$OBOL_CONFIG_DIR/.stack-version" 2>/dev/null || true)
+
+	log_success "Your Obol Stack is running"
+	if [[ -n "$installed" && "$stack_version" == "$installed" ]]; then
+		echo ""
+		echo "  It is already on obol $installed."
+		echo "  Check the stack's health:  obol doctor"
+		echo ""
+		return 0
+	fi
+
+	echo ""
+	echo "  The stack was last brought up by ${stack_version:+obol }${stack_version:-an earlier obol release}; you installed obol ${installed:-a new version}."
+	echo "  Upgrading it restarts LiteLLM and the x402 services (about a minute; paid requests in flight will fail)."
+	echo ""
+
+	local upgrade=false
+	if [[ "${OBOL_UPGRADE_STACK:-}" == "1" || "${OBOL_UPGRADE_STACK:-}" == "true" ]]; then
+		upgrade=true
+	elif confirm "Upgrade the running stack now (obol stack up)?" "y"; then
+		upgrade=true
+	fi
+
+	if [[ "$upgrade" != "true" ]]; then
+		log_dim "  Not upgrading the stack now. Finish the update later with:"
+		echo ""
+		echo "    obol stack up"
+		echo ""
+		return 0
+	fi
+
+	echo ""
+	if run_obol stack up; then
+		return 0
+	fi
+	log_error "obol stack up failed"
+	echo ""
+	log_info "Check what is wrong with: obol doctor"
+	log_info "Then retry with:          obol stack up"
+	echo ""
+	return 1
+}
+
 # Print the manual "start the stack" instructions.
 print_start_instructions() {
 	echo "  To start the cluster, run:"
@@ -1484,13 +1536,8 @@ print_instructions() {
 
 	case "$state" in
 	running)
-		# Never offer to init/start a stack that is already up.
-		log_success "Your Obol Stack is already running"
-		echo ""
-		echo "  Apply chart upgrades for this version:  obol upgrade"
-		echo "  Check the stack's health:               obol doctor"
-		echo ""
-		return 0
+		upgrade_running_stack
+		return $?
 		;;
 	stopped)
 		log_info "An Obol Stack is configured but not running"

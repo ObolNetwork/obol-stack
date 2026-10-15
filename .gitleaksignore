@@ -15,3 +15,10 @@ ea783359e4dd9ec7aea5b320b121fb2b6cdcd2af:internal/hermes/wallet_export.go:bls-ke
 ea783359e4dd9ec7aea5b320b121fb2b6cdcd2af:internal/stackbackup/wallets_test.go:bls-keystore-password:116
 ea783359e4dd9ec7aea5b320b121fb2b6cdcd2af:internal/walletbackup/verify_test.go:bls-keystore-password:15
 ea783359e4dd9ec7aea5b320b121fb2b6cdcd2af:internal/walletbackup/verify_test.go:bls-keystore-password:27
+
+# Squash merge of #888 (5479828c): the same false positives as above, at their new commit.
+5479828c88cbd6e0ae39fc228c2861b70626d443:internal/hermes/wallet_export.go:bls-keystore-password:75
+5479828c88cbd6e0ae39fc228c2861b70626d443:internal/stackbackup/wallets_test.go:bls-keystore-password:116
+5479828c88cbd6e0ae39fc228c2861b70626d443:internal/walletbackup/verify_test.go:bls-keystore-password:15
+5479828c88cbd6e0ae39fc228c2861b70626d443:internal/walletbackup/verify_test.go:bls-keystore-password:27
+5479828c88cbd6e0ae39fc228c2861b70626d443:web/frontend/src/components/atoms/.gitkeep:http-basic-auth-in-log:2

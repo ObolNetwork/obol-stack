@@ -29,6 +29,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
 	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/stackbackup"
+	"github.com/ObolNetwork/obol-stack/internal/stackversion"
 	"github.com/ObolNetwork/obol-stack/internal/tunnel"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/update"
@@ -306,6 +307,8 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS, resetDefaults bool) error {
 	// OpenClaw was removed in v0.16: tell anyone still running instances
 	// how to keep the wallet. Best effort, never fails up.
 	warnLeftoverOpenClawNamespaces(cfg, u)
+
+	stackversion.Record(cfg)
 
 	return nil
 }
@@ -604,6 +607,14 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 		restoredLiteLLMConfig, err = restoreLiteLLMConfig(cfg, kubeconfigPath, previousLiteLLMConfig)
 		if err != nil {
 			u.Warnf("Failed to restore LiteLLM config after base migration: %v", err)
+		}
+	}
+	if !restoredLiteLLMConfig {
+		// The restore above adds the Prometheus settings when it runs; this
+		// covers a missing snapshot (and is a no-op when they are present).
+		if _, err := model.EnsureLiveLiteLLMObservability(cfg, u); err != nil {
+			u.Warnf("LiteLLM metrics stay off: could not add the Prometheus settings to its config: %v", err)
+			u.Dim("  Retry with: obol stack up")
 		}
 	}
 	if restoredLiteLLMConfig {

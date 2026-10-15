@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"runtime/debug"
+	"slices"
+	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/app"
 	"github.com/ObolNetwork/obol-stack/internal/config"
@@ -14,6 +16,7 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/passthrough"
 	"github.com/ObolNetwork/obol-stack/internal/replay"
 	"github.com/ObolNetwork/obol-stack/internal/stack"
+	"github.com/ObolNetwork/obol-stack/internal/stackversion"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	"github.com/ObolNetwork/obol-stack/internal/version"
 	"github.com/urfave/cli/v3"
@@ -47,6 +50,17 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// notifiesVersionSkew reports whether the top-level command should say the
+// stack has not been brought up by this CLI version yet. Skipped where the
+// notice is noise or the command is the fix itself (stack up), reports it
+// already (doctor), or must keep its output clean (passthroughs).
+func notifiesVersionSkew(command string) bool {
+	return command != "" && !slices.Contains(versionSkewQuietCommands, command)
+}
+
+var versionSkewQuietCommands = strings.Fields(
+	"help h version completion stack upgrade update doctor bootstrap kubectl helm helmfile k9s env")
 
 // newRootCommand builds the full obol command tree. Help layout, completion
 // and unknown-command suggestions are wired by configureCLI (help.go).
@@ -91,6 +105,12 @@ func newRootCommand(cfg *config.Config) *cli.Command {
 			u := ui.NewWithAllOptions(cmd.Bool("verbose"), cmd.Bool("quiet"), outputMode)
 			u.SetNoBrowser(cmd.Bool("no-open"))
 			cmd.Metadata = map[string]any{"ui": u}
+
+			if !u.IsJSON() && !cmd.Bool("quiet") && notifiesVersionSkew(cmd.Args().First()) {
+				if stackVersion, skewed := stackversion.Skew(cfg); skewed {
+					u.Warn(stackversion.SkewMessage(stackVersion))
+				}
+			}
 
 			return ctx, checkGlobalFlagsBeforePassthrough(cmd)
 		},

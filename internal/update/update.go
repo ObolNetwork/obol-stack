@@ -12,6 +12,7 @@ import (
 	stackdefaults "github.com/ObolNetwork/obol-stack/internal/defaults"
 	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"github.com/ObolNetwork/obol-stack/internal/kubectl"
+	"github.com/ObolNetwork/obol-stack/internal/model"
 	"github.com/ObolNetwork/obol-stack/internal/network"
 	"github.com/ObolNetwork/obol-stack/internal/tools"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
@@ -256,6 +257,15 @@ func ApplyUpgrades(cfg *config.Config, u *ui.UI, opts UpgradeOptions) error {
 
 	if err := u.Exec(ui.ExecConfig{Name: label, Cmd: helmfileCmd}); err != nil {
 		return fmt.Errorf("failed to upgrade default infrastructure: %w", err)
+	}
+
+	// The base chart keeps the live LiteLLM config.yaml, so stacks older
+	// than the Prometheus settings only gain them here (as in `stack up`).
+	if syncsBaseRelease(selectors) {
+		if _, err := model.EnsureLiveLiteLLMObservability(cfg, u); err != nil {
+			u.Warnf("LiteLLM metrics stay off: could not add the Prometheus settings to its config: %v", err)
+			u.Dim("  Retry with: obol stack up")
+		}
 	}
 
 	// Skip networks/apps when targeting a specific chart
