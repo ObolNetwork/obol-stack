@@ -1561,23 +1561,52 @@ func patchLiteLLMConfig(kubectlBinary, kubeconfigPath string, entries []ModelEnt
 	// (never overriding operator values) on every model write.
 	EnsureLiteLLMObservability(&litellmConfig)
 
-	// Marshal back to YAML
-	updated, err := yaml.Marshal(&litellmConfig)
-	if err != nil {
-		return fmt.Errorf("failed to marshal config: %w", err)
+	return writeLiteLLMConfig(kubectlBinary, kubeconfigPath, &litellmConfig)
+}
+
+// EnsureLiveLiteLLMObservability adds the Prometheus settings to the live
+// litellm-config ConfigMap when they are missing (never overriding operator
+// values) and restarts LiteLLM so it loads them. Every path that re-syncs the
+// base chart over an existing stack must call it: the chart keeps the live
+// config.yaml, so this is the only way older stacks gain the settings.
+// Returns whether the ConfigMap changed.
+func EnsureLiveLiteLLMObservability(cfg *config.Config, u *ui.UI) (bool, error) {
+	kubectlBinary := cfg.ToolPath("kubectl")
+	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
+
+	changed, err := ensureObservabilityInConfigMap(kubectlBinary, kubeconfigPath)
+	if err != nil || !changed {
+		return changed, err
 	}
 
-	// Build ConfigMap patch — escape the YAML for JSON embedding
-	escapedYAML, err := json.Marshal(string(updated))
+	return true, RestartLiteLLM(cfg, u, "Prometheus metrics settings")
+}
+
+func ensureObservabilityInConfigMap(kubectlBinary, kubeconfigPath string) (bool, error) {
+	raw, err := kubectl.Output(kubectlBinary, kubeconfigPath,
+		"get", "configmap", configMapName, "-n", namespace, "-o", "jsonpath={.data.config\\.yaml}")
 	if err != nil {
-		return fmt.Errorf("failed to escape YAML: %w", err)
+		return false, fmt.Errorf("read LiteLLM config: %w", err)
 	}
 
-	patchJSON := fmt.Sprintf(`{"data":{"config.yaml":%s}}`, escapedYAML)
+	if strings.TrimSpace(raw) == "" {
+		return false, nil
+	}
 
-	return kubectl.RunSilent(kubectlBinary, kubeconfigPath,
-		"patch", "configmap", configMapName, "-n", namespace,
-		"-p", patchJSON, "--type=merge", "--field-manager=helm")
+	var litellmConfig LiteLLMConfig
+	if err := yaml.Unmarshal([]byte(raw), &litellmConfig); err != nil {
+		return false, fmt.Errorf("parse LiteLLM config: %w", err)
+	}
+
+	if !EnsureLiteLLMObservability(&litellmConfig) {
+		return false, nil
+	}
+
+	if err := writeLiteLLMConfig(kubectlBinary, kubeconfigPath, &litellmConfig); err != nil {
+		return false, fmt.Errorf("write LiteLLM config: %w", err)
+	}
+
+	return true, nil
 }
 
 // detectProvider infers the provider name from a model_list entry.

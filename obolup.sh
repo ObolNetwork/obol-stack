@@ -1487,8 +1487,8 @@ print_instructions() {
 		# Never offer to init/start a stack that is already up.
 		log_success "Your Obol Stack is already running"
 		echo ""
-		echo "  Apply chart upgrades for this version:  obol upgrade"
-		echo "  Check the stack's health:               obol doctor"
+		echo "  Upgrade the running stack to this version:  obol stack up"
+		echo "  Check the stack's health:                   obol doctor"
 		echo ""
 		return 0
 		;;

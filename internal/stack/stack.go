@@ -606,6 +606,14 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 			u.Warnf("Failed to restore LiteLLM config after base migration: %v", err)
 		}
 	}
+	if !restoredLiteLLMConfig {
+		// The restore above adds the Prometheus settings when it runs; this
+		// covers a missing snapshot (and is a no-op when they are present).
+		if _, err := model.EnsureLiveLiteLLMObservability(cfg, u); err != nil {
+			u.Warnf("LiteLLM metrics stay off: could not add the Prometheus settings to its config: %v", err)
+			u.Dim("  Retry with: obol stack up")
+		}
+	}
 	if restoredLiteLLMConfig {
 		// Helmfile may have restarted the pod while the chart-default
 		// ConfigMap was in place. Restart once after restoring user models so
