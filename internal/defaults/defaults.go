@@ -133,14 +133,39 @@ func renderInfrastructure(cfg *config.Config, defaultsDir, backendName, stackID 
 		// Fail before anything is applied: rolling workloads to a tag that
 		// was never published leaves them in ImagePullBackOff (and a fresh
 		// install with none of these components).
-		if len(missing) > 0 {
-			return fmt.Errorf("this obol build (commit %s) pins images that are not published:\n  %s\n"+
-				"the release is incomplete; reinstall a published release, or set OBOL_SKIP_IMAGE_DIGEST=true to apply the tags anyway",
-				images.PinTag(), strings.Join(missing, "\n  "))
+		if err := unpublishedImagesError(missing); err != nil {
+			return err
 		}
 	}
 
 	return nil
+}
+
+// CheckPublishedImages fails when the registry has no image under a tag this
+// build pins (stack up runs it before starting the cluster). Dev builds and
+// OBOL_DEVELOPMENT pin :latest or local tags and always pass; registry
+// outages pass too (see images.ResolveChecked). Lookups are cached, so the
+// render that follows does not query the registry again.
+func CheckPublishedImages() error {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("OBOL_DEVELOPMENT")), "true") {
+		return nil
+	}
+	var missing []string
+	for _, repo := range images.Managed {
+		if ref, err := images.ResolveChecked(repo); errors.Is(err, images.ErrTagNotFound) {
+			missing = append(missing, ref)
+		}
+	}
+	return unpublishedImagesError(missing)
+}
+
+func unpublishedImagesError(missing []string) error {
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("this obol build (commit %s) pins images that are not published:\n  %s\n"+
+		"the release is incomplete; reinstall a published release, or set OBOL_SKIP_IMAGE_DIGEST=true to apply the tags anyway",
+		images.PinTag(), strings.Join(missing, "\n  "))
 }
 
 // InfrastructureReplacements returns the placeholder values used when copying

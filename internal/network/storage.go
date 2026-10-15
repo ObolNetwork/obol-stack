@@ -2,6 +2,7 @@ package network
 
 import (
 	"context"
+	"encoding/json"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -19,6 +20,27 @@ type StorageStatus struct {
 	// Partial means some of it couldn't be read (permissions) or summed in
 	// time; the sizes are then lower bounds.
 	Partial bool `json:"partial,omitempty"`
+}
+
+// MarshalJSON writes a size that could not be read at all (partial, and
+// nothing counted) as null rather than 0, matching "unknown" in the
+// human output.
+func (s StorageStatus) MarshalJSON() ([]byte, error) {
+	size := func(n uint64) *uint64 {
+		if s.Partial && n == 0 {
+			return nil
+		}
+
+		return &n
+	}
+
+	return json.Marshal(struct {
+		Path           string  `json:"path"`
+		ExecutionBytes *uint64 `json:"execution_bytes"`
+		ConsensusBytes *uint64 `json:"consensus_bytes"`
+		FreeBytes      *uint64 `json:"free_bytes,omitempty"`
+		Partial        bool    `json:"partial,omitempty"`
+	}{s.Path, size(s.ExecutionBytes), size(s.ConsensusBytes), s.FreeBytes, s.Partial})
 }
 
 // TotalBytes is execution + consensus data.

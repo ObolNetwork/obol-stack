@@ -242,6 +242,12 @@ func Up(cfg *config.Config, u *ui.UI, wildcardDNS, resetDefaults bool) error {
 		return err
 	}
 
+	// Before the cluster starts: a build whose images were never published
+	// must not start (or upgrade) anything.
+	if err := stackdefaults.CheckPublishedImages(); err != nil {
+		return err
+	}
+
 	u.Infof("Starting stack (id: %s, backend: %s)", stackID, backend.Name())
 
 	kubeconfigData, err := backend.Up(cfg, u, stackID)

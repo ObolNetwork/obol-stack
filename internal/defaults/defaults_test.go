@@ -304,3 +304,16 @@ func TestHostPrimaryIPIsRoutable(t *testing.T) {
 		t.Fatalf("hostPrimaryIP returned %q, want a non-loopback IPv4 address", ip)
 	}
 }
+
+func TestCheckPublishedImages_DevAndSkipPass(t *testing.T) {
+	// The 404 path is covered in internal/images (ResolveChecked).
+	t.Setenv("OBOL_DEVELOPMENT", "true")
+	if err := CheckPublishedImages(); err != nil {
+		t.Fatalf("dev mode: %v", err)
+	}
+	t.Setenv("OBOL_DEVELOPMENT", "")
+	t.Setenv("OBOL_SKIP_IMAGE_DIGEST", "true")
+	if err := CheckPublishedImages(); err != nil {
+		t.Fatalf("OBOL_SKIP_IMAGE_DIGEST: %v", err)
+	}
+}

@@ -584,3 +584,21 @@ func TestRateTracker_CheckpointPausesAreNotStalls(t *testing.T) {
 		t.Fatalf("after 6 flat minutes: rate %v, want 0 (stalled?)", got)
 	}
 }
+
+func TestStorageStatusJSON_UnreadableIsNull(t *testing.T) {
+	free := uint64(5)
+	got, err := json.Marshal(StorageStatus{Path: "/d", ConsensusBytes: 7, FreeBytes: &free, Partial: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := `{"path":"/d","execution_bytes":null,"consensus_bytes":7,"free_bytes":5,"partial":true}`
+	if string(got) != want {
+		t.Fatalf("got %s\nwant %s", got, want)
+	}
+
+	got, _ = json.Marshal(StorageStatus{Path: "/d"})
+	if want := `{"path":"/d","execution_bytes":0,"consensus_bytes":0}`; string(got) != want {
+		t.Fatalf("complete zero sizes: got %s, want %s", got, want)
+	}
+}
