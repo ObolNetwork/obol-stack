@@ -88,7 +88,7 @@ func readDeployment(cfg *config.Config, typ, id string) Deployment {
 	d.Stopped = values.Stopped
 	if typ == TypeEthereum {
 		if d.Mode == "" {
-			d.Mode = "full"
+			d.Mode = modeFull
 		}
 		d.Since = values.Since
 		d.PruneKind = values.PruneKind
@@ -99,6 +99,12 @@ func readDeployment(cfg *config.Config, typ, id string) Deployment {
 
 	return d
 }
+
+const (
+	modeFull       = "full"
+	modeArchive    = "archive"
+	networkMainnet = "mainnet"
+)
 
 // FormatArchiveScope renders an ethereum node's mode and history scope for
 // humans, so a partial archive is not mistaken for a genesis archive:
@@ -113,20 +119,20 @@ func readDeployment(cfg *config.Config, typ, id string) Deployment {
 // Nodes installed before `since` was recorded have it empty; a pruneBlock
 // matching a known mainnet hardfork is then named via HardforkByBlock.
 func FormatArchiveScope(network, mode, since, pruneKind string, pruneBlock, pruneDistance uint64) string {
-	if mode != "archive" {
+	if mode != modeArchive {
 		return mode
 	}
 
 	since = strings.ToLower(strings.TrimSpace(since))
 	switch pruneKind {
-	case "before":
+	case PruneBefore:
 		if pruneBlock == 0 {
-			return "archive"
+			return modeArchive
 		}
 		name := ""
 		if hf := HardforkByName(since); hf != nil && hf.Block == pruneBlock {
 			name = hf.Name
-		} else if since == "" && (network == "" || network == "mainnet") {
+		} else if since == "" && (network == "" || network == networkMainnet) {
 			if hf := HardforkByBlock(pruneBlock); hf != nil {
 				name = hf.Name
 			}
@@ -135,16 +141,16 @@ func FormatArchiveScope(network, mode, since, pruneKind string, pruneBlock, prun
 			return fmt.Sprintf("archive since %s (block %s)", name, formatThousands(pruneBlock))
 		}
 		return "archive since block " + formatThousands(pruneBlock)
-	case "distance":
+	case PruneDistance:
 		if pruneDistance == 0 {
-			return "archive"
+			return modeArchive
 		}
 		if blocks, ok := parseDurationBlocks(since); ok && blocks == pruneDistance {
 			return "archive, last " + since
 		}
 		return fmt.Sprintf("archive, last %s blocks (~%s)", formatThousands(pruneDistance), approxBlocksDuration(pruneDistance))
 	default: // "", "all": no pruning, i.e. genesis archive
-		return "archive"
+		return modeArchive
 	}
 }
 

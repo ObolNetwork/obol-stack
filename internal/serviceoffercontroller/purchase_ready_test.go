@@ -18,12 +18,10 @@ import (
 // (even with fewer remaining auths than were pre-signed).
 func TestReconcilePurchaseReady_BuyerOutageFlipsReady(t *testing.T) {
 	buyerPod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "x402-buyer",
-			Namespace: "llm",
-			Labels:    map[string]string{"app": "x402-buyer"},
-		},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.2"},
+		Name:      "x402-buyer",
+		Namespace: "llm",
+		Labels:    map[string]string{"app": "x402-buyer"},
+		Status:    corev1.PodStatus{Phase: corev1.PodRunning, PodIP: "10.0.0.2"},
 	}
 	transport := &staticTransport{hostToBody: map[string]string{
 		"10.0.0.2:8402": `{"solo":{"remaining":3,"spent":0}}`,
@@ -34,8 +32,8 @@ func TestReconcilePurchaseReady_BuyerOutageFlipsReady(t *testing.T) {
 		httpClient: &http.Client{Transport: transport},
 	}
 	pr := &monetizeapi.PurchaseRequest{
-		ObjectMeta: metav1.ObjectMeta{Name: "solo", Namespace: "agent"},
-		Spec:       monetizeapi.PurchaseRequestSpec{PreSignedAuths: makePreSignedAuths("n", 3)},
+		Name: "solo", Namespace: "agent",
+		Spec: monetizeapi.PurchaseRequestSpec{PreSignedAuths: makePreSignedAuths("n", 3)},
 	}
 	status := &monetizeapi.PurchaseRequestStatus{}
 	ready := func() monetizeapi.Condition {
@@ -96,7 +94,7 @@ func TestReconcilePurchaseReady_NeverReadyKeepsSidecarNotReady(t *testing.T) {
 		httpClient: &http.Client{Transport: &staticTransport{}},
 	}
 	pr := &monetizeapi.PurchaseRequest{
-		ObjectMeta: metav1.ObjectMeta{Name: "solo", Namespace: "agent"},
+		Name: "solo", Namespace: "agent",
 	}
 	status := &monetizeapi.PurchaseRequestStatus{}
 	c.reconcilePurchaseReady(context.Background(), status, pr)

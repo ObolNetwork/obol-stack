@@ -93,7 +93,7 @@ func confirmLoss(u *ui.UI, action string, skipConfirm bool, services LiveService
 			return false, fmt.Errorf("refusing to run %q non-interactively while %d live offer(s) are serving traffic: pass --yes to confirm",
 				action, len(services.Offers))
 		case discoverErr != nil:
-			return false, fmt.Errorf("refusing to run %q non-interactively: could not check what is running on the cluster (%v): pass --yes to confirm", action, discoverErr)
+			return false, fmt.Errorf("refusing to run %q non-interactively: could not check what is running on the cluster (%w): pass --yes to confirm", action, discoverErr)
 		default:
 			return false, fmt.Errorf("refusing to run %q non-interactively: it destroys the existing cluster: pass --yes to confirm", action)
 		}

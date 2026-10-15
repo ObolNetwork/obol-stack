@@ -249,7 +249,7 @@ func (c *Client) FindRegistrationByOwnerAndURI(ctx context.Context, owner common
 
 // OwnerOf returns the current ERC-721 owner of the agent NFT.
 func (c *Client) OwnerOf(ctx context.Context, agentID *big.Int) (common.Address, error) {
-	var out []interface{}
+	var out []any
 	if err := c.contract.Call(&bind.CallOpts{Context: ctx}, &out, "ownerOf", agentID); err != nil {
 		return common.Address{}, fmt.Errorf("erc8004: ownerOf %s: %w", agentID, err)
 	}

@@ -33,7 +33,7 @@ func (p sysProcFS) Cmdline(pid int) ([]string, error) {
 		return nil, err
 	}
 	var argv []string
-	for _, a := range strings.Split(strings.TrimRight(string(data), "\x00"), "\x00") {
+	for a := range strings.SplitSeq(strings.TrimRight(string(data), "\x00"), "\x00") {
 		if a != "" {
 			argv = append(argv, a)
 		}
@@ -67,11 +67,11 @@ func (p sysProcFS) Pids() ([]int, error) {
 // /proc/<pid>/stat line. comm (field 2) may contain spaces and parentheses,
 // so fields are counted from the LAST ')'.
 func parseProcStat(stat string) (int, uint64, error) {
-	end := strings.LastIndexByte(stat, ')')
-	if end < 0 {
+	_, after, ok := strings.CutLast(stat, ")")
+	if !ok {
 		return 0, 0, errors.New("malformed stat: no comm terminator")
 	}
-	fields := strings.Fields(stat[end+1:])
+	fields := strings.Fields(after)
 	// fields[0] is field 3 (state), so field N is fields[N-3].
 	if len(fields) < 20 {
 		return 0, 0, fmt.Errorf("malformed stat: %d fields after comm", len(fields))

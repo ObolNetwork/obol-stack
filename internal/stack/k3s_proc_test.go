@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,7 +28,7 @@ func newFakeProc(t *testing.T) *fakeProc {
 
 func (f *fakeProc) add(pid, ppid int, start uint64, comm string, argv ...string) {
 	f.t.Helper()
-	dir := filepath.Join(f.root, fmt.Sprint(pid))
+	dir := filepath.Join(f.root, strconv.Itoa(pid))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		f.t.Fatal(err)
 	}
@@ -166,7 +167,7 @@ func k3sDownTestBackend(t *testing.T, p *fakeProc) (*K3sBackend, *config.Config,
 		signal: func(pid int, sig string) error {
 			signals = append(signals, fmt.Sprintf("%s %d", sig, pid))
 			// Simulate k3s exiting on SIGTERM.
-			_ = os.RemoveAll(filepath.Join(p.root, fmt.Sprint(pid)))
+			_ = os.RemoveAll(filepath.Join(p.root, strconv.Itoa(pid)))
 			return nil
 		},
 	}

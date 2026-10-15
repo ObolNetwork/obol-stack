@@ -8,8 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -107,11 +109,25 @@ func writeManifest(defaultsDir string, files map[string]string) error {
 	return os.WriteFile(filepath.Join(defaultsDir, manifestFile), append(data, '\n'), 0o600)
 }
 
-func writeFileMkdir(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+// writeFileMkdir writes base/rel (rel in slash form), creating directories
+// as needed. The write is scoped to base: rel cannot leave it.
+func writeFileMkdir(base, rel string, data []byte) error {
+	if err := os.MkdirAll(base, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	root, err := os.OpenRoot(base)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+
+	rel = filepath.FromSlash(rel)
+	if dir := filepath.Dir(rel); dir != "." {
+		if err := root.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	return root.WriteFile(rel, data, 0o600)
 }
 
 // RefreshInfrastructure re-renders the embedded infrastructure defaults when
@@ -155,22 +171,8 @@ func RefreshInfrastructure(cfg *config.Config, backendName, stackID string, opts
 		return res, err
 	}
 
-	newFiles := map[string][]byte{}
-	if err := filepath.WalkDir(staging, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil || d.IsDir() {
-			return walkErr
-		}
-		rel, err := filepath.Rel(staging, path)
-		if err != nil {
-			return err
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		newFiles[filepath.ToSlash(rel)] = data
-		return nil
-	}); err != nil {
+	newFiles, err := readTree(staging)
+	if err != nil {
 		return res, fmt.Errorf("read rendered defaults: %w", err)
 	}
 
@@ -179,7 +181,7 @@ func RefreshInfrastructure(cfg *config.Config, backendName, stackID string, opts
 	backupDir := filepath.Join(cfg.ConfigDir, backupDirPrefix+nowFn().UTC().Format("20060102T150405Z"))
 	backup := func(rel string, data []byte) error {
 		dst := filepath.Join(backupDir, filepath.FromSlash(rel))
-		if err := writeFileMkdir(dst, data); err != nil {
+		if err := writeFileMkdir(backupDir, rel, data); err != nil {
 			return fmt.Errorf("back up %s: %w", rel, err)
 		}
 		res.BackedUp = append(res.BackedUp, FileBackup{Path: filepath.Join(defaultsDir, filepath.FromSlash(rel)), Backup: dst})
@@ -205,7 +207,7 @@ func RefreshInfrastructure(cfg *config.Config, backendName, stackID string, opts
 			if !errors.Is(readErr, fs.ErrNotExist) {
 				return res, fmt.Errorf("read %s: %w", target, readErr)
 			}
-			if err := writeFileMkdir(target, newData); err != nil {
+			if err := writeFileMkdir(defaultsDir, rel, newData); err != nil {
 				return res, err
 			}
 			continue
@@ -236,7 +238,7 @@ func RefreshInfrastructure(cfg *config.Config, backendName, stackID string, opts
 			pendingPath := filepath.Join(pendingDir, filepath.FromSlash(rel))
 			_, pendErr := os.Stat(pendingPath)
 			if newHash != oldHash || pendErr == nil {
-				if err := writeFileMkdir(pendingPath, newData); err != nil {
+				if err := writeFileMkdir(pendingDir, rel, newData); err != nil {
 					return res, fmt.Errorf("write new default for %s: %w", rel, err)
 				}
 				keepPending[rel] = true
@@ -246,7 +248,7 @@ func RefreshInfrastructure(cfg *config.Config, backendName, stackID string, opts
 			}
 			continue
 		}
-		if err := writeFileMkdir(target, newData); err != nil {
+		if err := writeFileMkdir(defaultsDir, rel, newData); err != nil {
 			return res, err
 		}
 	}
@@ -297,24 +299,25 @@ func RefreshInfrastructure(cfg *config.Config, backendName, stackID string, opts
 // prunePending removes pending new-default files that are no longer pending
 // (the edit was resolved or reset) and any directories left empty.
 func prunePending(pendingDir string, keep map[string]bool) error {
-	if _, err := os.Stat(pendingDir); err != nil {
-		return nil
+	root, err := os.OpenRoot(pendingDir)
+	if err != nil {
+		return nil // no pending dir: nothing to prune
 	}
+	defer root.Close()
+
 	var dirs []string
-	err := filepath.WalkDir(pendingDir, func(path string, d fs.DirEntry, walkErr error) error {
+	err = fs.WalkDir(root.FS(), ".", func(rel string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if d.IsDir() {
-			dirs = append(dirs, path)
+			if rel != "." {
+				dirs = append(dirs, rel)
+			}
 			return nil
 		}
-		rel, err := filepath.Rel(pendingDir, path)
-		if err != nil {
-			return err
-		}
-		if !keep[filepath.ToSlash(rel)] {
-			return os.Remove(path)
+		if !keep[rel] {
+			return root.Remove(rel)
 		}
 		return nil
 	})
@@ -322,10 +325,34 @@ func prunePending(pendingDir string, keep map[string]bool) error {
 		return fmt.Errorf("prune %s: %w", pendingDir, err)
 	}
 	// Deepest first so parents empty out before they are tried.
-	for i := len(dirs) - 1; i >= 0; i-- {
-		_ = os.Remove(dirs[i]) // fails (and is ignored) when not empty
+	for _, dir := range slices.Backward(dirs) {
+		_ = root.Remove(dir) // fails (and is ignored) when not empty
 	}
+	_ = os.Remove(pendingDir) // likewise
 	return nil
+}
+
+// readTree reads every regular file under dir, keyed by slash path.
+func readTree(dir string) (map[string][]byte, error) {
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+
+	files := map[string][]byte{}
+	err = fs.WalkDir(root.FS(), ".", func(rel string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil || d.IsDir() {
+			return walkErr
+		}
+		data, err := fs.ReadFile(root.FS(), rel)
+		if err != nil {
+			return err
+		}
+		files[rel] = data
+		return nil
+	})
+	return files, err
 }
 
 // PendingDefaults lists edited defaults files that still have a newer
@@ -334,26 +361,20 @@ func prunePending(pendingDir string, keep map[string]bool) error {
 func PendingDefaults(cfg *config.Config) []PendingDefault {
 	pendingDir := filepath.Join(cfg.ConfigDir, pendingDirName)
 	defaultsDir := filepath.Join(cfg.ConfigDir, "defaults")
+	pending, err := readTree(pendingDir)
+	if err != nil {
+		return nil
+	}
 	var out []PendingDefault
 	keep := map[string]bool{}
-	_ = filepath.WalkDir(pendingDir, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil || d.IsDir() {
-			return nil
+	for _, rel := range slices.Sorted(maps.Keys(pending)) {
+		target := filepath.Join(defaultsDir, filepath.FromSlash(rel))
+		if disk, err := os.ReadFile(target); err == nil && bytes.Equal(pending[rel], disk) {
+			continue // resolved: pruned below
 		}
-		rel, err := filepath.Rel(pendingDir, path)
-		if err != nil {
-			return nil
-		}
-		target := filepath.Join(defaultsDir, rel)
-		newData, err1 := os.ReadFile(path)
-		disk, err2 := os.ReadFile(target)
-		if err1 == nil && err2 == nil && bytes.Equal(newData, disk) {
-			return nil // resolved: pruned below
-		}
-		keep[filepath.ToSlash(rel)] = true
-		out = append(out, PendingDefault{Path: target, New: path})
-		return nil
-	})
+		keep[rel] = true
+		out = append(out, PendingDefault{Path: target, New: filepath.Join(pendingDir, filepath.FromSlash(rel))})
+	}
 	_ = prunePending(pendingDir, keep)
 	return out
 }

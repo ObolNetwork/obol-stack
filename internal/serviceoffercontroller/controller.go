@@ -1268,8 +1268,7 @@ func (c *Controller) recoverRegistration(ctx context.Context, client *erc8004.Cl
 		status.RegistrationURI,
 		uint64(status.RegistrationSearchFromBlock),
 	)
-	var mismatch *erc8004.OwnerMismatchError
-	if errors.As(err, &mismatch) {
+	if mismatch, ok := errors.AsType[*erc8004.OwnerMismatchError](err); ok {
 		// Matching events exist but the minted token(s) no longer belong to
 		// the registration owner; never adopt someone else's agent ID.
 		log.Printf("serviceoffer-controller: registration recovery skipped: %v", mismatch)

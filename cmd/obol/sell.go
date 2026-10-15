@@ -3634,8 +3634,7 @@ func recoverRegistrationByOwnerAndURI(ctx context.Context, u *ui.UI, client *erc
 		if err == nil && found {
 			return agentID, txHash, true
 		}
-		var mismatch *erc8004.OwnerMismatchError
-		if errors.As(err, &mismatch) {
+		if mismatch, ok := errors.AsType[*erc8004.OwnerMismatchError](err); ok {
 			if u != nil {
 				u.Warnf("not reusing previous registration: %v", mismatch)
 			}
@@ -4559,7 +4558,7 @@ func refuseSellInferenceWithStack(cfg *config.Config, cmd *cli.Command, name str
 		return nil
 	}
 	if _, err := os.Stat(filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")); err != nil {
-		return nil
+		return nil //nolint:nilerr // no kubeconfig: no stack on this host, nothing to refuse
 	}
 
 	perRequest := cmd.String("price")

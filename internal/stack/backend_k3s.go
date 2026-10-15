@@ -461,6 +461,8 @@ func (b *K3sBackend) cleanStalePid(cfg *config.Config, u *ui.UI) {
 	case k3sPidReused:
 		u.Dim(fmt.Sprintf("  Cleaning up stale PID file (pid %d is no longer k3s: %s)", rec.PID, why))
 		b.removePidFile(cfg)
+	case k3sPidVerified:
+		// Still our k3s server: keep the file.
 	}
 }
 

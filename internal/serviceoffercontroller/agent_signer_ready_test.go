@@ -32,7 +32,7 @@ func preserveDeploymentStatusOnUpdate(t *testing.T, c *Controller) *dynamicfake.
 		}
 		existing, err := fakeDyn.Tracker().Get(monetizeapi.DeploymentGVR, update.GetNamespace(), obj.GetName())
 		if err != nil {
-			return false, nil, nil
+			return false, nil, nil //nolint:nilerr // not handled here: the default reactor reports it
 		}
 		if stored, ok := existing.(*unstructured.Unstructured); ok {
 			if status, found := stored.Object["status"]; found {

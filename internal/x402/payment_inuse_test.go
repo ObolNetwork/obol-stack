@@ -28,7 +28,7 @@ func inUseProxyRule(upstreamURL string) RouteRule {
 func inUseProxyRequest(header string) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/services/demo/v1/run", strings.NewReader(`{}`))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-PAYMENT", header)
+	req.Header.Set("X-Payment", header)
 	return req
 }
 
@@ -220,8 +220,8 @@ func TestPaymentInUse_SettledBlocksReuse(t *testing.T) {
 
 	first := httptest.NewRecorder()
 	v.HandleProxy(first, inUseProxyRequest(header))
-	if first.Code != http.StatusOK || first.Header().Get("X-PAYMENT-RESPONSE") == "" {
-		t.Fatalf("first status = %d (settled receipt %q), want settled 200", first.Code, first.Header().Get("X-PAYMENT-RESPONSE"))
+	if first.Code != http.StatusOK || first.Header().Get("X-Payment-Response") == "" {
+		t.Fatalf("first status = %d (settled receipt %q), want settled 200", first.Code, first.Header().Get("X-Payment-Response"))
 	}
 
 	replay := httptest.NewRecorder()
@@ -297,7 +297,7 @@ func TestPaymentInUse_HandleVerify_RefusesReplay(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/verify", nil)
 		req.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
 		req.Header.Set("X-Forwarded-Host", "obol.stack")
-		req.Header.Set("X-PAYMENT", header)
+		req.Header.Set("X-Payment", header)
 		w := httptest.NewRecorder()
 		v.HandleVerify(w, req)
 		return w.Code
@@ -312,7 +312,7 @@ func TestPaymentInUse_HandleVerify_RefusesReplay(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/verify", nil)
 	req.Header.Set("X-Forwarded-Uri", "/rpc/mainnet")
 	req.Header.Set("X-Forwarded-Host", "obol.stack")
-	req.Header.Set("X-PAYMENT", testPaymentHeader(t))
+	req.Header.Set("X-Payment", testPaymentHeader(t))
 	w := httptest.NewRecorder()
 	v.HandleVerify(w, req)
 	if w.Code != http.StatusOK {

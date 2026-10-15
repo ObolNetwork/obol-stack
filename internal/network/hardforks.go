@@ -95,10 +95,17 @@ func HardforkByBlock(block uint64) *Hardfork {
 	return nil
 }
 
+// ArchiveScope kinds (and the pruneKind stored in a node's values.yaml).
+const (
+	PruneAll      = "all"
+	PruneBefore   = "before"
+	PruneDistance = "distance"
+)
+
 // scope returns the partial-archive scope that keeps history from hf on.
 func (hf Hardfork) scope() ArchiveScope {
 	return ArchiveScope{
-		Kind:  "before",
+		Kind:  PruneBefore,
 		Block: hf.Block,
 		Label: fmt.Sprintf("since %s (block %d, %s)", hf.DisplayName, hf.Block, hf.Date),
 		Since: hf.Name,
@@ -107,7 +114,7 @@ func (hf Hardfork) scope() ArchiveScope {
 
 // genesisScope is the full-archive (all history) scope.
 func genesisScope() ArchiveScope {
-	return ArchiveScope{Kind: "all", Label: "all history (from genesis)", Since: "genesis"}
+	return ArchiveScope{Kind: PruneAll, Label: "all history (from genesis)", Since: "genesis"}
 }
 
 // ArchiveScope is the resolved meaning of --since after parsing.
@@ -143,7 +150,7 @@ func ParseSince(raw string) (ArchiveScope, error) {
 		return ArchiveScope{}, fmt.Errorf("--since cannot be empty")
 	}
 
-	if v == "genesis" || v == "all" {
+	if v == "genesis" || v == PruneAll {
 		return genesisScope(), nil
 	}
 
@@ -155,7 +162,7 @@ func ParseSince(raw string) (ArchiveScope, error) {
 	// post-merge slot time of 12s. "mo" is 30 days; "y" is 365 days.
 	if blocks, ok := parseDurationBlocks(v); ok {
 		return ArchiveScope{
-			Kind:     "distance",
+			Kind:     PruneDistance,
 			Distance: blocks,
 			Label:    fmt.Sprintf("last %s (~%d blocks from tip)", v, blocks),
 			Since:    v,
@@ -165,7 +172,7 @@ func ParseSince(raw string) (ArchiveScope, error) {
 	// Raw block number.
 	if n, err := strconv.ParseUint(v, 10, 64); err == nil {
 		return ArchiveScope{
-			Kind:  "before",
+			Kind:  PruneBefore,
 			Block: n,
 			Label: fmt.Sprintf("since block %d", n),
 			Since: strconv.FormatUint(n, 10),

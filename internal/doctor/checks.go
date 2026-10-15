@@ -577,7 +577,7 @@ func ollamaListensOnAllInterfaces(ctx context.Context, e *Env) (Result, bool) {
 		return Result{}, false
 	}
 
-	for _, line := range strings.Split(string(out), "\n") {
+	for line := range strings.SplitSeq(string(out), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 4 {
 			continue

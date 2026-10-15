@@ -805,6 +805,7 @@ func NewForwardAuthMiddleware(cfg ForwardAuthConfig, requirements []x402types.Pa
 						Retriable: true,
 					})
 					return
+				case claimOK:
 				}
 				deadline := paymentDeadline(payload)
 				// Deferred so a panicking handler (ReverseProxy aborts with

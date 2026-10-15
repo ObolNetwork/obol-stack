@@ -246,7 +246,7 @@ func ResolveCatalogEndpoint(sellerURL, endpoint string) (string, error) {
 // literals, single-label names and local/cluster-internal suffixes are
 // refused. No DNS resolution is done here.
 func isPublicHTTPSEndpoint(ref *url.URL) bool {
-	if !strings.EqualFold(ref.Scheme, "https") {
+	if !strings.EqualFold(ref.Scheme, schemeHTTPS) {
 		return false
 	}
 	host := strings.ToLower(strings.TrimSuffix(ref.Hostname(), "."))
@@ -267,12 +267,17 @@ func isPublicHTTPSEndpoint(ref *url.URL) bool {
 	return true
 }
 
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
+)
+
 // sameSellerOrigin reports whether ref is on the seller's origin: same
 // hostname and effective port with the same scheme, or an https upgrade of
 // an http seller URL on the same hostname (default https port).
 func sameSellerOrigin(seller, ref *url.URL) bool {
 	refScheme := strings.ToLower(ref.Scheme)
-	if refScheme != "http" && refScheme != "https" {
+	if refScheme != schemeHTTP && refScheme != schemeHTTPS {
 		return false
 	}
 	if !strings.EqualFold(seller.Hostname(), ref.Hostname()) {
@@ -281,7 +286,7 @@ func sameSellerOrigin(seller, ref *url.URL) bool {
 	if refScheme == seller.Scheme {
 		return effectivePort(seller) == effectivePort(ref)
 	}
-	return seller.Scheme == "http" && refScheme == "https" && effectivePort(ref) == "443"
+	return seller.Scheme == schemeHTTP && refScheme == schemeHTTPS && effectivePort(ref) == "443"
 }
 
 func effectivePort(u *url.URL) string {
@@ -289,9 +294,9 @@ func effectivePort(u *url.URL) string {
 		return p
 	}
 	switch strings.ToLower(u.Scheme) {
-	case "http":
+	case schemeHTTP:
 		return "80"
-	case "https":
+	case schemeHTTPS:
 		return "443"
 	}
 	return ""
