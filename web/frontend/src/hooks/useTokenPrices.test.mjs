@@ -107,7 +107,9 @@ describe('fetchTokenPrices', () => {
       ethereum: { price: 3000, change24h: 1 },
       obol: { price: 0.25, change24h: 2 },
     });
-    assert.match(requestedUrl, /api\.coingecko\.com\/api\/v3\/simple\/price/);
+    const url = new URL(requestedUrl);
+    assert.equal(url.hostname, 'api.coingecko.com');
+    assert.equal(url.pathname, '/api/v3/simple/price');
     assert.match(requestedUrl, new RegExp(COINGECKO_IDS.OBOL));
     assert.match(requestedUrl, new RegExp(COINGECKO_IDS.ETHEREUM));
   });

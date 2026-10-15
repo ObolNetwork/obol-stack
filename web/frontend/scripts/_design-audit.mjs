@@ -6,8 +6,10 @@
 
 import { chromium } from "playwright";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
-const outDir = "/tmp/obol-design-audit";
+const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "obol-design-audit-"));
 fs.mkdirSync(outDir, { recursive: true });
 
 const TUNNEL_HOST = "cigarette-checking-journalist-processed.trycloudflare.com";

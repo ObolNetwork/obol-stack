@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AgentClient } from '@/lib/services/agents';
 import type { AgentInstanceHealth, AgentRuntime } from '@/types/agent';
+import { logSafe } from '@/lib/utils/log-safe';
 
 export async function GET(request: NextRequest) {
   const id = request.nextUrl.searchParams.get('id');
@@ -37,7 +38,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json<AgentInstanceHealth>(health);
   } catch (error) {
-    console.error(`[Agent Status] Error for ${runtime}/${id}:`, error);
+    console.error('[Agent Status] Error for %s/%s:', logSafe(runtime), logSafe(id), error);
 
     return NextResponse.json<AgentInstanceHealth>(
       {

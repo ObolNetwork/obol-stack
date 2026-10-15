@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { AgentClient } from '@/lib/services/agents';
 import { rejectCrossOriginCredentialRead } from '@/lib/middleware/origin-check';
 import type { AgentRuntime } from '@/types/agent';
+import { logSafe } from '@/lib/utils/log-safe';
 
 export async function GET(request: NextRequest) {
   const csrfReject = rejectCrossOriginCredentialRead(request);
@@ -46,7 +47,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ token });
   } catch (error) {
-    console.error(`[Agent Token] Error for ${runtime}/${id}:`, error);
+    console.error('[Agent Token] Error for %s/%s:', logSafe(runtime), logSafe(id), error);
     return NextResponse.json({ error: 'Failed to get token' }, { status: 500 });
   }
 }

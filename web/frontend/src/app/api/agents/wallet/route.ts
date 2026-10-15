@@ -3,6 +3,7 @@ import { AgentClient } from '@/lib/services/agents';
 import { rejectCrossOriginCredentialRead } from '@/lib/middleware/origin-check';
 import type { AgentInstance, AgentRuntime } from '@/types/agent';
 import type { WalletMetadata } from '@/types/wallet';
+import { logSafe } from '@/lib/utils/log-safe';
 
 export async function GET(request: NextRequest) {
   const csrfReject = rejectCrossOriginCredentialRead(request);
@@ -43,7 +44,7 @@ export async function GET(request: NextRequest) {
     const metadata = await client.getWalletMetadata(instance);
     return NextResponse.json<WalletMetadata>(metadata);
   } catch (error) {
-    console.error(`[Agent Wallet] Error for ${runtime}/${id}:`, error);
+    console.error('[Agent Wallet] Error for %s/%s:', logSafe(runtime), logSafe(id), error);
     return NextResponse.json<WalletMetadata>(
       { instanceId: id, addresses: [], count: 0 },
       { status: 500 }
