@@ -266,6 +266,7 @@ func newRootCommand(cfg *config.Config) *cli.Command {
 			hermesCommand(cfg),
 			sellCommand(cfg),
 			buyCommand(cfg),
+			smokeCommand(cfg),
 			modelCommand(cfg),
 			{
 				Name:  "app",
