@@ -83,7 +83,7 @@ python3 scripts/signer.py send-tx --network hoodi \
 
 Supported networks: `mainnet`, `base`, `base-sepolia`, `hoodi`, `sepolia`, `arbitrum`, `robinhood` (depends on eRPC configuration). The aliases `ethereum`, `arb`, `arbitrum-one`, `robinhood-chain`, and `eip155:<id>` resolve to the canonical name. Unknown values fail with an explicit error rather than silently signing against chain id 1.
 
-Note: `arbitrum` and `robinhood` require the stack operator to have registered an eRPC upstream under that alias (`obol network add` — ChainList has both). If `${ERPC_URL}/arbitrum` or `${ERPC_URL}/robinhood` returns 404, the upstream isn't registered — ask the operator.
+Note: `arbitrum` and `robinhood` require the stack operator to have added the chain to eRPC (`obol network add arbitrum`, `obol network add robinhood` — ChainList has both). The script reaches every network by chain id (`${ERPC_URL}/evm/<chainId>`), so it does not depend on the alias eRPC gave the chain. If `${ERPC_URL}/evm/42161` or `${ERPC_URL}/evm/4663` returns 404, the upstream isn't registered — ask the operator.
 
 ## Gas & Tip Selection
 
