@@ -9,6 +9,14 @@
 prometheus:
   enabled: true
   prometheusSpec:
+    # Override the chart's v3.15.0 until kube-prometheus-stack ships v3.15.1+:
+    # built with Go 1.27.3 and an image CA store that distrusts the
+    # compromised eMudhra intermediates (CVE-2026-111943).
+    image:
+      registry: quay.io
+      repository: prometheus/prometheus
+      tag: v3.15.1-distroless
+      sha: 451a845bae1d51622b41af1780eb2ad911bbb79a9855bc8e9bb67fabbc03f934
     serviceMonitorSelectorNilUsesHelmValues: false
     serviceMonitorSelector:
       matchLabels:
