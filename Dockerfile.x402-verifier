@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 # Thin local/dev target — production CI uses docker-bake.hcl → Dockerfile.x402.
 # Cross-compiles from BUILDPLATFORM (no QEMU for pure Go).
-FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine AS builder
 ARG TARGETOS=linux
 ARG TARGETARCH
 WORKDIR /src
