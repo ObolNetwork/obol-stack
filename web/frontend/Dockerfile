@@ -1,7 +1,7 @@
 # -------------------------------
 # Base image
 # -------------------------------
-FROM node:24.22.1-alpine AS base
+FROM node:26.13.0-alpine AS base
 
 # Install a pinned pnpm via corepack so Docker builds match CI and local lockfile behavior.
 RUN npm install -g --force corepack \
