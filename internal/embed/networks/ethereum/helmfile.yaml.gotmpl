@@ -211,6 +211,23 @@ releases:
             # renovate: datasource=github-releases depName=gattaca-com/silver
             tag: v0.1.0-alpha.12
             {{- end }}
+          {{- if eq .Values.consensusClient "silver" }}
+          # Silver logs only errors unless RUST_LOG is set, and the chart's
+          # tcpSocket probes call it ready while its beacon API accepts
+          # connections but answers nothing (seen while it waited on a
+          # checkpoint). Readiness asks the API instead; /node/health is 206
+          # while syncing, which counts as ready.
+          extraEnv:
+            - name: RUST_LOG
+              value: info
+          readinessProbe:
+            tcpSocket: null
+            httpGet:
+              path: /eth/v1/node/health
+              port: http-api
+            periodSeconds: 10
+            timeoutSeconds: 5
+          {{- end }}
           persistence:
             enabled: true
             size: {{ if (index .Values "consensusStorageSize" | default "") }}{{ index .Values "consensusStorageSize" }}{{ else }}{{ if eq .Values.network "mainnet" }}{{ if eq (index .Values "mode" | default "full") "archive" }}500Gi{{ else }}200Gi{{ end }}{{ else }}{{ if eq (index .Values "mode" | default "full") "archive" }}100Gi{{ else }}50Gi{{ end }}{{ end }}{{ end }}
