@@ -104,11 +104,13 @@ homebrew_casks:
     # Release binaries are not signed/notarized; strip the Gatekeeper
     # quarantine bit on install (the goreleaser-documented pattern for
     # unsigned cask binaries).
+    # goreleaser >= 2.19 writes these as Homebrew's declarative
+    # postflight_steps (raw Ruby `install` hooks are deprecated).
     hooks:
       post:
-        install: |
-          if system_command("/usr/bin/xattr", args: ["-h"]).exit_status == 0
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", staged_path]
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}"]
           end
 
 changelog:
