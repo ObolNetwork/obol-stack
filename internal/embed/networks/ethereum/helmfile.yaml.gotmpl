@@ -67,7 +67,7 @@ releases:
     createNamespace: true
     chart: ethereum-helm-charts/ethereum-node
     # renovate: datasource=helm depName=ethereum-node registryUrl=https://ethpandaops.github.io/ethereum-helm-charts
-    version: 0.2.15
+    version: 0.2.16
     needs: [ethereum-pvcs]
     values:
       # Network and checkpoint sync configuration
@@ -179,6 +179,8 @@ releases:
       # No builder/relay wiring: blocks are built locally before Gloas (ePBS)
       # and builder bids arrive over p2p after it. Pins are stable releases
       # only; lighthouse and grandine are Gloas-ready only in pre-releases.
+      # Exception: silver (gattaca-com) has only alpha releases so far, and its
+      # image is linux/amd64 only (no Apple Silicon / arm64 node).
       - {{ .Values.consensusClient }}:
           enabled: true
           replicas: {{ $replicas }}
@@ -205,6 +207,9 @@ releases:
             {{- else if eq .Values.consensusClient "grandine" }}
             # renovate: datasource=docker depName=sifrai/grandine
             tag: "2.0.6"
+            {{- else if eq .Values.consensusClient "silver" }}
+            # renovate: datasource=github-releases depName=gattaca-com/silver
+            tag: v0.1.0-alpha.12
             {{- end }}
           persistence:
             enabled: true

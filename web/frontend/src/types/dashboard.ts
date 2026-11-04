@@ -74,6 +74,7 @@ export const CLIENT_NAMES = {
   NIMBUS: 'nimbus',
   LODESTAR: 'lodestar',
   GRANDINE: 'grandine',
+  SILVER: 'silver',
   AZTEC: 'aztec',
   HELIOS: 'helios',
   ERPC: 'erpc',

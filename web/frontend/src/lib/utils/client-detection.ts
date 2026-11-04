@@ -57,6 +57,7 @@ const CLIENT_ICONS: Partial<Record<ClientNameType, string>> = {
   nimbus: 'https://avatars.githubusercontent.com/u/11767950?s=200&v=4',
   lodestar: 'https://avatars.githubusercontent.com/u/27474093?s=48&v=4',
   grandine: 'https://avatars.githubusercontent.com/u/53257991?s=48&v=4',
+  silver: 'https://avatars.githubusercontent.com/u/101386290?s=48&v=4',
   aztec: 'https://avatars.githubusercontent.com/u/45291733?s=200&v=4',
   helios: 'https://avatars.githubusercontent.com/u/745163?s=200&v=4',
   erpc: 'https://avatars.githubusercontent.com/u/136539810?s=200&v=4',
