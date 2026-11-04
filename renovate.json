@@ -522,6 +522,35 @@
       ],
       "groupName": "Front-end npm minor/patch updates",
       "groupSlug": "frontend-npm-minor-patch"
+    },
+    {
+      "description": "Public storefront (web/public-storefront) npm dependencies. Served on the public tunnel, so keep it as current as web/frontend: minor/patch grouped weekly; majors separate.",
+      "matchManagers": [
+        "npm"
+      ],
+      "matchFileNames": [
+        "web/public-storefront/**"
+      ],
+      "labels": [
+        "renovate/storefront"
+      ],
+      "schedule": [
+        "before 6am on monday"
+      ]
+    },
+    {
+      "matchManagers": [
+        "npm"
+      ],
+      "matchFileNames": [
+        "web/public-storefront/**"
+      ],
+      "matchUpdateTypes": [
+        "minor",
+        "patch"
+      ],
+      "groupName": "Public storefront npm minor/patch updates",
+      "groupSlug": "storefront-npm-minor-patch"
     }
   ],
   "helmfile": {
