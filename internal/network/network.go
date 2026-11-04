@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"text/template"
 
@@ -163,6 +164,10 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 	// check warns and prompts; in non-interactive mode (no TTY / JSON) it
 	// auto-continues so scripted installs don't deadlock.
 	if network == TypeEthereum {
+		if err := checkClientArch(templateData["ConsensusClient"], runtime.GOARCH); err != nil {
+			return err
+		}
+
 		netValue := templateData["Network"]
 		modeValue := templateData["Mode"]
 		if modeValue == "" {
@@ -341,6 +346,14 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	valuesPath := filepath.Join(deploymentDir, "values.yaml")
 	if _, err := os.Stat(valuesPath); os.IsNotExist(err) {
 		return fmt.Errorf("values.yaml not found in deployment directory: %s", deploymentDir)
+	}
+
+	// values.yaml can be edited by hand, so check again what install checked.
+	if networkName == TypeEthereum {
+		d := readDeployment(cfg, networkName, deploymentID)
+		if err := checkClientArch(d.ConsensusClient, runtime.GOARCH); err != nil {
+			return err
+		}
 	}
 
 	// Check kubeconfig (cluster must be running)
