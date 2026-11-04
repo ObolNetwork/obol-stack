@@ -13,11 +13,15 @@ data-dir: {{DATA_DIR}}/k3s
 bind-address: 0.0.0.0
 https-listen-port: 6443
 
-# TLS SANs for local access
+# TLS SANs for local + LAN access. k3s already auto-adds the node's primary
+# IP, but listing it (and the hostname) explicitly lets worker nodes join via
+# either address and keeps the API cert deterministic across restarts.
 tls-san:
   - "127.0.0.1"
   - "localhost"
   - "obol.stack"
+  - "{{NODE_IP}}"
+  - "{{NODE_HOSTNAME}}"
 
 # Relax eviction thresholds: k3s reports imagefs capacity as 0 on shared
 # filesystems, causing spurious disk-pressure taints with percentage thresholds.
