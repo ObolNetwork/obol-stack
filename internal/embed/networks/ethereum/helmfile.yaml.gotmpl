@@ -209,17 +209,36 @@ releases:
             tag: "2.0.6"
             {{- else if eq .Values.consensusClient "silver" }}
             # renovate: datasource=github-releases depName=gattaca-com/silver
-            tag: v0.1.0-alpha.12
+            tag: v0.1.0-alpha.13
             {{- end }}
           {{- if eq .Values.consensusClient "silver" }}
           # Silver logs only errors unless RUST_LOG is set, and the chart's
           # tcpSocket probes call it ready while its beacon API accepts
           # connections but answers nothing (seen while it waited on a
           # checkpoint). Readiness asks the API instead; /node/health is 206
-          # while syncing, which counts as ready.
+          # while syncing, which counts as ready. Startup and liveness ask
+          # /node/version, so a boot that stalls before the first engine-API
+          # exchange (no answer for 30 min) or an API that stops answering
+          # (6 min) gets the container restarted. Same probes as
+          # ethpandaops/ethereum-helm-charts#505; drop these once it ships.
           extraEnv:
             - name: RUST_LOG
               value: info
+          startupProbe:
+            tcpSocket: null
+            httpGet:
+              path: /eth/v1/node/version
+              port: http-api
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 180
+          livenessProbe:
+            tcpSocket: null
+            httpGet:
+              path: /eth/v1/node/version
+              port: http-api
+            periodSeconds: 120
+            timeoutSeconds: 5
           readinessProbe:
             tcpSocket: null
             httpGet:
