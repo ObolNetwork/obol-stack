@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"text/template"
 
@@ -164,7 +163,7 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 	// check warns and prompts; in non-interactive mode (no TTY / JSON) it
 	// auto-continues so scripted installs don't deadlock.
 	if network == TypeEthereum {
-		if err := checkClientArch(templateData["ConsensusClient"], runtime.GOARCH); err != nil {
+		if err := checkClusterClientArch(cfg, templateData["ConsensusClient"]); err != nil {
 			return err
 		}
 
@@ -351,7 +350,7 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	// values.yaml can be edited by hand, so check again what install checked.
 	if networkName == TypeEthereum {
 		d := readDeployment(cfg, networkName, deploymentID)
-		if err := checkClientArch(d.ConsensusClient, runtime.GOARCH); err != nil {
+		if err := checkClusterClientArch(cfg, d.ConsensusClient); err != nil {
 			return err
 		}
 	}
@@ -365,6 +364,10 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	helmfileBinary := cfg.ToolPath("helmfile")
 	if _, err := os.Stat(helmfileBinary); os.IsNotExist(err) {
 		return fmt.Errorf("helmfile not found at %s; run 'obol upgrade' to install missing tools", helmfileBinary)
+	}
+
+	if networkName == TypeEthereum {
+		warnELRestart(cfg, u, readDeployment(cfg, networkName, deploymentID))
 	}
 
 	// Execute helmfile sync
