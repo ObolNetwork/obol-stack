@@ -58,6 +58,7 @@ var chainNames = map[string]int{
 	"linea":        59144,
 	"fantom":       250,
 	"celo":         42220,
+	"robinhood":    4663,
 }
 
 // ResolveChainID converts a chain name or numeric string to a chain ID.
