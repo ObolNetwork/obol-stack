@@ -1,6 +1,7 @@
 package network
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -72,5 +73,19 @@ func TestSizingTablesCoverClients(t *testing.T) {
 				t.Errorf("no CL sizing for %s on %s", cl, network)
 			}
 		}
+	}
+}
+
+func TestLowMemoryOverrides(t *testing.T) {
+	d := Deployment{Network: "mainnet", Mode: modeFull, ExecutionClient: "reth", ConsensusClient: "lighthouse"}
+
+	d.ExecutionMemory, d.ConsensusMemory = "2Gi", "16Gi" // a laptop user who lowered the old request
+	if got := lowMemoryOverrides(d); len(got) != 1 || !strings.Contains(got[0], "executionMemory: 2Gi is now reth's memory LIMIT") {
+		t.Errorf("got %q, want one executionMemory warning", got)
+	}
+
+	d.ExecutionMemory, d.ConsensusMemory = "", ""
+	if got := lowMemoryOverrides(d); len(got) != 0 {
+		t.Errorf("no overrides: got %q", got)
 	}
 }

@@ -17,8 +17,9 @@
   Without them (e.g. helmfile run by hand) no memory is set. Clients whose
   runtime doesn't read the cgroup limit are told it below: GOMEMLIMIT at 85%
   (geth, erigon, prysm), JVM heap at 60% (besu, teku), Node heap at 70%
-  (lodestar), reth's cross-block cache at a quarter (max its 4 GiB default).
-  Nethermind (.NET) sizes its heap from the limit itself. */}}
+  (lodestar), Init.MemoryHint at 70% (nethermind; .NET sizes its heap from
+  the limit itself), reth's cross-block cache at a quarter (max its 4 GiB
+  default). */}}
 {{- $elCPU := "500m" }}
 {{- $clCPU := "500m" }}
 {{- if eq .Values.network "mainnet" }}
@@ -133,11 +134,16 @@ releases:
             limits:
               memory: {{ printf "%dMi" $elLimMi | quote }}
             {{- end }}
-          {{- if and $elLimMi (has .Values.executionClient (list "geth" "erigon" "besu")) }}
+          {{- if and $elLimMi (has .Values.executionClient (list "geth" "erigon" "besu" "nethermind")) }}
           extraEnv:
             {{- if eq .Values.executionClient "besu" }}
             - name: JAVA_OPTS
               value: -XX:MaxRAMPercentage=60
+            {{- else if eq .Values.executionClient "nethermind" }}
+            # Init.MemoryHint: sizes its database and networking allocations,
+            # which the .NET heap limit doesn't cover.
+            - name: NETHERMIND_INITCONFIG_MEMORYHINT
+              value: {{ mul (div (mul $elLimMi 70) 100) 1048576 | quote }}
             {{- else }}
             - name: GOMEMLIMIT
               value: {{ printf "%dMiB" (div (mul $elLimMi 85) 100) | quote }}

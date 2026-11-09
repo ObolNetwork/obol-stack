@@ -135,3 +135,35 @@ func sizingStateValues(el, cl MemorySizing) []string {
 func deploymentSizing(d Deployment) (MemorySizing, MemorySizing, error) {
 	return EthereumSizing(d.Network, d.Mode, d.ExecutionClient, d.ConsensusClient, d.ExecutionMemory, d.ConsensusMemory)
 }
+
+// warnLowMemoryOverrides flags executionMemory / consensusMemory values
+// below the client's table request. Before they became limits they were
+// requests, and obol's Pending hint said to lower them; as a limit, such a
+// value gets the client OOM-killed in a loop.
+func lowMemoryOverrides(d Deployment) []string {
+	el, cl, err := EthereumSizing(d.Network, d.Mode, d.ExecutionClient, d.ConsensusClient, "", "")
+	if err != nil {
+		return nil
+	}
+
+	var out []string
+	for _, o := range []struct {
+		key, client, value string
+		table              MemorySizing
+	}{
+		{"executionMemory", d.ExecutionClient, d.ExecutionMemory, el},
+		{"consensusMemory", d.ConsensusClient, d.ConsensusMemory, cl},
+	} {
+		if o.value == "" {
+			continue
+		}
+
+		if mi, err := parseMemoryMi(o.value); err == nil && mi < o.table.RequestMi {
+			out = append(out, fmt.Sprintf("%s: %s is now %s's memory LIMIT, below what it needs at steady state (%s); it will be OOM-killed. "+
+				"Raise it to at least %s, or remove it to use the default (%s).",
+				o.key, o.value, o.client, formatMi(o.table.RequestMi), formatMi(o.table.RequestMi), formatMi(o.table.LimitMi)))
+		}
+	}
+
+	return out
+}

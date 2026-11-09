@@ -372,6 +372,10 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 
 	if networkName == TypeEthereum {
 		d := readDeployment(cfg, networkName, deploymentID)
+		for _, w := range lowMemoryOverrides(d) {
+			u.Warn(w)
+		}
+
 		warnClientRestarts(cfg, u, d)
 		warnMemoryFit(cfg, u, d)
 	}

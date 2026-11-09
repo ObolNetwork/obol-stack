@@ -72,6 +72,9 @@ func podMemoryRequest(spec corev1.PodSpec) resource.Quantity {
 
 // warnMemoryFit warns when the deployment's clients would not fit next to
 // everything else in the cluster: the scheduler then leaves pods Pending.
+// It compares against the nodes' allocatable memory, which is the k3d cap
+// only for clusters created with one; a cap added later with docker update
+// isn't visible to Kubernetes, so there the warning can come too late.
 func warnMemoryFit(cfg *config.Config, u *ui.UI, d Deployment) {
 	if d.Stopped {
 		return
@@ -97,6 +100,7 @@ func warnMemoryFit(cfg *config.Config, u *ui.UI, d Deployment) {
 	u.Print(strings.Join([]string{
 		"  Stop a node you don't need:   obol network stop <network>/<id>",
 		"  Lower a client's limit:       executionMemory / consensusMemory in values.yaml (the request never exceeds it)",
-		"  Give the node more memory:    --node-memory on obol stack init (applies when the cluster is next created)",
+		"  Give the node more memory:    docker update --memory <size> --memory-swap <size> k3d-<cluster>-server-0",
+		"                                (Kubernetes keeps the old size until the cluster is next created)",
 	}, "\n"))
 }
