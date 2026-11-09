@@ -47,7 +47,7 @@ const (
 // Init initializes the stack configuration. When --force switches backends
 // the old cluster is destroyed, which always needs confirmation: a default-No
 // prompt on a TTY, or skipConfirm (--yes) in non-interactive shells.
-func Init(cfg *config.Config, u *ui.UI, force bool, backendName string, skipConfirm bool) error {
+func Init(cfg *config.Config, u *ui.UI, force bool, backendName string, skipConfirm bool, nodeMemory string) error {
 	// Check if any stack config already exists (legacy k3d.yaml included).
 	stackIDPath := filepath.Join(cfg.ConfigDir, stackIDFile)
 	hasExistingConfig := false
@@ -90,6 +90,12 @@ func Init(cfg *config.Config, u *ui.UI, force bool, backendName string, skipConf
 	backend, err := NewBackend(backendName)
 	if err != nil {
 		return err
+	}
+
+	if kb, ok := backend.(*K3dBackend); ok {
+		kb.NodeMemory = nodeMemory
+	} else if nodeMemory != "" {
+		u.Warnf("--node-memory applies to the k3d backend only; the %s backend runs on the host directly", backend.Name())
 	}
 
 	u.Info("Initializing cluster configuration")

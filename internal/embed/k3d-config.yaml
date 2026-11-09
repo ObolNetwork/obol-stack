@@ -44,6 +44,10 @@ options:
         nodeFilters:
           - server:*
   runtime:
+    # Memory cap for the k3d node, without swap (obol stack up turns it off).
+    # Set by obol stack init: --node-memory / OBOL_NODE_MEMORY, default
+    # Docker's memory minus 4-8 GiB of headroom. Empty = no cap.
+    serversMemory: "{{SERVERS_MEMORY}}"
     labels:
       - label: obol.cluster-id={{STACK_ID}}
         nodeFilters:
