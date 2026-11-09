@@ -29,7 +29,9 @@ const (
 )
 
 // NodeMemoryEnv overrides the node memory cap: a size (22g, 22Gi, 22528m),
-// "auto" (the default) or "off".
+// "auto" (the default) or "off". It applies when the cluster is created (and
+// to a cluster created before obol capped it); a cap already on the node
+// changes only with docker update.
 const NodeMemoryEnv = "OBOL_NODE_MEMORY"
 
 // Swappable for tests.
@@ -192,7 +194,11 @@ func enforceNodeMemory(u *ui.UI, clusterName, k3dConfig string) {
 		}
 
 		if memory == 0 {
-			u.Infof("Capped the cluster node at %s of memory, no swap (set %s=off to disable)", humanGiB(target), NodeMemoryEnv)
+			u.Infof("Capped the cluster node at %s of memory, no swap. To change it: docker update --memory <size> --memory-swap <size> %s",
+				humanGiB(target), name)
+			if !present {
+				u.Dim("  Kubernetes keeps scheduling against the host's full memory until the cluster is next created.")
+			}
 		} else {
 			u.Infof("Turned swap off for the cluster node (memory cap %s)", humanGiB(target))
 		}
