@@ -213,14 +213,13 @@ Infrastructure services don't use layer prefixes and follow simpler patterns.
 
 ### Ingress
 
-**Pattern:** `ingress-nginx-{component}`
+Traefik with Gateway API.
 
-| Component  | Resource Name              |
-| ---------- | -------------------------- |
-| Controller | `ingress-nginx-controller` |
-| Admission  | `ingress-nginx-admission`  |
+| Component  | Resource Name |
+| ---------- | ------------- |
+| Controller | `traefik`     |
 
-**Namespace:** `ingress-nginx`
+**Namespace:** `traefik`
 
 ### RPC Load Balancer (eRPC)
 
@@ -492,7 +491,7 @@ kubectl port-forward -n monitoring svc/grafana 3000:80
 kubectl port-forward -n monitoring svc/prometheus-server 9090:80
 
 # View ingress controller logs
-kubectl logs -n ingress-nginx -l app.kubernetes.io/component=controller -f
+kubectl logs -n traefik -l app.kubernetes.io/name=traefik -f
 ```
 
 ## Migration Guide
