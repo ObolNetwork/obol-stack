@@ -9,31 +9,49 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
-func TestWarnELRestart(t *testing.T) {
-	orig := liveELMemoryFn
-	t.Cleanup(func() { liveELMemoryFn = orig })
+func TestWarnClientRestarts(t *testing.T) {
+	orig := liveMemoryFn
+	t.Cleanup(func() { liveMemoryFn = orig })
 
+	d := Deployment{Namespace: "ethereum-x", Network: "hoodi", Mode: modeFull, ExecutionClient: "reth", ConsensusClient: "lighthouse"}
+
+	type live struct{ req, lim string }
 	cases := []struct {
 		name    string
-		memory  string
-		found   bool
+		el, cl  *live // nil = no StatefulSet
 		stopped bool
-		want    bool
+		want    string // "" = no warning
 	}{
-		{"no requests yet", "", true, false, true},
-		{"already sized", "12Gi", true, false, false},
-		{"not deployed", "", false, false, false},
-		{"stopped", "", true, true, false},
+		{"pre-sizing deployment", &live{"", ""}, &live{"3Gi", ""}, false, "restarts reth (limit 4Gi) and lighthouse (limit 6Gi)"},
+		{"already sized", &live{"1Gi", "4Gi"}, &live{"2048Mi", "6Gi"}, false, ""},
+		{"only CL resized", &live{"1Gi", "4Gi"}, &live{"2Gi", "5Gi"}, false, "restarts lighthouse (limit 6Gi) once"},
+		{"not deployed", nil, nil, false, ""},
+		{"stopped", &live{"", ""}, &live{"", ""}, true, ""},
 	}
 	for _, c := range cases {
-		liveELMemoryFn = func(*config.Config, string) (string, bool) { return c.memory, c.found }
+		liveMemoryFn = func(_ *config.Config, _, sts string) (string, string, bool) {
+			l := c.el
+			if sts == beaconService {
+				l = c.cl
+			}
+			if l == nil {
+				return "", "", false
+			}
+			return l.req, l.lim, true
+		}
+
+		dd := d
+		dd.Stopped = c.stopped
 
 		var out bytes.Buffer
-		u := ui.NewForTest(&out, &out)
-		warnELRestart(&config.Config{}, u, Deployment{Namespace: "ethereum-x", ExecutionClient: "reth", Stopped: c.stopped})
+		warnClientRestarts(&config.Config{}, ui.NewForTest(&out, &out), dd)
 
-		if got := strings.Contains(out.String(), "also restarts reth"); got != c.want {
-			t.Errorf("%s: warned = %v, want %v (output %q)", c.name, got, c.want, out.String())
+		got := out.String()
+		if c.want == "" && got != "" {
+			t.Errorf("%s: unexpected warning %q", c.name, got)
+		}
+		if c.want != "" && !strings.Contains(got, c.want) {
+			t.Errorf("%s: warning %q, want it to contain %q", c.name, got, c.want)
 		}
 	}
 }
