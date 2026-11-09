@@ -820,3 +820,43 @@ func assertEnvFromAPISecret(t *testing.T, values, containerName, envName string)
 	}
 	t.Fatalf("Deployment container %s not found", containerName)
 }
+
+// Every container in the default agent's Deployment sets a memory request
+// and limit, like the controller's sub-agents.
+func TestGenerateValues_MemoryLimits(t *testing.T) {
+	values := generateValues("hermes-obol-agent", "h.obol.stack", "d.obol.stack", "", "tok", "m",
+		[]byte("model:\n  default: m\n"))
+
+	var doc struct {
+		Resources []map[string]any `yaml:"resources"`
+	}
+	if err := yaml.Unmarshal([]byte(values), &doc); err != nil {
+		t.Fatal(err)
+	}
+
+	checked := 0
+	for _, r := range doc.Resources {
+		if r["kind"] != "Deployment" {
+			continue
+		}
+
+		pod := r["spec"].(map[string]any)["template"].(map[string]any)["spec"].(map[string]any)
+		for _, field := range []string{"initContainers", "containers"} {
+			list, _ := pod[field].([]any)
+			for _, c := range list {
+				cm := c.(map[string]any)
+				res, _ := cm["resources"].(map[string]any)
+				req, _ := res["requests"].(map[string]any)
+				lim, _ := res["limits"].(map[string]any)
+				if req["memory"] == nil || lim["memory"] == nil {
+					t.Errorf("container %v: memory requests %v, limits %v; want both", cm["name"], req, lim)
+				}
+				checked++
+			}
+		}
+	}
+
+	if checked < 3 {
+		t.Errorf("checked %d containers, want init + hermes + dashboard", checked)
+	}
+}

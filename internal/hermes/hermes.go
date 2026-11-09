@@ -918,6 +918,11 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
             - name: init-hermes-data
               image: %s
               imagePullPolicy: IfNotPresent
+              resources:
+                requests:
+                  memory: 32Mi
+                limits:
+                  memory: 256Mi
               command:
                 - sh
                 - -ec
@@ -955,6 +960,12 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
             - name: %s
               image: %s
               imagePullPolicy: IfNotPresent
+              # Same as the controller's sub-agents (serviceoffercontroller/resources.go).
+              resources:
+                requests:
+                  memory: 256Mi
+                limits:
+                  memory: 2Gi
               command:
                 - %s
               args:
@@ -1025,6 +1036,11 @@ func generateValues(namespace, hostname, dashboardHostname, agentBaseURL, token,
             - name: hermes-dashboard
               image: %s
               imagePullPolicy: IfNotPresent
+              resources:
+                requests:
+                  memory: 64Mi
+                limits:
+                  memory: 512Mi
               command:
                 - %s
               args:

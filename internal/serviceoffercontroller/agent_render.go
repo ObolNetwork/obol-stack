@@ -349,6 +349,7 @@ func buildAgentConfigInitContainer() map[string]any {
 		"name":            "config-seed",
 		"image":           hermesImage(),
 		"imagePullPolicy": "IfNotPresent",
+		"resources":       memoryResources("32Mi", "256Mi"),
 		"command":         []any{"/bin/sh", "-ceu"},
 		"args": []any{`mkdir -p /data/.hermes
 cp /config-seed/config.yaml /data/.hermes/config.yaml
@@ -366,6 +367,7 @@ func buildAgentProfileInitContainer() map[string]any {
 		"name":            "profile-seed",
 		"image":           hermesImage(),
 		"imagePullPolicy": "IfNotPresent",
+		"resources":       memoryResources("32Mi", "256Mi"),
 		"command":         []any{"/bin/sh", "-ceu"},
 		"args": []any{`mkdir -p /data/.hermes/home /data/.hermes/workspace /data/.hermes/logs /data/.hermes/obol-skills
 
@@ -494,6 +496,7 @@ func agentPodSpec(agent *monetizeapi.Agent) map[string]any {
 				"name":            hermesServiceName,
 				"image":           hermesImage(),
 				"imagePullPolicy": "IfNotPresent",
+				"resources":       memoryResources(hermesMemoryRequest, hermesMemoryLimit),
 				"command":         []any{"/opt/hermes/.venv/bin/hermes"},
 				"args":            []any{"gateway", "run", "--replace"},
 				"ports": []any{
