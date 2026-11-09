@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	petname "github.com/dustinkirkland/golang-petname"
 	"gopkg.in/yaml.v3"
@@ -381,9 +381,11 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	}
 
 	// Execute helmfile sync
-	syncArgs := []string{"-f", helmfilePath, "sync",
+	syncArgs := []string{
+		"-f", helmfilePath, "sync",
 		"--state-values-file", valuesPath,
-		"--state-values-set", "id=" + deploymentID}
+		"--state-values-set", "id=" + deploymentID,
+	}
 
 	if networkName == TypeEthereum {
 		el, cl, err := deploymentSizing(readDeployment(cfg, networkName, deploymentID))
