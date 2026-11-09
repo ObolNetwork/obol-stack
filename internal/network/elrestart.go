@@ -1,48 +1,81 @@
 package network
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
-// liveELMemoryFn reads the memory request of the deployment's running EL
-// StatefulSet. found is false when there is no StatefulSet or the cluster
-// can't be asked. Swappable for tests.
-var liveELMemoryFn = func(cfg *config.Config, namespace string) (memory string, found bool) {
-	out, err := stopKubectlFn(cfg, "get", "statefulset", executionService, "-n", namespace,
-		"--ignore-not-found", "-o", "jsonpath={.metadata.name} {.spec.template.spec.containers[*].resources.requests.memory}")
+// liveMemoryFn reads the memory request and limit of one of a deployment's
+// running StatefulSets ("" when unset). found is false when there is no
+// StatefulSet or the cluster can't be asked. Swappable for tests.
+var liveMemoryFn = func(cfg *config.Config, namespace, statefulSet string) (request, limit string, found bool) {
+	out, err := stopKubectlFn(cfg, "get", "statefulset", statefulSet, "-n", namespace, "--ignore-not-found", "-o",
+		`jsonpath={.metadata.name}|{.spec.template.spec.containers[0].resources.requests.memory}|{.spec.template.spec.containers[0].resources.limits.memory}`)
 	if err != nil {
-		return "", false
+		return "", "", false
 	}
 
-	fields := strings.Fields(out)
-	if len(fields) == 0 {
-		return "", false
+	parts := strings.Split(strings.TrimSpace(out), "|")
+	if len(parts) != 3 || parts[0] == "" {
+		return "", "", false
 	}
 
-	return strings.Join(fields[1:], " "), true
+	return parts[1], parts[2], true
 }
 
-// warnELRestart says when a sync will also restart the execution client.
-// Deployments made before obol set per-network memory requests run the EL
-// with none; the next sync adds them, which changes the pod template and
-// restarts the EL, whatever the user meant to change (e.g. the CL).
-func warnELRestart(cfg *config.Config, u *ui.UI, d Deployment) {
-	memory, found := liveELMemoryFn(cfg, d.Namespace)
-	if d.Stopped || !found || memory != "" {
+// memoryChanges reports whether a live request/limit differs from the
+// sizing a sync will apply.
+func memoryChanges(request, limit string, want MemorySizing) bool {
+	req, err1 := parseMemoryMi(request)
+	lim, err2 := parseMemoryMi(limit)
+
+	return err1 != nil || err2 != nil || req != want.RequestMi || lim != want.LimitMi
+}
+
+// warnClientRestarts says when a sync will restart the clients for their
+// memory alone, which the user didn't ask for: deployments made before obol
+// set requests and limits get them on their next sync, and a new obol can
+// resize them. Data is kept either way.
+func warnClientRestarts(cfg *config.Config, u *ui.UI, d Deployment) {
+	if d.Stopped {
 		return
 	}
 
-	u.Warnf("This sync also restarts %s once: it was deployed before obol set memory requests per network, "+
-		"and now gets them. Its data is kept, and it resumes where it stopped.", elName(d.ExecutionClient))
-}
-
-func elName(client string) string {
-	if client == "" {
-		return "the execution client"
+	el, cl, err := deploymentSizing(d)
+	if err != nil {
+		return
 	}
 
-	return client + " (the execution client)"
+	var restarts []string
+	for _, c := range []struct {
+		sts, client string
+		want        MemorySizing
+	}{
+		{executionService, d.ExecutionClient, el},
+		{beaconService, d.ConsensusClient, cl},
+	} {
+		req, lim, found := liveMemoryFn(cfg, d.Namespace, c.sts)
+		if found && memoryChanges(req, lim, c.want) {
+			restarts = append(restarts, fmt.Sprintf("%s (limit %s)", c.client, formatMi(c.want.LimitMi)))
+		}
+	}
+
+	if len(restarts) == 0 {
+		return
+	}
+
+	u.Warnf("This sync restarts %s once to apply new memory requests and limits. Data is kept, and the clients resume where they stopped.",
+		strings.Join(restarts, " and "))
+}
+
+// formatMi renders MiB as "10Gi", "1536Mi".
+func formatMi(mi int64) string {
+	if mi%1024 == 0 {
+		return fmt.Sprintf("%dGi", mi/1024)
+	}
+
+	return fmt.Sprintf("%dMi", mi)
 }

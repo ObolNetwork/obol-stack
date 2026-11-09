@@ -238,6 +238,10 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 	u.Successf("Network %s/%s configured", network, id)
 	u.Detail("Location", deploymentDir)
 	u.Blank()
+	if network == TypeEthereum {
+		warnMemoryFit(cfg, u, readDeployment(cfg, network, id))
+	}
+
 	u.Printf("To deploy, run: obol network sync %s/%s", network, id)
 
 	return nil
@@ -367,14 +371,26 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	}
 
 	if networkName == TypeEthereum {
-		warnELRestart(cfg, u, readDeployment(cfg, networkName, deploymentID))
+		d := readDeployment(cfg, networkName, deploymentID)
+		warnClientRestarts(cfg, u, d)
+		warnMemoryFit(cfg, u, d)
 	}
 
 	// Execute helmfile sync
-	syncArgs := append([]string{"-f", helmfilePath, "sync",
+	syncArgs := []string{"-f", helmfilePath, "sync",
 		"--state-values-file", valuesPath,
-		"--state-values-set", "id=" + deploymentID},
-		helmcmd.SyncFlagsForVersion(cfg.ToolPath("helm"))...)
+		"--state-values-set", "id=" + deploymentID}
+
+	if networkName == TypeEthereum {
+		el, cl, err := deploymentSizing(readDeployment(cfg, networkName, deploymentID))
+		if err != nil {
+			return fmt.Errorf("%s/%s values.yaml: %w", networkName, deploymentID, err)
+		}
+
+		syncArgs = append(syncArgs, sizingStateValues(el, cl)...)
+	}
+
+	syncArgs = append(syncArgs, helmcmd.SyncFlagsForVersion(cfg.ToolPath("helm"))...)
 	cmd := helmcmd.Helmfile(helmfileBinary, cfg.ToolPath("helm"), syncArgs...)
 	cmd.Dir = deploymentDir
 

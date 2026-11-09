@@ -26,9 +26,9 @@ mode: {{.Mode}}
 since: {{.Since}}
 
 # @default
-# @description Memory request for the execution client, e.g. 16Gi (default sized per network, mode and client: mainnet 8Gi, archive 12Gi, testnets 2Gi)
+# @description Memory limit for the execution client, e.g. 16Gi; it is OOM-killed above it (default sized per network, mode and client: mainnet reth 10Gi, archive 14Gi, testnet reth 4Gi)
 executionMemory: {{.ExecutionMemory}}
 
 # @default
-# @description Memory request for the consensus client, e.g. 8Gi (default sized per network and client: mainnet 6Gi, hoodi 3Gi, sepolia 2Gi)
+# @description Memory limit for the consensus client, e.g. 8Gi; it is OOM-killed above it (default sized per network and client: mainnet lighthouse 10Gi, hoodi 6Gi, sepolia 5Gi)
 consensusMemory: {{.ConsensusMemory}}

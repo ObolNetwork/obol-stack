@@ -75,7 +75,8 @@ func (p PodProblem) Severe() bool {
 }
 
 // memoryValueKey is the values.yaml key (and install flag) that sets a
-// component's memory request.
+// component's memory limit (its request follows the sizing table, capped
+// at the limit).
 func memoryValueKey(component string) string {
 	switch component {
 	case componentExecution:
@@ -137,7 +138,7 @@ func podProblem(d Deployment, p PodStatus, now time.Time) (PodProblem, bool) {
 			if req == "" {
 				req = "its"
 			}
-			pr.Hint = memHint(fmt.Sprintf("Not enough free memory for %s request; free memory, or lower it:", req))
+			pr.Hint = memHint(fmt.Sprintf("Not enough free memory for %s request; free memory, or lower the client's memory limit (the request never exceeds it):", req))
 		} else {
 			pr.Hint = describe
 		}
@@ -204,7 +205,11 @@ func restartHint(p PodStatus, d Deployment, memHint func(string) string) string 
 			req = "request " + p.MemoryRequest
 		}
 
-		return memHint(fmt.Sprintf("Out of memory (%s, %s): free host memory (e.g. unload models: ollama ps), or raise the request:", req, limit))
+		if p.MemoryLimit != "" {
+			return memHint(fmt.Sprintf("Out of memory: hit its limit (%s, %s). Raise the limit:", req, limit))
+		}
+
+		return memHint(fmt.Sprintf("Out of memory (%s, %s): free host memory (e.g. unload models: ollama ps), or set a limit:", req, limit))
 	}
 
 	return fmt.Sprintf("Logs: obol kubectl logs -n %s %s --previous", d.Namespace, p.Name)

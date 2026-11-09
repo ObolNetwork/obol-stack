@@ -7,36 +7,28 @@
   with 0 replicas (PVCs and data are kept) until `obol network start`. */}}
 {{- $replicas := 1 }}
 {{- if (index .Values "stopped" | default false) }}{{ $replicas = 0 }}{{ end }}
-{{- /* Resource REQUESTS, never limits: the scheduler and the user see the
-  node's footprint, and under host memory pressure the kernel prefers to
-  OOM-kill something else. Sized from client docs and observed steady
-  state, kept low enough that a laptop can still schedule a testnet node.
-  Override the memory per deployment with --execution-memory /
-  --consensus-memory at install, or executionMemory / consensusMemory in
-  values.yaml followed by obol network sync.
-    mainnet  EL 8Gi (archive or erigon 12Gi), 2 CPU   CL 6Gi (grandine 4Gi, nimbus 3Gi), 1 CPU
-    hoodi    EL 2Gi (archive 4Gi), 500m             CL 3Gi (nimbus 2Gi), 500m
-    sepolia  EL 2Gi (archive 4Gi), 500m             CL 2Gi (nimbus 1Gi), 500m */}}
-{{- $mode := index .Values "mode" | default "full" }}
-{{- $elMemory := "2Gi" }}
+{{- /* CPU requests (no CPU limits: throttling hurts block processing).
+    mainnet  EL 2 CPU   CL 1 CPU
+    testnets EL 500m    CL 500m
+  Memory requests and limits come from obol network sync
+  (internal/network/sizing.go: per network, mode and client; executionMemory
+  / consensusMemory in values.yaml set the limit) as MiB in
+  elMemoryRequestMi / elMemoryLimitMi / clMemoryRequestMi / clMemoryLimitMi.
+  Without them (e.g. helmfile run by hand) no memory is set. Clients whose
+  runtime doesn't read the cgroup limit are told it below: GOMEMLIMIT at 85%
+  (geth, erigon, prysm), JVM heap at 60% (besu, teku), Node heap at 70%
+  (lodestar), reth's cross-block cache at a quarter (max its 4 GiB default).
+  Nethermind (.NET) sizes its heap from the limit itself. */}}
 {{- $elCPU := "500m" }}
-{{- $clMemory := "2Gi" }}
 {{- $clCPU := "500m" }}
 {{- if eq .Values.network "mainnet" }}
   {{- $elCPU = "2" }}
   {{- $clCPU = "1" }}
-  {{- $elMemory = "8Gi" }}
-  {{- if or (eq $mode "archive") (eq .Values.executionClient "erigon") }}{{ $elMemory = "12Gi" }}{{ end }}
-  {{- $clMemory = "6Gi" }}
-  {{- if eq .Values.consensusClient "grandine" }}{{ $clMemory = "4Gi" }}{{ end }}
-  {{- if eq .Values.consensusClient "nimbus" }}{{ $clMemory = "3Gi" }}{{ end }}
-{{- else }}
-  {{- if eq $mode "archive" }}{{ $elMemory = "4Gi" }}{{ end }}
-  {{- if eq .Values.network "hoodi" }}{{ $clMemory = "3Gi" }}{{ end }}
-  {{- if eq .Values.consensusClient "nimbus" }}{{ $clMemory = "1Gi" }}{{ if eq .Values.network "hoodi" }}{{ $clMemory = "2Gi" }}{{ end }}{{ end }}
 {{- end }}
-{{- $elMemory = index .Values "executionMemory" | default $elMemory }}
-{{- $clMemory = index .Values "consensusMemory" | default $clMemory }}
+{{- $elReqMi := index .Values "elMemoryRequestMi" | default 0 | int }}
+{{- $elLimMi := index .Values "elMemoryLimitMi" | default 0 | int }}
+{{- $clReqMi := index .Values "clMemoryRequestMi" | default 0 | int }}
+{{- $clLimMi := index .Values "clMemoryLimitMi" | default 0 | int }}
 repositories:
   - name: ethereum-helm-charts
     url: https://ethpandaops.github.io/ethereum-helm-charts
@@ -118,6 +110,9 @@ releases:
                     - --prune.receipts.distance={{ .Values.pruneDistance }}
                     - --prune.bodies.distance={{ .Values.pruneDistance }}
                     {{- end }}
+                    {{- if $elLimMi }}
+                    - --engine.cross-block-cache-size={{ min 4096 (div $elLimMi 4) }}
+                    {{- end }}
           {{- end }}
 
       # Execution client (pinned versions — Renovate-tracked)
@@ -131,7 +126,23 @@ releases:
           resources:
             requests:
               cpu: {{ $elCPU | quote }}
-              memory: {{ $elMemory | quote }}
+              {{- if $elReqMi }}
+              memory: {{ printf "%dMi" $elReqMi | quote }}
+              {{- end }}
+            {{- if $elLimMi }}
+            limits:
+              memory: {{ printf "%dMi" $elLimMi | quote }}
+            {{- end }}
+          {{- if and $elLimMi (has .Values.executionClient (list "geth" "erigon" "besu")) }}
+          extraEnv:
+            {{- if eq .Values.executionClient "besu" }}
+            - name: JAVA_OPTS
+              value: -XX:MaxRAMPercentage=60
+            {{- else }}
+            - name: GOMEMLIMIT
+              value: {{ printf "%dMiB" (div (mul $elLimMi 85) 100) | quote }}
+            {{- end }}
+          {{- end }}
           image:
             {{- if eq .Values.executionClient "reth" }}
             # renovate: datasource=github-releases depName=paradigmxyz/reth
@@ -187,7 +198,32 @@ releases:
           resources:
             requests:
               cpu: {{ $clCPU | quote }}
-              memory: {{ $clMemory | quote }}
+              {{- if $clReqMi }}
+              memory: {{ printf "%dMi" $clReqMi | quote }}
+              {{- end }}
+            {{- if $clLimMi }}
+            limits:
+              memory: {{ printf "%dMi" $clLimMi | quote }}
+            {{- end }}
+          {{- $clHeap := and $clLimMi (has .Values.consensusClient (list "prysm" "teku" "lodestar")) }}
+          {{- if or $clHeap (eq .Values.consensusClient "silver") }}
+          extraEnv:
+            {{- if eq .Values.consensusClient "silver" }}
+            # Silver logs only errors unless RUST_LOG is set.
+            - name: RUST_LOG
+              value: info
+            {{- else if eq .Values.consensusClient "prysm" }}
+            - name: GOMEMLIMIT
+              value: {{ printf "%dMiB" (div (mul $clLimMi 85) 100) | quote }}
+            {{- else if eq .Values.consensusClient "teku" }}
+            - name: JAVA_OPTS
+              value: -XX:MaxRAMPercentage=60
+            {{- else if eq .Values.consensusClient "lodestar" }}
+            # The image defaults to --max-old-space-size=8192, above most limits.
+            - name: NODE_OPTIONS
+              value: {{ printf "--max-old-space-size=%d" (div (mul $clLimMi 70) 100) | quote }}
+            {{- end }}
+          {{- end }}
           image:
             {{- if eq .Values.consensusClient "lighthouse" }}
             # renovate: datasource=github-releases depName=sigp/lighthouse
@@ -212,8 +248,7 @@ releases:
             tag: v0.1.0-alpha.13
             {{- end }}
           {{- if eq .Values.consensusClient "silver" }}
-          # Silver logs only errors unless RUST_LOG is set, and the chart's
-          # tcpSocket probes call it ready while its beacon API accepts
+          # The chart's tcpSocket probes call Silver ready while its beacon API accepts
           # connections but answers nothing (seen while it waited on a
           # checkpoint). Readiness asks the API instead; /node/health is 206
           # while syncing, which counts as ready. Startup and liveness ask
@@ -221,9 +256,6 @@ releases:
           # exchange (no answer for 30 min) or an API that stops answering
           # (6 min) gets the container restarted. Same probes as
           # ethpandaops/ethereum-helm-charts#505; drop these once it ships.
-          extraEnv:
-            - name: RUST_LOG
-              value: info
           startupProbe:
             tcpSocket: null
             httpGet:
