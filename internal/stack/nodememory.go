@@ -166,7 +166,7 @@ func enforceNodeMemory(u *ui.UI, clusterName, k3dConfig string) {
 		return
 	}
 
-	for _, name := range strings.Fields(names) {
+	for name := range strings.FieldsSeq(names) {
 		out, err := dockerOutputFn("inspect", "-f", "{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}", name)
 		if err != nil {
 			u.Warnf("Could not check %s's memory cap: %v", name, err)
@@ -187,8 +187,8 @@ func enforceNodeMemory(u *ui.UI, clusterName, k3dConfig string) {
 			continue
 		}
 
-		if _, err := dockerOutputFn("update", "--memory", strconv.FormatInt(target, 10),
-			"--memory-swap", strconv.FormatInt(target, 10), name); err != nil {
+		size := strconv.FormatInt(target, 10)
+		if _, err := dockerOutputFn("update", "--memory", size, "--memory-swap", size, name); err != nil {
 			u.Warnf("Could not cap %s at %s without swap: %v", name, humanGiB(target), err)
 			continue
 		}
