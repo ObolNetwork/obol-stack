@@ -152,19 +152,19 @@ releases:
           image:
             {{- if eq .Values.executionClient "reth" }}
             # renovate: datasource=github-releases depName=paradigmxyz/reth
-            tag: v2.7.0
+            tag: v2.10.1
             {{- else if eq .Values.executionClient "geth" }}
             # renovate: datasource=github-releases depName=ethereum/go-ethereum
-            tag: v1.17.8
+            tag: v1.17.10
             {{- else if eq .Values.executionClient "nethermind" }}
             # renovate: datasource=github-releases depName=NethermindEth/nethermind
-            tag: "2.1.0"
+            tag: "2.2.2"
             {{- else if eq .Values.executionClient "besu" }}
             # renovate: datasource=github-releases depName=hyperledger/besu
-            tag: "26.9.0"
+            tag: "26.11.0"
             {{- else if eq .Values.executionClient "erigon" }}
             # renovate: datasource=github-releases depName=erigontech/erigon
-            tag: v3.7.1
+            tag: v3.8.1
             {{- end }}
           {{- if eq .Values.executionClient "reth" }}
           # reth keeps p2p (30303) closed while running post-crash consistency
@@ -233,13 +233,13 @@ releases:
           image:
             {{- if eq .Values.consensusClient "lighthouse" }}
             # renovate: datasource=github-releases depName=sigp/lighthouse
-            tag: v8.2.3
+            tag: v8.3.3
             {{- else if eq .Values.consensusClient "prysm" }}
             # renovate: datasource=github-releases depName=OffchainLabs/prysm
-            tag: v7.2.1
+            tag: v7.3.1
             {{- else if eq .Values.consensusClient "teku" }}
             # renovate: datasource=github-releases depName=Consensys/teku
-            tag: "26.10.0"
+            tag: "26.10.3"
             {{- else if eq .Values.consensusClient "nimbus" }}
             # renovate: datasource=docker depName=statusim/nimbus-eth2
             tag: multiarch-v26.10.0
