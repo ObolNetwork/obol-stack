@@ -291,6 +291,11 @@ spec:
             - |
               with open("/config-src/config.yaml", "rb") as src, open("/config/config.yaml", "wb") as dst:
                   dst.write(src.read())
+          resources:
+            requests:
+              memory: 32Mi
+            limits:
+              memory: 128Mi
           volumeMounts:
             - name: litellm-config-source
               mountPath: /config-src

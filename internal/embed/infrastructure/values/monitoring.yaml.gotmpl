@@ -49,15 +49,23 @@ prometheus:
           resources:
             requests:
               storage: 5Gi
+    # ~0.45 GiB with two Ethereum nodes; replaying the WAL after a restart
+    # needs more, so the limit leaves room for it.
     resources:
       requests:
         cpu: 100m
-        memory: 256Mi
+        memory: 512Mi
       limits:
         cpu: 500m
-        memory: 1Gi
+        memory: 2Gi
 
 prometheusOperator:
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
   admissionWebhooks:
     enabled: false  # Disable webhook pre-install hooks (avoids timeout on fresh k3s)
   tls:

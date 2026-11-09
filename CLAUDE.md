@@ -114,6 +114,8 @@ obol                (root help is generated: each top-level command has a Catego
 
 Deployed by `obol stack up` from `internal/embed/infrastructure/`. Key templates (`base/templates/`): `llm.yaml` (LiteLLM + Ollama), `x402.yaml` (x402-verifier + serviceoffer-controller), `obol-agent.yaml` (singleton ns), `serviceoffer-crd.yaml`, `registrationrequest-crd.yaml`, `obol-agent-monetize-rbac.yaml`, `local-path.yaml`. Plus `cloudflared/` Helm chart, `values/*.yaml.gotmpl` (eRPC, monitoring, frontend).
 
+**Memory**: every stack container sets a memory request AND limit (no CPU limits added), so no pod grows until the node runs out: base templates (`embed_memory_limits_test.go`), chart values in `values/` + `helmfile.yaml`, the default Hermes agent (`hermes.TestGenerateValues_MemoryLimits`) and controller-rendered pods (`serviceoffercontroller/resources.go`, `TestRenderedPodsHaveMemoryLimits`). New containers need both.
+
 Namespaces: eRPC -> `erpc`, Frontend -> `obol-frontend`, Cloudflared -> `traefik`, Monitoring/Prometheus -> `monitoring`, LiteLLM -> `llm`, x402-verifier + serviceoffer-controller -> `x402`, default obol-agent (Hermes) -> `hermes-obol-agent`. ServiceOffer + RegistrationRequest CRDs (cluster-scoped).
 
 ## Monetize Subsystem
