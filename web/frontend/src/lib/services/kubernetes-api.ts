@@ -193,13 +193,13 @@ export class KubernetesAPIClient {
       {
         port: 80,
         name: 'HTTP',
-        service: 'ingress-nginx-controller',
+        service: 'traefik',
         check: false,
       },
       {
         port: 443,
         name: 'HTTPS',
-        service: 'ingress-nginx-controller',
+        service: 'traefik',
         check: false,
       },
     ];
