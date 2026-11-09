@@ -236,7 +236,7 @@ func remoteSignerManifests(agent *monetizeapi.Agent) []*unstructured.Unstructure
 							"image":           remoteSignerImage,
 							"imagePullPolicy": "IfNotPresent",
 							// Same as the remote-signer chart's defaults.
-							"resources": memoryResources("128Mi", "1Gi"),
+							resourcesKey: memoryResources("128Mi", "1Gi"),
 							"ports": []any{
 								map[string]any{"name": "http", "containerPort": int64(remoteSignerPort)},
 							},
