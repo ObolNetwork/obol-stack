@@ -25,6 +25,27 @@ type MemorySizing struct {
 	LimitMi   int64
 }
 
+// Networks and clients the sizing tables know.
+const (
+	netMainnet = "mainnet"
+	netHoodi   = "hoodi"
+	netSepolia = "sepolia"
+
+	elReth       = "reth"
+	elGeth       = "geth"
+	elNethermind = "nethermind"
+	elBesu       = "besu"
+	elErigon     = "erigon"
+
+	clLighthouse = "lighthouse"
+	clPrysm      = "prysm"
+	clTeku       = "teku"
+	clLodestar   = "lodestar"
+	clGrandine   = "grandine"
+	clNimbus     = "nimbus"
+	clSilver     = "silver"
+)
+
 // gi is n GiB in MiB.
 func gi(n float64) int64 { return int64(n * 1024) }
 
@@ -33,12 +54,12 @@ func sz(req, lim float64) MemorySizing { return MemorySizing{gi(req), gi(lim)} }
 // elSizing: [mainnet|testnet][full|archive][client].
 var elSizing = map[bool]map[bool]map[string]MemorySizing{
 	true: { // mainnet
-		false: {"reth": sz(4, 10), "geth": sz(6, 12), "nethermind": sz(6, 12), "besu": sz(6, 12), "erigon": sz(8, 16)},
-		true:  {"reth": sz(6, 14), "geth": sz(8, 16), "nethermind": sz(8, 16), "besu": sz(8, 16), "erigon": sz(8, 16)},
+		false: {elReth: sz(4, 10), elGeth: sz(6, 12), elNethermind: sz(6, 12), elBesu: sz(6, 12), elErigon: sz(8, 16)},
+		true:  {elReth: sz(6, 14), elGeth: sz(8, 16), elNethermind: sz(8, 16), elBesu: sz(8, 16), elErigon: sz(8, 16)},
 	},
 	false: { // hoodi, sepolia
-		false: {"reth": sz(1, 4), "geth": sz(2, 6), "nethermind": sz(2, 6), "besu": sz(2, 6), "erigon": sz(3, 8)},
-		true:  {"reth": sz(2, 6), "geth": sz(3, 8), "nethermind": sz(3, 8), "besu": sz(3, 8), "erigon": sz(3, 8)},
+		false: {elReth: sz(1, 4), elGeth: sz(2, 6), elNethermind: sz(2, 6), elBesu: sz(2, 6), elErigon: sz(3, 8)},
+		true:  {elReth: sz(2, 6), elGeth: sz(3, 8), elNethermind: sz(3, 8), elBesu: sz(3, 8), elErigon: sz(3, 8)},
 	},
 }
 
@@ -46,9 +67,9 @@ var elSizing = map[bool]map[bool]map[string]MemorySizing{
 // 6.8 GiB, hoodi 5.1 GiB observed); Silver's memory has grown over days, so
 // its limit also bounds that growth with a restart.
 var clSizing = map[string]map[string]MemorySizing{
-	"mainnet": {"lighthouse": sz(5, 10), "prysm": sz(5, 10), "teku": sz(6, 10), "lodestar": sz(5, 10), "grandine": sz(4, 8), "nimbus": sz(2, 5), "silver": sz(4, 8)},
-	"hoodi":   {"lighthouse": sz(2, 6), "prysm": sz(2, 6), "teku": sz(3, 6), "lodestar": sz(2, 6), "grandine": sz(2, 5), "nimbus": sz(1, 3), "silver": sz(2, 5)},
-	"sepolia": {"lighthouse": sz(2, 5), "prysm": sz(2, 5), "teku": sz(3, 6), "lodestar": sz(2, 5), "grandine": sz(2, 4), "nimbus": sz(1, 3), "silver": sz(2, 4)},
+	netMainnet: {clLighthouse: sz(5, 10), clPrysm: sz(5, 10), clTeku: sz(6, 10), clLodestar: sz(5, 10), clGrandine: sz(4, 8), clNimbus: sz(2, 5), clSilver: sz(4, 8)},
+	netHoodi:   {clLighthouse: sz(2, 6), clPrysm: sz(2, 6), clTeku: sz(3, 6), clLodestar: sz(2, 6), clGrandine: sz(2, 5), clNimbus: sz(1, 3), clSilver: sz(2, 5)},
+	netSepolia: {clLighthouse: sz(2, 5), clPrysm: sz(2, 5), clTeku: sz(3, 6), clLodestar: sz(2, 5), clGrandine: sz(2, 4), clNimbus: sz(1, 3), clSilver: sz(2, 4)},
 }
 
 // Fallbacks for a client or network missing from the tables.
@@ -92,7 +113,7 @@ func applyOverride(s MemorySizing, override string) (MemorySizing, error) {
 // EthereumSizing returns the execution and consensus clients' memory for a
 // deployment's values.
 func EthereumSizing(network, mode, el, cl, elOverride, clOverride string) (MemorySizing, MemorySizing, error) {
-	elS, ok := elSizing[network == "mainnet"][mode == modeArchive][el]
+	elS, ok := elSizing[network == netMainnet][mode == modeArchive][el]
 	if !ok {
 		elS = defaultELSizing
 	}
