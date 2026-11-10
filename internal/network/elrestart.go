@@ -44,7 +44,7 @@ func warnClientRestarts(cfg *config.Config, u *ui.UI, d Deployment) {
 		return
 	}
 
-	el, cl, err := deploymentSizing(d)
+	el, cl, _, err := clusterSizing(cfg, d)
 	if err != nil {
 		return
 	}

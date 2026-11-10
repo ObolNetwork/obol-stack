@@ -388,9 +388,13 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	}
 
 	if networkName == TypeEthereum {
-		el, cl, err := deploymentSizing(readDeployment(cfg, networkName, deploymentID))
+		el, cl, nodeMi, err := clusterSizing(cfg, readDeployment(cfg, networkName, deploymentID))
 		if err != nil {
 			return fmt.Errorf("%s/%s values.yaml: %w", networkName, deploymentID, err)
+		}
+
+		if nodeMi > 0 {
+			u.Dim(fmt.Sprintf("  Memory limits above the cluster node's %s are lowered to it.", formatMi(nodeMi)))
 		}
 
 		syncArgs = append(syncArgs, sizingStateValues(el, cl)...)

@@ -77,24 +77,47 @@ func parseNodeMemory(s string) (bytes int64, auto bool, err error) {
 		return 0, false, nil
 	}
 
-	m := sizePattern.FindStringSubmatch(v)
-	if m == nil {
+	b, ok := parseSize(v)
+	if !ok {
 		return 0, false, fmt.Errorf("invalid node memory %q: want a size such as 22g or 22Gi, auto or off", s)
 	}
-
-	n, err := strconv.ParseFloat(m[1], 64)
-	if err != nil {
-		return 0, false, fmt.Errorf("invalid node memory %q: %w", s, err)
-	}
-
-	unit := map[string]float64{"": 1, "k": 1 << 10, "m": 1 << 20, "g": 1 << 30, "t": 1 << 40}[m[2]]
-	b := int64(n * unit)
 
 	if b < 2*gib {
 		return 0, false, fmt.Errorf("node memory %q is below 2 GiB, too small to run the stack", s)
 	}
 
 	return b, false, nil
+}
+
+// parseSize reads a lower-case Docker size ("22g", "15.2gib") in bytes.
+func parseSize(v string) (int64, bool) {
+	m := sizePattern.FindStringSubmatch(v)
+	if m == nil {
+		return 0, false
+	}
+
+	n, err := strconv.ParseFloat(m[1], 64)
+	if err != nil {
+		return 0, false
+	}
+
+	unit := map[string]float64{"": 1, "k": 1 << 10, "m": 1 << 20, "g": 1 << 30, "t": 1 << 40}[m[2]]
+
+	return int64(n * unit), true
+}
+
+// containerMemoryUsage is a running container's memory use in bytes, as
+// docker stats reports it ("15.2GiB / 31.1GiB"). ok is false when it can't
+// be read.
+func containerMemoryUsage(name string) (int64, bool) {
+	out, err := dockerOutputFn("stats", "--no-stream", "--format", "{{.MemUsage}}", name)
+	if err != nil {
+		return 0, false
+	}
+
+	used, _, _ := strings.Cut(out, "/")
+
+	return parseSize(strings.ToLower(strings.TrimSpace(used)))
 }
 
 // resolveNodeMemory turns the user's setting into a cap in bytes (0 = none).
@@ -185,6 +208,18 @@ func enforceNodeMemory(u *ui.UI, clusterName, k3dConfig string) {
 
 		if target == 0 || swap == target {
 			continue
+		}
+
+		// A new cap below what the node already uses would OOM-kill pods
+		// the moment it's applied; leave it to the user to free memory first.
+		if memory == 0 {
+			if used, ok := containerMemoryUsage(name); ok && used > target/10*9 {
+				u.Warnf("Not capping the cluster node at %s yet: it already uses %s. Free some (obol network stop <network>/<id>), "+
+					"then run obol stack up again, or pick a larger cap: docker update --memory <size> --memory-swap <size> %s",
+					humanGiB(target), humanGiB(used), name)
+
+				continue
+			}
 		}
 
 		size := strconv.FormatInt(target, 10)

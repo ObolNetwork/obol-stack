@@ -393,7 +393,7 @@ func TestEthereumHelmfile_ReplicasAndResources(t *testing.T) {
 		{"mainnet full", map[string]any{"network": "mainnet", "executionClient": "reth", "consensusClient": "lighthouse", "mode": "full"}, 1, "4096Mi", "10240Mi", "5120Mi", "16384Mi", "2"},
 		{"mainnet archive stopped", map[string]any{"network": "mainnet", "executionClient": "reth", "consensusClient": "lighthouse", "mode": "archive", "stopped": true}, 0, "6144Mi", "14336Mi", "5120Mi", "16384Mi", "2"},
 		{"hoodi nimbus", map[string]any{"network": "hoodi", "executionClient": "geth", "consensusClient": "nimbus", "mode": "full"}, 1, "3072Mi", "10240Mi", "2048Mi", "8192Mi", "500m"},
-		{"sepolia archive", map[string]any{"network": "sepolia", "executionClient": "reth", "consensusClient": "teku", "mode": "archive"}, 1, "2048Mi", "6144Mi", "3072Mi", "8192Mi", "500m"},
+		{"sepolia archive", map[string]any{"network": "sepolia", "executionClient": "reth", "consensusClient": "teku", "mode": "archive"}, 1, "2048Mi", "8192Mi", "3072Mi", "8192Mi", "500m"},
 		{"overrides, empty since", map[string]any{
 			"network": "mainnet", "executionClient": "reth", "consensusClient": "lighthouse", "mode": "full",
 			"since": nil, "executionMemory": "16Gi", "consensusMemory": "10Gi", "stopped": false,

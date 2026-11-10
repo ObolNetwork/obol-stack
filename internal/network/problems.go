@@ -138,7 +138,7 @@ func podProblem(d Deployment, p PodStatus, now time.Time) (PodProblem, bool) {
 			if req == "" {
 				req = "its"
 			}
-			pr.Hint = memHint(fmt.Sprintf("Not enough free memory for %s request; free memory, or lower the client's memory limit (the request never exceeds it):", req))
+			pr.Hint = memHint(fmt.Sprintf("Not enough free memory for %s request; stop a node you don't need, or lower the client's memory (below its default request it is likely to be OOM-killed):", req))
 		} else {
 			pr.Hint = describe
 		}
@@ -206,7 +206,7 @@ func restartHint(p PodStatus, d Deployment, memHint func(string) string) string 
 		}
 
 		if p.MemoryLimit != "" {
-			return memHint(fmt.Sprintf("Out of memory: hit its limit (%s, %s). Raise the limit:", req, limit))
+			return memHint(fmt.Sprintf("Out of memory (%s, %s). Raise the limit, or if the cluster node is full, stop a node you don't need:", req, limit))
 		}
 
 		return memHint(fmt.Sprintf("Out of memory (%s, %s): free host memory (e.g. unload models: ollama ps), or set a limit:", req, limit))

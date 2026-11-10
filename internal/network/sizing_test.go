@@ -14,7 +14,7 @@ func TestEthereumSizing(t *testing.T) {
 		wantErr                bool
 	}{
 		{"mainnet archive reth+silver", "mainnet", modeArchive, "reth", "silver", "", "", sz(6, 14), sz(4, 8), false},
-		{"hoodi full reth+lighthouse", "hoodi", modeFull, "reth", "lighthouse", "", "", sz(1, 4), sz(3, 16), false},
+		{"hoodi full reth+lighthouse", "hoodi", modeFull, "reth", "lighthouse", "", "", sz(1, 6), sz(3, 16), false},
 		{"sepolia geth+teku", "sepolia", modeFull, "geth", "teku", "", "", sz(3, 10), sz(3, 8), false},
 		{"unknown client falls back", "mainnet", modeFull, "ethrex", "newcl", "", "", defaultELSizing, defaultCLSizing, false},
 		{"override raises the limit", "mainnet", modeFull, "reth", "lighthouse", "16Gi", "12Gi", sz(4, 16), sz(5, 12), false},
@@ -84,8 +84,32 @@ func TestLowMemoryOverrides(t *testing.T) {
 		t.Errorf("got %q, want one executionMemory warning", got)
 	}
 
+	d.ExecutionMemory, d.ConsensusMemory = "", "8Gi" // a user who raised the old 6Gi request
+	if got := lowMemoryOverrides(d); len(got) != 1 || !strings.Contains(got[0], "below the default limit of 16Gi") {
+		t.Errorf("got %q, want one consensusMemory headroom warning", got)
+	}
+
 	d.ExecutionMemory, d.ConsensusMemory = "", ""
 	if got := lowMemoryOverrides(d); len(got) != 0 {
 		t.Errorf("no overrides: got %q", got)
+	}
+}
+
+func TestClampToNode(t *testing.T) {
+	cases := []struct {
+		name   string
+		in     MemorySizing
+		nodeMi int64
+		want   MemorySizing
+	}{
+		{"fits", sz(5, 16), gi(23), sz(5, 16)},
+		{"limit lowered to the node", sz(5, 16), gi(12), sz(5, 12)},
+		{"request follows a tiny node", sz(5, 16), gi(4), sz(4, 4)},
+		{"node unknown", sz(5, 16), 0, sz(5, 16)},
+	}
+	for _, c := range cases {
+		if got := clampToNode(c.in, c.nodeMi); got != c.want {
+			t.Errorf("%s: got %+v, want %+v", c.name, got, c.want)
+		}
 	}
 }

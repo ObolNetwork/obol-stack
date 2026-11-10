@@ -13,8 +13,8 @@ import (
 )
 
 func TestWarnMemoryFit(t *testing.T) {
-	orig := clusterMemoryFn
-	t.Cleanup(func() { clusterMemoryFn = orig })
+	orig, origNode := clusterMemoryFn, nodeAllocatableFn
+	t.Cleanup(func() { clusterMemoryFn, nodeAllocatableFn = orig, origNode })
 
 	// mainnet archive reth + silver requests 6Gi + 4Gi = 10Gi.
 	d := Deployment{Namespace: "ethereum-mainnet", Network: "mainnet", Mode: modeArchive, ExecutionClient: "reth", ConsensusClient: "silver"}
@@ -33,6 +33,7 @@ func TestWarnMemoryFit(t *testing.T) {
 	}
 	for _, c := range cases {
 		clusterMemoryFn = func(*config.Config, string) (int64, int64, bool) { return c.allocatable, c.others, c.ok }
+		nodeAllocatableFn = func(*config.Config) (int64, bool) { return c.allocatable, c.ok }
 
 		dd := d
 		dd.Stopped = c.stopped
