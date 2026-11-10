@@ -14,11 +14,11 @@ func TestEthereumSizing(t *testing.T) {
 		wantErr                bool
 	}{
 		{"mainnet archive reth+silver", "mainnet", modeArchive, "reth", "silver", "", "", sz(6, 14), sz(4, 8), false},
-		{"hoodi full reth+lighthouse", "hoodi", modeFull, "reth", "lighthouse", "", "", sz(1, 4), sz(2, 6), false},
-		{"sepolia geth+teku", "sepolia", modeFull, "geth", "teku", "", "", sz(2, 6), sz(3, 6), false},
+		{"hoodi full reth+lighthouse", "hoodi", modeFull, "reth", "lighthouse", "", "", sz(1, 4), sz(3, 16), false},
+		{"sepolia geth+teku", "sepolia", modeFull, "geth", "teku", "", "", sz(3, 10), sz(3, 8), false},
 		{"unknown client falls back", "mainnet", modeFull, "ethrex", "newcl", "", "", defaultELSizing, defaultCLSizing, false},
 		{"override raises the limit", "mainnet", modeFull, "reth", "lighthouse", "16Gi", "12Gi", sz(4, 16), sz(5, 12), false},
-		{"override below the request caps it", "hoodi", modeFull, "geth", "lighthouse", "1536Mi", "", MemorySizing{1536, 1536}, sz(2, 6), false},
+		{"override below the request caps it", "hoodi", modeFull, "geth", "lighthouse", "1536Mi", "", MemorySizing{1536, 1536}, sz(3, 16), false},
 		{"bad override", "hoodi", modeFull, "reth", "lighthouse", "lots", "", MemorySizing{}, MemorySizing{}, true},
 	}
 	for _, c := range cases {

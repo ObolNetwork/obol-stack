@@ -51,25 +51,38 @@ func gi(n float64) int64 { return int64(n * 1024) }
 
 func sz(req, lim float64) MemorySizing { return MemorySizing{gi(req), gi(lim)} }
 
-// elSizing: [mainnet|testnet][full|archive][client].
+// elSizing: [mainnet|testnet][full|archive][client]. Limits sit about 1.5x
+// above the peak anonymous memory (cadvisor container_memory_rss) of Obol's
+// own nodes, Nov 2026: geth hoodi 8.4 GiB, besu hoodi 5.8, nethermind hoodi
+// 4.6 (OOM-killed once at a 7 GiB limit), geth / nethermind mainnet archive
+// 11.4 / 10.9, reth mainnet 6.8 (jemalloc; its RSS is mostly MDBX mmap,
+// which is reclaimable page cache and doesn't count towards an OOM).
 var elSizing = map[bool]map[bool]map[string]MemorySizing{
 	true: { // mainnet
 		false: {elReth: sz(4, 10), elGeth: sz(6, 12), elNethermind: sz(6, 12), elBesu: sz(6, 12), elErigon: sz(8, 16)},
 		true:  {elReth: sz(6, 14), elGeth: sz(8, 16), elNethermind: sz(8, 16), elBesu: sz(8, 16), elErigon: sz(8, 16)},
 	},
 	false: { // hoodi, sepolia
-		false: {elReth: sz(1, 4), elGeth: sz(2, 6), elNethermind: sz(2, 6), elBesu: sz(2, 6), elErigon: sz(3, 8)},
-		true:  {elReth: sz(2, 6), elGeth: sz(3, 8), elNethermind: sz(3, 8), elBesu: sz(3, 8), elErigon: sz(3, 8)},
+		false: {elReth: sz(1, 4), elGeth: sz(3, 10), elNethermind: sz(3, 8), elBesu: sz(3, 8), elErigon: sz(3, 8)},
+		true:  {elReth: sz(2, 6), elGeth: sz(4, 12), elNethermind: sz(4, 10), elBesu: sz(4, 10), elErigon: sz(4, 10)},
 	},
 }
 
-// clSizing: [network][client]. Lighthouse peaks with backfill (mainnet
-// 6.8 GiB, hoodi 5.1 GiB observed); Silver's memory has grown over days, so
-// its limit also bounds that growth with a restart.
+// clSizing: [network][client]. Hoodi's validator set is as large as
+// mainnet's, so its beacon state, and the beacon node's memory, are too:
+// hoodi gets mainnet's limits. Requests follow a node with no or few
+// validators (custody of 4-8 column groups: Lighthouse peaked at 6.8 GiB on
+// mainnet, 5.1 on hoodi), and stay lower on hoodi so a testnet node still
+// schedules on a small Docker VM. Limits cover a supernode (all 128 groups,
+// which validators worth 4096 ETH or more attached to the node bring), from
+// Obol's own hoodi and mainnet beacon nodes, Nov 2026 peak RSS: Lighthouse
+// 12.3 (OOM-killed once at 14), Teku 10.6, Prysm 9.7 median, Lodestar 7.0,
+// Grandine 6.9, Nimbus 5.3. Silver's memory has grown over days, so its
+// limit also bounds that growth with a restart.
 var clSizing = map[string]map[string]MemorySizing{
-	netMainnet: {clLighthouse: sz(5, 10), clPrysm: sz(5, 10), clTeku: sz(6, 10), clLodestar: sz(5, 10), clGrandine: sz(4, 8), clNimbus: sz(2, 5), clSilver: sz(4, 8)},
-	netHoodi:   {clLighthouse: sz(2, 6), clPrysm: sz(2, 6), clTeku: sz(3, 6), clLodestar: sz(2, 6), clGrandine: sz(2, 5), clNimbus: sz(1, 3), clSilver: sz(2, 5)},
-	netSepolia: {clLighthouse: sz(2, 5), clPrysm: sz(2, 5), clTeku: sz(3, 6), clLodestar: sz(2, 5), clGrandine: sz(2, 4), clNimbus: sz(1, 3), clSilver: sz(2, 4)},
+	netMainnet: {clLighthouse: sz(5, 16), clPrysm: sz(5, 14), clTeku: sz(6, 14), clLodestar: sz(4, 12), clGrandine: sz(4, 10), clNimbus: sz(3, 8), clSilver: sz(4, 8)},
+	netHoodi:   {clLighthouse: sz(3, 16), clPrysm: sz(3, 14), clTeku: sz(4, 14), clLodestar: sz(3, 12), clGrandine: sz(3, 10), clNimbus: sz(2, 8), clSilver: sz(3, 8)},
+	netSepolia: {clLighthouse: sz(2, 6), clPrysm: sz(2, 6), clTeku: sz(3, 8), clLodestar: sz(2, 6), clGrandine: sz(2, 5), clNimbus: sz(1, 4), clSilver: sz(2, 5)},
 }
 
 // Fallbacks for a client or network missing from the tables.
