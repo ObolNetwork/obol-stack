@@ -398,6 +398,18 @@
       "groupSlug": "gomod-minor-patch"
     },
     {
+      "description": "The x402 Go SDK gets its own PR, never auto-merged. v2.30 rejects non-CAIP-2 networks when parsing a 402 body, and the verifier still advertises legacy aliases (\"base-sepolia\") next to the CAIP-2 entries, so a bump needs that design changed first.",
+      "matchManagers": [
+        "gomod"
+      ],
+      "matchPackageNames": [
+        "github.com/x402-foundation/x402/go/**"
+      ],
+      "groupName": "x402 Go SDK",
+      "groupSlug": "x402-go",
+      "automerge": false
+    },
+    {
       "description": "Keep k8s.io client libraries and controller-tools in lockstep.",
       "matchManagers": [
         "gomod"
