@@ -22,9 +22,9 @@ func TestWarnClientRestarts(t *testing.T) {
 		stopped bool
 		want    string // "" = no warning
 	}{
-		{"pre-sizing deployment", &live{"", ""}, &live{"3Gi", ""}, false, "restarts reth (limit 4Gi) and lighthouse (limit 6Gi)"},
-		{"already sized", &live{"1Gi", "4Gi"}, &live{"2048Mi", "6Gi"}, false, ""},
-		{"only CL resized", &live{"1Gi", "4Gi"}, &live{"2Gi", "5Gi"}, false, "restarts lighthouse (limit 6Gi) once"},
+		{"pre-sizing deployment", &live{"", ""}, &live{"3Gi", ""}, false, "restarts reth (limit 4Gi) and lighthouse (limit 16Gi)"},
+		{"already sized", &live{"1Gi", "4Gi"}, &live{"3Gi", "16Gi"}, false, ""},
+		{"only CL resized", &live{"1Gi", "4Gi"}, &live{"2Gi", "5Gi"}, false, "restarts lighthouse (limit 16Gi) once"},
 		{"not deployed", nil, nil, false, ""},
 		{"stopped", &live{"", ""}, &live{"", ""}, true, ""},
 	}
