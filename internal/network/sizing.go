@@ -63,8 +63,8 @@ var elSizing = map[bool]map[bool]map[string]MemorySizing{
 		true:  {elReth: sz(6, 14), elGeth: sz(8, 16), elNethermind: sz(8, 16), elBesu: sz(8, 16), elErigon: sz(8, 16)},
 	},
 	false: { // hoodi, sepolia
-		false: {elReth: sz(1, 4), elGeth: sz(3, 10), elNethermind: sz(3, 8), elBesu: sz(3, 8), elErigon: sz(3, 8)},
-		true:  {elReth: sz(2, 6), elGeth: sz(4, 12), elNethermind: sz(4, 10), elBesu: sz(4, 10), elErigon: sz(4, 10)},
+		false: {elReth: sz(1, 6), elGeth: sz(3, 10), elNethermind: sz(3, 8), elBesu: sz(3, 8), elErigon: sz(3, 8)},
+		true:  {elReth: sz(2, 8), elGeth: sz(4, 12), elNethermind: sz(4, 10), elBesu: sz(4, 10), elErigon: sz(4, 10)},
 	},
 }
 
@@ -170,10 +170,11 @@ func deploymentSizing(d Deployment) (MemorySizing, MemorySizing, error) {
 	return EthereumSizing(d.Network, d.Mode, d.ExecutionClient, d.ConsensusClient, d.ExecutionMemory, d.ConsensusMemory)
 }
 
-// warnLowMemoryOverrides flags executionMemory / consensusMemory values
-// below the client's table request. Before they became limits they were
-// requests, and obol's Pending hint said to lower them; as a limit, such a
-// value gets the client OOM-killed in a loop.
+// lowMemoryOverrides flags executionMemory / consensusMemory values below
+// the client's table limit. Before they became limits they were requests
+// (raised by users who wanted more, lowered by obol's Pending hint); as a
+// limit, a value below the table request gets the client OOM-killed in a
+// loop, and one below the table limit takes away its headroom.
 func lowMemoryOverrides(d Deployment) []string {
 	el, cl, err := EthereumSizing(d.Network, d.Mode, d.ExecutionClient, d.ConsensusClient, "", "")
 	if err != nil {
@@ -192,10 +193,20 @@ func lowMemoryOverrides(d Deployment) []string {
 			continue
 		}
 
-		if mi, err := parseMemoryMi(o.value); err == nil && mi < o.table.RequestMi {
+		mi, err := parseMemoryMi(o.value)
+		if err != nil {
+			continue
+		}
+
+		switch {
+		case mi < o.table.RequestMi:
 			out = append(out, fmt.Sprintf("%s: %s is now %s's memory LIMIT, below what it needs at steady state (%s); it will be OOM-killed. "+
 				"Raise it to at least %s, or remove it to use the default (%s).",
 				o.key, o.value, o.client, formatMi(o.table.RequestMi), formatMi(o.table.RequestMi), formatMi(o.table.LimitMi)))
+		case mi < o.table.LimitMi:
+			out = append(out, fmt.Sprintf("%s: %s is now %s's memory LIMIT (it used to be the request), below the default limit of %s. "+
+				"Under sync, backfill or many attached validators it can be OOM-killed; remove it to use the default.",
+				o.key, o.value, o.client, formatMi(o.table.LimitMi)))
 		}
 	}
 
