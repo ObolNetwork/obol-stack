@@ -206,7 +206,12 @@ func enforceNodeMemory(u *ui.UI, clusterName, k3dConfig string) {
 			target = want
 		}
 
-		if target == 0 || swap == target {
+		if target == 0 {
+			continue
+		}
+
+		if swap == target {
+			u.Dim(fmt.Sprintf("  Cluster node memory: %s cap, no swap", humanGiB(target)))
 			continue
 		}
 
