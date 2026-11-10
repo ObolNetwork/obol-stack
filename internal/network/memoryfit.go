@@ -22,6 +22,21 @@ import (
 // visible to Kubernetes). ok is false when the cluster can't be asked.
 // Swappable for tests.
 var nodeAllocatableFn = func(cfg *config.Config) (int64, bool) {
+	allocatableMi, ok := kubeAllocatableFn(cfg)
+	if !ok {
+		return 0, false
+	}
+
+	if capMi, ok := dockerNodeCapMi(cfg); ok && capMi < allocatableMi {
+		allocatableMi = capMi
+	}
+
+	return allocatableMi, true
+}
+
+// kubeAllocatableFn is the nodes' allocatable memory as Kubernetes sees it
+// (and schedules against), in MiB. Swappable for tests.
+var kubeAllocatableFn = func(cfg *config.Config) (int64, bool) {
 	nodesOut, err := stopKubectlFn(cfg, "get", "nodes", "--request-timeout=5s", "-o", "json")
 	if err != nil {
 		return 0, false
@@ -37,10 +52,6 @@ var nodeAllocatableFn = func(cfg *config.Config) (int64, bool) {
 		if q, found := n.Status.Allocatable[corev1.ResourceMemory]; found {
 			allocatableMi += q.Value() >> 20
 		}
-	}
-
-	if capMi, ok := dockerNodeCapMi(cfg); ok && capMi < allocatableMi {
-		allocatableMi = capMi
 	}
 
 	return allocatableMi, allocatableMi > 0
@@ -186,8 +197,19 @@ func warnMemoryFit(cfg *config.Config, u *ui.UI, d Deployment) {
 		return
 	}
 
-	u.Warnf("Memory requests would total %s, more than the cluster node's %s: some pods will stay Pending.",
-		formatMi(total), formatMi(allocatable))
+	// A Docker cap added after the cluster was created is invisible to the
+	// scheduler: the pods still start, but can run the node out of memory
+	// together instead of waiting Pending.
+	if kubeMi, ok := kubeAllocatableFn(cfg); ok && kubeMi > allocatable {
+		u.Warnf("Memory requests would total %s, more than the cluster node's %s memory cap. Kubernetes sees %s "+
+			"(the cap was added after the cluster was created), so the pods still start, but together they can run the node "+
+			"out of memory and get OOM-killed.", formatMi(total), formatMi(allocatable), formatMi(kubeMi))
+	} else {
+		u.Warnf("Memory requests would total %s, more than the cluster node's %s: some pods will stay Pending.",
+			formatMi(total), formatMi(allocatable))
+	}
+
+	u.Dim("  Upgrading obol? Your other nodes' requests may drop when you sync them too.")
 	u.Print(strings.Join([]string{
 		"  Stop a node you don't need:  obol network stop <network>/<id>",
 		fmt.Sprintf("  Or lower this node's memory: executionMemory / consensusMemory in values.yaml (requests now %s / %s;",
