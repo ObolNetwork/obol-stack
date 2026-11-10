@@ -76,13 +76,16 @@ func TestEnforceNodeMemory(t *testing.T) {
 		name       string
 		config     string
 		inspect    string
+		stats      string
 		wantUpdate string // "" = no docker update
 	}{
-		{"new cluster, swap on", `serversMemory: "22528m"`, "23622320128 47244640256", "--memory 23622320128 --memory-swap 23622320128"},
-		{"already capped, no swap", `serversMemory: "22528m"`, "23622320128 23622320128", ""},
-		{"hand-set cap kept", `serversMemory: "20480m"`, "23622320128 23622320128", ""},
-		{"legacy cluster gets default", "options: {}", "0 0", "--memory 24964497408 --memory-swap 24964497408"},
-		{"cap off", `serversMemory: ""`, "0 0", ""},
+		{"new cluster, swap on", `serversMemory: "22528m"`, "23622320128 47244640256", "", "--memory 23622320128 --memory-swap 23622320128"},
+		{"already capped, no swap", `serversMemory: "22528m"`, "23622320128 23622320128", "", ""},
+		{"hand-set cap kept", `serversMemory: "20480m"`, "23622320128 23622320128", "", ""},
+		{"legacy cluster gets default", "options: {}", "0 0", "15.2GiB / 31GiB", "--memory 24964497408 --memory-swap 24964497408"},
+		{"legacy cluster using nearly the cap waits", "options: {}", "0 0", "22.1GiB / 31GiB", ""},
+		{"legacy cluster, stats unreadable", "options: {}", "0 0", "", "--memory 24964497408 --memory-swap 24964497408"},
+		{"cap off", `serversMemory: ""`, "0 0", "", ""},
 	}
 	for _, c := range cases {
 		var update string
@@ -92,6 +95,11 @@ func TestEnforceNodeMemory(t *testing.T) {
 				return "k3d-obol-stack-x-server-0", nil
 			case "inspect":
 				return c.inspect, nil
+			case "stats":
+				if c.stats == "" {
+					return "", errors.New("no stats")
+				}
+				return c.stats, nil
 			case "update":
 				update = strings.Join(args[1:len(args)-1], " ")
 				return "", nil

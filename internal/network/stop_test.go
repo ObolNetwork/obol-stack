@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"text/template"
@@ -318,7 +319,23 @@ func renderEthereumHelmfile(t *testing.T, values map[string]any) map[string]any 
 		"list": func(v ...any) []any {
 			return v
 		},
-		"fail":  func(msg string) (string, error) { return "", errors.New(msg) },
+		"fail": func(msg string) (string, error) { return "", errors.New(msg) },
+		// sprig's int/min/div/mul, enough for the memory sizing.
+		"int": func(v any) int64 {
+			n, _ := strconv.ParseInt(fmt.Sprint(v), 10, 64)
+			return n
+		},
+		"min": func(a, b any) int64 {
+			x, _ := strconv.ParseInt(fmt.Sprint(a), 10, 64)
+			y, _ := strconv.ParseInt(fmt.Sprint(b), 10, 64)
+			return min(x, y)
+		},
+		"div": func(a, b int64) int64 { return a / b },
+		"mul": func(a, b any) int64 {
+			x, _ := strconv.ParseInt(fmt.Sprint(a), 10, 64)
+			y, _ := strconv.ParseInt(fmt.Sprint(b), 10, 64)
+			return x * y
+		},
 		"quote": func(v any) string { return fmt.Sprintf("%q", fmt.Sprint(v)) },
 	}
 
@@ -364,47 +381,70 @@ func clientValues(t *testing.T, state map[string]any, client string) map[string]
 	return nil
 }
 
-func TestEthereumHelmfile_ReplicasAndRequests(t *testing.T) {
+func TestEthereumHelmfile_ReplicasAndResources(t *testing.T) {
 	cases := []struct {
 		name               string
 		values             map[string]any
 		replicas           int
-		elMemory, clMemory string
+		elRequest, elLimit string
+		clRequest, clLimit string
 		elCPU              string
 	}{
-		{"mainnet full", map[string]any{"network": "mainnet", "executionClient": "reth", "consensusClient": "lighthouse", "mode": "full"}, 1, "8Gi", "6Gi", "2"},
-		{"mainnet archive stopped", map[string]any{"network": "mainnet", "executionClient": "reth", "consensusClient": "lighthouse", "mode": "archive", "stopped": true}, 0, "12Gi", "6Gi", "2"},
-		{"hoodi nimbus", map[string]any{"network": "hoodi", "executionClient": "geth", "consensusClient": "nimbus", "mode": "full"}, 1, "2Gi", "2Gi", "500m"},
-		{"sepolia archive", map[string]any{"network": "sepolia", "executionClient": "reth", "consensusClient": "teku", "mode": "archive"}, 1, "4Gi", "2Gi", "500m"},
+		{"mainnet full", map[string]any{"network": "mainnet", "executionClient": "reth", "consensusClient": "lighthouse", "mode": "full"}, 1, "4096Mi", "10240Mi", "5120Mi", "16384Mi", "2"},
+		{"mainnet archive stopped", map[string]any{"network": "mainnet", "executionClient": "reth", "consensusClient": "lighthouse", "mode": "archive", "stopped": true}, 0, "6144Mi", "14336Mi", "5120Mi", "16384Mi", "2"},
+		{"hoodi nimbus", map[string]any{"network": "hoodi", "executionClient": "geth", "consensusClient": "nimbus", "mode": "full"}, 1, "3072Mi", "10240Mi", "2048Mi", "8192Mi", "500m"},
+		{"sepolia archive", map[string]any{"network": "sepolia", "executionClient": "reth", "consensusClient": "teku", "mode": "archive"}, 1, "2048Mi", "8192Mi", "3072Mi", "8192Mi", "500m"},
 		{"overrides, empty since", map[string]any{
 			"network": "mainnet", "executionClient": "reth", "consensusClient": "lighthouse", "mode": "full",
 			"since": nil, "executionMemory": "16Gi", "consensusMemory": "10Gi", "stopped": false,
-		}, 1, "16Gi", "10Gi", "2"},
+		}, 1, "4096Mi", "16384Mi", "5120Mi", "10240Mi", "2"},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			str := func(k string) string { v, _ := c.values[k].(string); return v }
+
+			el, cl, err := EthereumSizing(str("network"), str("mode"), str("executionClient"), str("consensusClient"), str("executionMemory"), str("consensusMemory"))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// As helmfile receives them: --state-values-set k=v, v a string.
+			args := sizingStateValues(el, cl)
+			for i := 1; i < len(args); i += 2 {
+				k, v, _ := strings.Cut(args[i], "=")
+				c.values[k] = v
+			}
+
 			state := renderEthereumHelmfile(t, c.values)
 
-			el := clientValues(t, state, c.values["executionClient"].(string))
-			cl := clientValues(t, state, c.values["consensusClient"].(string))
+			elv := clientValues(t, state, str("executionClient"))
+			clv := clientValues(t, state, str("consensusClient"))
 
-			for side, m := range map[string]map[string]any{"execution": el, "consensus": cl} {
+			for side, m := range map[string]map[string]any{"execution": elv, "consensus": clv} {
 				if m["replicas"] != c.replicas {
 					t.Errorf("%s replicas = %v, want %d", side, m["replicas"], c.replicas)
 				}
-
-				res := m["resources"].(map[string]any)
-				if _, ok := res["limits"]; ok {
-					t.Errorf("%s: requests only, no limits", side)
-				}
 			}
 
-			elReq := el["resources"].(map[string]any)["requests"].(map[string]any)
-			clReq := cl["resources"].(map[string]any)["requests"].(map[string]any)
+			check := func(side string, m map[string]any, req, lim string) {
+				res := m["resources"].(map[string]any)
+				gotReq := res["requests"].(map[string]any)["memory"]
+				gotLim := res["limits"].(map[string]any)["memory"]
 
-			if elReq["memory"] != c.elMemory || clReq["memory"] != c.clMemory || elReq["cpu"] != c.elCPU {
-				t.Errorf("requests: el %v, cl %v", elReq, clReq)
+				if gotReq != req || gotLim != lim {
+					t.Errorf("%s memory: request %v limit %v, want %s %s", side, gotReq, gotLim, req, lim)
+				}
+
+				if _, ok := res["limits"].(map[string]any)["cpu"]; ok {
+					t.Errorf("%s: no CPU limit", side)
+				}
+			}
+			check("execution", elv, c.elRequest, c.elLimit)
+			check("consensus", clv, c.clRequest, c.clLimit)
+
+			if cpu := elv["resources"].(map[string]any)["requests"].(map[string]any)["cpu"]; cpu != c.elCPU {
+				t.Errorf("execution cpu = %v, want %s", cpu, c.elCPU)
 			}
 		})
 	}

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
+	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	petname "github.com/dustinkirkland/golang-petname"
 	"gopkg.in/yaml.v3"
@@ -238,6 +238,10 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 	u.Successf("Network %s/%s configured", network, id)
 	u.Detail("Location", deploymentDir)
 	u.Blank()
+	if network == TypeEthereum {
+		warnMemoryFit(cfg, u, readDeployment(cfg, network, id))
+	}
+
 	u.Printf("To deploy, run: obol network sync %s/%s", network, id)
 
 	return nil
@@ -367,14 +371,36 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	}
 
 	if networkName == TypeEthereum {
-		warnELRestart(cfg, u, readDeployment(cfg, networkName, deploymentID))
+		d := readDeployment(cfg, networkName, deploymentID)
+		for _, w := range lowMemoryOverrides(d) {
+			u.Warn(w)
+		}
+
+		warnClientRestarts(cfg, u, d)
+		warnMemoryFit(cfg, u, d)
 	}
 
 	// Execute helmfile sync
-	syncArgs := append([]string{"-f", helmfilePath, "sync",
+	syncArgs := []string{
+		"-f", helmfilePath, "sync",
 		"--state-values-file", valuesPath,
-		"--state-values-set", "id=" + deploymentID},
-		helmcmd.SyncFlagsForVersion(cfg.ToolPath("helm"))...)
+		"--state-values-set", "id=" + deploymentID,
+	}
+
+	if networkName == TypeEthereum {
+		el, cl, nodeMi, err := clusterSizing(cfg, readDeployment(cfg, networkName, deploymentID))
+		if err != nil {
+			return fmt.Errorf("%s/%s values.yaml: %w", networkName, deploymentID, err)
+		}
+
+		if nodeMi > 0 {
+			u.Dim(fmt.Sprintf("  Memory limits above the cluster node's %s are lowered to it.", formatMi(nodeMi)))
+		}
+
+		syncArgs = append(syncArgs, sizingStateValues(el, cl)...)
+	}
+
+	syncArgs = append(syncArgs, helmcmd.SyncFlagsForVersion(cfg.ToolPath("helm"))...)
 	cmd := helmcmd.Helmfile(helmfileBinary, cfg.ToolPath("helm"), syncArgs...)
 	cmd.Dir = deploymentDir
 

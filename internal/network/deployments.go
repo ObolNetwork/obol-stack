@@ -34,6 +34,10 @@ type Deployment struct {
 	// Stopped is set by `obol network stop`: workloads scaled to 0, data
 	// kept, not registered with eRPC (values.yaml `stopped: true`).
 	Stopped bool `json:"stopped,omitempty"`
+	// ExecutionMemory / ConsensusMemory are the values.yaml memory limit
+	// overrides (ethereum only; "" = the sizing table's).
+	ExecutionMemory string `json:"-"`
+	ConsensusMemory string `json:"-"`
 	// Error is set when values.yaml could not be read; the deployment
 	// directory still exists, so it is listed rather than hidden.
 	Error string `json:"error,omitempty"`
@@ -75,6 +79,8 @@ func readDeployment(cfg *config.Config, typ, id string) Deployment {
 		PruneBlock      uint64 `yaml:"pruneBlock"`
 		PruneDistance   uint64 `yaml:"pruneDistance"`
 		Stopped         bool   `yaml:"stopped"`
+		ExecutionMemory string `yaml:"executionMemory"`
+		ConsensusMemory string `yaml:"consensusMemory"`
 	}
 	if err := yaml.Unmarshal(raw, &values); err != nil {
 		d.Error = "values.yaml invalid: " + err.Error()
@@ -86,6 +92,8 @@ func readDeployment(cfg *config.Config, typ, id string) Deployment {
 	d.ConsensusClient = values.ConsensusClient
 	d.Mode = values.Mode
 	d.Stopped = values.Stopped
+	d.ExecutionMemory = values.ExecutionMemory
+	d.ConsensusMemory = values.ConsensusMemory
 	if typ == TypeEthereum {
 		if d.Mode == "" {
 			d.Mode = modeFull
