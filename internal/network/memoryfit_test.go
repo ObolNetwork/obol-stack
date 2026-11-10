@@ -13,27 +13,29 @@ import (
 )
 
 func TestWarnMemoryFit(t *testing.T) {
-	orig, origNode := clusterMemoryFn, nodeAllocatableFn
-	t.Cleanup(func() { clusterMemoryFn, nodeAllocatableFn = orig, origNode })
+	orig, origNode, origKube := clusterMemoryFn, nodeAllocatableFn, kubeAllocatableFn
+	t.Cleanup(func() { clusterMemoryFn, nodeAllocatableFn, kubeAllocatableFn = orig, origNode, origKube })
 
 	// mainnet archive reth + silver requests 6Gi + 4Gi = 10Gi.
 	d := Deployment{Namespace: "ethereum-mainnet", Network: "mainnet", Mode: modeArchive, ExecutionClient: "reth", ConsensusClient: "silver"}
 
 	cases := []struct {
-		name                string
-		allocatable, others int64
-		ok, stopped         bool
-		warn                bool
+		name                      string
+		allocatable, kube, others int64
+		ok, stopped               bool
+		want                      string // "" = no warning
 	}{
-		{"fits", gi(23), gi(10), true, false, false},
-		{"exactly fits", gi(20), gi(10), true, false, false},
-		{"over", gi(23), gi(14), true, false, true},
-		{"stopped node needs nothing", gi(23), gi(14), true, true, false},
-		{"cluster unreachable", 0, 0, false, false, false},
+		{"fits", gi(23), gi(23), gi(10), true, false, ""},
+		{"exactly fits", gi(20), gi(20), gi(10), true, false, ""},
+		{"over", gi(23), gi(23), gi(14), true, false, "stay Pending"},
+		{"over a cap Kubernetes can't see", gi(22), gi(31), gi(14), true, false, "Kubernetes sees 31Gi"},
+		{"stopped node needs nothing", gi(23), gi(23), gi(14), true, true, ""},
+		{"cluster unreachable", 0, 0, 0, false, false, ""},
 	}
 	for _, c := range cases {
 		clusterMemoryFn = func(*config.Config, string) (int64, int64, bool) { return c.allocatable, c.others, c.ok }
 		nodeAllocatableFn = func(*config.Config) (int64, bool) { return c.allocatable, c.ok }
+		kubeAllocatableFn = func(*config.Config) (int64, bool) { return c.kube, c.ok }
 
 		dd := d
 		dd.Stopped = c.stopped
@@ -41,8 +43,12 @@ func TestWarnMemoryFit(t *testing.T) {
 		var out bytes.Buffer
 		warnMemoryFit(&config.Config{}, ui.NewForTest(&out, &out), dd)
 
-		if got := strings.Contains(out.String(), "stay Pending"); got != c.warn {
-			t.Errorf("%s: warned = %v, want %v (%q)", c.name, got, c.warn, out.String())
+		if c.want == "" && out.Len() > 0 {
+			t.Errorf("%s: unexpected warning %q", c.name, out.String())
+		}
+
+		if c.want != "" && !strings.Contains(out.String(), c.want) {
+			t.Errorf("%s: warning %q, want it to contain %q", c.name, out.String(), c.want)
 		}
 	}
 }
