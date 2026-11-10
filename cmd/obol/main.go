@@ -145,9 +145,14 @@ func newRootCommand(cfg *config.Config) *cli.Command {
 								Aliases: []string{"y"},
 								Usage:   "Confirm destroying the old cluster when --force switches backends (required in non-interactive shells)",
 							},
+							&cli.StringFlag{
+								Name:    "node-memory",
+								Usage:   "Memory cap for the k3d node, without swap: a size such as 22g, auto (Docker's memory minus 4-8 GiB) or off. Applies when the cluster is created",
+								Sources: cli.EnvVars(stack.NodeMemoryEnv),
+							},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return stack.Init(cfg, getUI(cmd), cmd.Bool("force"), cmd.String("backend"), cmd.Bool("yes"))
+							return stack.Init(cfg, getUI(cmd), cmd.Bool("force"), cmd.String("backend"), cmd.Bool("yes"), cmd.String("node-memory"))
 						},
 					},
 					{

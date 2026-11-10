@@ -30,7 +30,11 @@ const (
 )
 
 // K3dBackend manages clusters via k3d (k3s inside Docker containers)
-type K3dBackend struct{}
+type K3dBackend struct {
+	// NodeMemory is the --node-memory setting for Init: a size, "auto"
+	// ("" falls back to OBOL_NODE_MEMORY, then auto) or "off".
+	NodeMemory string
+}
 
 func (b *K3dBackend) Name() string { return BackendK3d }
 
@@ -70,6 +74,21 @@ func (b *K3dBackend) Init(cfg *config.Config, u *ui.UI, stackID string, force bo
 	k3dConfig = strings.ReplaceAll(k3dConfig, "{{STACK_ID}}", stackID)
 	k3dConfig = strings.ReplaceAll(k3dConfig, "{{DATA_DIR}}", absDataDir)
 	k3dConfig = strings.ReplaceAll(k3dConfig, "{{CONFIG_DIR}}", absConfigDir)
+
+	setting := b.NodeMemory
+	if setting == "" {
+		setting = os.Getenv(NodeMemoryEnv)
+	}
+
+	nodeMemory, err := resolveNodeMemory(setting)
+	if err != nil {
+		return err
+	}
+
+	k3dConfig = strings.ReplaceAll(k3dConfig, "{{SERVERS_MEMORY}}", k3dSize(nodeMemory))
+	if nodeMemory > 0 {
+		u.Infof("Cluster node memory: %s, no swap (change with --node-memory or %s)", humanGiB(nodeMemory), NodeMemoryEnv)
+	}
 
 	// Rewrite occupied host-port mappings so k3d cluster create won't fail
 	// when another local stack is already bound to the default ingress ports.
@@ -158,6 +177,10 @@ func (b *K3dBackend) Up(cfg *config.Config, u *ui.UI, stackID string) ([]byte, e
 		}); err != nil {
 			return nil, fmt.Errorf("failed to create cluster: %w", err)
 		}
+	}
+
+	if raw, err := os.ReadFile(k3dConfigPath); err == nil {
+		enforceNodeMemory(u, stackName, string(raw))
 	}
 
 	// Export kubeconfig
