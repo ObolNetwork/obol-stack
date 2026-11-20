@@ -182,8 +182,12 @@ def _signer_post(path, data):
 
 def _rpc_call(method, params=None, network=None):
     """JSON-RPC call to eRPC."""
-    net = network or NETWORK
-    url = f"{ERPC_BASE}/{net}"
+    net = _resolve_chain(network or NETWORK)
+    # Route by chain id, not alias: `obol network add` names a chain after its
+    # ChainList entry (Robinhood Chain -> "robinhood-chain", Arbitrum One ->
+    # "arbitrum-one"), so a canonical name above is not always an eRPC alias,
+    # while evm/<chainId> reaches the chain whatever alias it was given.
+    url = f"{ERPC_BASE}/evm/{CHAIN_IDS[net]}"
     payload = json.dumps({
         "jsonrpc": "2.0",
         "method": method,

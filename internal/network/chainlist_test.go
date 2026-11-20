@@ -215,6 +215,7 @@ func TestResolveChainID(t *testing.T) {
 		{"ethereum", 1, false},
 		{"mainnet", 1, false},
 		{"arbitrum", 42161, false},
+		{"robinhood", 4663, false},
 		{"8453", 8453, false},
 		{"137", 137, false},
 		{"unknown-chain", 0, true},
