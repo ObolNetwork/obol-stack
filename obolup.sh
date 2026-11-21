@@ -61,19 +61,19 @@ fi
 # TestManifestMatchesObolup keeps them equal to manifest.yaml, so a version
 # bump here must be paired with the manifest version AND sha256 update.
 # renovate: datasource=github-releases depName=kubernetes/kubernetes
-readonly KUBECTL_VERSION="1.37.1"
+readonly KUBECTL_VERSION="1.37.2"
 # renovate: datasource=github-releases depName=helm/helm
-readonly HELM_VERSION="4.3.0"
+readonly HELM_VERSION="4.3.2"
 # renovate: datasource=github-releases depName=k3d-io/k3d
 readonly K3D_VERSION="5.9.0"
 # renovate: datasource=github-releases depName=helmfile/helmfile
-readonly HELMFILE_VERSION="1.8.1"
+readonly HELMFILE_VERSION="1.8.4"
 # renovate: datasource=github-releases depName=derailed/k9s
 readonly K9S_VERSION="0.51.0"
 # renovate: datasource=github-releases depName=databus23/helm-diff
 readonly HELM_DIFF_VERSION="3.15.15"
 # renovate: datasource=github-releases depName=ollama/ollama
-readonly OLLAMA_VERSION="0.40.4"
+readonly OLLAMA_VERSION="0.40.17"
 
 # Repository URL for building from source
 readonly OBOL_REPO_URL="git@github.com:ObolNetwork/obol-stack.git"
