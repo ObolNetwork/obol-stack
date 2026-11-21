@@ -144,6 +144,21 @@ func captureERPCProvenanceEntries(prov *erpcProvenance, erpcConfig map[string]an
 	if prov == nil || ov == nil {
 		return false
 	}
+	if !captureERPCProvenanceEntries(prov, erpcConfig, ov) {
+		return nil
+	}
+	return writeERPCProvenance(cfg, prov)
+}
+
+// captureERPCProvenanceEntries is the in-memory half of
+// captureERPCProvenance. It records the original value for each newly-owned
+// key after retired overlay entries have been stripped, so replacing one
+// overlay with another never mistakes the previous overlay value for chart
+// base state.
+func captureERPCProvenanceEntries(prov *erpcProvenance, erpcConfig map[string]any, ov *ERPCOverlay) bool {
+	if prov == nil || ov == nil {
+		return false
+	}
 	project := erpcConfigProject(erpcConfig)
 	if project == nil {
 		return false
