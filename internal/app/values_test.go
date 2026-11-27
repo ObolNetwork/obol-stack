@@ -3,6 +3,7 @@ package app
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -116,5 +117,98 @@ func TestApplyOverridesToFile_InvalidSetExpression(t *testing.T) {
 	}
 	if err := applyOverridesToFile(valuesPath, nil, []string{"=value"}); err == nil {
 		t.Error("expected error for --set expression with empty key")
+	}
+}
+
+const (
+	testAddress = "0x3D1fD3D27b1C6Aa4Bd2fBc4fDaF8B53e70a7dbe2"
+	testHash    = "0x7f0f4b3c1a2d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7"
+)
+
+// Regression: re-serializing values dropped the quotes on hex strings, and
+// helm then read an address as the float 3.49e+47.
+func TestApplyOverridesToFile_KeepsHexStringsQuoted(t *testing.T) {
+	dir := t.TempDir()
+	valuesPath := writeFile(t, dir, "values.yaml",
+		"# operator settings\n"+
+			"tests:\n"+
+			"  dkgSidecar:\n"+
+			"    operatorAddress: \""+testAddress+"\"\n"+
+			"    configHash: \""+testHash+"\" # target hash\n"+
+			"zeta: 1\n"+
+			"alpha: 2\n")
+
+	err := applyOverridesToFile(valuesPath, nil, []string{
+		"charon.operatorAddress=" + testAddress,
+		"dkg.definition.configHash=" + testHash,
+		"small=0x10",
+	})
+	if err != nil {
+		t.Fatalf("applyOverridesToFile: %v", err)
+	}
+
+	data, err := os.ReadFile(valuesPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := string(data)
+
+	for _, want := range []string{
+		`operatorAddress: "` + testAddress + `"`,
+		`configHash: "` + testHash + `"`,
+		`small: "0x10"`,
+		"# operator settings",
+		"# target hash",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("values.yaml missing %q:\n%s", want, out)
+		}
+	}
+
+	if strings.Index(out, "zeta") > strings.Index(out, "alpha") {
+		t.Errorf("key order not preserved (zeta before alpha):\n%s", out)
+	}
+
+	// Values set as hex stay strings when read back.
+	values := readValues(t, valuesPath)
+	if got := values["charon"].(map[string]any)["operatorAddress"]; got != testAddress {
+		t.Errorf("charon.operatorAddress = %v (%T)", got, got)
+	}
+}
+
+// A bare hex value already in a file (written by an older obol) gets
+// quoted on the next write instead of staying a float for helm.
+func TestApplyOverridesToFile_QuotesExistingBareHex(t *testing.T) {
+	dir := t.TempDir()
+	valuesPath := writeFile(t, dir, "values.yaml", "addr: "+testAddress+"\nversion: 1.2.3\n")
+
+	if err := applyOverridesToFile(valuesPath, nil, []string{"x=1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	data, _ := os.ReadFile(valuesPath)
+	if !strings.Contains(string(data), `addr: "`+testAddress+`"`) {
+		t.Errorf("bare hex not quoted:\n%s", data)
+	}
+
+	if !strings.Contains(string(data), `version: "1.2.3"`) {
+		t.Errorf("number-like string not quoted:\n%s", data)
+	}
+}
+
+func TestBareHexPaths(t *testing.T) {
+	dir := t.TempDir()
+	path := writeFile(t, dir, "values.yaml",
+		"tests:\n  dkgSidecar:\n    a: "+testAddress+"\n    b: \""+testHash+"\"\nlist:\n  - "+testHash+"\nsmall: 0x10\n")
+
+	got, err := bareHexPaths(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"tests.dkgSidecar.a", "list[0]"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("bareHexPaths = %v, want %v", got, want)
 	}
 }

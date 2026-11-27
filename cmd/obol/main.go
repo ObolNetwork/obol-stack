@@ -283,14 +283,22 @@ func newRootCommand(cfg *config.Config) *cli.Command {
 						Description: `Install a Helm chart as a managed application.
 
 Supported chart reference formats:
-  repo/chart          Resolved via ArtifactHub (e.g., bitnami/redis)
-  repo/chart@version  Specific version (e.g., bitnami/redis@19.0.0)
+  repo/chart          A local helm repo alias (obol helm repo list), the
+                      built-in alias "obol" (Obol's chart repo), else ArtifactHub
+  repo/chart@version  Specific version (e.g., obol/dv-pod@0.24.0)
   https://.../*.tgz   Direct URL to chart archive
   oci://...           OCI registry reference
 
+The deployment lives in namespace <name>-<id> and the helm release defaults to
+<name>-<id> too (--namespace and --release override them). values.yaml holds only your
+overrides (--values/--set); charts that ship values-examples/obol-stack.yaml
+(dv-pod) start from it. An existing helm release of the same name that obol
+app doesn't manage is refused unless --adopt; to take over a dv-pod installed
+with helm: --namespace dv-pod --release my-dv-pod --adopt.
+
 Examples:
+  obol app install obol/dv-pod@0.24.0 --name dv-pod --id hoodi --set network=hoodi --values my-dv.yaml
   obol app install bitnami/redis
-  obol app install bitnami/postgresql@15.0.0
   obol app install https://charts.bitnami.com/bitnami/redis-19.0.0.tgz
   obol app install oci://registry-1.docker.io/bitnamicharts/redis --name mydb --id production
 
@@ -308,14 +316,26 @@ Find charts at https://artifacthub.io`,
 								Name:  "id",
 								Usage: "Deployment ID (defaults to generated petname)",
 							},
+							&cli.StringFlag{
+								Name:  appNamespaceFlag,
+								Usage: "Kubernetes namespace (default <name>-<id>; stack namespaces are refused)",
+							},
+							&cli.StringFlag{
+								Name:  "release",
+								Usage: "Helm release name (default <name>-<id>; with --force, the existing release)",
+							},
 							&cli.BoolFlag{
 								Name:    "force",
 								Aliases: []string{"f"},
 								Usage:   "Overwrite existing deployment",
 							},
+							&cli.BoolFlag{
+								Name:  "adopt",
+								Usage: "Take over an existing helm release of the same name, seeding values.yaml from its values",
+							},
 							&cli.StringSliceFlag{
 								Name:  "values",
-								Usage: "Values file merged onto chart defaults (repeatable, merged in order)",
+								Usage: "Values file merged into values.yaml (repeatable, merged in order)",
 							},
 							&cli.StringSliceFlag{
 								Name:  "set",
@@ -338,7 +358,10 @@ Find charts at https://artifacthub.io`,
 								Name:        cmd.String("name"),
 								Version:     cmd.String("version"),
 								ID:          cmd.String("id"),
+								Release:     cmd.String("release"),
+								Namespace:   cmd.String(appNamespaceFlag),
 								Force:       cmd.Bool("force"),
+								Adopt:       cmd.Bool("adopt"),
 								ValuesFiles: cmd.StringSlice("values"),
 								Set:         cmd.StringSlice("set"),
 							}
@@ -350,7 +373,14 @@ Find charts at https://artifacthub.io`,
 						Name:      "sync",
 						Usage:     "Deploy application to cluster",
 						ArgsUsage: "[<app>/<id>]",
+						Description: `Deploys values.yaml with helmfile. Refuses when the live helm release was
+changed outside obol app (helm upgrade/rollback since obol's last sync),
+naming the keys that differ; fold them into values.yaml or pass --force.`,
 						Flags: []cli.Flag{
+							&cli.BoolFlag{
+								Name:  "force",
+								Usage: "Sync even if the release was changed outside obol app (reverts those changes)",
+							},
 							&cli.StringSliceFlag{
 								Name:  "values",
 								Usage: "Values file merged into the deployment's values.yaml before syncing (repeatable)",
@@ -369,12 +399,53 @@ Find charts at https://artifacthub.io`,
 							u := getUI(cmd)
 							// Overrides are persisted into the deployment's
 							// values.yaml (not passed as ephemeral flags) so
-							// resume-on-stack-up replays them.
-							if err := app.ApplyOverrides(cfg, identifier, cmd.StringSlice("values"), cmd.StringSlice("set")); err != nil {
+							// resume-on-stack-up replays them. Sync merges
+							// them after its drift check.
+							syncOpts := app.SyncOptions{
+								Force:       cmd.Bool("force"),
+								ValuesFiles: cmd.StringSlice("values"),
+								Set:         cmd.StringSlice("set"),
+							}
+							if err := app.SyncWithOptions(cfg, u, identifier, syncOpts); err != nil {
 								return err
 							}
 
-							if err := app.Sync(cfg, u, identifier); err != nil {
+							app.PrintSellHint(cfg, u, identifier)
+
+							return nil
+						},
+					},
+					{
+						Name:      appUpgradeCmd,
+						Usage:     "Move an app to another chart version and sync it",
+						ArgsUsage: "[<app>/<id>]",
+						Description: `Sets version: in the app's helmfile.yaml and runs 'obol app sync' (with its
+drift check; a refused sync restores the old version). values.yaml is not
+changed. Warns when values.yaml is a pre-v0.19 full copy of the old chart's
+defaults, whose image tags would stay pinned.
+
+Example:
+  obol app upgrade dv-pod/hoodi --version 0.24.0`,
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:     "version",
+								Usage:    "Target chart version",
+								Required: true,
+							},
+							&cli.BoolFlag{
+								Name:  "force",
+								Usage: "Sync even if the release was changed outside obol app (reverts those changes)",
+							},
+						},
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							identifier, _, err := app.ResolveInstance(cfg, cmd.Args().Slice())
+							if err != nil {
+								return err
+							}
+
+							u := getUI(cmd)
+							upgradeOpts := app.UpgradeOptions{Version: cmd.String("version"), Force: cmd.Bool("force")}
+							if err := app.Upgrade(cfg, u, identifier, upgradeOpts); err != nil {
 								return err
 							}
 
@@ -398,11 +469,31 @@ Find charts at https://artifacthub.io`,
 						Name:      "delete",
 						Usage:     "Remove application and cluster resources",
 						ArgsUsage: "[<app>/<id>]",
+						Description: `Deletes the app's namespace and config directory.
+
+If the namespace holds PersistentVolumeClaims or Secrets that look like key
+material (dv-pod key shares and ENR keys, validator keystores), only the helm
+release is removed: the namespace, its PVCs and Secrets and the config
+directory stay, and 'obol app sync' redeploys onto them. --delete-data
+deletes everything; on a terminal you type the app name to confirm, without
+one pass --delete-data --yes.`,
 						Flags: []cli.Flag{
 							&cli.BoolFlag{
 								Name:    "force",
 								Aliases: []string{"f"},
-								Usage:   "Skip confirmation prompt",
+								Usage:   "Skip the confirmation prompt (never deletes data on its own)",
+							},
+							&cli.BoolFlag{
+								Name:  "delete-data",
+								Usage: "Also delete PVCs and key-material Secrets (key shares are lost)",
+							},
+							&cli.BoolFlag{
+								Name:  "keep-data",
+								Usage: "Remove only the helm release; keep the namespace, PVCs, Secrets and config",
+							},
+							&cli.BoolFlag{
+								Name:  "yes",
+								Usage: "Confirm --delete-data without typing the app name",
 							},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -411,9 +502,15 @@ Find charts at https://artifacthub.io`,
 								return err
 							}
 
-							return app.Delete(cfg, getUI(cmd), identifier, cmd.Bool("force"))
+							return app.Delete(cfg, getUI(cmd), identifier, app.DeleteOptions{
+								Force:      cmd.Bool("force"),
+								DeleteData: cmd.Bool("delete-data"),
+								KeepData:   cmd.Bool("keep-data"),
+								Yes:        cmd.Bool("yes"),
+							})
 						},
 					},
+					appSecretCommand(cfg),
 				},
 			},
 		},

@@ -11,9 +11,11 @@ import (
 
 // HelmfileInfo holds parsed information from a helmfile.yaml
 type HelmfileInfo struct {
-	ChartRef string // Original chart reference (from comment)
-	Chart    string // Chart field value
-	Version  string // Chart version
+	ChartRef  string // Original chart reference (from comment)
+	Chart     string // Chart field value
+	Version   string // Chart version
+	Release   string // Release name (releases[0].name)
+	Namespace string // Release namespace (releases[0].namespace)
 }
 
 // ParseHelmfile extracts chart information from a helmfile.yaml
@@ -45,8 +47,10 @@ func ParseHelmfile(dir string) (*HelmfileInfo, error) {
 	// Parse YAML structure to get chart and version
 	var helmfile struct {
 		Releases []struct {
-			Chart   string `yaml:"chart"`
-			Version string `yaml:"version"`
+			Name      string `yaml:"name"`
+			Namespace string `yaml:"namespace"`
+			Chart     string `yaml:"chart"`
+			Version   string `yaml:"version"`
 		} `yaml:"releases"`
 	}
 	if err := yaml.Unmarshal(data, &helmfile); err != nil {
@@ -56,6 +60,8 @@ func ParseHelmfile(dir string) (*HelmfileInfo, error) {
 	if len(helmfile.Releases) > 0 {
 		info.Chart = helmfile.Releases[0].Chart
 		info.Version = helmfile.Releases[0].Version
+		info.Release = helmfile.Releases[0].Name
+		info.Namespace = helmfile.Releases[0].Namespace
 	}
 
 	return info, nil

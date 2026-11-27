@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"text/template"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
+	"github.com/ObolNetwork/obol-stack/internal/fsutil"
 	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	petname "github.com/dustinkirkland/golang-petname"
@@ -21,8 +21,11 @@ type InstallOptions struct {
 	Name        string   // Optional app name override
 	Version     string   // Chart version (empty = latest for repo/chart, extracted for URL)
 	ID          string   // Deployment ID (empty = generate petname)
+	Release     string   // Helm release name (empty = <name>-<id>, or the existing one with --force)
+	Namespace   string   // Kubernetes namespace (empty = <name>-<id>, or the existing one with --force)
 	Force       bool     // Overwrite existing deployment
-	ValuesFiles []string // Values files merged onto chart defaults (in order)
+	Adopt       bool     // Take over an existing helm release of the same name (values seeded from it)
+	ValuesFiles []string // Values files merged into values.yaml (in order)
 	Set         []string // key.path=value overrides applied after values files
 }
 
@@ -31,7 +34,18 @@ type ListOptions struct {
 	Verbose bool // Show detailed information
 }
 
-// Install scaffolds a new application from a Helm chart reference
+// newArtifactHubResolver is the ArtifactHub lookup used by Install
+// (replaced in tests).
+var newArtifactHubResolver = func() func(string) (*ChartInfo, error) {
+	return NewArtifactHubClient().ResolveChart
+}
+
+// Install scaffolds a new application from a Helm chart reference.
+//
+// values.yaml records only the operator's overrides (from --values/--set),
+// starting from the chart's values-examples/obol-stack.yaml when the chart
+// ships one. Chart defaults are read from the chart at every sync, so a
+// chart upgrade brings its new defaults (image tags included).
 func Install(cfg *config.Config, u *ui.UI, chartRef string, opts InstallOptions) error {
 	u.Infof("Installing application from: %s", chartRef)
 
@@ -41,42 +55,27 @@ func Install(cfg *config.Config, u *ui.UI, chartRef string, opts InstallOptions)
 		return err
 	}
 
-	// 2. If repo/chart format, resolve via ArtifactHub
-	if chart.NeedsResolution() {
-		u.Info("Resolving chart via ArtifactHub...")
-
-		client := NewArtifactHubClient()
-
-		info, err := client.ResolveChart(chartRef)
-		if err != nil {
-			return err
-		}
-
-		chart.RepoURL = info.RepoURL
-
-		chart.RepoName = info.RepoName
-		if chart.Version == "" {
-			chart.Version = info.Version
-		}
-
-		u.Detail("Resolved", fmt.Sprintf("%s/%s version %s", info.RepoName, info.ChartName, info.Version))
-		u.Detail("Repository URL", info.RepoURL)
-	}
-
-	// Apply version override from CLI flag
 	if opts.Version != "" {
 		chart.Version = opts.Version
 	}
 
-	// 3. Determine app name
+	// 2. Resolve repo/chart: local helm repo alias → built-in alias → ArtifactHub
+	if chart.NeedsResolution() {
+		source, err := resolveRepoChart(cfg, chart, newArtifactHubResolver())
+		if err != nil {
+			return err
+		}
+
+		u.Detail("Resolved", fmt.Sprintf("%s/%s version %s (via %s)", chart.RepoName, chart.ChartName, chart.Version, source))
+		u.Detail("Repository URL", chart.RepoURL)
+	}
+
+	// 3. Determine app name and ID
 	appName := opts.Name
 	if appName == "" {
 		appName = chart.GetChartName()
 	}
 
-	u.Detail("Application name", appName)
-
-	// 4. Generate or use provided ID
 	id := opts.ID
 	if id == "" {
 		id = petname.Generate(2, "-")
@@ -85,8 +84,16 @@ func Install(cfg *config.Config, u *ui.UI, chartRef string, opts InstallOptions)
 		u.Detail("Using deployment ID", id)
 	}
 
-	// 5. Check if deployment exists
-	deploymentDir := filepath.Join(cfg.ConfigDir, "applications", appName, id)
+	defaultName := fmt.Sprintf("%s-%s", appName, id)
+	deploymentDir := deploymentDirFor(cfg, appName, id)
+
+	// 4. Existing deployment: refuse, or with --force keep its release name
+	// (a new default would install a second release next to the old one).
+	existingRelease := ""
+	existingNamespace := ""
+	carriedRevision := 0 // sync record of the deployment being overwritten
+	carryLegacy := false
+
 	if _, err := os.Stat(deploymentDir); err == nil {
 		if !opts.Force {
 			return fmt.Errorf("deployment already exists: %s/%s\n"+
@@ -94,45 +101,177 @@ func Install(cfg *config.Config, u *ui.UI, chartRef string, opts InstallOptions)
 				"Use --force or -f to overwrite", appName, id, deploymentDir)
 		}
 
+		if old, err := loadAppMeta(deploymentDir, appName, id); err == nil {
+			existingRelease = old.Release
+			existingNamespace = old.Namespace
+			carriedRevision = old.SyncedRevision
+			carryLegacy = old.Legacy()
+		}
+
 		u.Warnf("Overwriting existing deployment at %s", deploymentDir)
 	}
 
-	// 6. Create deployment directory
+	// 5. Namespace and release name: flags, else the overwritten
+	// deployment's, else <name>-<id>.
+	namespace := firstNonEmpty(opts.Namespace, existingNamespace, defaultName)
+	if err := ValidateNamespace(namespace); err != nil {
+		if opts.Namespace == "" {
+			return fmt.Errorf("%w\nPick another --name, or set --namespace", err)
+		}
+
+		return err
+	}
+
+	if existingNamespace != "" && namespace != existingNamespace {
+		u.Warnf("This deployment was in namespace %s; syncing will install into %s. The old release stays in %s until you remove it.",
+			existingNamespace, namespace, existingNamespace)
+
+		existingRelease = "" // nothing obol manages in the new namespace yet
+	}
+
+	release := firstNonEmpty(opts.Release, existingRelease, defaultName)
+
+	if err := ValidateReleaseName(release); err != nil {
+		return err
+	}
+
+	if existingRelease != "" && release != existingRelease {
+		u.Warnf("This deployment's release was %q; syncing will install %q next to it in namespace %s. Remove the old one with: obol helm uninstall %s -n %s",
+			existingRelease, release, namespace, existingRelease, namespace)
+	}
+
+	u.Detail("Application", appName)
+	u.Detail("Release", release)
+	u.Detail("Namespace", namespace)
+
+	// 6. A helm release with this name already in the namespace that obol
+	// app doesn't manage: syncing would take it over and revert whatever
+	// was set with helm directly.
+	adoptedRevision := 0
+
+	var adoptedValues []byte
+
+	if clusterConfigured(cfg) {
+		live, err := liveRelease(cfg, namespace, release)
+
+		switch {
+		case err != nil:
+			u.Warnf("Could not check for an existing helm release %s in %s: %v", release, namespace, err)
+		case live != nil && existingRelease == release && !opts.Adopt:
+			// Re-install (--force) of an app obol already manages: keep its
+			// sync record so the next sync neither calls the release foreign
+			// nor misses drift. A pre-v0.19 app has no record; its current
+			// revision becomes the baseline.
+			if carryLegacy || carriedRevision == 0 {
+				carriedRevision = live.Revision
+			}
+		case live != nil && !opts.Adopt:
+			return fmt.Errorf("helm release %q already exists in namespace %s (revision %d) and is not managed by obol app\n"+
+				"Syncing would take it over and revert changes made with helm directly. Either:\n"+
+				"  - keep managing it with helm: obol helm upgrade %s <chart> -n %s ...\n"+
+				"  - or let obol app take it over, seeding values.yaml from the release:\n"+
+				"      obol app install %s --name %s --id %s --namespace %s --release %s --adopt",
+				release, namespace, live.Revision, release, namespace, chartRef, appName, id, namespace, release)
+		case live != nil:
+			values, err := helmCluster(cfg, "get", "values", release, "-n", namespace, "-o", "yaml")
+			if err != nil {
+				return fmt.Errorf("read values of release %s: %w", release, err)
+			}
+
+			adoptedValues = values
+			adoptedRevision = live.Revision
+			u.Infof("Adopting helm release %s (revision %d); values.yaml starts from its current values", release, live.Revision)
+		case opts.Adopt:
+			return fmt.Errorf("--adopt: no helm release %q in namespace %s", release, namespace)
+		}
+	}
+
+	// 7. Pull the chart (validates it and reads its Obol Stack example values)
+	u.Info("Fetching chart...")
+
+	pulled, err := pullChart(cfg, chart)
+	if err != nil {
+		return fmt.Errorf("failed to fetch chart: %w", err)
+	}
+	defer pulled.cleanup()
+
+	if chart.Version == "" {
+		chart.Version = pulled.chartVersion()
+	}
+
+	// 8. Build values.yaml: overrides only
+	base := []byte(nil)
+	baseNote := ""
+
+	switch {
+	case adoptedValues != nil:
+		base = adoptedValues
+		baseNote = fmt.Sprintf("Seeded from helm release %s (revision %d) when obol app adopted it.", release, adoptedRevision)
+	case pulled.stackExampleValues() != nil:
+		base = pulled.stackExampleValues()
+		baseNote = "Started from the chart's " + stackExampleValuesPath + " (Obol Stack settings)."
+
+		u.Detail("Values", "starting from the chart's "+stackExampleValuesPath)
+	}
+
+	doc, err := parseValuesNode(base, "chart values")
+	if err != nil {
+		return err
+	}
+
+	if err := applyOverridesToNode(doc, opts.ValuesFiles, opts.Set); err != nil {
+		return fmt.Errorf("failed to apply value overrides: %w", err)
+	}
+
+	header := valuesHeader(appName, id, chart, baseNote)
+	if doc.HeadComment != "" {
+		// Keep the example's own leading comments (how-to notes) below ours.
+		header += "\n\n" + doc.HeadComment
+	}
+
+	doc.HeadComment = header
+
+	values, err := encodeValuesNode(doc)
+	if err != nil {
+		return err
+	}
+
+	// 9. Write the deployment directory
 	if err := os.MkdirAll(deploymentDir, 0o755); err != nil {
 		return fmt.Errorf("failed to create deployment directory: %w", err)
 	}
 
-	// 7. Fetch default values using helm show values
-	u.Info("Fetching chart default values...")
-
-	values, err := fetchChartValues(cfg, chart)
-	if err != nil {
-		// Clean up on failure
+	fail := func(err error) error {
 		os.RemoveAll(deploymentDir)
-		return fmt.Errorf("failed to fetch chart values: %w", err)
+		return err
 	}
 
-	// 8. Write values.yaml
-	valuesPath := filepath.Join(deploymentDir, "values.yaml")
-	if err := os.WriteFile(valuesPath, values, 0o600); err != nil {
-		os.RemoveAll(deploymentDir)
-		return fmt.Errorf("failed to write values.yaml: %w", err)
+	if err := fsutil.WriteSecret(filepath.Join(deploymentDir, "values.yaml"), values); err != nil {
+		return fail(fmt.Errorf("failed to write values.yaml: %w", err))
 	}
 
-	// 9. Merge user overrides (--values files, then --set) into values.yaml
-	// so the deployment directory records exactly what will deploy.
-	if err := applyOverridesToFile(valuesPath, opts.ValuesFiles, opts.Set); err != nil {
-		os.RemoveAll(deploymentDir)
-		return fmt.Errorf("failed to apply value overrides: %w", err)
+	if err := generateRemoteHelmfile(deploymentDir, chart, release, namespace); err != nil {
+		return fail(fmt.Errorf("failed to generate helmfile: %w", err))
 	}
 
-	// 10. Generate helmfile.yaml (references chart remotely)
-	if err := generateRemoteHelmfile(deploymentDir, chart, appName, id); err != nil {
-		os.RemoveAll(deploymentDir)
-		return fmt.Errorf("failed to generate helmfile: %w", err)
+	if release != existingRelease {
+		carriedRevision = 0 // a different release has no sync record yet
 	}
 
-	// 11. Print success message
+	meta := &AppMeta{
+		Release:            release,
+		Namespace:          namespace,
+		ChartRef:           chartRef,
+		ChartName:          chart.ChartName,
+		ValuesMode:         ValuesModeOverrides,
+		ValuesChartVersion: chart.Version,
+		SyncedRevision:     max(adoptedRevision, carriedRevision),
+	}
+	if err := saveAppMeta(deploymentDir, meta); err != nil {
+		return fail(fmt.Errorf("failed to write %s: %w", metaFileName, err))
+	}
+
+	// 10. Print success message
 	u.Blank()
 	u.Successf("Application installed successfully!")
 	u.Detail("Deployment", fmt.Sprintf("%s/%s", appName, id))
@@ -140,68 +279,40 @@ func Install(cfg *config.Config, u *ui.UI, chartRef string, opts InstallOptions)
 	u.Blank()
 	u.Print("Files created:")
 	u.Print("  - helmfile.yaml: Deployment configuration")
-	u.Print("  - values.yaml: Chart default values (edit to customize)")
+	u.Print("  - values.yaml: Your overrides of the chart defaults (edit to customize)")
+	u.Printf("  - %s: Release name and sync record (managed by obol)", metaFileName)
 	u.Blank()
-	u.Print("Edit values.yaml to customize your deployment.")
+	u.Printf("All chart defaults: %s", showValuesCommand(chart))
 	u.Printf("To deploy, run: obol app sync %s/%s", appName, id)
 
 	return nil
 }
 
-// fetchChartValues retrieves default values from a chart using helm show values
-func fetchChartValues(cfg *config.Config, chart *ChartReference) ([]byte, error) {
-	helmPath := cfg.ToolPath("helm")
-
-	var args []string
-
-	switch chart.Format {
-	case FormatURL:
-		// Direct URL reference
-		args = []string{"show", "values", chart.ChartURL}
-	case FormatRepoChart:
-		// Use repo URL directly without helm repo add
-		args = []string{"show", "values", chart.ChartName, "--repo", chart.RepoURL}
-		if chart.Version != "" {
-			args = append(args, "--version", chart.Version)
-		}
-	case FormatOCI:
-		// OCI reference
-		args = []string{"show", "values", chart.ChartURL}
-		if chart.Version != "" {
-			args = append(args, "--version", chart.Version)
-		}
+// valuesHeader is the comment block at the top of a new values.yaml.
+func valuesHeader(appName, id string, chart *ChartReference, baseNote string) string {
+	lines := []string{
+		fmt.Sprintf("Values for app %s/%s (chart %s %s).", appName, id, chart.ChartName, chart.Version),
+		"Only your overrides belong here: chart defaults are read from the chart on every",
+		"'obol app sync', so a chart upgrade brings its new defaults (image tags included).",
+		"All defaults: " + showValuesCommand(chart),
+	}
+	if baseNote != "" {
+		lines = append(lines, baseNote)
 	}
 
-	cmd := exec.Command(helmPath, args...)
-
-	var stdout, stderr bytes.Buffer
-
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("helm show values failed: %w\n%s", err, stderr.String())
-	}
-
-	// Return empty YAML if chart has no default values
-	if stdout.Len() == 0 {
-		return []byte("# No default values in chart\n"), nil
-	}
-
-	return stdout.Bytes(), nil
+	return strings.Join(lines, "\n")
 }
 
 // generateRemoteHelmfile creates a helmfile.yaml that references the chart remotely
-func generateRemoteHelmfile(dir string, chart *ChartReference, appName, id string) error {
+func generateRemoteHelmfile(dir string, chart *ChartReference, release, namespace string) error {
 	var tmpl string
 
 	switch chart.Format {
-	case FormatURL:
-		// Direct URL reference
+	case FormatURL, FormatOCI:
 		tmpl = `# Installed from: {{ .Original }}
 
 releases:
-  - name: {{ .AppName }}
+  - name: {{ .Release }}
     namespace: {{ .Namespace }}
     createNamespace: true
     chart: {{ .ChartURL }}
@@ -213,33 +324,18 @@ releases:
 `
 	case FormatRepoChart:
 		// Repository reference (helmfile handles repo inline)
-		tmpl = `# Installed from: {{ .Original }} (resolved via ArtifactHub)
+		tmpl = `# Installed from: {{ .Original }}
 
 repositories:
   - name: {{ .RepoName }}
     url: {{ .RepoURL }}
 
 releases:
-  - name: {{ .AppName }}
+  - name: {{ .Release }}
     namespace: {{ .Namespace }}
     createNamespace: true
     chart: {{ .RepoName }}/{{ .ChartName }}
     version: "{{ .Version }}"
-    values:
-      - values.yaml
-`
-	case FormatOCI:
-		// OCI registry reference
-		tmpl = `# Installed from: {{ .Original }}
-
-releases:
-  - name: {{ .AppName }}
-    namespace: {{ .Namespace }}
-    createNamespace: true
-    chart: {{ .ChartURL }}
-{{- if .Version }}
-    version: "{{ .Version }}"
-{{- end }}
     values:
       - values.yaml
 `
@@ -252,8 +348,8 @@ releases:
 		"RepoURL":   chart.RepoURL,
 		"ChartName": chart.ChartName,
 		"Version":   chart.Version,
-		"AppName":   appName,
-		"Namespace": fmt.Sprintf("%s-%s", appName, id),
+		"Release":   release,
+		"Namespace": namespace,
 	}
 
 	t, err := template.New("helmfile").Parse(tmpl)
@@ -269,9 +365,38 @@ releases:
 	return os.WriteFile(filepath.Join(dir, "helmfile.yaml"), buf.Bytes(), 0o600)
 }
 
-// Sync deploys or updates an application to the cluster
+// ErrDrift is returned (wrapped) when sync refuses because the live
+// release was changed outside obol app.
+var ErrDrift = errors.New("release drift")
+
+// SyncOptions controls Sync.
+type SyncOptions struct {
+	// Force syncs even when the live release was changed outside obol app
+	// (those changes are reverted to values.yaml).
+	Force bool
+	// ValuesFiles and Set are merged into values.yaml after the drift check
+	// and before deploying.
+	ValuesFiles []string
+	Set         []string
+}
+
+// Sync deploys or updates an application to the cluster. It refuses when
+// the live release was changed outside obol app; see SyncWithOptions.
 func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
-	// Parse deployment identifier: app-name/id
+	return SyncWithOptions(cfg, u, deploymentIdentifier, SyncOptions{})
+}
+
+// SyncWithOptions deploys or updates an application.
+//
+// Before deploying it compares the live helm release with obol's record:
+//   - a revision above the one obol last synced means someone ran helm
+//     upgrade/rollback directly; syncing would revert that, so it refuses
+//     without Force and names the keys that differ;
+//   - a release that exists although this deployment was never synced is
+//     a foreign release (refused without Force);
+//   - pre-v0.19 deployments have no record: it warns when the live values
+//     differ from values.yaml and adopts the current revision.
+func SyncWithOptions(cfg *config.Config, u *ui.UI, deploymentIdentifier string, opts SyncOptions) error {
 	appName, id, err := parseDeploymentIdentifier(deploymentIdentifier)
 	if err != nil {
 		return err
@@ -279,13 +404,11 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 
 	u.Infof("Syncing application: %s/%s", appName, id)
 
-	// Locate deployment directory
-	deploymentDir := filepath.Join(cfg.ConfigDir, "applications", appName, id)
+	deploymentDir := deploymentDirFor(cfg, appName, id)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
 		return fmt.Errorf("deployment not found: %s\nDirectory: %s", deploymentIdentifier, deploymentDir)
 	}
 
-	// Check required files exist
 	helmfilePath := filepath.Join(deploymentDir, "helmfile.yaml")
 	if _, err := os.Stat(helmfilePath); os.IsNotExist(err) {
 		return fmt.Errorf("helmfile.yaml not found in: %s", deploymentDir)
@@ -296,44 +419,157 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 		return fmt.Errorf("values.yaml not found in: %s", deploymentDir)
 	}
 
-	// Check kubeconfig exists (cluster must be running)
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+	if !clusterConfigured(cfg) {
 		return errors.New("cluster not running. Run 'obol stack up' first")
 	}
 
-	// Get helmfile binary path
 	helmfileBinary := cfg.ToolPath("helmfile")
 	if _, err := os.Stat(helmfileBinary); os.IsNotExist(err) {
 		return fmt.Errorf("helmfile not found at %s; run 'obol upgrade' to install missing tools", helmfileBinary)
 	}
 
-	u.Detail("Deployment directory", deploymentDir)
-	u.Detail("Deployment ID", id)
+	meta, err := loadAppMeta(deploymentDir, appName, id)
+	if err != nil {
+		return err
+	}
 
-	// Execute helmfile sync
+	u.Detail("Deployment directory", deploymentDir)
+	u.Detail("Release", meta.Release)
+	u.Detail("Namespace", meta.Namespace)
+
+	// Drift check runs before values.yaml is touched by --values/--set.
+	live, err := liveRelease(cfg, meta.Namespace, meta.Release)
+	if err != nil {
+		u.Warnf("Could not read helm release %s: %v", meta.Release, err)
+	}
+
+	if live != nil {
+		if err := checkDrift(cfg, u, meta, live, valuesPath, appName, id, opts.Force); err != nil {
+			return err
+		}
+
+		warnStaleDefaults(u, meta, live, helmfilePath, appName, id)
+	}
+
+	if err := ApplyOverrides(cfg, deploymentIdentifier, opts.ValuesFiles, opts.Set); err != nil {
+		return err
+	}
+
+	if paths, err := bareHexPaths(valuesPath); err == nil && len(paths) > 0 {
+		u.Warnf("values.yaml has unquoted hex values that helm reads as numbers (a long address or hash becomes a float): %s. Quote them, e.g. key: \"0x…\"",
+			formatPaths(paths))
+	}
+
 	syncArgs := append([]string{"-f", helmfilePath, "sync"}, helmcmd.SyncFlagsForVersion(cfg.ToolPath("helm"))...)
 	cmd := helmcmd.Helmfile(helmfileBinary, cfg.ToolPath("helm"), syncArgs...)
 	cmd.Dir = deploymentDir
+	cmd.Env = append(os.Environ(), "KUBECONFIG="+stackKubeconfig(cfg))
 
-	cmd.Env = append(os.Environ(),
-		"KUBECONFIG="+kubeconfigPath,
-	)
+	syncErr := u.Exec(ui.ExecConfig{Name: "Running helmfile sync", Cmd: cmd})
 
-	if err := u.Exec(ui.ExecConfig{Name: "Running helmfile sync", Cmd: cmd}); err != nil {
-		return fmt.Errorf("helmfile sync failed: %w", err)
+	// Record the revision this sync produced, even after a failed sync
+	// (a failed upgrade still adds a revision, and it was ours).
+	recordSync(cfg, u, deploymentDir, meta)
+
+	if syncErr != nil {
+		return fmt.Errorf("helmfile sync failed: %w", syncErr)
 	}
-
-	namespace := fmt.Sprintf("%s-%s", appName, id)
 
 	u.Blank()
 	u.Success("Application synced successfully!")
-	u.Detail("Namespace", namespace)
+	u.Detail("Namespace", meta.Namespace)
 	u.Blank()
-	u.Printf("To check status: obol kubectl get all -n %s", namespace)
-	u.Printf("To view logs: obol kubectl logs -n %s <pod-name>", namespace)
+	u.Printf("To check status: obol kubectl get all -n %s", meta.Namespace)
+	u.Printf("To view logs: obol kubectl logs -n %s <pod-name>", meta.Namespace)
 
 	return nil
+}
+
+// checkDrift compares the live release with obol's sync record.
+func checkDrift(cfg *config.Config, u *ui.UI, meta *AppMeta, live *releaseState, valuesPath, appName, id string, force bool) error {
+	changedKeys := func() string {
+		fileValues, ferr := loadValuesMap(valuesPath)
+		liveVals, lerr := liveValues(cfg, meta.Namespace, meta.Release)
+
+		if ferr != nil || lerr != nil {
+			return ""
+		}
+
+		if diff := valuesDiff(fileValues, liveVals); len(diff) > 0 {
+			return "\nValues that differ between the live release and values.yaml: " + formatPaths(diff)
+		}
+
+		return ""
+	}
+
+	foldHint := fmt.Sprintf("Fold those changes into %s (see: obol helm get values %s -n %s), then run 'obol app sync %s/%s --force'.\n"+
+		"Or pass --force now to overwrite them with values.yaml.", valuesPath, meta.Release, meta.Namespace, appName, id)
+
+	switch {
+	case meta.Legacy():
+		if keys := changedKeys(); keys != "" {
+			u.Warnf("Helm release %s (revision %d) was deployed before obol app kept a sync record.%s\n"+
+				"Expected if you edited values.yaml. If someone changed the release with helm directly, this sync reverts that.",
+				meta.Release, live.Revision, keys)
+		}
+
+		return nil
+	case meta.SyncedRevision == 0:
+		msg := fmt.Sprintf("helm release %s already exists in namespace %s (revision %d) but obol app never synced it: it was installed outside obol app.%s",
+			meta.Release, meta.Namespace, live.Revision, changedKeys())
+		if force {
+			u.Warnf("%s\n--force: taking it over with values.yaml.", msg)
+			return nil
+		}
+
+		return fmt.Errorf("%w: %s\n%s", ErrDrift, msg, foldHint)
+	case live.Revision > meta.SyncedRevision:
+		msg := fmt.Sprintf("helm release %s was changed outside obol app: it is at revision %d (%s), obol app last synced revision %d.%s",
+			meta.Release, live.Revision, live.Status, meta.SyncedRevision, changedKeys())
+		if force {
+			u.Warnf("%s\n--force: overwriting with values.yaml.", msg)
+			return nil
+		}
+
+		return fmt.Errorf("%w: %s\n%s", ErrDrift, msg, foldHint)
+	}
+
+	return nil
+}
+
+// warnStaleDefaults warns when a deployment whose values.yaml holds a
+// chart's full defaults (pre-v0.19 install) moves to another chart version:
+// the old defaults, image tags included, stay pinned as user values.
+func warnStaleDefaults(u *ui.UI, meta *AppMeta, live *releaseState, helmfilePath, appName, id string) {
+	if meta.ValuesMode != ValuesModeFullDefaults {
+		return
+	}
+
+	info, err := ParseHelmfile(filepath.Dir(helmfilePath))
+	if err != nil || info.Version == "" || live.ChartVersion == "" || info.Version == live.ChartVersion {
+		return
+	}
+
+	u.Warnf("Chart version changes %s → %s, but values.yaml is a full copy of the chart defaults from install time: "+
+		"those old defaults (image tags included) stay pinned and override the new chart's.\n"+
+		"To slim it, keep only the keys you changed (compare with 'obol helm show values' for the old version), "+
+		"or reinstall with only your overrides: obol app install <chart>@%s --name %s --id %s --force --values <your-overrides.yaml>",
+		live.ChartVersion, info.Version, info.Version, appName, id)
+}
+
+// recordSync stores the live revision after a sync in obol-app.yaml.
+func recordSync(cfg *config.Config, u *ui.UI, dir string, meta *AppMeta) {
+	live, err := liveRelease(cfg, meta.Namespace, meta.Release)
+	if err != nil || live == nil {
+		return
+	}
+
+	meta.SyncedRevision = live.Revision
+	meta.SyncedChartVersion = live.ChartVersion
+
+	if err := saveAppMeta(dir, meta); err != nil {
+		u.Warnf("Could not record the synced revision in %s: %v", metaFileName, err)
+	}
 }
 
 // parseDeploymentIdentifier parses "app-name/id" format
@@ -439,114 +675,6 @@ func List(cfg *config.Config, u *ui.UI, opts ListOptions) error {
 
 	u.Blank()
 	u.Printf("Total: %d application deployment(s)", count)
-
-	return nil
-}
-
-// Delete removes an application deployment and its cluster resources
-func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string, force bool) error {
-	appName, id, err := parseDeploymentIdentifier(deploymentIdentifier)
-	if err != nil {
-		return err
-	}
-
-	namespaceName := fmt.Sprintf("%s-%s", appName, id)
-	deploymentDir := filepath.Join(cfg.ConfigDir, "applications", appName, id)
-
-	u.Infof("Deleting application: %s/%s", appName, id)
-	u.Detail("Namespace", namespaceName)
-	u.Detail("Config directory", deploymentDir)
-
-	// Check if config directory exists
-	configExists := false
-	if _, err := os.Stat(deploymentDir); err == nil {
-		configExists = true
-	}
-
-	// Check if namespace exists in cluster
-	namespaceExists := false
-
-	kubeconfigPath := filepath.Join(cfg.ConfigDir, "kubeconfig.yaml")
-	if _, err := os.Stat(kubeconfigPath); err == nil {
-		kubectlBinary := cfg.ToolPath("kubectl")
-		cmd := exec.Command(kubectlBinary, "get", "namespace", namespaceName)
-
-		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-		if err := cmd.Run(); err == nil {
-			namespaceExists = true
-		}
-	}
-
-	// Display what will be deleted
-	u.Blank()
-	u.Print("Resources to be deleted:")
-
-	if namespaceExists {
-		u.Printf("  [x] Kubernetes namespace: %s", namespaceName)
-	} else {
-		u.Printf("  [ ] Kubernetes namespace: %s (not found)", namespaceName)
-	}
-
-	if configExists {
-		u.Printf("  [x] Configuration directory: %s", deploymentDir)
-	} else {
-		u.Printf("  [ ] Configuration directory: %s (not found)", deploymentDir)
-	}
-
-	// Check if there's anything to delete
-	if !namespaceExists && !configExists {
-		return fmt.Errorf("deployment not found: %s", deploymentIdentifier)
-	}
-
-	// Confirm deletion (unless --force)
-	if !force {
-		u.Blank()
-
-		ok, err := u.ConfirmOrFlag("Proceed with deletion?", "--force")
-		if err != nil {
-			return err
-		}
-
-		if !ok {
-			u.Print("Deletion cancelled")
-			return nil
-		}
-	}
-
-	// Delete Kubernetes namespace
-	if namespaceExists {
-		kubectlBinary := cfg.ToolPath("kubectl")
-		cmd := exec.Command(kubectlBinary, "delete", "namespace", namespaceName,
-			"--force", "--grace-period=0")
-
-		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfigPath)
-
-		if err := u.Exec(ui.ExecConfig{Name: "Deleting namespace " + namespaceName, Cmd: cmd}); err != nil {
-			return fmt.Errorf("failed to delete namespace: %w", err)
-		}
-	}
-
-	// Delete configuration directory
-	if configExists {
-		u.Info("Deleting configuration directory...")
-
-		if err := os.RemoveAll(deploymentDir); err != nil {
-			return fmt.Errorf("failed to delete config directory: %w", err)
-		}
-
-		u.Success("Configuration deleted")
-
-		// Clean up empty parent directories
-		appDir := filepath.Join(cfg.ConfigDir, "applications", appName)
-
-		entries, err := os.ReadDir(appDir)
-		if err == nil && len(entries) == 0 {
-			os.Remove(appDir)
-		}
-	}
-
-	u.Blank()
-	u.Successf("Application %s/%s deleted successfully!", appName, id)
 
 	return nil
 }
