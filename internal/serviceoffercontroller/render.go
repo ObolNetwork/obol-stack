@@ -21,6 +21,11 @@ import (
 )
 
 const (
+	// staticSiteImage serves the public static site (busybox httpd) and runs
+	// its init container.
+	// renovate: datasource=docker depName=busybox
+	staticSiteImage = "busybox:1.38"
+
 	// The static site is the busybox httpd that serves every public artifact:
 	// skill.md, services.json (the storefront's own backend), openapi.json,
 	// the API docs, and one bundle per hostname-bound offer (landing page,
@@ -148,7 +153,7 @@ func buildAgentIdentityRegistrationDeployment(identity *monetizeapi.AgentIdentit
 						"containers": []any{
 							map[string]any{
 								"name":            "httpd",
-								"image":           "busybox:1.36",
+								"image":           staticSiteImage, //nolint:goconst // unstructured field name
 								"command":         []any{"httpd", "-f", "-p", "8080", "-h", "/www"},
 								"securityContext": restrictedContainerSecurityContext(),
 								"ports": []any{
@@ -363,7 +368,7 @@ func buildStaticSiteDeployment(contentHash string, bundles []offerBundleFile) *u
 						"containers": []any{
 							map[string]any{
 								"name":            "httpd",
-								"image":           "busybox:1.36",
+								"image":           staticSiteImage,
 								"command":         []any{"httpd", "-f", "-p", "8080", "-h", "/www"},
 								"securityContext": restrictedContainerSecurityContext(),
 								"ports": []any{

@@ -263,7 +263,7 @@ Two-stage templating: `values.yaml.gotmpl` annotated with `@enum`/`@default`/`@d
 | `obol stack export` | Full backup archive: config dir (minus kubeconfig; includes `defaults/` + `defaults.obol-new/` + the defaults manifest so hand-edits survive), agent data dirs (brains + keystores, deployments quiesced for consistency), encrypted wallet backups, etcd-drift resources (Agent CRs, ServiceOffers, LiteLLM/eRPC CMs). `internal/stackbackup/` Wallets: every Hermes (and leftover OpenClaw) wallet goes to `wallets/<ns>.json|.enc`, read through the k3d node when the host keystore dir (owned by the signer's UID 65532) isn't readable — so export needs the cluster running; an uncapturable wallet is reported as NOT in the archive. |
 | `obol stack import <archive>` | One command: restore host state (absolute paths re-pointed to this host) → `stack up` via the shared `runStackUp` path when the cluster isn't running → re-apply CRs/CMs + re-sync agents. Over a fresh `init`/`up` pass `--force`; an EMPTY pre-import cluster of the replaced stack is deleted (frees ingress ports), a populated one never is; another stack's cluster behind a stale kubeconfig is left untouched (`internal/stackbackup/identity.go`). `--cluster-only` re-applies only. PurchaseRequests/buyer auths intentionally not restored (auths expire) An archive's defaults tree replaces the local one (a hand-edited local tree is moved to `defaults.bak.<ts>` first). In every mode, a keystore that `data/` didn't restore is re-created from `wallets/` after decrypting it in-process and matching the derived address (`--passphrase`, else a TTY prompt, else a loud NOT-restored with the manual `obol agent wallet restore` command); the remote-signer chart's init container chowns it to 65532. |
 
-k3d: 1 server, ports `80:80` + `8080:80` + `443:443` + `8443:443`, image `rancher/k3s:v1.35.9-k3s1`.
+k3d: 1 server, ports `80:80` + `8080:80` + `443:443` + `8443:443`, image `rancher/k3s:v1.35.10-k3s1`.
 
 **Local access**: macOS port 80 privileged — may not bind without root. Always use `http://obol.stack:8080/` (not `http://obol.stack/`). Port 8080 maps to same Traefik load balancer as port 80.
 
@@ -529,7 +529,7 @@ Enforced by `.claude/settings.json` (Read/Edit/Write deny) + `.claude/hooks/secr
 
 **Docs**: `docs/guides/monetize-inference.md` (E2E monetize walkthrough), `docs/guides/apps.md` (`obol app`, dv-pods in the stack), `README.md`.
 
-**Deps**: Docker 20.10.0+, Go 1.27+. Installed by `obol` (obolup.sh runs `obol upgrade --tools-only`; sha256-verified from `internal/tools/manifest.yaml`): kubectl 1.37.1, helm 4.3.0, k3d 5.9.0, helmfile 1.8.1, k9s 0.51.0, helm-diff 3.15.15, ollama 0.40.4. Key Go: `urfave/cli/v3`, `dustinkirkland/golang-petname`, `coinbase/x402/go` (v2 SDK, v1 wire format).
+**Deps**: Docker 20.10.0+, Go 1.27+. Installed by `obol` (obolup.sh runs `obol upgrade --tools-only`; sha256-verified from `internal/tools/manifest.yaml`): kubectl 1.37.2, helm 4.3.2, k3d 5.9.0, helmfile 1.8.4, k9s 0.51.0, helm-diff 3.15.15, ollama 0.40.17. Key Go: `urfave/cli/v3`, `dustinkirkland/golang-petname`, `coinbase/x402/go` (v2 SDK, v1 wire format).
 
 ## Related Codebases
 

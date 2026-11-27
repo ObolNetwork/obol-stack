@@ -576,6 +576,18 @@ func syncDefaults(cfg *config.Config, u *ui.UI, kubeconfigPath string, dataDir s
 	// predates allowUnsafePathPattern so the base release below recreates it.
 	kubectl.PrepareLocalPathStorageClass(cfg, u)
 
+	// Helm installs a chart's crds/ on first install only and never upgrades
+	// them. Server-side apply every release's CRDs first (as `obol upgrade`
+	// does), so a cluster created by an older obol gets the CRDs the new
+	// charts expect: Traefik's, and the Gateway API CRDs that moved out of
+	// the Traefik chart into ./gateway-api-crds.
+	if err := update.ApplyChartCRDs(cfg, u, helmfilePath, kubeconfigPath, nil); err != nil {
+		u.Warn("Updating CRDs failed — cluster left running so you can inspect and retry.")
+		u.Dim("  Retry:    obol stack up")
+
+		return fmt.Errorf("failed to update CRDs before the defaults sync: %w", err)
+	}
+
 	if err := u.Exec(ui.ExecConfig{
 		Name: "Deploying default infrastructure",
 		Cmd:  helmfileCmd,

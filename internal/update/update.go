@@ -232,7 +232,7 @@ func ApplyUpgrades(cfg *config.Config, u *ui.UI, opts UpgradeOptions) error {
 
 	// Helm never upgrades crds/, so bring CRDs up to the target chart
 	// versions before syncing.
-	if err := applyChartCRDs(cfg, u, helmfilePath, kubeconfigPath, selectors); err != nil {
+	if err := ApplyChartCRDs(cfg, u, helmfilePath, kubeconfigPath, selectors); err != nil {
 		return fmt.Errorf("failed to update CRDs: %w", err)
 	}
 

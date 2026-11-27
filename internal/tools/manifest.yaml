@@ -28,7 +28,7 @@
 #   url      {version} expands to the pinned version.
 tools:
   - name: kubectl
-    version: "1.37.1"
+    version: "1.37.2"
     obolupVar: KUBECTL_VERSION
     required: true
     compat: skew1
@@ -38,19 +38,19 @@ tools:
     assets:
       linux/amd64:
         url: https://dl.k8s.io/release/v{version}/bin/linux/amd64/kubectl
-        sha256: 65691ff77eb6fa44c908b77a1082c9f092c3b9733b5cefabec0d1104890e21a8
+        sha256: c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4
       linux/arm64:
         url: https://dl.k8s.io/release/v{version}/bin/linux/arm64/kubectl
-        sha256: ff749f4b78d9c4f1ec87307df9b50119ed819e2094aa9810cb9acffc3286c8c7
+        sha256: fcc16f63186659d9722014b7e02d5fdd2d4e669cb8c0ab66365d7d3b8ba03509
       darwin/amd64:
         url: https://dl.k8s.io/release/v{version}/bin/darwin/amd64/kubectl
-        sha256: 6851381c486ff6edd691623e3d65c87cb9a5b02887ff8fbbb38d8a031b748387
+        sha256: 88379aff5c8111de6be0a394adffba2819e44cde269f3ab23cef76de1a48eaa8
       darwin/arm64:
         url: https://dl.k8s.io/release/v{version}/bin/darwin/arm64/kubectl
-        sha256: fd65982c97ddad3106754b69ffa196d0e543aa591930ae52aed1adfb92f8c77f
+        sha256: 55701af0d51815ee335f240e48acf0959c3c23017ed3fa816e880c4a92bae581
 
   - name: helm
-    version: "4.3.0"
+    version: "4.3.2"
     obolupVar: HELM_VERSION
     required: true
     compat: minor
@@ -60,19 +60,19 @@ tools:
       linux/amd64:
         url: https://get.helm.sh/helm-v{version}-linux-amd64.tar.gz
         member: linux-amd64/helm
-        sha256: 86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb
+        sha256: d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983
       linux/arm64:
         url: https://get.helm.sh/helm-v{version}-linux-arm64.tar.gz
         member: linux-arm64/helm
-        sha256: 31c5794dd55c66a51e6b7d2e2ac7a114ae8b1de41ff1d9ba51748ac973b06a08
+        sha256: df31cb61680ef728f82c770e5280dd565617bee6b039d37e85c677288be4bbb0
       darwin/amd64:
         url: https://get.helm.sh/helm-v{version}-darwin-amd64.tar.gz
         member: darwin-amd64/helm
-        sha256: 347a784877e0e20eac865e8d1c36a80f6bb0861d6f29abd34defb6570ef95d92
+        sha256: 9e0068e9ae18c441d27388190ee7f53ae65eba44bfe910b40bdac44c4b51fa71
       darwin/arm64:
         url: https://get.helm.sh/helm-v{version}-darwin-arm64.tar.gz
         member: darwin-arm64/helm
-        sha256: d3870437e1e95b67f8edbde964156c84a26503f560821d40c542441658934fba
+        sha256: 6f3421de3a8cc2ac578c8cfb33b8edde290dde2871bc1bab12e24f2e5caeaa90
 
   - name: k3d
     version: "5.9.0"
@@ -97,7 +97,7 @@ tools:
         sha256: fe106541d5d0a3f18debcd4d432a16f8c0ce3e6ddc06f8fbb6f696a122313e00
 
   - name: helmfile
-    version: "1.8.1"
+    version: "1.8.4"
     obolupVar: HELMFILE_VERSION
     required: true
     compat: minor
@@ -107,19 +107,19 @@ tools:
       linux/amd64:
         url: https://github.com/helmfile/helmfile/releases/download/v{version}/helmfile_{version}_linux_amd64.tar.gz
         member: helmfile
-        sha256: ccabbe75dddbc25008d055fe92a44f95a184342211e7244d32b870409239c7a3
+        sha256: 1f19ced8adb0cdf2350e94ca598cf64e390d8c21d0d9b4bdc1c9f246d4591c9d
       linux/arm64:
         url: https://github.com/helmfile/helmfile/releases/download/v{version}/helmfile_{version}_linux_arm64.tar.gz
         member: helmfile
-        sha256: 2217788de9fb42cd0b3d84f1ee99c63617e19dea7af4995a59e45e4952c86ec4
+        sha256: 96f898a9faf236e06c5e65bf39a7f4ca727f5e911be1b28e2c2f80adabc132ed
       darwin/amd64:
         url: https://github.com/helmfile/helmfile/releases/download/v{version}/helmfile_{version}_darwin_amd64.tar.gz
         member: helmfile
-        sha256: b7a44505f1cf09e8e42db4e5914d46bd6f3abae95d226d16ea182d56954eb3bd
+        sha256: 859ab46d4608ebc1005c5f7c3c07d35562330340795b40750dbb316aae608390
       darwin/arm64:
         url: https://github.com/helmfile/helmfile/releases/download/v{version}/helmfile_{version}_darwin_arm64.tar.gz
         member: helmfile
-        sha256: 62a6b086bdd7a934ff4a36d4974446d7271566b88db200b3956053a9b388fed8
+        sha256: 61e7fa5401269785d6ee7bc1eac21e614371c00c705fda6e2e9f9d02c0fbc7b3
 
   - name: k9s
     version: "0.51.0"

@@ -41,7 +41,7 @@ func TestApplyUpgrades_PreparesLocalPathStorageClassBeforeSync_SourceGuard(t *te
 	}
 	guard := strings.Index(fn, "if syncsBaseRelease(selectors) {")
 	prep := strings.Index(fn, "kubectl.PrepareLocalPathStorageClass(cfg, u)")
-	crds := strings.Index(fn, "applyChartCRDs(")
+	crds := strings.Index(fn, "ApplyChartCRDs(")
 	sync := strings.Index(fn, `helmfileArgs = append(helmfileArgs, "sync")`)
 	if guard < 0 || prep < 0 || crds < 0 || sync < 0 {
 		t.Fatalf("missing step: guard=%d prep=%d crds=%d sync=%d", guard, prep, crds, sync)

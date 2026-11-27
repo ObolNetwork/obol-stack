@@ -1646,3 +1646,35 @@ func TestSyncDefaults_PreparesLocalPathStorageClassBeforeSync_SourceGuard(t *tes
 		t.Fatalf("syncDefaults must prepare local-path StorageClass before the helmfile sync: prep=%d sync=%d", prep, sync)
 	}
 }
+
+// Helm never upgrades a chart's crds/, so `obol stack up` must server-side
+// apply every release's CRDs before the helmfile sync, the same step
+// `obol upgrade` runs. Without it a cluster created by an older obol keeps
+// the Gateway API v1.4.0 CRDs that Traefik chart 39 installed, and the
+// Traefik v3.7 chart syncs against stale Traefik CRDs.
+func TestSyncDefaults_AppliesChartCRDsBeforeSync_SourceGuard(t *testing.T) {
+	src, err := os.ReadFile("stack.go")
+	if err != nil {
+		t.Fatalf("read stack.go: %v", err)
+	}
+	body := string(src)
+	start := strings.Index(body, "func syncDefaults(")
+	if start < 0 {
+		t.Fatal("syncDefaults not found")
+	}
+	end := strings.Index(body[start+1:], "\nfunc ")
+	if end < 0 {
+		t.Fatal("could not delimit syncDefaults body")
+	}
+	fn := body[start : start+1+end]
+	repos := strings.Index(fn, "preflightHelmRepos(")
+	crds := strings.Index(fn, "update.ApplyChartCRDs(cfg, u, helmfilePath, kubeconfigPath, nil)")
+	sync := strings.Index(fn, `Name: "Deploying default infrastructure"`)
+	if repos < 0 || crds < 0 || sync < 0 {
+		t.Fatalf("missing step: repos=%d crds=%d sync=%d", repos, crds, sync)
+	}
+	// Repos first (helm show crds needs the chart repos), then CRDs, then sync.
+	if repos > crds || crds > sync {
+		t.Fatalf("wrong order: repos=%d crds=%d sync=%d", repos, crds, sync)
+	}
+}

@@ -48,7 +48,7 @@ cat >> `+applied+`
 	u := ui.NewForTest(&bytes.Buffer{}, &bytes.Buffer{})
 	helmfile := filepath.Join(dir, "defaults", "helmfile.yaml")
 
-	if err := applyChartCRDs(cfg, u, helmfile, "/kc.yaml", []string{"name=traefik"}); err != nil {
+	if err := ApplyChartCRDs(cfg, u, helmfile, "/kc.yaml", []string{"name=traefik"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -93,7 +93,7 @@ func TestApplyChartCRDsHelmFailureStopsUpgrade(t *testing.T) {
 	cfg := &config.Config{ConfigDir: dir, BinDir: filepath.Join(dir, "bin")}
 	u := ui.NewForTest(&bytes.Buffer{}, &bytes.Buffer{})
 
-	err := applyChartCRDs(cfg, u, filepath.Join(dir, "helmfile.yaml"), "/kc.yaml", nil)
+	err := ApplyChartCRDs(cfg, u, filepath.Join(dir, "helmfile.yaml"), "/kc.yaml", nil)
 	if err == nil || !strings.Contains(err.Error(), "helm show crds traefik/traefik") {
 		t.Fatalf("want helm show crds error, got %v", err)
 	}
