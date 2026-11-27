@@ -8,13 +8,14 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 )
 
-// deploymentStateFile is the only per-deployment state under
-// networks/<network>/<id>/. Everything else there (helmfile, Chart.yaml,
-// templates/) is a copy of the network files embedded in obol.
-const deploymentStateFile = "values.yaml"
+// deploymentStateFiles are the per-deployment state under
+// networks/<network>/<id>/: values.yaml and the optional user overrides.
+// Everything else there (helmfile, Chart.yaml, templates/) is a copy of the
+// network files embedded in obol.
+var deploymentStateFiles = map[string]bool{"values.yaml": true, deploymentOverridesFile: true}
 
 // refreshDeploymentFiles replaces a deployment's copied network files with
-// the ones embedded in this obol binary, keeping values.yaml. Without it,
+// the ones embedded in this obol binary, keeping values.yaml and overrides.yaml. Without it,
 // image pin bumps and template fixes never reach existing installs: sync
 // would keep rendering whatever was copied at install time.
 //
@@ -44,7 +45,7 @@ func refreshDeploymentFiles(networkName, deploymentDir string) (bool, error) {
 	}
 
 	for _, e := range entries {
-		if e.Name() == deploymentStateFile {
+		if deploymentStateFiles[e.Name()] {
 			continue
 		}
 

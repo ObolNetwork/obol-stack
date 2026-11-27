@@ -45,6 +45,7 @@ func Checks(r Repairs) []Check {
 		{ID: "models", Group: GroupServices, Title: "Models", NeedsCluster: true, Run: checkModels},
 		{ID: "litellm-drift", Group: GroupServices, Title: "LiteLLM router", NeedsCluster: true, Run: checkRouterDrift},
 		{ID: "ollama", Group: GroupServices, Title: "Ollama", Run: checkOllama},
+		{ID: "eth-restarts", Group: GroupServices, Title: "Ethereum nodes", NeedsCluster: true, Run: checkEthereumRestarts},
 		{ID: "ca-bundle", Group: GroupServices, Title: "x402 CA bundle", NeedsCluster: true, Run: checkCABundle, Repair: r.PopulateCABundle},
 		{ID: "tunnel", Group: GroupTunnel, Title: "Cloudflare tunnel", NeedsCluster: true, Run: checkTunnel},
 		{ID: "wallets", Group: GroupWallets, Title: "Agent wallets", Run: checkWallets},

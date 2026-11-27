@@ -129,8 +129,11 @@ type NodeStatus struct {
 	Storage   *StorageStatus   `json:"storage,omitempty"`
 	ERPC      *NodeERPC        `json:"erpc,omitempty"`
 	// GrafanaURL is the node's dashboard on the local Grafana route.
-	GrafanaURL string  `json:"grafana_url,omitempty"`
-	Verdict    Verdict `json:"verdict"`
+	GrafanaURL string `json:"grafana_url,omitempty"`
+	// StoppedFor is set for stopped nodes: since when, and roughly how far
+	// behind they will be.
+	StoppedFor *StoppedFor `json:"stopped_for,omitempty"`
+	Verdict    Verdict     `json:"verdict"`
 }
 
 // GrafanaNodeURL is the obol-eth-node dashboard filtered to one namespace.
@@ -183,14 +186,7 @@ func NewKubectlNodeProber(cfg *config.Config) *NodeProber {
 	bin, kubeconfig := kubectl.Paths(cfg)
 
 	return &NodeProber{
-		Forward: func(ctx context.Context, namespace, service string, port int) (string, func(), error) {
-			fwd, err := kubectl.PortForward(ctx, bin, kubeconfig, namespace, "svc/"+service, port, 5*time.Second)
-			if err != nil {
-				return "", nil, err
-			}
-
-			return fwd.URL(), fwd.Close, nil
-		},
+		Forward: kubectlForwardFn(cfg),
 		Pods: func(ctx context.Context, namespace string) ([]PodStatus, error) {
 			return kubectlPods(ctx, bin, kubeconfig, namespace)
 		},
@@ -265,7 +261,9 @@ func Unprobed(d Deployment, summary string) NodeStatus {
 	}
 
 	if d.Stopped {
-		st.Verdict = Verdict{State: VerdictStopped, Summary: "stopped (data kept)"}
+		st.StoppedFor = StoppedForAt(d, time.Now())
+		st.Verdict = Verdict{State: VerdictStopped, Summary: stoppedSummary(st.StoppedFor)}
+
 		return st
 	}
 
@@ -294,7 +292,8 @@ func (p *NodeProber) Probe(ctx context.Context, d Deployment) NodeStatus {
 
 	if d.Stopped {
 		st.Storage = p.storage(ctx, d)
-		st.Verdict = Verdict{State: VerdictStopped, Summary: "stopped (data kept)"}
+		st.StoppedFor = StoppedForAt(d, time.Now())
+		st.Verdict = Verdict{State: VerdictStopped, Summary: stoppedSummary(st.StoppedFor)}
 
 		return st
 	}

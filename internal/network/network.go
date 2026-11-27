@@ -247,8 +247,20 @@ func Install(cfg *config.Config, u *ui.UI, network string, overrides map[string]
 	return nil
 }
 
+// SyncOptions tune Sync.
+type SyncOptions struct {
+	// Yes answers sync's confirmation prompts (needed without a TTY), e.g.
+	// moving Silver across its data-format change.
+	Yes bool
+}
+
 // SyncAll syncs all installed network deployments found in the config directory.
 func SyncAll(cfg *config.Config, u *ui.UI) error {
+	return SyncAllWithOptions(cfg, u, SyncOptions{})
+}
+
+// SyncAllWithOptions is SyncAll with options for every deployment.
+func SyncAllWithOptions(cfg *config.Config, u *ui.UI, opts SyncOptions) error {
 	networksDir := filepath.Join(cfg.ConfigDir, "networks")
 
 	networkDirs, err := os.ReadDir(networksDir)
@@ -281,7 +293,7 @@ func SyncAll(cfg *config.Config, u *ui.UI) error {
 			identifier := fmt.Sprintf("%s/%s", networkDir.Name(), deployment.Name())
 			u.Infof("Syncing %s", identifier)
 
-			if err := Sync(cfg, u, identifier); err != nil {
+			if err := SyncWithOptions(cfg, u, identifier, opts); err != nil {
 				u.Warnf("Failed to sync %s: %v", identifier, err)
 				continue
 			}
@@ -301,6 +313,11 @@ func SyncAll(cfg *config.Config, u *ui.UI) error {
 
 // Sync deploys or updates a network configuration to the cluster using helmfile
 func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
+	return SyncWithOptions(cfg, u, deploymentIdentifier, SyncOptions{})
+}
+
+// SyncWithOptions is Sync with options.
+func SyncWithOptions(cfg *config.Config, u *ui.UI, deploymentIdentifier string, opts SyncOptions) error {
 	// Parse deployment identifier
 	var networkName, deploymentID string
 
@@ -326,6 +343,19 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 	deploymentDir := filepath.Join(cfg.ConfigDir, "networks", networkName, deploymentID)
 	if _, err := os.Stat(deploymentDir); os.IsNotExist(err) {
 		return fmt.Errorf("deployment not found: %s\nDirectory: %s", deploymentIdentifier, deploymentDir)
+	}
+
+	// Before the refresh replaces it (the old helmfile names the old pins):
+	// warn about hand-set images sync reverts, and ask before a client
+	// change that needs its data resynced.
+	if networkName == TypeEthereum {
+		oldHelmfile, _ := os.ReadFile(filepath.Join(deploymentDir, "helmfile.yaml.gotmpl"))
+		if newHelmfile, err := embed.ReadEmbeddedNetworkFile(networkName, "helmfile.yaml.gotmpl"); err == nil {
+			d := readDeployment(cfg, networkName, deploymentID)
+			if err := guardSyncImages(cfg, u, d, deploymentDir, oldHelmfile, newHelmfile, opts.Yes); err != nil {
+				return err
+			}
+		}
 	}
 
 	// Render from this obol's network files, not the copy made at install,
@@ -387,6 +417,17 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 		"--state-values-set", "id=" + deploymentID,
 	}
 
+	// overrides.yaml: the user's values layer, merged last into the
+	// ethereum release by the template.
+	if _, err := os.Stat(filepath.Join(deploymentDir, deploymentOverridesFile)); err == nil {
+		if networkName == TypeEthereum {
+			u.Infof("Applying %s", filepath.Join(deploymentDir, deploymentOverridesFile))
+			syncArgs = append(syncArgs, "--state-values-set", "hasOverrides=true")
+		} else {
+			u.Warnf("%s is only read for ethereum deployments; ignoring it", deploymentOverridesFile)
+		}
+	}
+
 	if networkName == TypeEthereum {
 		el, cl, nodeMi, err := clusterSizing(cfg, readDeployment(cfg, networkName, deploymentID))
 		if err != nil {
@@ -413,6 +454,12 @@ func Sync(cfg *config.Config, u *ui.UI, deploymentIdentifier string) error {
 		Cmd:  cmd,
 	}); err != nil {
 		return fmt.Errorf("helmfile sync failed: %w", err)
+	}
+
+	// A RollingUpdate never replaces a pod that is not Ready, so a fix for a
+	// crash-looping client would not apply on its own.
+	if networkName == TypeEthereum && !deploymentStopped(cfg, networkName, deploymentID) {
+		unstickRollouts(cfg, u, networkName+"-"+deploymentID)
 	}
 
 	// Register local node as eRPC upstream — unless it is stopped (rendered

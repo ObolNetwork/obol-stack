@@ -379,13 +379,16 @@ obol network sync --all
 obol network status
 obol network status ethereum/mainnet -o json
 
+# Let local Docker containers (e.g. charon) use the node's beacon API
+obol network expose ethereum/mainnet --beacon
+
 # Add a remote RPC instead of running a node
 obol network add
 ```
 
 **Available networks:** ethereum, aztec
 
-**Ethereum options:** `--network` (mainnet, sepolia, hoodi), `--execution-client` (reth, geth, nethermind, besu, erigon), `--consensus-client` (lighthouse, prysm, teku, nimbus, lodestar, grandine, silver; silver is alpha and amd64-only), `--mode` (full, archive), `--since` (partial archive: `merge`, `365d`, a block number)
+**Ethereum options:** `--network` (mainnet, sepolia, hoodi), `--execution-client` (reth, geth, nethermind, besu, erigon), `--consensus-client` (lighthouse, prysm, teku, nimbus, lodestar, grandine, silver; silver is alpha), `--mode` (full, archive), `--since` (partial archive: `merge`, `365d`, a block number)
 
 ```bash
 # Hoodi node with a specific client pair

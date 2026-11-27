@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"gopkg.in/yaml.v3"
@@ -34,6 +35,9 @@ type Deployment struct {
 	// Stopped is set by `obol network stop`: workloads scaled to 0, data
 	// kept, not registered with eRPC (values.yaml `stopped: true`).
 	Stopped bool `json:"stopped,omitempty"`
+	// StoppedAt is when `obol network stop` stopped it (values.yaml
+	// `stoppedAt`); zero for installs stopped by an older obol.
+	StoppedAt time.Time `json:"stopped_at,omitzero"`
 	// ExecutionMemory / ConsensusMemory are the values.yaml memory limit
 	// overrides (ethereum only; "" = the sizing table's).
 	ExecutionMemory string `json:"-"`
@@ -79,6 +83,7 @@ func readDeployment(cfg *config.Config, typ, id string) Deployment {
 		PruneBlock      uint64 `yaml:"pruneBlock"`
 		PruneDistance   uint64 `yaml:"pruneDistance"`
 		Stopped         bool   `yaml:"stopped"`
+		StoppedAt       string `yaml:"stoppedAt"`
 		ExecutionMemory string `yaml:"executionMemory"`
 		ConsensusMemory string `yaml:"consensusMemory"`
 	}
@@ -92,6 +97,11 @@ func readDeployment(cfg *config.Config, typ, id string) Deployment {
 	d.ConsensusClient = values.ConsensusClient
 	d.Mode = values.Mode
 	d.Stopped = values.Stopped
+	if d.Stopped {
+		if t, err := time.Parse(time.RFC3339, values.StoppedAt); err == nil {
+			d.StoppedAt = t
+		}
+	}
 	d.ExecutionMemory = values.ExecutionMemory
 	d.ConsensusMemory = values.ConsensusMemory
 	if typ == TypeEthereum {

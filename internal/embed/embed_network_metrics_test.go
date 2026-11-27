@@ -1,6 +1,7 @@
 package embed
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -23,8 +24,14 @@ func TestEthereumHelmfile_ServiceMonitorsSelectedByMonitoring(t *testing.T) {
 		t.Fatal("monitoring selector no longer keys on release=monitoring; update the network ServiceMonitor labels")
 	}
 
-	block := "serviceMonitor:\n            enabled: true\n            labels:\n              release: monitoring"
-	if got := strings.Count(string(data), block); got != 2 {
+	// The consensus block is disabled for Silver, which serves /metrics on
+	// its own port and is scraped by its own ServiceMonitor instead (below).
+	block := regexp.MustCompile(`serviceMonitor:\n            enabled: (true|\{\{ ne \.Values\.consensusClient "silver" \}\})\n            labels:\n              release: monitoring`)
+	if got := len(block.FindAllString(string(data), -1)); got != 2 {
 		t.Fatalf("found %d EL/CL serviceMonitor blocks labelled release=monitoring, want 2 (execution + consensus)", got)
+	}
+
+	if !strings.Contains(string(data), "kind: ServiceMonitor\n            metadata:\n              name: ethereum-beacon-silver\n              namespace: ethereum-{{ .Values.id }}\n              labels:\n                release: monitoring") {
+		t.Fatal("Silver metrics ServiceMonitor missing or not labelled release=monitoring")
 	}
 }

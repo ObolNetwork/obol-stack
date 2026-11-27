@@ -11,8 +11,9 @@ import (
 )
 
 // amd64OnlyClients publish linux/amd64 images only. On a node of any other
-// architecture their pod never starts.
-var amd64OnlyClients = map[string]bool{"silver": true}
+// architecture their pod never starts. Empty today: Silver publishes arm64
+// images too from v0.1.0-alpha.20. Keep the check for the next such client.
+var amd64OnlyClients = map[string]bool{}
 
 // nodeArchsFn returns the kubernetes.io/arch label of every cluster node.
 // Swappable for tests.

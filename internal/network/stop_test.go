@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 	"text/template"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
@@ -262,15 +263,57 @@ func TestSetValuesStopped(t *testing.T) {
 		t.Fatalf("clearing an absent key: changed=%v err=%v", changed, err)
 	}
 
+	origNow := stopNowFn
+	t.Cleanup(func() { stopNowFn = origNow })
+
+	stopAt := time.Date(2026, 11, 11, 10, 4, 0, 0, time.UTC)
+	stopNowFn = func() time.Time { return stopAt }
+
 	if changed, err := setValuesStopped(path, true); err != nil || !changed {
 		t.Fatalf("set: changed=%v err=%v", changed, err)
+	}
+
+	// Stopping again keeps the first stop time.
+	stopNowFn = func() time.Time { return stopAt.Add(48 * time.Hour) }
+	if changed, _ := setValuesStopped(path, true); changed {
+		t.Fatal("re-stop changed values.yaml")
+	}
+
+	cfg := &config.Config{ConfigDir: t.TempDir()}
+	depDir := filepath.Join(cfg.ConfigDir, "networks", "ethereum", "hoodi")
+	if err := os.MkdirAll(depDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, _ := os.ReadFile(path)
+	if err := os.WriteFile(filepath.Join(depDir, "values.yaml"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	d := readDeployment(cfg, "ethereum", "hoodi")
+	if !d.Stopped || !d.StoppedAt.Equal(stopAt) {
+		t.Fatalf("read back stopped=%v at %v, want %v:\n%s", d.Stopped, d.StoppedAt, stopAt, raw)
+	}
+
+	sf := StoppedForAt(d, stopAt.Add(16*24*time.Hour))
+	if sf.BehindSlots != 16*7200 || sf.Text() != "since 2026-11-11 10:04 UTC, 16d ago, ~115,200 slots behind" {
+		t.Fatalf("stopped for = %+v %q", sf, sf.Text())
 	}
 
 	if changed, _ := setValuesStopped(path, false); !changed {
 		t.Fatal("clear: not changed")
 	}
 
-	raw, _ := os.ReadFile(path)
+	if raw, _ := os.ReadFile(path); stoppedAtLine.Match(raw) {
+		t.Fatalf("start left stoppedAt behind:\n%s", raw)
+	}
+
+	// Installs stopped by an older obol have no stoppedAt.
+	if got := StoppedForAt(Deployment{Stopped: true}, stopAt).Text(); got != "time unknown" {
+		t.Fatalf("no stoppedAt: %q", got)
+	}
+
+	raw, _ = os.ReadFile(path)
 
 	var v map[string]any
 	if err := yaml.Unmarshal(raw, &v); err != nil || v["stopped"] != false || v["network"] != "hoodi" {
@@ -344,7 +387,9 @@ func renderEthereumHelmfile(t *testing.T, values map[string]any) map[string]any 
 		t.Fatal(err)
 	}
 
-	values["id"] = "x"
+	if _, ok := values["id"]; !ok {
+		values["id"] = "x"
+	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, map[string]any{"Values": values}); err != nil {

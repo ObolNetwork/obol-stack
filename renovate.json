@@ -345,6 +345,29 @@
       "groupSlug": "ethereum-clients"
     },
     {
+      "description": "Silver images on ghcr.io: take only the multi-arch vX.Y.Z[-alpha.N] tags, never the per-arch -amd64/-arm64 ones published next to them. semver orders alpha.9 below alpha.23; ignoreUnstable is off because every Silver release so far is an alpha.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "ghcr.io/gattaca-com/silver"
+      ],
+      "allowedVersions": "/^v\\d+\\.\\d+\\.\\d+(-alpha\\.\\d+)?$/",
+      "versioning": "semver",
+      "ignoreUnstable": false
+    },
+    {
+      "description": "sifrai/grandine also publishes commit-SHA, unstable/stable and -rc tags; only plain X.Y.Z tags are releases (a SHA tag was proposed as v9 in #831).",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "sifrai/grandine"
+      ],
+      "allowedVersions": "/^\\d+\\.\\d+\\.\\d+$/",
+      "versioning": "semver"
+    },
+    {
       "description": "Batch the obol/aztec-node chart pin and the aztecprotocol/aztec image tag into a single standing PR. Aztec testnet upgrades require the image and chart appVersion to stay aligned, so they should land together.",
       "matchFileNames": [
         "internal/embed/networks/aztec/**"

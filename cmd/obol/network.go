@@ -17,6 +17,9 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
+// flagYes is the name of the confirm-without-prompting flag.
+const flagYes = "yes"
+
 // deploymentArgsUsage is the ArgsUsage of network subcommands that take one
 // installed deployment.
 const deploymentArgsUsage = "[<network>/<id>]"
@@ -49,11 +52,38 @@ func networkCommand(cfg *config.Config) *cli.Command {
 						Aliases: []string{"a"},
 						Usage:   "Sync all installed network deployments",
 					},
+					&cli.BoolFlag{
+						Name:    flagYes,
+						Aliases: []string{"y"},
+						Usage:   "Confirm upgrades that need a manual data resync (required in non-interactive shells)",
+					},
 				},
+				Description: `Renders the deployment from this obol's network files (image pins and
+template fixes reach existing deployments) and applies it with helmfile.
+
+Before it does, sync compares the running images with the pins: an image
+set by hand (e.g. kubectl set image) is reported, since sync reverts it.
+To keep your own image tags or client settings, put them in
+overrides.yaml next to values.yaml in the deployment's config dir
+(networks/<network>/<id>/). Sync merges it last into the ethereum
+release and keeps it across upgrades, e.g.:
+
+  silver:
+    image:
+      tag: v0.1.0-alpha.23
+
+An upgrade that cannot reuse the existing data (Silver before alpha.18 to
+alpha.18 or later) asks first and prints the resync steps; without a
+terminal it needs --yes.
+
+Examples:
+  obol network sync ethereum/hoodi
+  obol network sync --all`,
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					u := getUI(cmd)
+					opts := network.SyncOptions{Yes: cmd.Bool(flagYes)}
 					if cmd.Bool("all") {
-						return network.SyncAll(cfg, u)
+						return network.SyncAllWithOptions(cfg, u, opts)
 					}
 
 					identifier, _, err := network.ResolveInstance(cfg, cmd.Args().Slice())
@@ -61,7 +91,7 @@ func networkCommand(cfg *config.Config) *cli.Command {
 						return fmt.Errorf("%w\n\nOr use --all to sync all deployments", err)
 					}
 
-					return network.Sync(cfg, u, identifier)
+					return network.SyncWithOptions(cfg, u, identifier, opts)
 				},
 			},
 			{
@@ -82,6 +112,7 @@ func networkCommand(cfg *config.Config) *cli.Command {
 			networkAddCommand(cfg),
 			networkRemoveCommand(cfg),
 			networkStatusCommand(cfg),
+			networkExposeCommand(cfg),
 			networkERPCCommand(cfg),
 		},
 	}
@@ -402,7 +433,12 @@ func printDeployments(u *ui.UI, deployments []network.Deployment) {
 		line := fmt.Sprintf("  %-26s %-9s %-11s %-11s %s", d.Identifier(), dash(d.Network),
 			dash(d.ExecutionClient), dash(d.ConsensusClient), dash(modeLabel(d)))
 		if d.Stopped {
-			line += "  " + ui.Paint("dim", ui.GlyphStopped+" stopped (obol network start "+d.Identifier()+")")
+			stopped := "stopped"
+			if !d.StoppedAt.IsZero() {
+				stopped += " since " + d.StoppedAt.UTC().Format("2006-01-02")
+			}
+
+			line += "  " + ui.Paint("dim", ui.GlyphStopped+" "+stopped+" (obol network start "+d.Identifier()+")")
 		}
 
 		u.Print(line)
