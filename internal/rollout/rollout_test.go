@@ -1,4 +1,4 @@
-package network
+package rollout
 
 import (
 	"bytes"
@@ -8,13 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 )
 
 type fakePod struct {
-	name, owner, revision, phase string
-	ready, deleting              bool
+	name, owner, revision, phase  string
+	ready, deleting, initializing bool
 }
 
 func (p fakePod) json() string {
@@ -28,17 +27,22 @@ func (p fakePod) json() string {
 		del = `"deletionTimestamp":"2026-11-27T10:00:00Z",`
 	}
 
-	return fmt.Sprintf(`{"metadata":{"name":%q,%s"labels":{"controller-revision-hash":%q},"ownerReferences":[{"kind":"StatefulSet","name":%q}]},"status":{"phase":%q,"conditions":[{"type":"Ready","status":%q}]}}`,
-		p.name, del, p.revision, p.owner, p.phase, ready)
+	initialized := "True"
+	if p.initializing {
+		initialized = "False"
+	}
+
+	return fmt.Sprintf(`{"metadata":{"name":%q,%s"labels":{"controller-revision-hash":%q},"ownerReferences":[{"kind":"StatefulSet","name":%q}]},"status":{"phase":%q,"conditions":[{"type":"Initialized","status":%q},{"type":"Ready","status":%q}]}}`,
+		p.name, del, p.revision, p.owner, p.phase, initialized, ready)
 }
 
 // fakeRollout serves `kubectl get statefulset|pods -o json` and records
 // deletes. pods is called on every get, so a test can change them over time.
-func fakeRollout(t *testing.T, replicas int, pods func() []fakePod) (deleted *[]string) {
+func fakeRollout(t *testing.T, replicas int, pods func() []fakePod) (run Kubectl, deleted *[]string) {
 	t.Helper()
 
-	origKubectl, origSleep, origNow := rolloutKubectlFn, rolloutSleepFn, rolloutNowFn
-	t.Cleanup(func() { rolloutKubectlFn, rolloutSleepFn, rolloutNowFn = origKubectl, origSleep, origNow })
+	origSleep, origNow := rolloutSleepFn, rolloutNowFn
+	t.Cleanup(func() { rolloutSleepFn, rolloutNowFn = origSleep, origNow })
 
 	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
 	rolloutNowFn = func() time.Time { return now }
@@ -46,7 +50,7 @@ func fakeRollout(t *testing.T, replicas int, pods func() []fakePod) (deleted *[]
 
 	var dels []string
 
-	rolloutKubectlFn = func(_ *config.Config, args ...string) (string, error) {
+	run = func(args ...string) (string, error) {
 		switch {
 		case args[0] == "get" && args[1] == "statefulset":
 			return fmt.Sprintf(`{"items":[
@@ -74,11 +78,11 @@ func fakeRollout(t *testing.T, replicas int, pods func() []fakePod) (deleted *[]
 		return "", nil
 	}
 
-	return &dels
+	return run, &dels
 }
 
 func TestUnstickRollouts_DeletesOnlyStuckPods(t *testing.T) {
-	deleted := fakeRollout(t, 1, func() []fakePod {
+	run, deleted := fakeRollout(t, 1, func() []fakePod {
 		return []fakePod{
 			// Crash-looping on the old spec: the StatefulSet will never roll it.
 			{name: "ethereum-beacon-0", owner: "ethereum-beacon", revision: "ethereum-beacon-old", phase: "Running"},
@@ -88,7 +92,7 @@ func TestUnstickRollouts_DeletesOnlyStuckPods(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	unstickRollouts(&config.Config{}, ui.NewForTest(&out, &out), "ethereum-hoodi")
+	Unstick(run, ui.NewForTest(&out, &out), "ethereum-hoodi", Options{})
 
 	if !slices.Equal(*deleted, []string{"ethereum-beacon-0"}) {
 		t.Fatalf("deleted %v, want only the stuck beacon pod\n%s", *deleted, out.String())
@@ -109,10 +113,10 @@ func TestUnstickRollouts_LeavesHealthyAndRollingPods(t *testing.T) {
 
 	for name, pods := range cases {
 		t.Run(name, func(t *testing.T) {
-			deleted := fakeRollout(t, 1, func() []fakePod { return pods })
+			run, deleted := fakeRollout(t, 1, func() []fakePod { return pods })
 
 			var out bytes.Buffer
-			unstickRollouts(&config.Config{}, ui.NewForTest(&out, &out), "ethereum-hoodi")
+			Unstick(run, ui.NewForTest(&out, &out), "ethereum-hoodi", Options{})
 
 			if len(*deleted) != 0 {
 				t.Fatalf("deleted %v", *deleted)
@@ -125,7 +129,7 @@ func TestUnstickRollouts_LeavesHealthyAndRollingPods(t *testing.T) {
 // the controller.
 func TestUnstickRollouts_WaitsForTheNormalRollout(t *testing.T) {
 	gets := 0
-	deleted := fakeRollout(t, 1, func() []fakePod {
+	run, deleted := fakeRollout(t, 1, func() []fakePod {
 		gets++
 		if gets > 2 {
 			return []fakePod{{name: "ethereum-beacon-0", owner: "ethereum-beacon", revision: "ethereum-beacon-new", phase: "Running", ready: true}}
@@ -135,7 +139,7 @@ func TestUnstickRollouts_WaitsForTheNormalRollout(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	unstickRollouts(&config.Config{}, ui.NewForTest(&out, &out), "ethereum-hoodi")
+	Unstick(run, ui.NewForTest(&out, &out), "ethereum-hoodi", Options{})
 
 	if len(*deleted) != 0 {
 		t.Fatalf("deleted %v although the rollout went ahead", *deleted)
@@ -145,13 +149,13 @@ func TestUnstickRollouts_WaitsForTheNormalRollout(t *testing.T) {
 // Right after helmfile sync the controller may not have computed the new
 // updateRevision yet; wait for it instead of judging against the old one.
 func TestUnstickRollouts_WaitsForTheControllerToObserve(t *testing.T) {
-	deleted := fakeRollout(t, 1, func() []fakePod {
+	run, deleted := fakeRollout(t, 1, func() []fakePod {
 		return []fakePod{{name: "ethereum-beacon-0", owner: "ethereum-beacon", revision: "ethereum-beacon-old", phase: "Running"}}
 	})
 
-	inner := rolloutKubectlFn
+	inner := run
 	stsGets := 0
-	rolloutKubectlFn = func(cfg *config.Config, args ...string) (string, error) {
+	run = func(args ...string) (string, error) {
 		if args[0] == "get" && args[1] == "statefulset" {
 			stsGets++
 			if stsGets == 1 {
@@ -159,11 +163,11 @@ func TestUnstickRollouts_WaitsForTheControllerToObserve(t *testing.T) {
 			}
 		}
 
-		return inner(cfg, args...)
+		return inner(args...)
 	}
 
 	var out bytes.Buffer
-	unstickRollouts(&config.Config{}, ui.NewForTest(&out, &out), "ethereum-hoodi")
+	Unstick(run, ui.NewForTest(&out, &out), "ethereum-hoodi", Options{})
 
 	if !slices.Equal(*deleted, []string{"ethereum-beacon-0"}) || stsGets < 2 {
 		t.Fatalf("deleted %v after %d statefulset reads", *deleted, stsGets)
@@ -172,14 +176,32 @@ func TestUnstickRollouts_WaitsForTheControllerToObserve(t *testing.T) {
 
 // Stopped deployments (0 replicas) are not touched.
 func TestUnstickRollouts_SkipsScaledDown(t *testing.T) {
-	deleted := fakeRollout(t, 0, func() []fakePod {
+	run, deleted := fakeRollout(t, 0, func() []fakePod {
 		return []fakePod{{name: "ethereum-beacon-0", owner: "ethereum-beacon", revision: "ethereum-beacon-old", phase: "Running"}}
 	})
 
 	var out bytes.Buffer
-	unstickRollouts(&config.Config{}, ui.NewForTest(&out, &out), "ethereum-hoodi")
+	Unstick(run, ui.NewForTest(&out, &out), "ethereum-hoodi", Options{})
 
 	if len(*deleted) != 0 {
 		t.Fatalf("deleted %v", *deleted)
+	}
+}
+
+// Apps (InitOnly): only a pod still in Init is replaced; a pod whose main
+// containers started (e.g. a running but unready validator) is left alone.
+func TestUnstick_InitOnly(t *testing.T) {
+	run, deleted := fakeRollout(t, 1, func() []fakePod {
+		return []fakePod{
+			{name: "ethereum-beacon-0", owner: "ethereum-beacon", revision: "ethereum-beacon-old", phase: "Pending", initializing: true},
+			{name: "ethereum-execution-0", owner: "ethereum-execution", revision: "ethereum-execution-old", phase: "Running"},
+		}
+	})
+
+	var out bytes.Buffer
+	Unstick(run, ui.NewForTest(&out, &out), "ethereum-hoodi", Options{InitOnly: true})
+
+	if !slices.Equal(*deleted, []string{"ethereum-beacon-0"}) {
+		t.Fatalf("deleted %v, want only the pod still in Init\n%s", *deleted, out.String())
 	}
 }

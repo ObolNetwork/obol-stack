@@ -14,6 +14,8 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
+	"github.com/ObolNetwork/obol-stack/internal/kubectl"
+	"github.com/ObolNetwork/obol-stack/internal/rollout"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	petname "github.com/dustinkirkland/golang-petname"
 	"gopkg.in/yaml.v3"
@@ -459,7 +461,10 @@ func SyncWithOptions(cfg *config.Config, u *ui.UI, deploymentIdentifier string, 
 	// A RollingUpdate never replaces a pod that is not Ready, so a fix for a
 	// crash-looping client would not apply on its own.
 	if networkName == TypeEthereum && !deploymentStopped(cfg, networkName, deploymentID) {
-		unstickRollouts(cfg, u, networkName+"-"+deploymentID)
+		bin, kubeconfig := kubectl.Paths(cfg)
+		rollout.Unstick(func(args ...string) (string, error) {
+			return kubectl.Output(bin, kubeconfig, args...)
+		}, u, networkName+"-"+deploymentID, rollout.Options{})
 	}
 
 	// Register local node as eRPC upstream — unless it is stopped (rendered

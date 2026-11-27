@@ -77,6 +77,12 @@ The same check runs from `obol upgrade` and the app replay in `obol stack up`. A
 
 Sync also warns about unquoted long hex values. Older obol versions wrote them bare, and helm reads them as floats.
 
+**Pods parked in Init.** A StatefulSet never replaces a pod that isn't Ready. So a dv-pod still in Init (for example, waiting for a Launchpad invite or its DKG) would keep the old spec after you change its values.
+
+After a successful sync, obol waits up to 60 s for the normal rollout. Then it deletes any pod that is still in Init and on the old revision, so the StatefulSet recreates it from the new spec. Its volumes and Secrets are kept.
+
+A pod whose containers have started is never deleted, even if it isn't Ready: charon or the validator client may be running.
+
 ## Upgrade the chart
 
 ```bash

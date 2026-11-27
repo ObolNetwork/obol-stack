@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // releaseFake simulates one helm release whose revision goes up by one per
@@ -301,6 +302,59 @@ func TestInstallForceThenSync(t *testing.T) {
 
 			if err != nil {
 				t.Fatalf("Sync after install --force: %v", err)
+			}
+		})
+	}
+}
+
+// A dv-pod parked in Init (waiting for its DKG) on the old revision is
+// replaced after sync, since its StatefulSet never would; a pod whose
+// containers already started is never touched, even when not Ready.
+func TestSync_ReplacesPodsParkedInInit(t *testing.T) {
+	orig := unstickWait
+	unstickWait = time.Millisecond
+	t.Cleanup(func() { unstickWait = orig })
+
+	cases := map[string]struct {
+		initialized string
+		wantDelete  bool
+	}{
+		"still in Init":             {initialized: "False", wantDelete: true},
+		"started but not Ready yet": {initialized: "True", wantDelete: false},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			env := newTestEnv(t, true)
+			writeManaged(t, env, 3, "mode: launchpad\n")
+			rel := &releaseFake{env: env, exists: true, baseRev: 3}
+
+			var deleted []string
+
+			useFakeTools(t, func(tool, args string, argv []string, stdin []byte) (string, error) {
+				switch {
+				case tool == "kubectl" && strings.HasPrefix(args, "get statefulset -n dv-pod-hoodi"):
+					return `{"items":[{"metadata":{"name":"dv-pod-hoodi","generation":2},"spec":{"replicas":1},"status":{"updateRevision":"dv-pod-hoodi-new","observedGeneration":2}}]}`, nil
+				case tool == "kubectl" && strings.HasPrefix(args, "get pods -n dv-pod-hoodi"):
+					if len(deleted) > 0 {
+						return `{"items":[]}`, nil
+					}
+
+					return fmt.Sprintf(`{"items":[{"metadata":{"name":"dv-pod-hoodi-0","labels":{"controller-revision-hash":"dv-pod-hoodi-old"},"ownerReferences":[{"kind":"StatefulSet","name":"dv-pod-hoodi"}]},"status":{"phase":"Pending","conditions":[{"type":"Initialized","status":%q},{"type":"Ready","status":"False"}]}}]}`, tc.initialized), nil
+				case tool == "kubectl" && strings.HasPrefix(args, "delete pod -n dv-pod-hoodi"):
+					deleted = append(deleted, argv[4])
+					return "", nil
+				}
+
+				return rel.handle(tool, args, argv, stdin)
+			})
+
+			if err := SyncWithOptions(env.cfg, env.u, "dv-pod/hoodi", SyncOptions{}); err != nil {
+				t.Fatalf("Sync: %v", err)
+			}
+
+			if got := len(deleted) > 0; got != tc.wantDelete {
+				t.Fatalf("deleted %v, want delete=%v\n%s", deleted, tc.wantDelete, env.stdout.String())
 			}
 		})
 	}

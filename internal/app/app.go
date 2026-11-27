@@ -8,10 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/ObolNetwork/obol-stack/internal/config"
 	"github.com/ObolNetwork/obol-stack/internal/fsutil"
 	"github.com/ObolNetwork/obol-stack/internal/helmcmd"
+	"github.com/ObolNetwork/obol-stack/internal/rollout"
 	"github.com/ObolNetwork/obol-stack/internal/ui"
 	petname "github.com/dustinkirkland/golang-petname"
 )
@@ -475,6 +477,15 @@ func SyncWithOptions(cfg *config.Config, u *ui.UI, deploymentIdentifier string, 
 		return fmt.Errorf("helmfile sync failed: %w", syncErr)
 	}
 
+	// A StatefulSet never replaces a pod that is not Ready, so a pod parked
+	// in Init (e.g. a dv-pod waiting for its DKG) would keep the old spec.
+	// Only pods still in Init are replaced: none of their main containers
+	// (charon, a validator client) has started, so nothing is interrupted.
+	rollout.Unstick(func(args ...string) (string, error) {
+		out, err := kubectl(cfg, nil, args...)
+		return string(out), err
+	}, u, meta.Namespace, rollout.Options{InitOnly: true, Wait: unstickWait})
+
 	u.Blank()
 	u.Success("Application synced successfully!")
 	u.Detail("Namespace", meta.Namespace)
@@ -571,6 +582,11 @@ func recordSync(cfg *config.Config, u *ui.UI, dir string, meta *AppMeta) {
 		u.Warnf("Could not record the synced revision in %s: %v", metaFileName, err)
 	}
 }
+
+// unstickWait is how long a sync lets the StatefulSet controller roll pods
+// parked in Init before replacing them (0 = the rollout package default).
+// Tests shorten it.
+var unstickWait time.Duration
 
 // parseDeploymentIdentifier parses "app-name/id" format
 func parseDeploymentIdentifier(identifier string) (appName, id string, err error) {
