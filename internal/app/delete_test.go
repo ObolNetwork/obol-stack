@@ -297,3 +297,40 @@ func TestDelete_SharedNamespaceNeverDeleted(t *testing.T) {
 		t.Errorf("own release not uninstalled from the custom namespace: %+v", *calls)
 	}
 }
+
+// Scripts pass --yes for every delete: it works without a terminal for the
+// keep-data path and the no-data path alike (it used to need --force there).
+func TestDelete_YesWorksForEveryMode(t *testing.T) {
+	t.Run("data present: release only", func(t *testing.T) {
+		env := newTestEnv(t, true)
+		env.writeDeployment(t, "dvtee", "a", map[string]string{
+			"helmfile.yaml": legacyHelmfile("dvtee-a", "0.23.0"),
+			"values.yaml":   "a: 1\n",
+		})
+		calls := useFakeTools(t, nsFake{
+			nsExists: true, pvcs: "charon-data-dvtee-a-0\n", secrets: dvPodSecrets, release: true,
+		}.handle)
+
+		if err := Delete(env.cfg, env.u, "dvtee/a", DeleteOptions{Yes: true}); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+
+		if !hasCall(*calls, "helm", "uninstall dvtee-a -n dvtee-a") || hasCall(*calls, "kubectl", "delete namespace") {
+			t.Errorf("want release-only delete: %+v", *calls)
+		}
+	})
+
+	t.Run("no data: namespace", func(t *testing.T) {
+		env := newTestEnv(t, true)
+		env.writeDeployment(t, "redis", "x", map[string]string{"values.yaml": "a: 1\n"})
+		calls := useFakeTools(t, nsFake{nsExists: true, secrets: "sh.helm.release.v1.redis.v1\thelm.sh/release.v1\trelease,\n"}.handle)
+
+		if err := Delete(env.cfg, env.u, "redis/x", DeleteOptions{Yes: true}); err != nil {
+			t.Fatalf("Delete: %v", err)
+		}
+
+		if !hasCall(*calls, "kubectl", "delete namespace redis-x") {
+			t.Errorf("namespace not deleted: %+v", *calls)
+		}
+	})
+}

@@ -106,7 +106,7 @@ A chart installed from a versioned `.tgz` URL can't be upgraded this way; reinst
 ## Delete
 
 ```bash
-obol app delete redis/prod                         # namespace + config (confirm, or --force)
+obol app delete redis/prod                         # namespace + config (confirm, or --yes)
 obol app delete dv-pod/hoodi                       # data present: removes only the helm release
 obol app delete dv-pod/hoodi --keep-data           # only the helm release, always
 obol app delete dv-pod/hoodi --delete-data         # everything; type the app name to confirm
@@ -121,7 +121,7 @@ Before deleting anything, obol checks the namespace for PersistentVolumeClaims a
 
 If it finds any of these, or can't check, it removes only the helm release. The namespace, PVCs, Secrets and config directory stay, and `obol app sync` redeploys onto them. dv-pod's PVCs use the `Retain` retention policy, so they survive the release uninstall.
 
-`--force` only skips the yes/no prompt. It never deletes data.
+`--yes` skips the prompt for every delete, and with `--delete-data` it also confirms the data deletion. `--force` is an older alias for the plain prompt only: it never confirms `--delete-data`.
 
 A namespace that also holds other helm releases (an adopted release in a namespace you made by hand) is never deleted as a whole: only this app's release is removed, and `--delete-data` refuses and tells you which PVCs to delete by name.
 

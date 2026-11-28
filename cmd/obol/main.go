@@ -476,12 +476,13 @@ material (dv-pod key shares and ENR keys, validator keystores), only the helm
 release is removed: the namespace, its PVCs and Secrets and the config
 directory stay, and 'obol app sync' redeploys onto them. --delete-data
 deletes everything; on a terminal you type the app name to confirm, without
-one pass --delete-data --yes.`,
+one pass --delete-data --yes. In scripts, --yes skips the prompt for every
+delete; --force (an older alias for keep-data deletes) never deletes data.`,
 						Flags: []cli.Flag{
 							&cli.BoolFlag{
 								Name:    "force",
 								Aliases: []string{"f"},
-								Usage:   "Skip the confirmation prompt (never deletes data on its own)",
+								Usage:   "Skip the confirmation prompt; never confirms --delete-data (prefer --yes)",
 							},
 							&cli.BoolFlag{
 								Name:  "delete-data",
@@ -492,8 +493,9 @@ one pass --delete-data --yes.`,
 								Usage: "Remove only the helm release; keep the namespace, PVCs, Secrets and config",
 							},
 							&cli.BoolFlag{
-								Name:  "yes",
-								Usage: "Confirm --delete-data without typing the app name",
+								Name:    "yes",
+								Aliases: []string{"y"},
+								Usage:   "Skip the confirmation prompt; with --delete-data, confirm without typing the app name",
 							},
 						},
 						Action: func(ctx context.Context, cmd *cli.Command) error {

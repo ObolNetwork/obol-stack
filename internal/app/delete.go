@@ -14,7 +14,8 @@ import (
 
 // DeleteOptions controls Delete.
 type DeleteOptions struct {
-	// Force skips the confirmation prompt. It never implies DeleteData.
+	// Force skips the confirmation prompt (an alias of Yes for deletes that
+	// keep data). It never implies DeleteData and never confirms it.
 	Force bool
 	// DeleteData deletes the namespace even when it holds PVCs or Secrets
 	// that look like key material (dv-pod key shares, ENR keys).
@@ -22,7 +23,8 @@ type DeleteOptions struct {
 	// KeepData removes only the helm release, keeping the namespace, its
 	// PVCs and Secrets, and the app's config directory.
 	KeepData bool
-	// Yes confirms DeleteData without typing the app name.
+	// Yes skips the confirmation prompt, and also confirms DeleteData
+	// without typing the app name. Scripts pass --yes for every delete.
 	Yes bool
 }
 
@@ -309,7 +311,7 @@ func Delete(cfg *config.Config, u *ui.UI, deploymentIdentifier string, opts Dele
 	} else if !opts.Force && !opts.Yes {
 		u.Blank()
 
-		ok, err := u.ConfirmOrFlag("Proceed with deletion?", "--force")
+		ok, err := u.ConfirmOrFlag("Proceed with deletion?", "--yes")
 		if err != nil {
 			return err
 		}
@@ -414,10 +416,10 @@ func deleteReleaseOnly(cfg *config.Config, u *ui.UI, identifier, deploymentDir s
 
 	u.Printf("To delete everything, data included: obol app delete %s --delete-data", identifier)
 
-	if !opts.Force {
+	if !opts.Force && !opts.Yes {
 		u.Blank()
 
-		ok, err := u.ConfirmOrFlag("Remove the helm release?", "--force")
+		ok, err := u.ConfirmOrFlag("Remove the helm release?", "--yes")
 		if err != nil {
 			return err
 		}

@@ -379,6 +379,13 @@ releases:
                   path: /metrics
                   interval: 1m
                   honorLabels: true
+                  # Both chart Services (ethereum-beacon and
+                  # ethereum-beacon-headless) carry the same labels and the
+                  # metrics port; scrape the pod through one of them only.
+                  relabelings:
+                    - sourceLabels: [__meta_kubernetes_service_name]
+                      regex: ethereum-beacon-headless
+                      action: drop
           {{- end }}
           - apiVersion: v1
             kind: ConfigMap

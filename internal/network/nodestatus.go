@@ -568,13 +568,19 @@ func ComputeVerdict(pods []PodStatus, el *ExecutionStatus, cl *ConsensusStatus) 
 		}
 	case clUp && cl.ELOffline:
 		v.State, v.Summary = VerdictELOffline, "EL offline: the beacon node cannot reach the execution client"
+	case clUp && cl.IsSyncing && cl.Peers != nil && *cl.Peers == 0:
+		// Nothing to sync from: a peerless beacon node never catches up,
+		// while its health endpoint (206 = syncing) still passes the
+		// readiness probe. Seen with Silver's discv5 bootstrap stalling.
+		v.State = VerdictDegraded
+		v.Summary = fmt.Sprintf("beacon syncing with 0 peers: stalled at head slot %d (restart the beacon pod; if it persists, see the client's discovery logs)", cl.HeadSlot)
 	case clUp && cl.IsSyncing:
 		v.State = VerdictSyncing
 		v.Summary = fmt.Sprintf("beacon syncing, %s behind (head slot %d)", slotsBehind(cl.SyncDistance), cl.HeadSlot)
 		if pct, ok := elProgress(el); ok {
 			v.ProgressPct = &pct
 			v.Summary += fmt.Sprintf("; execution ~%.1f%%", pct)
-		} else if cl.HeadSlot+cl.SyncDistance > 0 {
+		} else if !implausibleDistance(cl.SyncDistance) && cl.HeadSlot+cl.SyncDistance > 0 {
 			pct := percent(cl.HeadSlot, cl.HeadSlot+cl.SyncDistance)
 			v.ProgressPct = &pct
 		}
@@ -669,6 +675,10 @@ func percent(n, d uint64) float64 {
 
 // slotsBehind renders a sync distance as "N slots (~2h05m)".
 func slotsBehind(distance uint64) string {
+	if implausibleDistance(distance) {
+		return "an unknown number of slots"
+	}
+
 	d := time.Duration(distance) * slotSeconds * time.Second
 	switch {
 	case d >= 24*time.Hour:
@@ -678,6 +688,13 @@ func slotsBehind(distance uint64) string {
 	default:
 		return fmt.Sprintf("%d slots (~%dm)", distance, int(d.Minutes()))
 	}
+}
+
+// implausibleDistance reports a sync_distance no real chain has: Silver
+// reports u64 underflow (18446744073709551615) while it syncs or has no
+// peers. 2^40 slots is ~400,000 years.
+func implausibleDistance(distance uint64) bool {
+	return distance > 1<<40
 }
 
 // --- transport helpers ------------------------------------------------------

@@ -34,4 +34,10 @@ func TestEthereumHelmfile_ServiceMonitorsSelectedByMonitoring(t *testing.T) {
 	if !strings.Contains(string(data), "kind: ServiceMonitor\n            metadata:\n              name: ethereum-beacon-silver\n              namespace: ethereum-{{ .Values.id }}\n              labels:\n                release: monitoring") {
 		t.Fatal("Silver metrics ServiceMonitor missing or not labelled release=monitoring")
 	}
+
+	// Both beacon Services expose the metrics port; without this drop each
+	// Silver pod is scraped twice (duplicate series, one target down at boot).
+	if !strings.Contains(string(data), "regex: ethereum-beacon-headless\n                      action: drop") {
+		t.Fatal("Silver ServiceMonitor does not drop the headless Service's targets")
+	}
 }
