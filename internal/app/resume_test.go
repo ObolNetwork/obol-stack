@@ -61,3 +61,30 @@ func TestResumeAll_SkipsNonAppStateDirs(t *testing.T) {
 		t.Errorf("resume must not touch the hermes state dir, got: %q", out)
 	}
 }
+
+// stack up must not re-sync a deployed app (it would apply pending
+// values.yaml edits to, and possibly restart, a live DV); a release that is
+// missing (e.g. the cluster was recreated) is deployed again.
+func TestResumeAll_OnlyMissingOrFailedReleases(t *testing.T) {
+	cases := map[string]struct {
+		exists   bool
+		wantSync bool
+	}{
+		"deployed release is left alone": {exists: true, wantSync: false},
+		"missing release is re-deployed": {exists: false, wantSync: true},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			env := newTestEnv(t, true)
+			writeManaged(t, env, 3, "mode: launchpad\n")
+			useFakeTools(t, (&releaseFake{env: env, exists: tc.exists, baseRev: 3}).handle)
+
+			ResumeAll(env.cfg, env.u)
+
+			if got := env.helmfileRuns() > 0; got != tc.wantSync {
+				t.Fatalf("synced=%v, want %v\n%s", got, tc.wantSync, env.stdout.String())
+			}
+		})
+	}
+}

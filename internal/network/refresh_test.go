@@ -8,8 +8,8 @@ import (
 	"github.com/ObolNetwork/obol-stack/internal/embed"
 )
 
-// Sync must render the embedded network files, keeping only values.yaml from
-// the deployment: stale and hand-edited copies are replaced, leftovers removed.
+// Sync must render the embedded network files, keeping only values.yaml and
+// overrides.yaml from the deployment: stale and hand-edited copies are replaced, leftovers removed.
 func TestRefreshDeploymentFiles(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "ethereum", "my-node")
 	if err := os.MkdirAll(filepath.Join(dir, "templates"), 0o755); err != nil {
@@ -17,9 +17,11 @@ func TestRefreshDeploymentFiles(t *testing.T) {
 	}
 
 	values := []byte("network: hoodi\n")
+	overrides := []byte("silver:\n  image:\n    tag: v0.1.0-alpha.22\n")
 
 	files := map[string][]byte{
 		"values.yaml":                  values,
+		"overrides.yaml":               overrides,
 		"helmfile.yaml.gotmpl":         []byte("stale pin\n"),
 		"templates/removed-later.yaml": []byte("gone\n"),
 	}
@@ -36,6 +38,10 @@ func TestRefreshDeploymentFiles(t *testing.T) {
 
 	if got, _ := os.ReadFile(filepath.Join(dir, "values.yaml")); string(got) != string(values) {
 		t.Fatalf("values.yaml changed: %q", got)
+	}
+
+	if got, _ := os.ReadFile(filepath.Join(dir, "overrides.yaml")); string(got) != string(overrides) {
+		t.Fatalf("overrides.yaml changed: %q", got)
 	}
 
 	want, _ := embed.ReadEmbeddedNetworkFile("ethereum", "helmfile.yaml.gotmpl")

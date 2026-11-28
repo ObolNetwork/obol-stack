@@ -379,13 +379,16 @@ obol network sync --all
 obol network status
 obol network status ethereum/mainnet -o json
 
+# Let local Docker containers (e.g. charon) use the node's beacon API
+obol network expose ethereum/mainnet --beacon
+
 # Add a remote RPC instead of running a node
 obol network add
 ```
 
 **Available networks:** ethereum, aztec
 
-**Ethereum options:** `--network` (mainnet, sepolia, hoodi), `--execution-client` (reth, geth, nethermind, besu, erigon), `--consensus-client` (lighthouse, prysm, teku, nimbus, lodestar, grandine, silver; silver is alpha and amd64-only), `--mode` (full, archive), `--since` (partial archive: `merge`, `365d`, a block number)
+**Ethereum options:** `--network` (mainnet, sepolia, hoodi), `--execution-client` (reth, geth, nethermind, besu, erigon), `--consensus-client` (lighthouse, prysm, teku, nimbus, lodestar, grandine, silver; silver is alpha), `--mode` (full, archive), `--since` (partial archive: `merge`, `365d`, a block number)
 
 ```bash
 # Hoodi node with a specific client pair
@@ -404,8 +407,9 @@ obol network delete ethereum/mainnet --force
 Install arbitrary Helm charts as managed applications — useful for running upstreams you then put on sale with `obol sell http`:
 
 ```bash
-# Install from ArtifactHub
+# Install (repo names: your local helm repos, the built-in "obol" alias, then ArtifactHub)
 obol app install bitnami/redis
+obol app install obol/dv-pod@0.24.0 --name dv-pod --id hoodi --set network=hoodi
 
 # With specific version
 obol app install bitnami/postgresql@15.0.0
@@ -418,12 +422,18 @@ obol app sync redis --values ./my-overrides.yaml --set image.tag=7.2
 obol app sync
 obol app sync postgresql/eager-fox
 
+# Move to another chart version (edits helmfile.yaml, then syncs)
+obol app upgrade dv-pod/hoodi --version 0.24.0
+
 # List and manage
 obol app list
-obol app delete postgresql/eager-fox --force
+obol app delete postgresql/eager-fox --force   # keeps namespaces holding PVCs or key material; --delete-data removes them
+
+# Secrets without echoing values
+obol app secret set dv-pod/hoodi obol-monitoring --from-file token=./token
 ```
 
-Installed apps are re-synced automatically on `obol stack up`, so they survive cluster recreation. After a sync, the CLI prints a ready-to-run `obol sell http` command for each service the app exposes.
+An app's `values.yaml` holds only your overrides; the release is `<name>-<id>` in namespace `<name>-<id>`. `obol app sync` refuses when the release was changed with `helm` directly since its last sync (`--force` overrides). Installed apps are re-synced automatically on `obol stack up`, so they survive cluster recreation. After a sync, the CLI prints a ready-to-run `obol sell http` command for each service the app exposes, except validator and signer workloads such as dv-pods. Full guide: [docs/guides/apps.md](docs/guides/apps.md).
 
 Find charts at [Artifact Hub](https://artifacthub.io).
 

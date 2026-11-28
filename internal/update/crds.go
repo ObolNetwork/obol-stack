@@ -22,11 +22,13 @@ type listedRelease struct {
 	Version string `json:"version"`
 }
 
-// applyChartCRDs server-side applies the CRDs shipped in each enabled
+// ApplyChartCRDs server-side applies the CRDs shipped in each enabled
 // release's chart before `helmfile sync`. Helm installs crds/ on first
 // install only and never upgrades them, so without this an existing cluster
-// keeps old CRD schemas after a chart bump (e.g. Traefik, prometheus-operator).
-func applyChartCRDs(cfg *config.Config, u *ui.UI, helmfilePath, kubeconfigPath string, selectors []string) error {
+// keeps old CRD schemas after a chart bump (e.g. Traefik, prometheus-operator,
+// the Gateway API CRDs in ./gateway-api-crds). Both `obol upgrade` and
+// `obol stack up` call it before their helmfile sync.
+func ApplyChartCRDs(cfg *config.Config, u *ui.UI, helmfilePath, kubeconfigPath string, selectors []string) error {
 	args := []string{"--file", helmfilePath, "--kubeconfig", kubeconfigPath}
 	for _, s := range selectors {
 		args = append(args, "--selector", s)

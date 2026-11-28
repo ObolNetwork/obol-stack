@@ -710,7 +710,7 @@ func nodeHeadline(n network.NodeStatus, chains []network.ERPCChain) string {
 			data = "data kept, " + network.FormatBytes(n.Storage.TotalBytes())
 		}
 
-		return ui.Paint("dim", ui.GlyphStopped) + " Stopped (" + data + ") — start with: obol network start " + ident
+		return ui.Paint("dim", ui.GlyphStopped) + " Stopped (" + n.StoppedFor.Text() + "; " + data + ") — start with: obol network start " + ident
 	case network.VerdictNotDeployed:
 		return ui.Paint("fail", ui.GlyphFail) + " Not deployed — no node pods (obol network sync " + ident + ")"
 	case network.VerdictNotProbed, network.VerdictNotSupported:

@@ -1,0 +1,15 @@
+apiVersion: v2
+name: gateway-api-crds
+description: >-
+  Gateway API standard-channel CRDs (vendored from the upstream
+  standard-install.yaml, CustomResourceDefinitions only). Traefik chart 40.2+
+  no longer ships them. Fresh installs get them from crds/; `obol stack up`
+  and `obol upgrade` server-side apply them before every helmfile sync, so
+  existing clusters move to this version too.
+type: application
+version: 0.1.0
+# The Gateway API release vendored in crds/. Bump with
+# scripts/update-gateway-api-crds.sh, which rewrites crds/ and this line;
+# TestGatewayAPICRDsMatchAppVersion fails if they drift.
+# renovate: datasource=github-releases depName=kubernetes-sigs/gateway-api
+appVersion: "v1.6.3"

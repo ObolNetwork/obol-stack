@@ -36,8 +36,15 @@ var (
 	}
 )
 
-// stoppedLine matches the `stopped:` key written into values.yaml.
-var stoppedLine = regexp.MustCompile(`(?m)^stopped:.*$`)
+// stoppedLine matches the `stopped:` key written into values.yaml, and
+// stoppedAtLine the `stoppedAt:` timestamp written with it.
+var (
+	stoppedLine   = regexp.MustCompile(`(?m)^stopped:.*$`)
+	stoppedAtLine = regexp.MustCompile(`(?m)^stoppedAt:.*\n?`)
+)
+
+// stopNowFn is the clock for stoppedAt. Swappable for tests.
+var stopNowFn = time.Now
 
 // stoppableTypes are the network types whose chart renders `stopped` as
 // replicas 0 (see internal/embed/networks/ethereum/helmfile.yaml.gotmpl).
@@ -229,11 +236,19 @@ func setValuesStopped(valuesPath string, stopped bool) (bool, error) {
 
 	content := string(raw)
 	line := fmt.Sprintf("stopped: %t", stopped)
+	// Stamped only when the node goes from running to stopped, so network
+	// status can say how far behind it is.
+	at := fmt.Sprintf("stoppedAt: %q", stopNowFn().UTC().Format(time.RFC3339))
 
 	switch existing := stoppedLine.FindString(content); {
 	case existing != "":
 		if strings.TrimSpace(existing) == line {
 			return false, nil
+		}
+
+		content = stoppedAtLine.ReplaceAllString(content, "")
+		if stopped {
+			line += "\n" + at
 		}
 
 		content = stoppedLine.ReplaceAllString(content, line)
@@ -244,7 +259,8 @@ func setValuesStopped(valuesPath string, stopped bool) (bool, error) {
 			content += "\n"
 		}
 
-		content += "\n# Set by obol network stop; obol network start clears it.\n# While true the node's workloads render with 0 replicas.\n" + line + "\n"
+		content = stoppedAtLine.ReplaceAllString(content, "")
+		content += "\n# Set by obol network stop (stoppedAt: when); obol network start clears them.\n# While true the node's workloads render with 0 replicas.\n" + line + "\n" + at + "\n"
 	}
 
 	info, err := os.Stat(valuesPath)

@@ -9,12 +9,16 @@ import (
 )
 
 func TestCheckClientArch(t *testing.T) {
+	amd64OnlyClients["amd64only"] = true
+	t.Cleanup(func() { delete(amd64OnlyClients, "amd64only") })
+
 	cases := []struct {
 		client, arch string
 		wantErr      bool
 	}{
-		{"silver", "amd64", false},
-		{"silver", "arm64", true},
+		{"amd64only", "amd64", false},
+		{"amd64only", "arm64", true},
+		{"silver", "arm64", false},
 		{"lighthouse", "arm64", false},
 		{"lighthouse", "amd64", false},
 	}

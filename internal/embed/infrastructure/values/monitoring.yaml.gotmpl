@@ -15,6 +15,7 @@ prometheus:
     image:
       registry: quay.io
       repository: prometheus/prometheus
+      # Manual pin (not Renovate-tracked): move tag and sha together.
       tag: v3.15.1-distroless
       sha: 451a845bae1d51622b41af1780eb2ad911bbb79a9855bc8e9bb67fabbc03f934
     serviceMonitorSelectorNilUsesHelmValues: false
@@ -60,6 +61,23 @@ prometheus:
         memory: 2Gi
 
 prometheusOperator:
+  # Override the chart's v0.94.1 until kube-prometheus-stack ships v0.94.2+:
+  # v0.94.2 is a security rebuild (Go 1.27.3, busybox base without the
+  # distrusted Comodo AAA / emSign ECC G3 roots). Drop both pins with the
+  # next kube-prometheus-stack bump that defaults to >= v0.94.2.
+  image:
+    registry: quay.io
+    repository: prometheus-operator/prometheus-operator
+    # Manual pin (not Renovate-tracked): move tag and sha together.
+    tag: v0.94.2
+    sha: c7edf0379b7271ef1705dce258d2bb73820e299cc95559369e9f6fc3321639ec
+  prometheusConfigReloader:
+    image:
+      registry: quay.io
+      repository: prometheus-operator/prometheus-config-reloader
+      # Manual pin (not Renovate-tracked): move tag and sha together.
+      tag: v0.94.2
+      sha: a1897c67478bc23434534e91ad3855280771196b1daf17144db9dbcb655bef71
   resources:
     requests:
       cpu: 10m
@@ -103,6 +121,17 @@ defaultRules:
 
 grafana:
   enabled: true
+  # Override the chart's 13.2.3 until kube-prometheus-stack ships 13.2.7+:
+  # 13.2.4 through 13.2.7 are security releases (CVE-2026-15577,
+  # CVE-2026-33374, CVE-2026-93294, CVE-2026-100105, CVE-2026-103506,
+  # CVE-2026-88858, CVE-2026-102589, CVE-2026-107509, CVE-2026-110992,
+  # CVE-2026-107561, CVE-2026-88943, CVE-2026-88960).
+  image:
+    registry: docker.io
+    repository: grafana/grafana
+    # Manual pin (not Renovate-tracked): move tag and sha together.
+    tag: 13.2.7-distroless
+    sha: 8ab7a89c158ef69de8ed6d7d7a34a2751de9ad2d2d51110546618da5aba19fcc
   # Default kube-prometheus-stack dashboards (node-exporter, k8s compute
   # resources, kubelet, CoreDNS, Prometheus, …). Dashboards for disabled
   # components above are not rendered.
@@ -250,6 +279,7 @@ prometheus-node-exporter:
   image:
     registry: quay.io
     repository: prometheus/node-exporter
+    # renovate: datasource=docker depName=quay.io/prometheus/node-exporter
     tag: v1.12.1
     digest: sha256:1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0
     # kube-prometheus-stack 85+ defaults the subchart to the -distroless tag

@@ -17,7 +17,6 @@ repositories:
 # Single source of truth: change this to switch networks
 values:
   - network: mainnet
-  - gatewayApiVersion: v1.6.3
   # Default the cloudflared release to enabled. `obol stack up` overrides via
   # `--state-values-set cloudflared.enabled=false` when it detects a running
   # quick tunnel that should be preserved across the sync.
@@ -64,10 +63,17 @@ releases:
   # the `release: monitoring` label.
 
 
+  # Gateway API standard-channel CRDs (vendored, version = the chart's
+  # appVersion). Traefik chart 40.2+ no longer ships them; up to v0.18 they
+  # came from Traefik chart 39 (Gateway API v1.4.0). Fresh installs get them
+  # from the chart's crds/; `obol stack up` and `obol upgrade` server-side
+  # apply every release's chart CRDs before the sync, which moves existing
+  # clusters to this version.
+  - name: gateway-api-crds
+    namespace: kube-system
+    chart: ./gateway-api-crds
+
   # Traefik ingress controller with Gateway API support
-  # Traefik chart <= 40.1.x bundles Gateway API CRDs (39.x: v1.4.0) in its
-  # crds/ directory. Chart 40.2.0+ drops them, so bumping past 40.1 needs a
-  # separate Gateway API CRD install (see gatewayApiVersion above).
   # Declared before `base` so the Traefik CRDs (Middleware,
   # IngressRoute, …) and Gateway API CRDs are available when base
   # templates that depend on them (erpc.yaml, obol-frontend.yaml)
@@ -76,11 +82,29 @@ releases:
     namespace: traefik
     createNamespace: true
     chart: traefik/traefik
-    version: 39.0.9
-    # The metrics ServiceMonitor below needs the monitoring.coreos.com CRDs.
+    version: 42.4.3
+    # The metrics ServiceMonitor below needs the monitoring.coreos.com CRDs;
+    # the Gateway/GatewayClass the chart renders need the Gateway API CRDs.
     needs:
       - monitoring/monitoring
+      - kube-system/gateway-api-crds
     values:
+      # Pinned separately from the chart so Traefik security patches can
+      # land without a chart bump. v3.7.20 fixes every advisory published
+      # through 2026-11-24 (e.g. GHSA-f52w-8j3h-j724, GHSA-cp28-5662-543f,
+      # GHSA-v67p-phpq-fc8x, GHSA-w4v4-9rw7-5326, GHSA-rf44-j88r-hh8c).
+      # Traefik v3.7 supports Gateway API v1.6.x (gateway-api-crds above);
+      # v3.8 needs chart 43 and Gateway API v1.7.
+      - image:
+          # renovate: datasource=docker depName=traefik
+          tag: v3.7.20
+      # Drop request headers whose names alias another header (X_Verified_Wallet,
+      # X.Verified.Wallet, ...). The x402 ForwardAuth middlewares overwrite
+      # the dash form of identity headers (X-Verified-Wallet, X-Payment-Payer)
+      # but cannot see aliases, which CGI/WSGI-style backends read as the
+      # same header (GHSA-rf44-j88r-hh8c). Traefik's default is `keep`.
+      - global:
+          aliasHeadersStrategy: delete
       # Gateway API provider configuration
       - providers:
           kubernetesGateway:
@@ -124,10 +148,13 @@ releases:
             http:
               tls:
                 enabled: false  # TLS termination disabled for local dev
-      # Service configuration
+      # Service configuration (chart 40+: Kubernetes Service spec syntax).
+      # Up to v0.18 this block also set `externalTrafficPolicy: Local`, but
+      # chart 39 ignored that key, so every stack has run with the default
+      # (Cluster). Keep that tested behaviour.
       - service:
-          type: LoadBalancer
-          externalTrafficPolicy: Local
+          spec:
+            type: LoadBalancer
       # Resource limits
       - resources:
           limits:
@@ -198,7 +225,7 @@ releases:
     namespace: reloader
     createNamespace: true
     chart: stakater/reloader
-    version: 2.2.19
+    version: 2.2.20
     values:
       - reloader:
           deployment:

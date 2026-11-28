@@ -68,6 +68,8 @@ Read it the same way `obol network status` does:
 | `is_optimistic: true` | object | beacon at head, EL still syncing (`currentBlock/highestBlock`) |
 | all false | `false` | synced |
 
+Silver (alpha) can report `sync_distance` as `18446744073709551615` while it syncs or has no peers. Treat that as "distance unknown", and check `/eth/v1/node/peer_count`: 0 peers means it is stuck, not far behind.
+
 The deployment's network, clients and endpoints are in ConfigMap
 `ethereum-<id>-metadata`. From the host the operator runs
 `obol network status [ethereum/<id>]`.

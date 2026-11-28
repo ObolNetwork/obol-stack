@@ -137,6 +137,8 @@ func TestComputeVerdict(t *testing.T) {
 		{"cl down, el waiting at genesis", running, &ExecutionStatus{Reachable: true}, clDown, VerdictWaiting, "waiting for the beacon node", -1, ""},
 		{"cl down, el syncing", running, elSyncing, clDown, VerdictSyncing, "execution syncing ~50.0%; beacon API unreachable", 50, ""},
 		{"cl down, el has head", running, elSynced, clDown, VerdictDegraded, "beacon API unreachable; execution at block 21000000", -1, ""},
+		{"cl syncing with 0 peers is stalled", running, elSynced, &ConsensusStatus{Reachable: true, HeadSlot: 4464832, SyncDistance: 18446744073709551615, IsSyncing: true, Peers: new(uint64(0))}, VerdictDegraded, "beacon syncing with 0 peers: stalled at head slot 4464832", -1, "beacon node has 0 peers"},
+		{"silver sync_distance underflow with peers", running, elSyncing, &ConsensusStatus{Reachable: true, HeadSlot: 900, SyncDistance: 18446744073709551615, IsSyncing: true, Peers: new(uint64(6))}, VerdictSyncing, "beacon syncing, an unknown number of slots behind (head slot 900)", 50, ""},
 		{"zero peers warns", running, &ExecutionStatus{Reachable: true, HeadBlock: 1, Peers: new(uint64(0))}, clSynced, VerdictSynced, "synced", 100, "execution client has 0 peers"},
 	}
 

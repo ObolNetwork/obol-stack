@@ -250,8 +250,19 @@ func TestRenderStatus_Stopped(t *testing.T) {
 	out := render(r, renderOptions{})
 	t.Log("\n" + out)
 
-	if !strings.Contains(out, "◼ Stopped (data kept, 450 GiB) — start with: obol network start ethereum/mainnet") {
+	if !strings.Contains(out, "◼ Stopped (time unknown; data kept, 450 GiB) — start with: obol network start ethereum/mainnet") {
 		t.Fatalf("stopped headline:\n%s", out)
+	}
+
+	// A node stopped by this obol says since when and how far behind.
+	d := mainnetDeployment()
+	d.Stopped = true
+	d.StoppedAt = time.Now().Add(-16*24*time.Hour - time.Hour)
+	n := network.Unprobed(d, "")
+
+	out = render(network.StatusReport{ERPC: sampleERPC("obol-rpc-mainnet"), Nodes: []network.NodeStatus{n}}, renderOptions{})
+	if !strings.Contains(out, "◼ Stopped (since "+d.StoppedAt.UTC().Format("2006-01-02 15:04 UTC")+", 16d ago, ~115,500 slots behind; data kept)") {
+		t.Fatalf("stopped-since headline:\n%s", out)
 	}
 
 	if strings.Contains(out, "Execution  ") || len(r.Unhealthy()) != 0 {
