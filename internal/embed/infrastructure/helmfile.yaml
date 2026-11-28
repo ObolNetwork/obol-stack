@@ -225,7 +225,7 @@ releases:
     namespace: reloader
     createNamespace: true
     chart: stakater/reloader
-    version: 2.2.20
+    version: 2.2.21
     values:
       - reloader:
           deployment:
